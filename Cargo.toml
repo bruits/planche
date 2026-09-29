@@ -10,6 +10,8 @@ publish = false
 [workspace.dependencies]
 # Dependencies only point inward, see CONTRIBUTING.md#getting-started.
 board = { path = "crates/board" }
+folder = { path = "crates/folder" }
+format = { path = "crates/format" }
 
 serde = { version = "1", features = ["derive"] }
 # Without float_roundtrip, some floats read back one bit off, and saving would rewrite

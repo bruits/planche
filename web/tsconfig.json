@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "nodenext",
+    "lib": ["es2023", "dom", "dom.iterable", "dom.asynciterable"],
+    "types": [],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "rootDir": "src",
+    // wasm-bindgen writes the core's bindings next to the compiled JS, in public/js/wasm.
+    "rootDirs": ["src", "public/js"],
+    "outDir": "public/js"
+  },
+  "include": ["src"]
+}

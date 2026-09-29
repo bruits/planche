@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Planche",
+  "version": "0.0.0",
+  "identifier": "dev.bruits.planche",
+  "build": {
+    "frontendDist": "../../web/public"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Planche",
+        "width": 1200,
+        "height": 800
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  }
+}

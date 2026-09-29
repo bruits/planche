@@ -1,0 +1,29 @@
+{
+  "z": "a1",
+  "kind": {
+    "type": "image",
+    "asset": "2f76b06fc4959ba89d116fb907f574e622ad2b9def9ec4ab9247e84ffeee6054",
+    "natural_size": {
+      "width": 256,
+      "height": 256
+    },
+    "frame": {
+      "x": 600.0,
+      "y": 0.0,
+      "width": 200.0,
+      "height": 200.0
+    },
+    "rotation": 15.0,
+    "edits": {
+      "crop": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 192.0,
+        "height": 192.0
+      },
+      "flip_horizontal": true,
+      "flip_vertical": false,
+      "greyscale": true
+    }
+  }
+}

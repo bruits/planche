@@ -22,14 +22,26 @@ Every platform runs the same Rust core behind a thin shell. The core does no I/O
 
 ## Getting Started
 
-Planche is a Rust monorepo using [Cargo workspaces](https://doc.rust-lang.org/book/ch14-03-cargo-workspaces.html). The only prerequisites are [rustup](https://rustup.rs/), which installs the toolchain and the WASM target pinned in `rust-toolchain.toml`, and [just](https://github.com/casey/just) for the recipes listed in [AGENTS.md](./AGENTS.md).
+Planche is a Rust monorepo using [Cargo workspaces](https://doc.rust-lang.org/book/ch14-03-cargo-workspaces.html). The core needs [rustup](https://rustup.rs/), which installs the toolchain and the WASM target pinned in `rust-toolchain.toml`, and [just](https://github.com/casey/just) for the recipes listed in [AGENTS.md](./AGENTS.md). The app also needs [Node.js](https://nodejs.org/) and [pnpm](https://pnpm.io/), then `just setup`, Python 3 for `just serve`, and on Linux the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). On Windows, `just` runs its recipes with the `sh` of [Git for Windows](https://gitforwindows.org/).
 
-Dependencies only point inward: `format` → `board`. The crates live in `crates/`:
+The app is one web app in `web/`, in TypeScript without a framework, which runs the core as WASM on every platform: in a browser, and in the desktop shell's webview. Dependencies only point inward: `bindings` → `format` → `board`, and `desktop` → `folder`, which know nothing of boards. The crates live in `crates/`:
 
 ### board
 
-The board as plain data: elements (images, notes, shapes, arrows, and groups), their geometry, and non-destructive image edits. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes.
+The board as plain data: elements (images, notes, shapes, arrows, and groups), their geometry, their stacking, and non-destructive image edits. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle is repaired on read.
 
 ### format
 
-The board as a folder of files, keyed by path, and back: a `board.json` manifest holding the format version, one JSON file per element in `elements/`, and image bytes in `assets/`. Assets never change once named, so the caller writes each one once and checks it against its digest when loading it, which catches a board cloned without Git LFS. It implements the file format track from the [foundation](./docs/technical/foundation.md): until the first release, it can change freely; from then on, any change to its shape bumps `FORMAT_VERSION`, and earlier versions are migrated on read.
+The board as a folder of files, keyed by path, and back: a `board.json` manifest holding the format version, one JSON file per element in `elements/`, image bytes in `assets/`, and a `.gitattributes`, written when the board is created, that keeps Git from converting line endings and sends assets to Git LFS. `samples/demo/` holds a board to try the shells on. Assets never change once named, so the caller writes each one once and checks it against its digest when loading it, which catches a board cloned without Git LFS. It implements the file format track from the [foundation](./docs/technical/foundation.md): until the first release, it can change freely; from then on, any change to its shape bumps `FORMAT_VERSION`, and earlier versions are migrated on read.
+
+### bindings
+
+The core for the web app, through [wasm-bindgen](https://github.com/wasm-bindgen/wasm-bindgen): boards cross as JSON, and files as paths and bytes. Its CLI must match the crate's version in `Cargo.lock`, which `just setup` installs.
+
+### desktop
+
+The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web app, and the file system that a browser lacks, limited to the folders the user picks, and writing only into those that were empty. It is the Tauri track from the [foundation](./docs/technical/foundation.md), under test in the prototype.
+
+### folder
+
+A folder on disk as the desktop shell reads and writes it: paths with `/` between segments, atomic writes, and nothing that leads out of it, neither links nor dot folders such as `.git/`. It needs no Tauri, so its tests run on every platform.

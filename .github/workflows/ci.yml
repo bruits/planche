@@ -16,6 +16,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+defaults:
+  run:
+    # Windows runners default to PowerShell.
+    shell: bash
+
 jobs:
   fmt:
     name: Formatting
@@ -38,11 +43,18 @@ jobs:
           rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
           rustup toolchain uninstall stable
       - uses: Swatinem/rust-cache@v2
+      # Tauri renders through WebKitGTK on Linux.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
-    name: Tests
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain (rust-toolchain.toml)
@@ -66,4 +78,56 @@ jobs:
           rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
           rustup toolchain uninstall stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p board -p format --target wasm32-unknown-unknown
+      - run: cargo build -p board -p format -p bindings --target wasm32-unknown-unknown
+
+  web:
+    name: Web app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          # rust-cache keys on every installed toolchain: keep only the pinned one.
+          rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
+          rustup toolchain uninstall stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      # The CLI must match the wasm-bindgen crate that Cargo.lock pins.
+      - id: wasm-bindgen
+        run: echo "version=$(cargo pkgid wasm-bindgen | sed 's/.*@//')" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+      - run: pnpm --dir web install --frozen-lockfile
+      - run: cargo build -p bindings --target wasm32-unknown-unknown
+      - run: wasm-bindgen target/wasm32-unknown-unknown/debug/bindings.wasm --target web --out-dir web/public/js/wasm
+      - run: pnpm --dir web exec tsc
+
+  desktop:
+    name: Desktop app (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          # rust-cache keys on every installed toolchain: keep only the pinned one.
+          rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
+          rustup toolchain uninstall stable
+      - uses: Swatinem/rust-cache@v2
+      # Tauri renders through WebKitGTK on Linux.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
+      - run: cargo build -p desktop

@@ -1,6 +1,7 @@
 //! A board as a folder of files:
 //!
 //! ```text
+//! .gitattributes        keeps Git off the bytes
 //! board.json            format version
 //! elements/<id>.json    one per element
 //! assets/<sha-256>      image bytes
@@ -72,7 +73,8 @@ pub fn write(board: &Board) -> Result<Files> {
 }
 
 /// A `.json` file in `elements/` that is not named after an id may be a sync tool's
-/// conflicted copy, so it is refused.
+/// conflicted copy, so it is refused. The board comes back repaired (see
+/// [`Board::repair`]), and its files only change when the caller writes it.
 pub fn read(files: &Files) -> Result<Board> {
     let manifest: Manifest =
         from_json(MANIFEST, files.get(MANIFEST).ok_or(Error::MissingManifest)?)?;
@@ -88,7 +90,21 @@ pub fn read(files: &Files) -> Result<Board> {
         let id = name.parse().map_err(|_| Error::InvalidName(path.clone()))?;
         board.elements.insert(id, from_json(path, bytes)?);
     }
+    board.repair();
     Ok(board)
+}
+
+/// How many segments deep board files go, such as `elements/<id>.json`, so that the caller
+/// lists no further.
+pub const DEPTH: usize = 2;
+
+/// The files [`read`] needs. The caller reads them up front, and the assets lazily.
+pub fn is_board_file(path: &str) -> bool {
+    path == MANIFEST || element_name(path).is_some()
+}
+
+pub fn is_asset_file(path: &str) -> bool {
+    path.starts_with(ASSETS)
 }
 
 pub fn is_element_file(path: &str) -> bool {
@@ -100,6 +116,18 @@ fn element_name(path: &str) -> Option<&str> {
         return None;
     }
     path.strip_prefix(ELEMENTS)?.strip_suffix(".json")
+}
+
+/// A `.gitattributes` for a new board folder, as its path and bytes. Converting line endings
+/// on checkout would change every file's bytes, and images belong in Git LFS rather than in
+/// Git's history. The caller writes it when creating a board and leaves it to its user
+/// afterwards; [`read`] skips it like any dot file.
+pub fn git_attributes() -> (&'static str, Vec<u8>) {
+    let lfs = "filter=lfs diff=lfs merge=lfs -text";
+    (
+        ".gitattributes",
+        format!("* -text\n{ASSETS}** {lfs}\n").into_bytes(),
+    )
 }
 
 pub fn asset_path(asset: AssetId) -> String {

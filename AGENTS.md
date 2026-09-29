@@ -10,7 +10,11 @@ just lint                              # lint, exactly as CI does
 just test                              # test, exactly as CI does
 just test lfs                          # only the tests whose name holds lfs
 just wasm                              # build the core for the browser, exactly as CI does
-just ci                                # all four, in CI order
+just setup                             # install the web app's tools, once
+just web                               # build the web app, exactly as CI does
+just serve                             # serve the web app on http://localhost:8080
+just desktop                           # run the desktop app
+just ci                                # everything CI checks, in CI order
 ```
 
 ## Useful Resources
@@ -22,7 +26,7 @@ just ci                                # all four, in CI order
 
 - **The core runs everywhere.** `board` and `format` build for `wasm32-unknown-unknown`: no I/O, no clock, no randomness source, and no platform crate. The shells pass those in. Check with `just wasm`, not only a native build.
 - **Board files are a contract.** A board reads back exactly as written, the same board always writes the same bytes, and an edit rewrites only the files it touches. From the first release on, any change to their shape bumps `FORMAT_VERSION`, `read` migrates every earlier version, and a sample board per version stays as a test fixture.
-- **Tracks are not decisions.** Do not build on a track from the foundation (Tauri, wgpu, Vello, Loro, and so on) until the prototype has settled it. `format` is the one exception, so that the core has something to test, and its layout may still change.
+- **Tracks are not decisions yet.** The prototype is where the foundation's tracks (Tauri, wgpu, Vello, Loro, and so on) are tried, so building on one is fine there, as long as the core never depends on it and it can be dropped if it loses. A track becomes a decision only once the prototype has measured it and the [foundation](./docs/technical/foundation.md) records it as a rule.
 - Do not create new documentation files to explain implementation.
 - Do not alter CI/CD configuration unless explicitly instructed.
 - Do not add external dependencies without justification. Prefer the standard library and existing utilities.

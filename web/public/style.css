@@ -1,0 +1,62 @@
+:root {
+  color-scheme: light dark;
+  font: 14px/1.4 system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+header {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+}
+
+#platform {
+  margin-left: auto;
+  opacity: 0.6;
+}
+
+main {
+  display: flex;
+  gap: 2rem;
+  align-items: flex-start;
+  padding: 1rem;
+}
+
+table {
+  flex: 1;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+}
+
+td:nth-child(2),
+td:nth-child(3),
+td:nth-child(4) {
+  font-family: ui-monospace, monospace;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.25rem 1rem;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+dt {
+  opacity: 0.6;
+}
+
+dd {
+  margin: 0;
+}

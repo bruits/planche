@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Planche</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <header>
+      <button id="open" type="button">Open a board…</button>
+      <button id="save-as" type="button" disabled>Save as…</button>
+      <span id="status"></span>
+      <span id="platform"></span>
+    </header>
+    <main>
+      <table>
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Id</th>
+            <th>Z</th>
+            <th>Group</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody id="elements"></tbody>
+      </table>
+      <dl id="metrics"></dl>
+    </main>
+  </body>
+</html>
