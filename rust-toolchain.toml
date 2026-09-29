@@ -1,0 +1,8 @@
+# Minor-pinned: a new stable's lints can't break CI unannounced, while
+# patch fixes still flow in.
+[toolchain]
+channel = "1.98"
+# rust-src is for rust-analyzer.
+components = ["rustfmt", "clippy", "rust-src"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

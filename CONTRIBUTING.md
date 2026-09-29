@@ -1,0 +1,35 @@
+# Contributing Guidelines
+
+## Philosophy
+
+Planche stays small. The core covers what a reference board needs, and anything else goes into a plugin.
+
+A board is plain files that belong to its user, and the app works fully without the cloud.
+
+Every platform runs the same Rust core behind a thin shell. The core does no I/O, so it builds for the browser too.
+
+## Quality Guidelines
+
+- Prefer self-documenting code first, with expressive names and straightforward logic. Comments should explain *why* (intent, invariants, trade-offs), not *how*, and are never used as decorations or separators.
+- Variable and function names should be clear and descriptive, not cryptic abbreviations. Avoid hidden state and side effects.
+- Explicit `use` imports for standard library types (e.g. `use std::collections::BTreeMap;`).
+- Prefer `?` propagation when possible, and reserve `.expect()`/`.unwrap()` for cases where failure is a programmer bug.
+- For errors, use typed error enums in library crates (derived with `thiserror`), with a per-crate `pub type Result<T>` alias. Add context at the boundary (the shells) rather than deep in the core, and keep library error messages concise.
+- We deeply value idiomatic, easy-to-maintain Rust code. Avoid code duplication when possible. Prefer clarity over cleverness, and small focused functions over dark magic.
+- Tests should assert observable behaviour, not internal implementation details. Keep tests deterministic and independent of global state.
+- The core builds for `wasm32-unknown-unknown`. `board` and `format` do no I/O and read no clock or randomness source: the caller passes them in (e.g. the bits of a new `ElementId`).
+- Board files are deterministic. The same board always writes the same bytes, and an edit to one element rewrites one file, so nothing on that path iterates a `HashMap`.
+
+## Getting Started
+
+Planche is a Rust monorepo using [Cargo workspaces](https://doc.rust-lang.org/book/ch14-03-cargo-workspaces.html). The only prerequisites are [rustup](https://rustup.rs/), which installs the toolchain and the WASM target pinned in `rust-toolchain.toml`, and [just](https://github.com/casey/just) for the recipes listed in [AGENTS.md](./AGENTS.md).
+
+Dependencies only point inward: `format` → `board`. The crates live in `crates/`:
+
+### board
+
+The board as plain data: elements (images, notes, shapes, arrows, and groups), their geometry, and non-destructive image edits. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes.
+
+### format
+
+The board as a folder of files, keyed by path, and back: a `board.json` manifest holding the format version, one JSON file per element in `elements/`, and image bytes in `assets/`. Assets never change once named, so the caller writes each one once and checks it against its digest when loading it, which catches a board cloned without Git LFS. It implements the file format track from the [foundation](./docs/technical/foundation.md): until the first release, it can change freely; from then on, any change to its shape bumps `FORMAT_VERSION`, and earlier versions are migrated on read.

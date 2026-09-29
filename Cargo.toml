@@ -1,0 +1,19 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# Dependencies only point inward, see CONTRIBUTING.md#getting-started.
+board = { path = "crates/board" }
+
+serde = { version = "1", features = ["derive"] }
+# Without float_roundtrip, some floats read back one bit off, and saving would rewrite
+# element files nobody touched.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.11"
+thiserror = "2"
