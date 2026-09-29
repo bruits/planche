@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
 use board::{
-    AssetId, Board, Element, ElementId, ElementKind, ImageEdits, Point, Rect, Shape, Size, ZIndex,
+    AssetId, Board, Editor, Element, ElementId, ElementKind, ImageEdits, Point, Rect, Restack,
+    Shape, Size, ZIndex,
 };
 use format::{Error, Files};
 
@@ -102,11 +104,12 @@ fn sample() -> Board {
     }
 }
 
-fn changed<'a>(before: &Files, after: &'a Files) -> Vec<&'a str> {
-    after
-        .iter()
-        .filter(|(path, bytes)| before.get(*path) != Some(*bytes))
-        .map(|(path, _)| path.as_str())
+fn changed(before: &Files, after: &Files) -> Vec<String> {
+    let paths: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
+    paths
+        .into_iter()
+        .filter(|path| before.get(*path) != after.get(*path))
+        .cloned()
         .collect()
 }
 
@@ -143,6 +146,47 @@ fn restacking_rewrites_one_file() {
     assert_eq!(changed(&before, &after), [format!("elements/{NOTE}.json")]);
     let order = format::read(&after).unwrap().draw_order();
     assert_eq!(order, [1, 2, 3, 4, 5].map(ElementId::from_random));
+}
+
+#[test]
+fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
+    type Edit = fn(&mut Editor) -> board::Result<Vec<ElementId>>;
+    fn id(bits: u128) -> ElementId {
+        ElementId::from_random(bits)
+    }
+    let cases: [(Edit, &[u128]); 7] = [
+        (
+            |editor| editor.add(id(10), None, note(None, "New").kind),
+            &[10],
+        ),
+        (
+            |editor| editor.update(NOTE, note(None, "Cool light").kind),
+            &[3],
+        ),
+        (|editor| editor.translate(&[id(1)], 8.0, -8.0), &[2, 3]),
+        (|editor| editor.restack(id(4), Restack::Front), &[4]),
+        (|editor| editor.group(id(10), &[id(4), ARROW]), &[4, 5, 10]),
+        (|editor| editor.ungroup(id(1)), &[1, 2, 3]),
+        (|editor| editor.remove(&[ARROW]), &[5]),
+    ];
+    for (edit, touched) in cases {
+        let mut editor = Editor::new(sample());
+        let before = format::write(editor.board()).unwrap();
+        let reported = edit(&mut editor).unwrap();
+        let after = format::write(editor.board()).unwrap();
+        let touched: Vec<ElementId> = touched.iter().copied().map(id).collect();
+        assert_eq!(reported, touched);
+        let expected: Vec<String> = touched
+            .iter()
+            .map(|id| format!("elements/{id}.json"))
+            .collect();
+        assert_eq!(changed(&before, &after), expected);
+
+        assert_eq!(editor.undo(), reported);
+        assert_eq!(format::write(editor.board()).unwrap(), before);
+        assert_eq!(editor.redo(), reported);
+        assert_eq!(format::write(editor.board()).unwrap(), after);
+    }
 }
 
 #[test]

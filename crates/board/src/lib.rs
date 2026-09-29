@@ -4,6 +4,7 @@
 //! Board space has y pointing down. A [`Rect`] is placed by its top-left corner before
 //! rotation, and an element with a frame rotates clockwise, in degrees, around its centre.
 
+mod edit;
 mod z_index;
 
 use std::collections::BTreeMap;
@@ -13,6 +14,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
+pub use edit::{Editor, Restack};
 pub use z_index::ZIndex;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -23,6 +25,18 @@ pub enum Error {
     InvalidId(String),
     #[error("`{0}` is not a valid z-index")]
     InvalidZIndex(String),
+    #[error("element {0} does not exist")]
+    UnknownElement(ElementId),
+    #[error("element {0} already exists")]
+    TakenId(ElementId),
+    #[error("element {0} is not a group")]
+    NotAGroup(ElementId),
+    #[error("element {0} cannot change kind")]
+    KindChanged(ElementId),
+    #[error("element {0} would hold a NaN or an infinity")]
+    NotFinite(ElementId),
+    #[error("only two elements or more of the same group can be grouped")]
+    CannotGroup,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -80,7 +94,7 @@ impl Board {
             .map(|(id, _)| *id)
             .collect();
         for id in misplaced {
-            self.ungroup(id);
+            self.detach(id);
         }
 
         let ids: Vec<ElementId> = self.elements.keys().copied().collect();
@@ -89,7 +103,7 @@ impl Board {
             while let Some(group) = self.elements[path.last().expect("never empty")].group {
                 if let Some(at) = path.iter().position(|&id| id == group) {
                     let smallest = *path[at..].iter().min().expect("never empty");
-                    self.ungroup(smallest);
+                    self.detach(smallest);
                     break;
                 }
                 path.push(group);
@@ -97,7 +111,7 @@ impl Board {
         }
     }
 
-    fn ungroup(&mut self, id: ElementId) {
+    fn detach(&mut self, id: ElementId) {
         if let Some(element) = self.elements.get_mut(&id) {
             element.group = None;
         }
@@ -478,15 +492,15 @@ mod tests {
         }
     }
 
-    fn id(bits: u128) -> ElementId {
+    pub(crate) fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
 
-    fn z(key: &str) -> ZIndex {
+    pub(crate) fn z(key: &str) -> ZIndex {
         key.parse().unwrap()
     }
 
-    fn element(group: Option<u128>, key: &str, kind: ElementKind) -> Element {
+    pub(crate) fn element(group: Option<u128>, key: &str, kind: ElementKind) -> Element {
         Element {
             group: group.map(id),
             z: z(key),
@@ -494,7 +508,7 @@ mod tests {
         }
     }
 
-    fn arrow() -> ElementKind {
+    pub(crate) fn arrow() -> ElementKind {
         let point = Point { x: 0.0, y: 0.0 };
         ElementKind::Arrow {
             from: point,
@@ -502,7 +516,7 @@ mod tests {
         }
     }
 
-    fn board(elements: impl IntoIterator<Item = (u128, Element)>) -> Board {
+    pub(crate) fn board(elements: impl IntoIterator<Item = (u128, Element)>) -> Board {
         Board {
             elements: elements
                 .into_iter()

@@ -28,7 +28,7 @@ The app is one web app in `web/`, in TypeScript without a framework, which runs 
 
 ### board
 
-The board as plain data: elements (images, notes, shapes, arrows, and groups), their geometry, their stacking, and non-destructive image edits. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle is repaired on read.
+The board as plain data: elements (images, notes, shapes, arrows, and groups), their geometry, their stacking, and non-destructive image edits. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle is repaired on read. Edits go through an `Editor`, whose undo history keeps every touched element as it was, in memory only.
 
 ### format
 
