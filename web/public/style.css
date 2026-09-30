@@ -207,6 +207,16 @@ body {
   stroke-dasharray: 4 4;
 }
 
+/* Wide and faint, so that it does not read as selected. */
+.targets > * {
+  fill: none;
+  stroke: Highlight;
+  stroke-opacity: 0.5;
+  stroke-width: 6px;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
 .handles > * {
   fill: Canvas;
   stroke: Highlight;

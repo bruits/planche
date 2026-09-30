@@ -4,10 +4,12 @@
 // what it touches. Double-clicking a group goes into it, where clicks select its own elements
 // instead, and double-clicking a note, a sticky note, a shape, or a comment writes in it. The
 // selection's corners scale it around the opposite one, the handle above it rotates it around
-// its centre, and the ends of a lone arrow or line move on their own. While snapping, what
-// moves, scales, or is drawn lands on the grid's lines where near them, unless ⌘, or Ctrl
-// elsewhere than macOS, is held, and for a move once under way, as pressing an element with it
-// toggles the element instead.
+// its centre, and the ends of a lone arrow or line move on their own. The ends of an arrow or a
+// line, as drawn or moved, stick to the image, note, sticky note, or shape they land on, onto its
+// outline when near it, and follow it from then on. While snapping, what moves, scales, or is
+// drawn lands on the grid's lines where near them otherwise. Holding ⌘, or Ctrl elsewhere than
+// macOS, keeps ends from sticking and the grid from pulling, but for a move only once under
+// way, as pressing an element with it toggles the element instead.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
@@ -23,6 +25,8 @@ import { writer } from "./writer.js";
 const TOLERANCE = 4;
 /** How near the pointer counts as on a handle, in CSS pixels. */
 const REACH = 6;
+/** How near an element an end sticks to it, and how near its outline it sticks onto that, in CSS pixels. */
+const STICK = 12;
 /** How far a press moves before it drags, in CSS pixels. */
 const DRAG = 3;
 /** Scaling down further would turn the selection over. */
@@ -122,7 +126,8 @@ type Press =
   | { kind: "marquee"; pointer: number; start: Point; dragging: boolean; kept: Set<string> }
   | { kind: "scale"; pointer: number; origin: Point; corner: Point; handle: Point; upright: boolean }
   | { kind: "rotate"; pointer: number; pivot: Point; from: number }
-  | { kind: "draw"; pointer: number; start: Point; last: Point; shape: Draw; id: string; dragging: boolean }
+  /** `ends` where it was last drawn from and to, once dragging. */
+  | { kind: "draw"; pointer: number; start: Point; ends?: [Point, Point]; shape: Draw; id: string; dragging: boolean }
   | { kind: "end"; pointer: number; start: Point; dragging: boolean; id: string; segment: Segment; end: "from" | "to" };
 
 export function edits(
@@ -136,6 +141,8 @@ export function edits(
   let press: Press | undefined;
   /** Whether the grid pulls, as the last pointer event had its keys. */
   let pulling = false;
+  /** Whether ends stick, as the last pointer event had its keys. */
+  let sticking = false;
   /** Its gesture stays open until the field closes, so that writing undoes in one step. */
   let written: { id: string; fresh: boolean } | undefined;
   /** Whether the last press was a click, as browsers still send a double-click when it dragged. */
@@ -159,6 +166,10 @@ export function edits(
     pulling
       ? { x: point.x + (core.snapToGrid([point.x], zoom) ?? 0), y: point.y + (core.snapToGrid([point.y], zoom) ?? 0) }
       : point;
+  const landed = (editor: Editor, point: Point, zoom: number, sticks = true): { at: Point; target?: string } =>
+    (sticks && sticking ? core.stick(editor, point, STICK / zoom) : undefined) ?? { at: pulled(point, zoom) };
+  const showTargets = (editor: Editor, ids: (string | undefined)[]) =>
+    overlay.targets(ids.flatMap((id) => (id === undefined ? [] : [editor.outline(id)])));
   /** As moving it would pull it. */
   const aligned = (kind: Kind, zoom: number): Kind => {
     if (!pulling || !("frame" in kind)) {
@@ -245,9 +256,10 @@ export function edits(
     const { editor } = editing;
     const pointer = event.pointerId;
     pulling = snapping() && !freed(event);
+    sticking = !freed(event);
     const shape = drawing();
     if (shape) {
-      press = { kind: "draw", pointer, start: at, last: at, shape, id: newId(), dragging: false };
+      press = { kind: "draw", pointer, start: at, shape, id: newId(), dragging: false };
       view.host.setPointerCapture(pointer);
       return;
     }
@@ -318,6 +330,7 @@ export function edits(
     const { editor } = editing;
     const ids = [...selected];
     pulling = snapping() && !freed(event);
+    sticking = !freed(event);
     // From where the gesture began, so that coming back there changes nothing.
     const again = (edited: () => string[]) => edit(editing, [...editor.rewindGesture(), ...edited()]);
     const settled = (touched: string[], snapped: boolean) => (snapped ? [...touched, ...editor.settleOnGrid(ids)] : touched);
@@ -372,7 +385,6 @@ export function edits(
         return;
       }
       case "draw": {
-        press.last = at;
         // Pinned where it was pressed.
         if (press.shape === "comment") {
           return;
@@ -386,10 +398,15 @@ export function edits(
           editor.beginGesture();
         }
         const { id, shape } = press;
-        const [start, end] = [pulled(press.start, zoom), pulled(at, zoom)];
+        const sticks = SEGMENTS.has(shape);
+        const [start, end] = [landed(editor, press.start, zoom, sticks), landed(editor, at, zoom, sticks)];
+        press.ends = [start.at, end.at];
         // A note shows nothing until written in.
-        overlay.marquee(shape === "note" ? rect(start, end) : undefined);
-        again(() => editor.add(id, entered, JSON.stringify(shaped(shape, start, end, FONT_SIZE / zoom))));
+        overlay.marquee(shape === "note" ? rect(start.at, end.at) : undefined);
+        showTargets(editor, [start.target, end.target]);
+        const kind = shaped(shape, start.at, end.at, FONT_SIZE / zoom);
+        const stuck = sticks ? { ...kind, from_target: start.target, to_target: end.target } : kind;
+        again(() => editor.add(id, entered, JSON.stringify(stuck)));
         return;
       }
       case "end": {
@@ -399,8 +416,9 @@ export function edits(
           return;
         }
         press.dragging = true;
-        const moved = pulled({ x: segment[end].x + at.x - start.x, y: segment[end].y + at.y - start.y }, zoom);
-        again(() => editor.update(id, JSON.stringify({ ...segment, [end]: moved })));
+        const moved = landed(editor, { x: segment[end].x + at.x - start.x, y: segment[end].y + at.y - start.y }, zoom);
+        showTargets(editor, [moved.target]);
+        again(() => editor.update(id, JSON.stringify({ ...segment, [end]: moved.at, [`${end}_target`]: moved.target })));
         return;
       }
     }
@@ -412,6 +430,7 @@ export function edits(
       return;
     }
     wasClick = (press.kind === "move" || press.kind === "marquee") && !press.dragging;
+    overlay.targets([]);
     if (press.kind === "marquee") {
       overlay.marquee(undefined);
     } else if (press.kind === "draw") {
@@ -442,7 +461,7 @@ export function edits(
       return;
     }
     const { editor } = editing;
-    const { id, shape, start, last, dragging } = press;
+    const { id, shape, start, ends, dragging } = press;
     const writes = shape === "note" || shape === "sticky" || shape === "comment";
     // Nobody would write in it.
     if (writes && !completed) {
@@ -450,7 +469,7 @@ export function edits(
       editor.endGesture();
       return;
     }
-    if (dragging && zoom !== undefined && distance(pulled(last, zoom), pulled(start, zoom)) * zoom >= DRAG) {
+    if (ends && zoom !== undefined && distance(...ends) * zoom >= DRAG) {
       if (!writes) {
         editor.endGesture();
       }
@@ -732,6 +751,7 @@ export function edits(
       overlay.ends(undefined);
       overlay.marquee(undefined);
       overlay.entered(undefined);
+      overlay.targets([]);
       selectionChanged();
     },
   };

@@ -78,8 +78,8 @@ export type Kind =
   | { type: "note"; frame: Rect; rotation: number; text: Text }
   | { type: "sticky"; frame: Rect; rotation: number; text: Text }
   | { type: "shape"; frame: Rect; rotation: number; shape: "rectangle" | "ellipse" | "cross"; text: Text }
-  | { type: "arrow"; from: Point; to: Point }
-  | { type: "line"; from: Point; to: Point }
+  | { type: "arrow"; from: Point; to: Point; from_target?: string; to_target?: string }
+  | { type: "line"; from: Point; to: Point; from_target?: string; to_target?: string }
   | { type: "comment"; at: Point; text: string }
   | { type: "group" };
 
@@ -161,6 +161,20 @@ export function snapToGrid(values: number[], zoom: number): number | undefined {
  */
 export function snapScaleToGrid(origin: Point, corner: Point, factor: number, zoom: number): number | undefined {
   return snapScale(origin.x, origin.y, corner.x, corner.y, factor, zoom);
+}
+
+export interface Stuck {
+  target: string;
+  at: Point;
+}
+
+/**
+ * Where an end let go at `at` sticks, onto the outline of what it sticks to when within
+ * `tolerance` of it, `undefined` when nothing there takes ends.
+ */
+export function stick(editor: Editor, at: Point, tolerance: number): Stuck | undefined {
+  const json = editor.stick(at.x, at.y, tolerance);
+  return json === undefined ? undefined : (JSON.parse(json) as Stuck);
 }
 
 /** What the elements draw over, their groups' elements included, `undefined` when nothing. */

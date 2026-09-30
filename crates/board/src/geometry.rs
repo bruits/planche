@@ -2,6 +2,7 @@
 //! the outlines that show a selection.
 
 use std::collections::BTreeSet;
+use std::f64::consts::FRAC_1_SQRT_2;
 
 use crate::{Board, ElementId, ElementKind, Point, Rect, STROKE_WIDTH, Shape};
 
@@ -112,7 +113,9 @@ fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
         | ElementKind::Shape {
             frame, rotation, ..
         } => Some(corners(frame, *rotation).to_vec()),
-        ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => Some(vec![*from, *to]),
+        ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
+            Some(vec![*from, *to])
+        }
         ElementKind::Comment { .. } | ElementKind::Group => None,
     }
 }
@@ -147,42 +150,77 @@ fn corners(rect: &Rect, degrees: f64) -> [Point; 4] {
 }
 
 /// Strokes reach half their width beyond the line they follow, and a shape's text fills it.
-fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
+pub(crate) fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
     let reach = tolerance + STROKE_WIDTH / 2.0;
     match kind {
         ElementKind::Shape {
             frame,
             rotation,
             shape: Shape::Ellipse,
-            text,
+            ..
+        } => near_ellipse(frame, *rotation, point, reach) || covers(kind, point),
+        ElementKind::Shape {
+            frame,
+            rotation,
+            shape: Shape::Cross,
+            ..
         } => {
-            near_ellipse(frame, *rotation, point, reach)
-                || (!text.is_blank() && within_ellipse(frame, *rotation, point))
+            diagonals(&corners(frame, *rotation)).any(|(a, b)| distance(point, a, b) <= reach)
+                || covers(kind, point)
+        }
+        ElementKind::Shape {
+            frame, rotation, ..
+        } => near_edges(&corners(frame, *rotation), point, reach) || covers(kind, point),
+        ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
+            distance(point, *from, *to) <= reach
+        }
+        _ => shape(kind).is_some_and(|shape| near(&shape, point, tolerance)),
+    }
+}
+
+/// Whether `point` is within the area an element fills, besides its outline: an image's, a
+/// note's, a sticky note's, or a shape's once it holds text.
+pub(crate) fn covers(kind: &ElementKind, point: Point) -> bool {
+    match kind {
+        ElementKind::Shape { text, .. } if text.is_blank() => false,
+        ElementKind::Shape {
+            frame,
+            rotation,
+            shape: Shape::Ellipse,
+            ..
+        } => within_ellipse(frame, *rotation, point),
+        _ => shape(kind).is_some_and(|shape| inside(&shape, point)),
+    }
+}
+
+pub(crate) fn nearest_on_outline(kind: &ElementKind, point: Point) -> Option<Point> {
+    match kind {
+        ElementKind::Shape {
+            frame,
+            rotation,
+            shape: Shape::Ellipse,
+            ..
+        } if frame.width != 0.0 && frame.height != 0.0 => {
+            Some(nearest_on_ellipse(frame, *rotation, point))
         }
         ElementKind::Shape {
             frame,
             rotation,
             shape: Shape::Cross,
-            text,
-        } => {
-            let outline = corners(frame, *rotation);
-            diagonals(&outline).any(|(a, b)| distance(point, a, b) <= reach)
-                || (!text.is_blank() && inside(&outline, point))
-        }
-        ElementKind::Shape {
-            frame,
-            rotation,
-            text,
             ..
-        } => {
-            let outline = corners(frame, *rotation);
-            near_edges(&outline, point, reach) || (!text.is_blank() && inside(&outline, point))
-        }
-        ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
-            distance(point, *from, *to) <= reach
-        }
-        _ => shape(kind).is_some_and(|shape| near(&shape, point, tolerance)),
+        } => nearest_on_segments(point, diagonals(&corners(frame, *rotation))),
+        _ if kind.is_target() => nearest_on_segments(point, edges(&shape(kind)?)),
+        _ => None,
     }
+}
+
+fn nearest_on_segments(
+    point: Point,
+    segments: impl Iterator<Item = (Point, Point)>,
+) -> Option<Point> {
+    segments
+        .map(|(a, b)| closest(point, a, b))
+        .min_by(|a, b| apart(*a, point).total_cmp(&apart(*b, point)))
 }
 
 /// As [`hits`], a shape without text only draws its strokes, so an area between them touches
@@ -291,6 +329,47 @@ fn near_ellipse(frame: &Rect, degrees: f64, point: Point, tolerance: f64) -> boo
     away <= tolerance
 }
 
+/// On the curve of the ellipse that fills `frame`, which has an area, turned clockwise by
+/// `degrees` around its centre.
+fn nearest_on_ellipse(frame: &Rect, degrees: f64, point: Point) -> Point {
+    let (radius_x, radius_y) = ((frame.width / 2.0).abs(), (frame.height / 2.0).abs());
+    let centre = frame.centre();
+    let upright = point.turned(centre, -degrees);
+    let (x, y) = ((upright.x - centre.x).abs(), (upright.y - centre.y).abs());
+    // In the quarter holding the point, each step goes from the centre of curvature at the
+    // last guess towards the point, as far as the curve is from that centre, which lands
+    // within a hair of the nearest point in a few steps.
+    let (mut cos, mut sin) = (FRAC_1_SQRT_2, FRAC_1_SQRT_2);
+    for _ in 0..4 {
+        let pull = radius_x * radius_x - radius_y * radius_y;
+        let (from_x, from_y) = (
+            pull * cos.powi(3) / radius_x,
+            -pull * sin.powi(3) / radius_y,
+        );
+        let curvature = (radius_x * cos - from_x).hypot(radius_y * sin - from_y);
+        let (to_x, to_y) = (x - from_x, y - from_y);
+        let to = to_x.hypot(to_y);
+        // From the centre of curvature itself, every way is as near.
+        if to == 0.0 {
+            break;
+        }
+        let next = (
+            ((from_x + to_x * curvature / to) / radius_x).clamp(0.0, 1.0),
+            ((from_y + to_y * curvature / to) / radius_y).clamp(0.0, 1.0),
+        );
+        let length = next.0.hypot(next.1);
+        if length == 0.0 {
+            break;
+        }
+        (cos, sin) = (next.0 / length, next.1 / length);
+    }
+    Point {
+        x: centre.x + (radius_x * cos).copysign(upright.x - centre.x),
+        y: centre.y + (radius_y * sin).copysign(upright.y - centre.y),
+    }
+    .turned(centre, degrees)
+}
+
 fn within_ellipse(frame: &Rect, degrees: f64, point: Point) -> bool {
     let (radius_x, radius_y) = ((frame.width / 2.0).abs(), (frame.height / 2.0).abs());
     let centre = frame.centre();
@@ -313,6 +392,11 @@ fn inside(polygon: &[Point], point: Point) -> bool {
 
 /// From `point` to the segment from `a` to `b`.
 fn distance(point: Point, a: Point, b: Point) -> f64 {
+    apart(point, closest(point, a, b))
+}
+
+/// The point of the segment from `a` to `b` nearest to `point`.
+fn closest(point: Point, a: Point, b: Point) -> Point {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let length = dx * dx + dy * dy;
     let along = if length == 0.0 {
@@ -320,7 +404,14 @@ fn distance(point: Point, a: Point, b: Point) -> f64 {
     } else {
         (((point.x - a.x) * dx + (point.y - a.y) * dy) / length).clamp(0.0, 1.0)
     };
-    (point.x - a.x - along * dx).hypot(point.y - a.y - along * dy)
+    Point {
+        x: a.x + along * dx,
+        y: a.y + along * dy,
+    }
+}
+
+pub(crate) fn apart(a: Point, b: Point) -> f64 {
+    (a.x - b.x).hypot(a.y - b.y)
 }
 
 /// Two convex polygons, or segments, overlap unless one of their edges' normals separates
@@ -378,6 +469,8 @@ mod tests {
         ElementKind::Arrow {
             from: point(from.0, from.1),
             to: point(to.0, to.1),
+            from_target: None,
+            to_target: None,
         }
     }
 
@@ -723,8 +816,18 @@ mod tests {
     fn an_arrow_or_a_line_is_hit_near_its_line() {
         let (from, to) = (point(0.0, 0.0), point(100.0, 100.0));
         for kind in [
-            ElementKind::Arrow { from, to },
-            ElementKind::Line { from, to },
+            ElementKind::Arrow {
+                from,
+                to,
+                from_target: None,
+                to_target: None,
+            },
+            ElementKind::Line {
+                from,
+                to,
+                from_target: None,
+                to_target: None,
+            },
         ] {
             let board = board([(1, element(None, "a0", kind))]);
             assert_eq!(board.hit(point(52.0, 48.0), 3.0), Some(id(1)));

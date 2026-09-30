@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
 use crate::grid::settled;
+use crate::stick::{followed, lands_on, moves_ends};
 use crate::{Background, Board, Element, ElementId, ElementKind, Error, Point, Result, ZIndex};
 
 /// Where an element moves among the elements of its group.
@@ -83,6 +84,7 @@ impl Editor {
             self.existing_group(group)?;
         }
         check_valid(id, &kind)?;
+        self.check_targets(&kind)?;
         let siblings = self.siblings(group, &BTreeSet::new());
         let mut keys = place(&siblings, siblings.len(), &[id]);
         let (_, z) = keys.remove(0);
@@ -98,7 +100,8 @@ impl Editor {
         self.record(step)
     }
 
-    /// With the elements of the removed groups, and the groups that the removal empties.
+    /// With the elements of the removed groups, and the groups that the removal empties. The
+    /// ends stuck to them come free where they are.
     pub fn remove(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
         let mut removed = self.with_descendants(ids)?;
         loop {
@@ -113,23 +116,31 @@ impl Editor {
             }
             removed.extend(emptied);
         }
-        let step = removed
-            .into_iter()
-            .map(|id| (id, self.change(id, |_| None)))
+        let mut step: Changes = removed
+            .iter()
+            .map(|id| (*id, self.change(*id, |_| None)))
             .collect();
+        step.extend(self.edit_ends(
+            |id| removed.contains(&id),
+            |_, target| {
+                target.take_if(|target| removed.contains(target));
+            },
+        ));
         self.record(step)
     }
 
-    /// Replaces an element's kind with another of the same kind.
+    /// Replaces an element's kind with another of the same kind. The ends stuck to it follow it.
     pub fn update(&mut self, id: ElementId, kind: ElementKind) -> Result<Vec<ElementId>> {
         if mem::discriminant(&self.get(id)?.kind) != mem::discriminant(&kind) {
             return Err(Error::KindChanged(id));
         }
         check_valid(id, &kind)?;
-        let step = Changes::from([(
+        self.check_targets(&kind)?;
+        let mut step = Changes::from([(
             id,
             self.change(id, |element| Some(Element { kind, ..element })),
         )]);
+        self.follow(&mut step);
         self.record(step)
     }
 
@@ -143,7 +154,7 @@ impl Editor {
                 frame.x += dx;
                 frame.y += dy;
             }
-            ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
+            ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
                 for point in [from, to] {
                     point.x += dx;
                     point.y += dy;
@@ -195,7 +206,7 @@ impl Editor {
                     frame.x = centre.x - frame.width / 2.0;
                     frame.y = centre.y - frame.height / 2.0;
                 }
-                ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
+                ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
                     scaled(from);
                     scaled(to);
                 }
@@ -236,7 +247,7 @@ impl Editor {
                 let turned = (*rotation + degrees).rem_euclid(360.0);
                 *rotation = if turned < 360.0 { turned } else { 0.0 };
             }
-            ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
+            ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
                 *from = from.turned(pivot, degrees);
                 *to = to.turned(pivot, degrees);
             }
@@ -262,7 +273,7 @@ impl Editor {
                     *value = settled(*value);
                 }
             }
-            ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
+            ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
                 for point in [from, to] {
                     point.x = settled(point.x);
                     point.y = settled(point.y);
@@ -565,7 +576,92 @@ impl Editor {
             check_valid(id, &change.after.as_ref().expect("reshaped").kind)?;
             step.insert(id, change);
         }
+        self.unstick(&mut step);
+        self.follow(&mut step);
         self.record(step)
+    }
+
+    fn unstick(&self, step: &mut Changes) {
+        let moved: BTreeSet<ElementId> = moved(step).into_keys().collect();
+        for change in step
+            .values_mut()
+            .filter(|change| change.before != change.after)
+        {
+            let ends = change
+                .after
+                .as_mut()
+                .and_then(|after| after.kind.ends_mut());
+            for (point, target) in ends.into_iter().flatten() {
+                target.take_if(|target| {
+                    !moved.contains(target)
+                        && !self
+                            .board
+                            .elements
+                            .get(target)
+                            .is_some_and(|element| lands_on(&element.kind, *point))
+                });
+            }
+        }
+    }
+
+    /// Leaves out the arrows and lines that the step changes too, which moved alike.
+    fn follow(&self, step: &mut Changes) {
+        let moved = moved(step);
+        if moved.is_empty() {
+            return;
+        }
+        let followers = self.edit_ends(
+            |id| {
+                step.get(&id)
+                    .is_some_and(|change| change.before != change.after)
+            },
+            |point, target| {
+                let Some((before, after)) = target.and_then(|target| moved.get(&target)) else {
+                    return;
+                };
+                // An end left behind would no longer be on what it sticks to.
+                match followed(before, after, *point) {
+                    Some(followed) => *point = followed,
+                    None => *target = None,
+                }
+            },
+        );
+        step.extend(followers);
+    }
+
+    fn edit_ends(
+        &self,
+        skipped: impl Fn(ElementId) -> bool,
+        mut edit: impl FnMut(&mut Point, &mut Option<ElementId>),
+    ) -> Changes {
+        let mut changes = Changes::new();
+        for (id, element) in &self.board.elements {
+            if element.kind.ends().is_none() || skipped(*id) {
+                continue;
+            }
+            let mut kind = element.kind.clone();
+            for (point, target) in kind.ends_mut().into_iter().flatten() {
+                edit(point, target);
+            }
+            if kind != element.kind {
+                changes.insert(
+                    *id,
+                    self.change(*id, |element| Some(Element { kind, ..element })),
+                );
+            }
+        }
+        changes
+    }
+
+    fn check_targets(&self, kind: &ElementKind) -> Result<()> {
+        for (_, target) in kind.ends().into_iter().flatten() {
+            if let Some(target) = target
+                && !self.get(target)?.kind.is_target()
+            {
+                return Err(Error::NotATarget(target));
+            }
+        }
+        Ok(())
     }
 
     fn get(&self, id: ElementId) -> Result<&Element> {
@@ -680,6 +776,15 @@ impl Step {
         }
         self.elements.keys().copied().collect()
     }
+}
+
+fn moved(step: &Changes) -> BTreeMap<ElementId, (&ElementKind, &ElementKind)> {
+    step.iter()
+        .filter_map(|(id, change)| {
+            let (before, after) = (&change.before.as_ref()?.kind, &change.after.as_ref()?.kind);
+            moves_ends(before, after).then_some((*id, (before, after)))
+        })
+        .collect()
 }
 
 /// Keys that stack `ids`, in order, right above the first `at` of `siblings`, which are
@@ -1126,7 +1231,7 @@ mod tests {
             unreachable!()
         };
         assert_eq!((frame.x, frame.y), (15.0, -5.0));
-        let ElementKind::Arrow { from, to } = &elements[&id(5)].kind else {
+        let ElementKind::Arrow { from, to, .. } = &elements[&id(5)].kind else {
             unreachable!()
         };
         assert_eq!((from.x, from.y, to.x, to.y), (5.0, -5.0, 5.0, -5.0));
@@ -1368,14 +1473,24 @@ mod tests {
     fn scaling_and_rotating_move_both_ends_of_an_arrow_or_a_line() {
         let (from, to) = (Point { x: 10.0, y: 0.0 }, Point { x: 20.0, y: 0.0 });
         let ends = |editor: &Editor| match editor.board().elements[&id(1)].kind {
-            ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
+            ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
                 [from.x, from.y, to.x, to.y]
             }
             _ => unreachable!(),
         };
         for kind in [
-            ElementKind::Arrow { from, to },
-            ElementKind::Line { from, to },
+            ElementKind::Arrow {
+                from,
+                to,
+                from_target: None,
+                to_target: None,
+            },
+            ElementKind::Line {
+                from,
+                to,
+                from_target: None,
+                to_target: None,
+            },
         ] {
             let mut editor = Editor::new(board([(1, element(None, "a0", kind))]));
             editor
@@ -1466,6 +1581,376 @@ mod tests {
             underflowed.is_err(),
             "{:?}",
             editor.board().elements[&id(4)].kind
+        );
+    }
+
+    fn stuck(from: (f64, f64), on: Option<u128>, to: (f64, f64), at: Option<u128>) -> ElementKind {
+        ElementKind::Arrow {
+            from: Point {
+                x: from.0,
+                y: from.1,
+            },
+            to: Point { x: to.0, y: to.1 },
+            from_target: on.map(id),
+            to_target: at.map(id),
+        }
+    }
+
+    fn framed(x: f64, y: f64, width: f64, height: f64) -> ElementKind {
+        ElementKind::Note {
+            frame: Rect {
+                x,
+                y,
+                width,
+                height,
+            },
+            rotation: 0.0,
+            text: Text {
+                content: String::new(),
+                font_size: 2.0,
+            },
+        }
+    }
+
+    fn ends(editor: &Editor, bits: u128) -> [(Point, Option<ElementId>); 2] {
+        editor.board().elements[&id(bits)].kind.ends().unwrap()
+    }
+
+    fn assert_at(point: Point, x: f64, y: f64) {
+        assert!(
+            (point.x - x).abs() < 1e-9 && (point.y - y).abs() < 1e-9,
+            "{point:?} is not ({x}, {y})"
+        );
+    }
+
+    #[test]
+    fn an_end_follows_what_it_sticks_to() {
+        // `to` on the middle of the note's right side.
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", framed(0.0, 0.0, 100.0, 50.0))),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    stuck((200.0, 200.0), None, (100.0, 25.0), Some(1)),
+                ),
+            ),
+        ]));
+        let before = editor.board().clone();
+
+        assert_eq!(editor.translate(&ids([1]), 10.0, 5.0).unwrap(), ids([1, 2]));
+        let [(from, _), (to, target)] = ends(&editor, 2);
+        assert_at(from, 200.0, 200.0);
+        assert_at(to, 110.0, 30.0);
+        assert_eq!(target, Some(id(1)));
+
+        editor
+            .scale(&ids([1]), Point { x: 10.0, y: 5.0 }, 2.0)
+            .unwrap();
+        assert_at(ends(&editor, 2)[1].0, 210.0, 55.0);
+        // Around the note's centre, (110, 55), the right side's middle turns to the bottom.
+        editor
+            .rotate(&ids([1]), Point { x: 110.0, y: 55.0 }, 90.0)
+            .unwrap();
+        assert_at(ends(&editor, 2)[1].0, 110.0, 155.0);
+        assert_sound(&editor);
+
+        for _ in 0..3 {
+            assert_eq!(editor.undo(), ids([1, 2]));
+        }
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn an_end_stuck_to_an_image_keeps_to_the_same_pixel() {
+        let image = |frame: Rect, crop: Option<Rect>, flipped: bool| ElementKind::Image {
+            asset: crate::AssetId::of(b""),
+            natural_size: crate::Size {
+                width: 100,
+                height: 100,
+            },
+            frame,
+            rotation: 0.0,
+            edits: crate::ImageEdits {
+                crop,
+                flip_horizontal: flipped,
+                ..crate::ImageEdits::default()
+            },
+        };
+        let rect = |width, height| Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        };
+        // Twice the picture's size, so that `to` shows its pixel (20, 30).
+        let mut editor = Editor::new(board([
+            (
+                1,
+                element(None, "a0", image(rect(200.0, 200.0), None, false)),
+            ),
+            (
+                2,
+                element(None, "a1", stuck((300.0, 0.0), None, (40.0, 60.0), Some(1))),
+            ),
+        ]));
+
+        editor.flip(&ids([1]), true).unwrap();
+        assert_at(ends(&editor, 2)[1].0, 160.0, 60.0);
+        // Cropped to the picture's left half, flipped within it, at the same scale.
+        editor
+            .update(
+                id(1),
+                image(rect(100.0, 200.0), Some(rect(50.0, 100.0)), true),
+            )
+            .unwrap();
+        assert_at(ends(&editor, 2)[1].0, 60.0, 60.0);
+        editor
+            .rotate(&ids([1]), Point { x: 50.0, y: 100.0 }, 90.0)
+            .unwrap();
+        assert_at(ends(&editor, 2)[1].0, 90.0, 110.0);
+        assert_at(ends(&editor, 2)[0].0, 300.0, 0.0);
+    }
+
+    #[test]
+    fn an_arrow_moved_with_what_it_sticks_to_moves_once() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", framed(0.0, 0.0, 100.0, 50.0))),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    stuck((200.0, 200.0), None, (100.0, 25.0), Some(1)),
+                ),
+            ),
+        ]));
+        editor.translate(&ids([1, 2]), 10.0, 5.0).unwrap();
+        let [(from, _), (to, target)] = ends(&editor, 2);
+        assert_at(from, 210.0, 205.0);
+        assert_at(to, 110.0, 30.0);
+        assert_eq!(target, Some(id(1)));
+    }
+
+    #[test]
+    fn an_arrow_flipped_with_the_image_it_sticks_to_still_follows_it() {
+        // Twice the picture's size, so that `to` shows its pixel (20, 30).
+        let image = ElementKind::Image {
+            asset: crate::AssetId::of(b""),
+            natural_size: crate::Size {
+                width: 100,
+                height: 100,
+            },
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 200.0,
+            },
+            rotation: 0.0,
+            edits: crate::ImageEdits::default(),
+        };
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", image)),
+            (
+                2,
+                element(None, "a1", stuck((300.0, 0.0), None, (40.0, 60.0), Some(1))),
+            ),
+        ]));
+        let before = editor.board().clone();
+
+        // Flipping leaves the arrow as it was, so it did not move alike.
+        assert_eq!(editor.flip(&ids([1, 2]), true).unwrap(), ids([1, 2]));
+        let [(from, _), (to, target)] = ends(&editor, 2);
+        assert_at(from, 300.0, 0.0);
+        assert_at(to, 160.0, 60.0);
+        assert_eq!(target, Some(id(1)));
+        editor.undo();
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn an_end_follows_what_a_drag_moves_then_settles_on_the_grid() {
+        // Moved onto the line at 900, the note lands a hair short of it. `to` on the middle of
+        // its left side.
+        let x = -242.154_545_454_545_43;
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", framed(x, 0.0, 100.0, 50.0))),
+            (
+                2,
+                element(None, "a1", stuck((0.0, 300.0), None, (x, 25.0), Some(1))),
+            ),
+        ]));
+        let before = editor.board().clone();
+
+        // As each move of a drag does, from where the gesture began.
+        editor.begin_gesture();
+        let mut settled = Vec::new();
+        for dx in [100.0, 900.0 - x] {
+            editor.rewind_gesture();
+            assert_eq!(editor.translate(&ids([1]), dx, 0.0).unwrap(), ids([1, 2]));
+            settled = editor.settle_on_grid(&ids([1])).unwrap();
+        }
+        editor.end_gesture();
+        assert_eq!(settled, ids([1, 2]));
+        let ElementKind::Note { frame, .. } = editor.board().elements[&id(1)].kind else {
+            unreachable!()
+        };
+        assert_eq!(frame.x, 900.0);
+        let [(from, _), (to, target)] = ends(&editor, 2);
+        assert_at(from, 0.0, 300.0);
+        assert_eq!(to, Point { x: 900.0, y: 25.0 });
+        assert_eq!(target, Some(id(1)));
+        assert_sound(&editor);
+
+        assert_eq!(editor.undo(), ids([1, 2]));
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn an_arrow_moved_alone_keeps_the_ends_that_still_land_on_what_they_stick_to() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", framed(0.0, 0.0, 100.0, 100.0))),
+            (2, element(None, "a1", framed(300.0, 0.0, 100.0, 100.0))),
+            // From within the first note to the second's left side.
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    stuck((50.0, 50.0), Some(1), (300.0, 50.0), Some(2)),
+                ),
+            ),
+        ]));
+        let before = editor.board().clone();
+        assert_eq!(editor.translate(&ids([3]), -10.0, 0.0).unwrap(), ids([3]));
+        let [(from, from_target), (to, to_target)] = ends(&editor, 3);
+        assert_at(from, 40.0, 50.0);
+        assert_at(to, 290.0, 50.0);
+        assert_eq!((from_target, to_target), (Some(id(1)), None));
+        assert_sound(&editor);
+        editor.undo();
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn an_end_follows_a_frame_that_text_grows_but_not_the_text_alone() {
+        // `to` on the middle of the note's bottom side.
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", framed(0.0, 0.0, 100.0, 50.0))),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    stuck((200.0, 200.0), None, (50.0, 50.0), Some(1)),
+                ),
+            ),
+        ]));
+        let ElementKind::Note {
+            frame, rotation, ..
+        } = framed(0.0, 0.0, 100.0, 50.0)
+        else {
+            unreachable!()
+        };
+        let written = ElementKind::Note {
+            frame,
+            rotation,
+            text: Text {
+                content: "Warm".to_owned(),
+                font_size: 2.0,
+            },
+        };
+        assert_eq!(editor.update(id(1), written).unwrap(), ids([1]));
+        assert_eq!(
+            editor.update(id(1), framed(0.0, 0.0, 100.0, 80.0)).unwrap(),
+            ids([1, 2])
+        );
+        assert_at(ends(&editor, 2)[1].0, 50.0, 80.0);
+    }
+
+    #[test]
+    fn an_end_follows_a_flat_frame_it_sticks_to() {
+        // `to` on a note drawn flat, as a horizontal drag leaves it.
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", framed(0.0, 100.0, 100.0, 0.0))),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    stuck((200.0, 200.0), None, (30.0, 100.0), Some(1)),
+                ),
+            ),
+        ]));
+        assert_eq!(
+            editor.board().stick(Point { x: 30.0, y: 100.0 }, 3.0),
+            Some((id(1), Point { x: 30.0, y: 100.0 }))
+        );
+
+        assert_eq!(
+            editor.translate(&ids([1]), 40.0, 40.0).unwrap(),
+            ids([1, 2])
+        );
+        let [_, (to, target)] = ends(&editor, 2);
+        assert_at(to, 70.0, 140.0);
+        assert_eq!(target, Some(id(1)));
+        // Around the note's centre, (90, 140), its line turns upright.
+        editor
+            .rotate(&ids([1]), Point { x: 90.0, y: 140.0 }, 90.0)
+            .unwrap();
+        assert_at(ends(&editor, 2)[1].0, 90.0, 120.0);
+        editor
+            .update(id(1), framed(40.0, 140.0, 100.0, 50.0))
+            .unwrap();
+        let [_, (to, target)] = ends(&editor, 2);
+        assert_eq!(target, Some(id(1)));
+        assert!(
+            lands_on(&editor.board().elements[&id(1)].kind, to),
+            "{to:?}"
+        );
+    }
+
+    #[test]
+    fn removing_what_an_end_sticks_to_frees_the_end_where_it_is() {
+        let mut editor = editor();
+        editor
+            .update(id(5), stuck((5.0, 5.0), Some(3), (25.0, 5.0), Some(4)))
+            .unwrap();
+        let before = editor.board().clone();
+
+        // With the note that stays, and within the group that goes.
+        assert_eq!(editor.remove(&ids([1])).unwrap(), ids([1, 2, 3, 5]));
+        let [(from, from_target), (_, to_target)] = ends(&editor, 5);
+        assert_at(from, 5.0, 5.0);
+        assert_eq!((from_target, to_target), (None, Some(id(4))));
+        assert_sound(&editor);
+        editor.undo();
+        assert_eq!(editor.board(), &before);
+
+        assert_eq!(editor.remove(&ids([4, 5])).unwrap(), ids([4, 5]));
+    }
+
+    #[test]
+    fn an_end_sticks_only_to_an_element_that_takes_ends() {
+        let mut editor = editor();
+        let refused = [
+            editor.add(id(6), None, stuck((0.0, 0.0), Some(9), (0.0, 0.0), None)),
+            editor.add(id(6), None, stuck((0.0, 0.0), None, (0.0, 0.0), Some(1))),
+            editor.update(id(5), stuck((0.0, 0.0), Some(5), (0.0, 0.0), None)),
+        ];
+        assert_eq!(
+            refused.map(|result| result.unwrap_err()),
+            [
+                Error::UnknownElement(id(9)),
+                Error::NotATarget(id(1)),
+                Error::NotATarget(id(5)),
+            ]
+        );
+        assert_eq!(
+            editor.add(id(6), None, stuck((0.0, 0.0), Some(2), (0.0, 0.0), Some(4))),
+            Ok(ids([6]))
         );
     }
 }

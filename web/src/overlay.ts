@@ -1,7 +1,7 @@
 // What shows over the board without being part of it: the outlines of the selection, its
-// handles, the rectangle that selects, and the bounds of the group gone into. It lies in board
-// space, so following the camera only moves its view box, and its strokes keep their width at
-// any zoom.
+// handles, the rectangle that selects, the bounds of the group gone into, and the outlines of
+// what the ends being drawn or moved stick to. It lies in board space, so following the camera
+// only moves its view box, and its strokes keep their width at any zoom.
 
 import type { Camera, Viewport } from "./camera.js";
 import type { Point, Rect } from "./core.js";
@@ -26,6 +26,8 @@ export interface Overlay {
   marquee(area: Rect | undefined): void;
   /** The corners of the group gone into, `undefined` to hide them. */
   entered(corners: Point[] | undefined): void;
+  /** What ends stick to, as `outline` takes them. */
+  targets(outlines: Float64Array[]): void;
 }
 
 /** The four corners of `box` unless it is too small, then the rotation handle above its top side. */
@@ -56,7 +58,9 @@ export function overlay(host: HTMLElement): Overlay {
   const entered = document.createElementNS(SVG, "polygon");
   entered.classList.add("entered");
   entered.setAttribute("display", "none");
-  svg.append(entered, selection, grips, marquee);
+  const targets = document.createElementNS(SVG, "g");
+  targets.classList.add("targets");
+  svg.append(entered, targets, selection, grips, marquee);
   host.append(svg);
   let zoom = 1;
   let corners: Point[] | undefined;
@@ -92,16 +96,7 @@ export function overlay(host: HTMLElement): Overlay {
       }
     },
     outline(outlines) {
-      selection.replaceChildren(
-        ...outlines
-          .filter((points) => points.length > 0)
-          .map((points) => {
-            // An arrow's two ends make a line, which a polygon would draw twice.
-            const shape = document.createElementNS(SVG, points.length > 4 ? "polygon" : "polyline");
-            shape.setAttribute("points", points.join(" "));
-            return shape;
-          }),
-      );
+      selection.replaceChildren(...shapes(outlines));
     },
     box(box) {
       corners = box;
@@ -131,5 +126,19 @@ export function overlay(host: HTMLElement): Overlay {
       entered.setAttribute("points", corners.flatMap(({ x, y }) => [x, y]).join(" "));
       entered.removeAttribute("display");
     },
+    targets(outlines) {
+      targets.replaceChildren(...shapes(outlines));
+    },
   };
+}
+
+function shapes(outlines: Float64Array[]): SVGElement[] {
+  return outlines
+    .filter((points) => points.length > 0)
+    .map((points) => {
+      // An arrow's two ends make a line, which a polygon would draw twice.
+      const shape = document.createElementNS(SVG, points.length > 4 ? "polygon" : "polyline");
+      shape.setAttribute("points", points.join(" "));
+      return shape;
+    });
 }

@@ -428,6 +428,7 @@ function refreshBar(): void {
 function hint(): string {
   // As the menus name them.
   const [escapeKey, insideKey] = [commands.escape, commands.goInside].map(({ keys }) => describe(keys[0]!));
+  const freeKey = mac ? "⌘" : "Ctrl";
   if (editing.writing() !== undefined) {
     return `${escapeKey} or click away to finish`;
   }
@@ -438,10 +439,10 @@ function hint(): string {
     return "Drag to move around";
   }
   if (tool === "arrow") {
-    return `Drag from where the arrow starts to where it points · ${escapeKey} to select again`;
+    return `Drag from where the arrow starts to where it points · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;
   }
   if (tool === "line") {
-    return `Drag from one end to the other · ${escapeKey} to select again`;
+    return `Drag from one end to the other · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;
   }
   if (tool === "rectangle" || tool === "ellipse" || tool === "cross" || tool === "sticky") {
     return `Drag to draw, or click to place · ${escapeKey} to select again`;
@@ -463,7 +464,7 @@ function hint(): string {
     return `Drag to move · double-click or ${insideKey} to edit the text · right-click for more`;
   }
   if (editing.loneSegment()) {
-    return "Drag to move · drag an end to move it · right-click for more";
+    return `Drag to move · drag an end to move it, holding ${freeKey} to keep it from sticking · right-click for more`;
   }
   if (editing.selection().length > 0) {
     return "Drag to move · corners scale · the circle rotates · right-click for more";

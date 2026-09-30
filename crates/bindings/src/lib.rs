@@ -21,6 +21,12 @@ struct BoardJson<'a> {
     background: Background,
 }
 
+#[derive(Serialize)]
+struct Stuck {
+    target: ElementId,
+    at: Point,
+}
+
 /// A board being edited, and the history of its edits. Every edit, undo, and redo returns the
 /// ids of the elements it touched, which leaves out the background.
 #[wasm_bindgen]
@@ -223,6 +229,15 @@ impl Editor {
     pub fn hit(&self, x: f64, y: f64, tolerance: f64) -> Option<String> {
         let hit = self.0.board().hit(Point { x, y }, tolerance);
         hit.as_ref().map(ElementId::to_string)
+    }
+
+    /// Where an arrow's or a line's end let go at a point sticks, as JSON: the element it
+    /// sticks to, and where, onto its outline when within `tolerance` of it. `undefined` when
+    /// nothing there takes ends.
+    pub fn stick(&self, x: f64, y: f64, tolerance: f64) -> Result<Option<String>, JsError> {
+        let stuck = self.0.board().stick(Point { x, y }, tolerance);
+        let json = stuck.map(|(target, at)| serde_json::to_string(&Stuck { target, at }));
+        Ok(json.transpose()?)
     }
 
     /// Every element that draws something within the rectangle, from back to front.

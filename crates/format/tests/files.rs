@@ -10,7 +10,9 @@ use board::{
 use format::{Error, Files, zip};
 
 const NOTE: ElementId = ElementId::from_random(3);
+const ELLIPSE: ElementId = ElementId::from_random(4);
 const ARROW: ElementId = ElementId::from_random(5);
+const STICKY: ElementId = ElementId::from_random(6);
 const IMAGE: &[u8] = b"not really a PNG";
 
 fn frame(width: f64, height: f64) -> Rect {
@@ -76,7 +78,7 @@ fn sample() -> Board {
         ),
         (NOTE, note(Some(group), "Warm light from the left")),
         (
-            ElementId::from_random(4),
+            ELLIPSE,
             Element {
                 group: None,
                 z: z("a1"),
@@ -103,11 +105,13 @@ fn sample() -> Board {
                         x: 1.0 / 11.0,
                         y: 2.0 / 13.0,
                     },
+                    from_target: Some(ELLIPSE),
+                    to_target: Some(STICKY),
                 },
             },
         ),
         (
-            ElementId::from_random(6),
+            STICKY,
             Element {
                 group: None,
                 z: z("a3"),
@@ -129,6 +133,8 @@ fn sample() -> Board {
                 kind: ElementKind::Line {
                     from: Point { x: -10.0, y: 5.0 },
                     to: Point { x: 30.0, y: 5.0 },
+                    from_target: None,
+                    to_target: None,
                 },
             },
         ),
@@ -219,7 +225,7 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
     fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
-    let cases: [(Edit, &[u128]); 10] = [
+    let cases: [(Edit, &[u128]); 13] = [
         (
             |editor| editor.add(id(10), None, note(None, "New").kind),
             &[10],
@@ -239,10 +245,26 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
         ),
         // The note cannot flip.
         (|editor| editor.flip(&[id(1)], true), &[2]),
-        (|editor| editor.restack(&[id(4)], Restack::Front), &[4]),
-        (|editor| editor.group(id(10), &[id(4), ARROW]), &[4, 5, 10]),
+        (|editor| editor.restack(&[ELLIPSE], Restack::Front), &[4]),
+        (
+            |editor| editor.group(id(10), &[ELLIPSE, ARROW]),
+            &[4, 5, 10],
+        ),
         (|editor| editor.ungroup(id(1)), &[1, 2, 3]),
         (|editor| editor.remove(&[ARROW]), &[5]),
+        // The arrow's ends stick to the ellipse and the sticky note.
+        (|editor| editor.translate(&[ELLIPSE], 8.0, -8.0), &[4, 5]),
+        (
+            |editor| {
+                let mut kind = editor.board().elements[&ELLIPSE].kind.clone();
+                if let ElementKind::Shape { text, .. } = &mut kind {
+                    text.content.push('!');
+                }
+                editor.update(ELLIPSE, kind)
+            },
+            &[4],
+        ),
+        (|editor| editor.remove(&[STICKY]), &[5, 6]),
     ];
     for (edit, touched) in cases {
         let mut editor = Editor::new(sample());
@@ -358,6 +380,32 @@ fn an_element_is_plain_json() {
       "content": "Warm light from the left",
       "font_size": 20.0
     }
+  }
+}
+"#
+    );
+}
+
+#[test]
+fn an_arrow_names_what_its_ends_stick_to() {
+    let files = format::write(&sample()).unwrap();
+    let arrow = String::from_utf8(files[&format!("elements/{ARROW}.json")].clone()).unwrap();
+    assert_eq!(
+        arrow,
+        r#"{
+  "z": "a2",
+  "kind": {
+    "type": "arrow",
+    "from": {
+      "x": 0.0,
+      "y": 0.0
+    },
+    "to": {
+      "x": 0.09090909090909091,
+      "y": 0.15384615384615385
+    },
+    "from_target": "00000000000000000000000000000004",
+    "to_target": "00000000000000000000000000000006"
   }
 }
 "#
@@ -521,8 +569,14 @@ fn a_damaged_element_file_is_named() {
 fn a_broken_structure_reads_back_repaired() {
     let mut board = sample();
     board.elements.get_mut(&NOTE).unwrap().group = Some(ElementId::from_random(99));
+    // As another branch would delete it.
+    board.elements.remove(&STICKY);
     let read = format::read(&format::write(&board).unwrap()).unwrap();
     assert_eq!(read.elements[&NOTE].group, None);
+    let ElementKind::Arrow { to_target, .. } = &read.elements[&ARROW].kind else {
+        unreachable!()
+    };
+    assert_eq!(*to_target, None);
 }
 
 #[test]
