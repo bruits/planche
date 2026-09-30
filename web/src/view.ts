@@ -12,8 +12,10 @@ export interface View {
   clear(): void;
   /** On the next frame, however often it is called before. */
   redraw(): void;
-  /** Where on the board the event's pointer is, `undefined` when nothing is shown. */
-  at(event: MouseEvent): Point | undefined;
+  /** Where on the board a point of the page is, `undefined` when nothing is shown. */
+  at(point: { clientX: number; clientY: number }): Point | undefined;
+  /** Where on the board the viewport's centre is, `undefined` when nothing is shown. */
+  centre(): Point | undefined;
   /** CSS pixels per board unit, `undefined` when nothing is shown. */
   zoom(): number | undefined;
 }
@@ -128,13 +130,20 @@ export function view(host: HTMLElement, { drawn, failed }: Drawing): View {
       shown = undefined;
     },
     redraw,
-    at(event) {
+    at({ clientX, clientY }) {
       if (!shown) {
         return undefined;
       }
       const { x, y, zoom } = shown.camera;
       const box = host.getBoundingClientRect();
-      return { x: x + (event.clientX - box.left) / zoom, y: y + (event.clientY - box.top) / zoom };
+      return { x: x + (clientX - box.left) / zoom, y: y + (clientY - box.top) / zoom };
+    },
+    centre() {
+      if (!shown) {
+        return undefined;
+      }
+      const { x, y, zoom } = shown.camera;
+      return { x: x + host.clientWidth / 2 / zoom, y: y + host.clientHeight / 2 / zoom };
     },
     zoom: () => shown?.camera.zoom,
   };

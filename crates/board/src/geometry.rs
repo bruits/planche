@@ -93,24 +93,33 @@ fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
     }
 }
 
+impl Point {
+    /// Turned clockwise by `degrees` around `pivot`, as y points down.
+    pub(crate) fn turned(self, pivot: Point, degrees: f64) -> Point {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let (x, y) = (self.x - pivot.x, self.y - pivot.y);
+        Point {
+            x: pivot.x + x * cos - y * sin,
+            y: pivot.y + x * sin + y * cos,
+        }
+    }
+}
+
+impl Rect {
+    pub(crate) fn centre(&self) -> Point {
+        Point {
+            x: self.x + self.width / 2.0,
+            y: self.y + self.height / 2.0,
+        }
+    }
+}
+
 /// Clockwise from the top-left, once turned clockwise by `degrees` around the centre.
 fn corners(rect: &Rect, degrees: f64) -> [Point; 4] {
-    let (sin, cos) = degrees.to_radians().sin_cos();
-    let (half_width, half_height) = (rect.width / 2.0, rect.height / 2.0);
-    let centre = Point {
-        x: rect.x + half_width,
-        y: rect.y + half_height,
-    };
-    [
-        (-half_width, -half_height),
-        (half_width, -half_height),
-        (half_width, half_height),
-        (-half_width, half_height),
-    ]
-    .map(|(x, y)| Point {
-        x: centre.x + x * cos - y * sin,
-        y: centre.y + x * sin + y * cos,
-    })
+    let (left, top) = (rect.x, rect.y);
+    let (right, bottom) = (left + rect.width, top + rect.height);
+    [(left, top), (right, top), (right, bottom), (left, bottom)]
+        .map(|(x, y)| Point { x, y }.turned(rect.centre(), degrees))
 }
 
 fn near(shape: &[Point], point: Point, tolerance: f64) -> bool {

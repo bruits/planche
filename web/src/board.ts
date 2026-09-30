@@ -2,7 +2,7 @@
 // images decoded by the browser.
 
 import * as core from "./core.js";
-import type { Board, Editor, Files } from "./core.js";
+import type { Board, Bytes, Editor, Files, Kind, Point, Rect, Size } from "./core.js";
 import { milliseconds, timed } from "./metrics.js";
 import type { Folder } from "./platform.js";
 import type { Placed } from "./renderer.js";
@@ -12,13 +12,24 @@ export interface Opened {
   editor: Editor;
   /** The editor's board, as `refresh` keeps it. */
   board: Board;
+  /** The assets of the images added since it opened, by path, which its folder lacks. */
+  added: Map<string, Blob>;
+}
+
+/** An image to add, decoded. */
+export interface Added {
+  asset: string;
+  bytes: Blob;
+  natural: Size;
+  /** Capped as `decode` caps them. */
+  bitmap: ImageBitmap;
 }
 
 /** An asset that images show, still encoded. */
 export interface Asset {
   asset: string;
   blob: Blob;
-  natural: { width: number; height: number };
+  natural: Size;
 }
 
 /**
@@ -46,7 +57,83 @@ export async function open(
   timings.set(`list ${paths.length} files`, milliseconds(listing));
   timings.set(`read ${files.size} files`, milliseconds(reading));
   timings.set("parse", milliseconds(parsing));
-  return { folder, editor, board: core.board(editor) };
+  return { folder, editor, board: core.board(editor), added: new Map() };
+}
+
+/** A new board, which has no folder yet. */
+export function untitled(): Opened {
+  const folder: Folder = {
+    name: "Untitled",
+    list: async () => [],
+    read: async (path) => {
+      throw new Error(`${path} is not in the board`);
+    },
+  };
+  const editor = new core.Editor();
+  return { folder, editor, board: core.board(editor), added: new Map() };
+}
+
+/** Its files as they stand: its folder's, and the assets of the images added since. */
+export function files({ folder, added }: Opened): Folder {
+  return {
+    ...folder,
+    read: async (path) => {
+      const blob = added.get(path);
+      return blob ? (new Uint8Array(await blob.arrayBuffer()) as Bytes) : folder.read(path);
+    },
+  };
+}
+
+/** Throws when the bytes are not an image the host can decode. */
+export async function prepare(bytes: Blob, cap: number): Promise<Added> {
+  const head = new Uint8Array(await bytes.slice(0, 256).arrayBuffer());
+  // Vector images have no size of their own in pixels, and hosts decode them unevenly.
+  if (new TextDecoder().decode(head).trimStart().startsWith("<")) {
+    throw new Error("an SVG or other vector image");
+  }
+  const asset = await digest(new Uint8Array(await bytes.arrayBuffer()));
+  const full = await createImageBitmap(bytes, { imageOrientation: "from-image" });
+  const natural = { width: full.width, height: full.height };
+  const { width, height } = capped(natural, cap);
+  if (width === natural.width && height === natural.height) {
+    return { asset, bytes, natural, bitmap: full };
+  }
+  const bitmap = await createImageBitmap(full, {
+    resizeWidth: width,
+    resizeHeight: height,
+    resizeQuality: "high",
+  }).finally(() => full.close());
+  return { asset, bytes, natural, bitmap };
+}
+
+export function newId(): string {
+  return hex(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+/**
+ * The asset id of `bytes`, which the host hashes without holding the page up where it can. Only
+ * a secure context can, which the macOS webview may not be.
+ */
+async function digest(bytes: Bytes): Promise<string> {
+  return crypto.subtle ? hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))) : core.assetId(bytes);
+}
+
+function hex(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export function imageKind(asset: string, natural: Size, frame: Rect): Kind {
+  const edits = { crop: null, flip_horizontal: false, flip_vertical: false, greyscale: false };
+  return { type: "image", asset, natural_size: natural, frame, rotation: 0, edits };
+}
+
+export function row(sizes: Size[], at: Point): Rect[] {
+  let x = at.x - sizes.reduce((sum, { width }) => sum + width, 0) / 2;
+  return sizes.map(({ width, height }) => {
+    const frame = { x, y: at.y - height / 2, width, height };
+    x += width;
+    return frame;
+  });
 }
 
 export function refresh({ editor, board }: Opened, touched: string[]): void {
@@ -65,7 +152,23 @@ export function refresh({ editor, board }: Opened, touched: string[]): void {
 export function images(board: Board): Placed[] {
   return board.draw_order.flatMap((id) => {
     const { kind } = board.elements[id]!;
-    return kind.type === "image" ? [{ asset: kind.asset, frame: kind.frame, rotation: kind.rotation }] : [];
+    if (kind.type !== "image") {
+      return [];
+    }
+    const { width, height } = kind.natural_size;
+    const { crop, flip_horizontal, flip_vertical, greyscale } = kind.edits;
+    const shown = crop ?? { x: 0, y: 0, width, height };
+    let [x, y] = [shown.x / width, shown.y / height];
+    let [across, down] = [shown.width / width, shown.height / height];
+    // Flipped within the crop.
+    if (flip_horizontal) {
+      [x, across] = [x + across, -across];
+    }
+    if (flip_vertical) {
+      [y, down] = [y + down, -down];
+    }
+    const texture = { x, y, width: across, height: down };
+    return [{ asset: kind.asset, frame: kind.frame, rotation: kind.rotation, texture, greyscale }];
   });
 }
 
@@ -89,11 +192,11 @@ export async function decode(assets: Asset[], cap: number): Promise<Map<string, 
   const pending = assets.values();
   const worker = async () => {
     for (const { asset, blob, natural } of pending) {
-      const scale = Math.min(1, cap / Math.max(natural.width, natural.height));
+      const { width, height } = capped(natural, cap);
       const bitmap = await createImageBitmap(blob, {
         imageOrientation: "from-image",
-        resizeWidth: Math.round(natural.width * scale),
-        resizeHeight: Math.round(natural.height * scale),
+        resizeWidth: width,
+        resizeHeight: height,
         resizeQuality: "high",
       });
       bitmaps.set(asset, bitmap);
@@ -106,4 +209,9 @@ export async function decode(assets: Asset[], cap: number): Promise<Map<string, 
     throw failed.reason;
   }
   return bitmaps;
+}
+
+function capped(size: Size, cap: number): Size {
+  const scale = Math.min(1, cap / Math.max(size.width, size.height));
+  return { width: Math.round(size.width * scale), height: Math.round(size.height * scale) };
 }

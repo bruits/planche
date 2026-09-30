@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use board::{AssetId, Board, Element, ElementId, Point, Rect};
+use board::{AssetId, Board, Element, ElementId, ElementKind, Point, Rect, Restack};
 use format::zip;
 use js_sys::{Map, Uint8Array};
 use serde::Serialize;
@@ -20,10 +20,16 @@ struct BoardJson<'a> {
 /// A board being edited, and the history of its edits. Every edit, undo, and redo returns the
 /// ids of the elements it touched.
 #[wasm_bindgen]
+#[derive(Default)]
 pub struct Editor(board::Editor);
 
 #[wasm_bindgen]
 impl Editor {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Reads a board from its files, all but the assets.
     pub fn read(paths: Vec<String>, contents: Vec<Uint8Array>) -> Result<Editor, JsError> {
         let files = paths
@@ -68,6 +74,56 @@ impl Editor {
         Ok(strings(self.0.remove(&parse(ids)?)?))
     }
 
+    /// On top of the top level, `kind` as JSON.
+    pub fn add(&mut self, id: &str, kind: &str) -> Result<Vec<String>, JsError> {
+        let kind: ElementKind = serde_json::from_str(kind)?;
+        Ok(strings(self.0.add(id.parse()?, None, kind)?))
+    }
+
+    pub fn scale(
+        &mut self,
+        ids: Vec<String>,
+        x: f64,
+        y: f64,
+        factor: f64,
+    ) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.scale(
+            &parse(ids)?,
+            Point { x, y },
+            factor,
+        )?))
+    }
+
+    pub fn rotate(
+        &mut self,
+        ids: Vec<String>,
+        x: f64,
+        y: f64,
+        degrees: f64,
+    ) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.rotate(
+            &parse(ids)?,
+            Point { x, y },
+            degrees,
+        )?))
+    }
+
+    pub fn flip(&mut self, ids: Vec<String>, horizontally: bool) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.flip(&parse(ids)?, horizontally)?))
+    }
+
+    /// `to` is `forward`, `backward`, `front`, or `back`.
+    pub fn restack(&mut self, ids: Vec<String>, to: &str) -> Result<Vec<String>, JsError> {
+        let to = match to {
+            "forward" => Restack::Forward,
+            "backward" => Restack::Backward,
+            "front" => Restack::Front,
+            "back" => Restack::Back,
+            _ => return Err(JsError::new(&format!("`{to}` is not a way to restack"))),
+        };
+        Ok(strings(self.0.restack(&parse(ids)?, to)?))
+    }
+
     /// Whether the board is as it was when read or last saved, however it got back there.
     #[wasm_bindgen(js_name = isSaved)]
     pub fn is_saved(&self) -> bool {
@@ -88,6 +144,12 @@ impl Editor {
     #[wasm_bindgen(js_name = beginGesture)]
     pub fn begin_gesture(&mut self) {
         self.0.begin_gesture();
+    }
+
+    /// Takes the open gesture's edits back and keeps it open.
+    #[wasm_bindgen(js_name = rewindGesture)]
+    pub fn rewind_gesture(&mut self) -> Vec<String> {
+        strings(self.0.rewind_gesture())
     }
 
     #[wasm_bindgen(js_name = endGesture)]
@@ -136,13 +198,11 @@ impl Editor {
             .collect())
     }
 
-    /// The x, y, width, and height of what the whole board draws, `undefined` when it draws
-    /// nothing.
-    pub fn bounds(&self) -> Option<Vec<f64>> {
-        let board = self.0.board();
-        let ids: Vec<ElementId> = board.elements.keys().copied().collect();
-        let bounds = board.bounds(&ids)?;
-        Some(vec![bounds.x, bounds.y, bounds.width, bounds.height])
+    /// The x, y, width, and height of what the elements draw, their groups' elements included,
+    /// `undefined` when they draw nothing.
+    pub fn bounds(&self, ids: Vec<String>) -> Result<Option<Vec<f64>>, JsError> {
+        let bounds = self.0.board().bounds(&parse(ids)?);
+        Ok(bounds.map(|bounds| vec![bounds.x, bounds.y, bounds.width, bounds.height]))
     }
 }
 
@@ -191,6 +251,11 @@ pub fn is_asset_file(path: &str) -> bool {
 #[wasm_bindgen(js_name = assetPath)]
 pub fn asset_path(asset: &str) -> Result<String, JsError> {
     Ok(format::asset_path(asset.parse::<AssetId>()?))
+}
+
+#[wasm_bindgen(js_name = assetId)]
+pub fn asset_id(bytes: &[u8]) -> String {
+    AssetId::of(bytes).to_string()
 }
 
 #[wasm_bindgen(js_name = verifyAsset)]

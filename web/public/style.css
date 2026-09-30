@@ -64,6 +64,13 @@ main {
   stroke-width: 1px;
 }
 
+.handles > * {
+  fill: Canvas;
+  stroke: Highlight;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
 #unsaved {
   opacity: 0.6;
 }

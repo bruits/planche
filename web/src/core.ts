@@ -6,6 +6,7 @@ import init, {
   Snapshot,
   ZipIndex,
   ZipWriter,
+  assetId,
   assetPath,
   fileDepth,
   isAssetFile,
@@ -21,6 +22,7 @@ export {
   Snapshot,
   ZipIndex,
   ZipWriter,
+  assetId,
   assetPath,
   fileDepth,
   isAssetFile,
@@ -47,14 +49,20 @@ export interface Point {
   y: number;
 }
 
+export interface Size {
+  width: number;
+  height: number;
+}
+
 /** Mirrors `board::ElementKind`, as far as the shells read it. */
 export type Kind =
   | {
       type: "image";
       asset: string;
-      natural_size: { width: number; height: number };
+      natural_size: Size;
       frame: Rect;
       rotation: number;
+      edits: { crop: Rect | null; flip_horizontal: boolean; flip_vertical: boolean; greyscale: boolean };
     }
   | { type: "note"; frame: Rect; rotation: number; text: string }
   | { type: "shape"; frame: Rect; rotation: number; shape: "rectangle" | "ellipse" }
@@ -98,9 +106,9 @@ export function element(editor: Editor, id: string): Element | undefined {
   return json === undefined ? undefined : (JSON.parse(json) as Element);
 }
 
-/** What the whole board draws over, `undefined` when it draws nothing. */
-export function bounds(editor: Editor): Rect | undefined {
-  const bounds = editor.bounds();
+/** What the elements draw over, their groups' elements included, `undefined` when nothing. */
+export function bounds(editor: Editor, ids: string[]): Rect | undefined {
+  const bounds = editor.bounds(ids);
   return bounds && { x: bounds[0]!, y: bounds[1]!, width: bounds[2]!, height: bounds[3]! };
 }
 

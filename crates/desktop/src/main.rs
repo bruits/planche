@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use percent_encoding::percent_decode_str;
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::{AppHandle, Manager, State, Window, WindowEvent, Wry};
+use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, Window, WindowEvent, Wry};
 use tauri_plugin_dialog::{
     DialogExt, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind,
 };
@@ -24,22 +24,41 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Picked::default())
         .manage(Unsaved::default())
-        .on_window_event(|window, event| {
-            let WindowEvent::CloseRequested { api, .. } = event else {
-                return;
-            };
-            if !window.state::<Unsaved>().0.load(Ordering::Relaxed) {
-                return;
-            }
-            // The dialog cannot block here, on the main thread, so the window closes later.
-            api.prevent_close();
-            let closing = window.clone();
-            ask(window, "Close, and lose the changes to this board?").show(move |close| {
-                if close {
-                    // It only fails once the window is gone anyway.
-                    let _ = closing.destroy();
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
+                if !window.state::<Unsaved>().0.load(Ordering::Relaxed) {
+                    return;
                 }
-            });
+                // The dialog cannot block here, on the main thread, so the window closes later.
+                api.prevent_close();
+                let closing = window.clone();
+                ask(window, "Close, and lose the changes to this board?").show(move |close| {
+                    if close {
+                        // It only fails once the window is gone anyway.
+                        let _ = closing.destroy();
+                    }
+                });
+            }
+            // Only on Linux, where drags from a web page come through here too, and there the
+            // position is in CSS pixels.
+            WindowEvent::DragDrop(DragDropEvent::Drop { paths, position }) => {
+                // A page's image comes as its address, which wry takes for a relative path.
+                let (files, addresses): (Vec<PathBuf>, Vec<PathBuf>) =
+                    paths.iter().cloned().partition(|path| path.is_absolute());
+                let addresses: Vec<String> = addresses
+                    .iter()
+                    .map(|address| address.to_string_lossy().into_owned())
+                    .collect();
+                let picked = window.state::<Picked>();
+                picked
+                    .dropped
+                    .lock()
+                    .expect("never poisoned")
+                    .extend(files.iter().cloned());
+                // Only once they may be read. It only fails once the window is gone anyway.
+                let _ = window.emit("dropped", (files, addresses, position.x, position.y));
+            }
+            _ => {}
         })
         .on_menu_event(|app, event| {
             if event.id() == QUIT {
@@ -51,6 +70,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             confirm,
             mark_unsaved,
+            read_dropped,
             pick_folder,
             pick_target,
             list_files,
@@ -88,12 +108,20 @@ fn main() {
         app_menu.insert(&quit, at)?;
         Ok(menu)
     });
-    builder
-        .run(tauri::generate_context!())
-        .expect("the app runs");
+    let context = tauri::generate_context!();
+    // WebKitGTK gives pages no dropped files, so the shell takes them there.
+    #[cfg(target_os = "linux")]
+    let context = {
+        let mut context = context;
+        for window in &mut context.config_mut().app.windows {
+            window.drag_drop_enabled = true;
+        }
+        context
+    };
+    builder.run(context).expect("the app runs");
 }
 
-/// The folders and files the user picked, the only ones the webview may touch, so that a
+/// The folders and files the user picked or dropped, the only ones the webview may touch, so that a
 /// script injected into it could not reach the rest of the disk. It may only write into
 /// folders that were empty when picked, which hold nothing but what the app wrote, and to
 /// files picked to export to, which only change once the export is complete.
@@ -103,6 +131,7 @@ struct Picked {
     writable: Mutex<BTreeSet<PathBuf>>,
     zips: Mutex<BTreeMap<PathBuf, folder::Stamp>>,
     exports: Mutex<BTreeMap<PathBuf, folder::Draft>>,
+    dropped: Mutex<BTreeSet<PathBuf>>,
 }
 
 #[derive(Default)]
@@ -141,6 +170,14 @@ fn confirm(window: Window, question: String) -> bool {
 #[tauri::command]
 fn mark_unsaved(unsaved: State<'_, Unsaved>, value: bool) {
     unsaved.0.store(value, Ordering::Relaxed);
+}
+
+#[tauri::command(async)]
+fn read_dropped(picked: State<'_, Picked>, path: PathBuf) -> Result<Response, String> {
+    check(&picked.dropped, &path)?;
+    std::fs::read(&path)
+        .map(Response::new)
+        .map_err(|error| describe(&path, error))
 }
 
 /// A folder to read. `None` when the user cancels.

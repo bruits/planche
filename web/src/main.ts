@@ -1,8 +1,24 @@
-// The app: open a board, from a folder or a ZIP file, look around it and edit it, and save it
-// elsewhere or export it.
+// The app: start a board, or open one from a folder or a ZIP file, look around it, add images
+// to it and edit it, and save it elsewhere or export it.
 
 import * as core from "./core.js";
-import { decode, images, open, readAssets, refresh, type Opened } from "./board.js";
+import type { Point } from "./core.js";
+import { receive, type Incoming } from "./add.js";
+import {
+  decode,
+  files,
+  imageKind,
+  images,
+  open,
+  prepare,
+  readAssets,
+  newId,
+  refresh,
+  row,
+  untitled,
+  type Added,
+  type Opened,
+} from "./board.js";
 import { fit } from "./camera.js";
 import { edits } from "./edit.js";
 import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./metrics.js";
@@ -15,6 +31,7 @@ import { writeZip, zipFolder } from "./zip.js";
 /** WebGL2 guarantees textures this large. */
 const LONGEST_SIDE = 2048;
 
+const newButton = byId<HTMLButtonElement>("new");
 const openButton = byId<HTMLButtonElement>("open");
 const openZipButton = byId<HTMLButtonElement>("open-zip");
 const saveButton = byId<HTMLButtonElement>("save-as");
@@ -38,62 +55,134 @@ let exporting = false;
 await core.start();
 byId("platform").textContent = platform.name;
 saveButton.title = platform.cannotSave ?? "";
+newButton.addEventListener("click", () => report(newBoard()));
 openButton.addEventListener("click", () => report(openBoard(() => platform.open())));
 openZipButton.addEventListener("click", () => report(openBoard(openZip)));
 saveButton.addEventListener("click", () => report(saveAs()));
 exportButton.addEventListener("click", () => report(exportZip()));
+receive(viewport, (incoming, at) => report(addImages(incoming, at)));
 watchFrameRate(showMetrics);
+// Something to drop images on from the start.
+report(opening(() => show(untitled())));
 
 async function openZip(): Promise<Folder | null> {
   const file = await platform.openZip();
   return file && zipFolder(file);
 }
 
-async function openBoard(pick: () => Promise<Folder | null>): Promise<void> {
-  // Two boards opening at once would free each other's editor.
-  openButton.disabled = true;
-  openZipButton.disabled = true;
+/** Two boards opening at once would free each other's editor. */
+async function opening(work: () => Promise<void>): Promise<void> {
+  const buttons = [newButton, openButton, openZipButton];
+  buttons.forEach((button) => (button.disabled = true));
   try {
+    await work();
+  } finally {
+    buttons.forEach((button) => (button.disabled = false));
+  }
+}
+
+const question = "Leave this board, and lose its changes?";
+
+async function newBoard(): Promise<void> {
+  await opening(async () => {
+    if (opened === undefined || opened.editor.isSaved() || (await platform.confirm(question))) {
+      await show(untitled());
+    }
+  });
+}
+
+async function openBoard(pick: () => Promise<Folder | null>): Promise<void> {
+  await opening(async () => {
     // Asked once picked, since a browser only opens a picker right after a click.
-    const question = "Open another board, and lose the changes to this one?";
     const next = await open(async () => {
       const folder = await pick();
       const losing = folder !== null && opened !== undefined && !opened.editor.isSaved();
       return losing && !(await platform.confirm(question)) ? null : folder;
     }, details);
-    if (next === null) {
-      return;
+    if (next !== null) {
+      await show(next);
     }
-    // The core's memory holds it until freed.
-    opened?.editor.free();
-    opened = next;
-    renderer = undefined;
-    showSaved();
-    editing.reset();
-    saveButton.disabled = platform.cannotSave !== undefined;
-    exportButton.disabled = exporting;
-    const summary = `${next.folder.name}: ${next.board.draw_order.length} elements`;
-    status.textContent = summary;
-    viewport.clear();
-    const [assets, reading] = await timed(() => readAssets(next));
-    details.set(`read ${assets.length} images`, milliseconds(reading));
-    const { width, height } = viewport.size();
-    const created = await create(viewport.host, width, height);
-    details.set("renderer", created.backend);
-    viewport.show(created, fit(core.bounds(next.editor), viewport.size()));
-    renderer = created;
-    status.textContent = `${summary}, decoding ${assets.length} images…`;
-    const [bitmaps, decoding] = await timed(() => decode(assets, LONGEST_SIDE));
-    details.set("decode", milliseconds(decoding));
-    const [, uploading] = await timed(() => created.load(bitmaps));
-    details.set("upload", milliseconds(uploading));
-    created.place(images(next.board));
-    viewport.redraw();
-    status.textContent = summary;
-  } finally {
-    openButton.disabled = false;
-    openZipButton.disabled = false;
+  });
+}
+
+async function show(next: Opened): Promise<void> {
+  // The core's memory holds it until freed.
+  opened?.editor.free();
+  opened = next;
+  renderer = undefined;
+  showSaved();
+  editing.reset();
+  saveButton.disabled = platform.cannotSave !== undefined;
+  exportButton.disabled = exporting;
+  const summary = summarise(next);
+  status.textContent = summary;
+  viewport.clear();
+  const [assets, reading] = await timed(() => readAssets(next));
+  details.set(`read ${assets.length} images`, milliseconds(reading));
+  const { width, height } = viewport.size();
+  const created = await create(viewport.host, width, height);
+  details.set("renderer", created.backend);
+  viewport.show(created, fit(core.bounds(next.editor, next.board.draw_order), viewport.size()));
+  renderer = created;
+  status.textContent = `${summary}, decoding ${assets.length} images…`;
+  const [bitmaps, decoding] = await timed(() => decode(assets, LONGEST_SIDE));
+  details.set("decode", milliseconds(decoding));
+  const [, uploading] = await timed(() => created.load(bitmaps));
+  details.set("upload", milliseconds(uploading));
+  created.place(images(next.board));
+  viewport.redraw();
+  status.textContent = summary;
+}
+
+/** At their natural size, side by side around `at`, and as one edit. */
+async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void> {
+  const target = opened;
+  const added: Added[] = [];
+  const failures: string[] = [];
+  for (const image of await incoming) {
+    if ("failure" in image) {
+      failures.push(`${image.name}: ${image.failure}`);
+      continue;
+    }
+    try {
+      added.push(await prepare(image.bytes, LONGEST_SIDE));
+    } catch (error) {
+      const reason = error instanceof Error && error.message ? error.message : String(error);
+      failures.push(`${image.name}: this app cannot open it here (${reason})`);
+    }
   }
+  await editing.idle();
+  if (added.length > 0 && target !== undefined && target === opened && renderer !== undefined) {
+    renderer.load(new Map(added.map(({ asset, bitmap }) => [asset, bitmap])));
+    const { editor } = target;
+    const frames = row(
+      added.map(({ natural }) => natural),
+      at,
+    );
+    const ids = added.map(() => newId());
+    const touched: string[] = [];
+    editor.beginGesture();
+    try {
+      added.forEach(({ asset, bytes, natural }, at) => {
+        target.added.set(core.assetPath(asset), bytes);
+        touched.push(...editor.add(ids[at]!, JSON.stringify(imageKind(asset, natural, frames[at]!))));
+      });
+    } finally {
+      editor.endGesture();
+    }
+    changed(touched);
+    editing.select(ids);
+    status.textContent = summarise(target);
+  } else {
+    added.forEach(({ bitmap }) => bitmap.close());
+  }
+  if (failures.length > 0) {
+    status.textContent = `Not added, ${failures.join("; ")}`;
+  }
+}
+
+function summarise({ folder, board }: Opened): string {
+  return `${folder.name}: ${board.draw_order.length} elements`;
 }
 
 function changed(touched: string[]): void {
@@ -110,7 +199,8 @@ async function saveAs(): Promise<void> {
   if (opened === undefined) {
     return;
   }
-  const { folder, editor } = opened;
+  const { editor } = opened;
+  const folder = files(opened);
   // Editing goes on while the files are written, and another board may even open.
   const snapshot = editor.snapshot();
   try {
@@ -141,7 +231,8 @@ async function exportZip(): Promise<void> {
   if (opened === undefined || exporting) {
     return;
   }
-  const { folder, editor } = opened;
+  const { editor } = opened;
+  const folder = files(opened);
   exporting = true;
   exportButton.disabled = true;
   const snapshot = editor.snapshot();

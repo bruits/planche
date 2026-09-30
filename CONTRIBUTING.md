@@ -40,7 +40,7 @@ The core for the web app, through [wasm-bindgen](https://github.com/wasm-bindgen
 
 ### desktop
 
-The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web app, and the file system that a browser lacks, limited to the folders and ZIP files the user picks, and writing only into folders that were empty and to files picked to export to. It asks before closing a window loses changes. It is the Tauri track from the [foundation](./docs/technical/foundation.md), under test in the prototype.
+The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web app, and the file system that a browser lacks, limited to the folders and ZIP files the user picks and the files dropped on it, and writing only into folders that were empty and to files picked to export to. It asks before closing a window loses changes. The webview takes dropped files itself, but not on Linux, where WebKitGTK hides them from pages, so the shell takes them there. It is the Tauri track from the [foundation](./docs/technical/foundation.md), under test in the prototype.
 
 ### renderer
 

@@ -15,4 +15,8 @@ interface TauriApi {
       options?: { headers: Record<string, string> },
     ): Promise<T>;
   };
+  event: {
+    /** Resolves to what stops listening. */
+    listen<T>(event: string, handler: (event: { payload: T }) => void): Promise<() => void>;
+  };
 }

@@ -113,6 +113,9 @@ export const browser: Platform = {
   markUnsaved(value) {
     unsaved = value;
   },
+
+  // The page sees them all.
+  watchDrops() {},
 };
 
 async function walk(folder: FileSystemDirectoryHandle, prefix: string, depth: number): Promise<string[]> {

@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
-use crate::{Board, Element, ElementId, ElementKind, Error, Result, ZIndex};
+use crate::{Board, Element, ElementId, ElementKind, Error, Point, Result, ZIndex};
 
 /// Where an element moves among the elements of its group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,47 +126,206 @@ impl Editor {
 
     /// With the elements of the moved groups.
     pub fn translate(&mut self, ids: &[ElementId], dx: f64, dy: f64) -> Result<Vec<ElementId>> {
-        let mut step = Step::new();
-        for id in self.with_descendants(ids)? {
-            let change = self.change(id, |mut element| {
-                match &mut element.kind {
-                    ElementKind::Image { frame, .. }
-                    | ElementKind::Note { frame, .. }
-                    | ElementKind::Shape { frame, .. } => {
-                        frame.x += dx;
-                        frame.y += dy;
-                    }
-                    ElementKind::Arrow { from, to } => {
-                        for point in [from, to] {
-                            point.x += dx;
-                            point.y += dy;
-                        }
-                    }
-                    ElementKind::Group => {}
+        self.reshape(ids, |kind| match kind {
+            ElementKind::Image { frame, .. }
+            | ElementKind::Note { frame, .. }
+            | ElementKind::Shape { frame, .. } => {
+                frame.x += dx;
+                frame.y += dy;
+            }
+            ElementKind::Arrow { from, to } => {
+                for point in [from, to] {
+                    point.x += dx;
+                    point.y += dy;
                 }
-                Some(element)
-            });
-            check_finite(id, &change.after.as_ref().expect("moved").kind)?;
-            step.insert(id, change);
-        }
-        self.record(step)
+            }
+            ElementKind::Group => {}
+        })
     }
 
-    pub fn restack(&mut self, id: ElementId, to: Restack) -> Result<Vec<ElementId>> {
-        let element = self.get(id)?;
-        let key = (element.z.clone(), id);
-        let siblings = self.siblings(element.group, &BTreeSet::from([id]));
-        let below = siblings.partition_point(|sibling| *sibling < key);
-        let at = match to {
-            Restack::Forward => (below + 1).min(siblings.len()),
-            Restack::Backward => below.saturating_sub(1),
-            Restack::Front => siblings.len(),
-            Restack::Back => 0,
-        };
-        if at == below {
-            return Ok(Vec::new());
+    /// With the elements of the scaled groups, around `origin`. The scale is the same both
+    /// ways, so rotations hold.
+    pub fn scale(
+        &mut self,
+        ids: &[ElementId],
+        origin: Point,
+        factor: f64,
+    ) -> Result<Vec<ElementId>> {
+        if !(factor.is_finite() && factor > 0.0) {
+            return Err(Error::NotAScale);
         }
-        let step = self.rekey(place(&siblings, at, &[id]));
+        // Its arithmetic would not give the same floats back.
+        if factor == 1.0 {
+            return self.with_descendants(ids).map(|_| Vec::new());
+        }
+        let scaled = |point: &mut Point| {
+            point.x = origin.x + (point.x - origin.x) * factor;
+            point.y = origin.y + (point.y - origin.y) * factor;
+        };
+        self.reshape(ids, |kind| match kind {
+            ElementKind::Image { frame, .. }
+            | ElementKind::Note { frame, .. }
+            | ElementKind::Shape { frame, .. } => {
+                let mut centre = frame.centre();
+                scaled(&mut centre);
+                frame.width *= factor;
+                frame.height *= factor;
+                frame.x = centre.x - frame.width / 2.0;
+                frame.y = centre.y - frame.height / 2.0;
+            }
+            ElementKind::Arrow { from, to } => {
+                scaled(from);
+                scaled(to);
+            }
+            ElementKind::Group => {}
+        })
+    }
+
+    /// With the elements of the turned groups, clockwise around `pivot`.
+    pub fn rotate(
+        &mut self,
+        ids: &[ElementId],
+        pivot: Point,
+        degrees: f64,
+    ) -> Result<Vec<ElementId>> {
+        if degrees == 0.0 {
+            return self.with_descendants(ids).map(|_| Vec::new());
+        }
+        self.reshape(ids, |kind| match kind {
+            ElementKind::Image {
+                frame, rotation, ..
+            }
+            | ElementKind::Note {
+                frame, rotation, ..
+            }
+            | ElementKind::Shape {
+                frame, rotation, ..
+            } => {
+                let centre = frame.centre().turned(pivot, degrees);
+                frame.x = centre.x - frame.width / 2.0;
+                frame.y = centre.y - frame.height / 2.0;
+                // An angle has a single spelling, so that equal boards write the same bytes.
+                // Rounding can bring a tiny negative angle up to 360.
+                let turned = (*rotation + degrees).rem_euclid(360.0);
+                *rotation = if turned < 360.0 { turned } else { 0.0 };
+            }
+            ElementKind::Arrow { from, to } => {
+                *from = from.turned(pivot, degrees);
+                *to = to.turned(pivot, degrees);
+            }
+            ElementKind::Group => {}
+        })
+    }
+
+    /// Flips each image among the elements, with those of the flipped groups, in its place.
+    pub fn flip(&mut self, ids: &[ElementId], horizontally: bool) -> Result<Vec<ElementId>> {
+        self.reshape(ids, |kind| {
+            if let ElementKind::Image { edits, .. } = kind {
+                let flipped = if horizontally {
+                    &mut edits.flip_horizontal
+                } else {
+                    &mut edits.flip_vertical
+                };
+                *flipped = !*flipped;
+            }
+        })
+    }
+
+    /// Moves the elements among their siblings and keeps their order, forward or backward past
+    /// the nearest sibling that stays, or to an end.
+    pub fn restack(&mut self, ids: &[ElementId], to: Restack) -> Result<Vec<ElementId>> {
+        let mut moving: BTreeMap<Option<ElementId>, BTreeSet<ElementId>> = BTreeMap::new();
+        for id in ids {
+            moving.entry(self.get(*id)?.group).or_default().insert(*id);
+        }
+        let mut step = Step::new();
+        for (parent, moving) in moving {
+            let before: Vec<ElementId> = self
+                .siblings(parent, &BTreeSet::new())
+                .into_iter()
+                .map(|(_, id)| id)
+                .collect();
+            let mut order = before.clone();
+            match to {
+                Restack::Front => order.sort_by_key(|id| moving.contains(id)),
+                Restack::Back => order.sort_by_key(|id| !moving.contains(id)),
+                Restack::Forward => {
+                    for at in (0..order.len().saturating_sub(1)).rev() {
+                        if moving.contains(&order[at]) && !moving.contains(&order[at + 1]) {
+                            order.swap(at, at + 1);
+                        }
+                    }
+                }
+                Restack::Backward => {
+                    for at in 1..order.len() {
+                        if moving.contains(&order[at]) && !moving.contains(&order[at - 1]) {
+                            order.swap(at, at - 1);
+                        }
+                    }
+                }
+            }
+            if order == before {
+                continue;
+            }
+            // Each run of moving elements goes right above the siblings that stay below it.
+            let mut staying = self.siblings(parent, &moving);
+            let mut runs: Vec<(usize, Vec<ElementId>)> = Vec::new();
+            let mut below = 0;
+            for id in order {
+                if !moving.contains(&id) {
+                    below += 1;
+                    continue;
+                }
+                match runs.last_mut() {
+                    Some((at, run)) if *at == below => run.push(id),
+                    _ => runs.push((below, vec![id])),
+                }
+            }
+            let z = |id: &ElementId| self.board.elements[id].z.clone();
+            // Those kept in place join the siblings that stay, below the runs further up.
+            let mut kept = 0;
+            for (at, mut run) in runs {
+                let at = at + kept;
+                // The ends of a run whose keys already fit where it goes keep them, so that
+                // only what moves is rewritten.
+                let fits = |id: &ElementId, low: Option<&ZIndex>, high: Option<&ZIndex>| {
+                    let key = z(id);
+                    low.is_none_or(|low| *low < key) && high.is_none_or(|high| key < *high)
+                };
+                let below = at.checked_sub(1).map(|at| staying[at].0.clone());
+                let mut above = staying.get(at).map(|(key, _)| key.clone());
+                let mut top = Vec::new();
+                while let Some(&last) = run.last()
+                    && fits(&last, below.as_ref(), above.as_ref())
+                {
+                    above = Some(z(&last));
+                    top.insert(0, run.pop().expect("a last one"));
+                }
+                let mut bottom = Vec::new();
+                let mut low = below;
+                while let Some(&first) = run.first()
+                    && fits(&first, low.as_ref(), above.as_ref())
+                {
+                    low = Some(z(&first));
+                    bottom.push(run.remove(0));
+                }
+                let at = at + bottom.len();
+                staying.splice(
+                    at - bottom.len()..at - bottom.len(),
+                    bottom.iter().map(|id| (z(id), *id)),
+                );
+                staying.splice(at..at, top.iter().map(|id| (z(id), *id)));
+                kept += bottom.len() + top.len();
+                let keys = place(&staying, at, &run);
+                // A run can lift siblings that tie below it, which the next run must see.
+                for (id, z) in &keys {
+                    if let Some(sibling) = staying.iter_mut().find(|(_, sibling)| sibling == id) {
+                        sibling.0 = z.clone();
+                    }
+                }
+                step.extend(self.rekey(keys));
+            }
+        }
         self.record(step)
     }
 
@@ -257,6 +416,18 @@ impl Editor {
         self.gesture.get_or_insert_default();
     }
 
+    /// Takes the open gesture's edits back and keeps it open.
+    pub fn rewind_gesture(&mut self) -> Vec<ElementId> {
+        let Some(gesture) = &mut self.gesture else {
+            return Vec::new();
+        };
+        let step = mem::take(gesture);
+        for (id, change) in &step {
+            set(&mut self.board, *id, change.before.clone());
+        }
+        step.into_keys().collect()
+    }
+
     pub fn end_gesture(&mut self) {
         if let Some(mut gesture) = self.gesture.take() {
             gesture.retain(|_, change| change.before != change.after);
@@ -315,6 +486,23 @@ impl Editor {
             }
         }
         Ok(touched)
+    }
+
+    fn reshape(
+        &mut self,
+        ids: &[ElementId],
+        edit: impl Fn(&mut ElementKind),
+    ) -> Result<Vec<ElementId>> {
+        let mut step = Step::new();
+        for id in self.with_descendants(ids)? {
+            let change = self.change(id, |mut element| {
+                edit(&mut element.kind);
+                Some(element)
+            });
+            check_finite(id, &change.after.as_ref().expect("reshaped").kind)?;
+            step.insert(id, change);
+        }
+        self.record(step)
     }
 
     fn get(&self, id: ElementId) -> Result<&Element> {
@@ -487,7 +675,8 @@ mod tests {
             editor.translate(&[id(4)], f64::INFINITY, 0.0),
             editor.update(id(4), arrow()),
             editor.remove(&[id(9)]),
-            editor.restack(id(9), Restack::Front),
+            editor.restack(&[id(9)], Restack::Front),
+            editor.scale(&[id(4)], Point { x: 0.0, y: 0.0 }, 0.0),
             editor.group(id(6), &[id(4)]),
             editor.group(id(6), &[id(2), id(4)]),
             editor.group(id(1), &[id(4), id(5)]),
@@ -505,6 +694,7 @@ mod tests {
                 Error::KindChanged(id(4)),
                 Error::UnknownElement(id(9)),
                 Error::UnknownElement(id(9)),
+                Error::NotAScale,
                 Error::CannotGroup,
                 Error::CannotGroup,
                 Error::TakenId(id(1)),
@@ -560,8 +750,63 @@ mod tests {
             (1, Restack::Backward, [4, 1, 2, 3, 5]),
             (3, Restack::Back, [4, 1, 3, 2, 5]),
         ] {
-            editor.restack(id(element), to).unwrap();
+            editor.restack(&[id(element)], to).unwrap();
             assert_eq!(order(&editor), ids(expected), "{element} {to:?}");
+        }
+    }
+
+    #[test]
+    fn restacking_several_keeps_their_order() {
+        let arrows = |keys: [&str; 5]| {
+            board(
+                (1..=5)
+                    .zip(keys)
+                    .map(|(bits, key)| (bits, element(None, key, arrow()))),
+            )
+        };
+        for (moving, to, expected) in [
+            (&[1, 2][..], Restack::Forward, [3, 1, 2, 4, 5]),
+            (&[2, 4], Restack::Backward, [2, 1, 4, 3, 5]),
+            (&[1, 3], Restack::Front, [2, 4, 5, 1, 3]),
+            (&[3, 5], Restack::Back, [3, 5, 1, 2, 4]),
+        ] {
+            let mut editor = Editor::new(arrows(["a0", "a1", "a2", "a3", "a4"]));
+            let moving: Vec<ElementId> = moving.iter().copied().map(id).collect();
+            editor.restack(&moving, to).unwrap();
+            assert_eq!(order(&editor), ids(expected), "{moving:?} {to:?}");
+        }
+        // Blocked by one another at the top, neither moves.
+        let mut editor = Editor::new(arrows(["a0", "a1", "a2", "a3", "a4"]));
+        assert!(
+            editor
+                .restack(&ids([4, 5]), Restack::Forward)
+                .unwrap()
+                .is_empty()
+        );
+        // A merge can leave keys tied, which each run lifts past.
+        let mut editor = Editor::new(arrows(["a0"; 5]));
+        editor.restack(&ids([1, 3]), Restack::Forward).unwrap();
+        assert_eq!(order(&editor), ids([2, 1, 4, 3, 5]));
+        assert_sound(&editor);
+    }
+
+    #[test]
+    fn restacking_several_rewrites_only_those_that_move() {
+        let arrows = || {
+            board(
+                (1..=5)
+                    .zip(["a0", "a1", "a2", "a3", "a4"])
+                    .map(|(bits, key)| (bits, element(None, key, arrow()))),
+            )
+        };
+        for (moving, to, expected, touched) in [
+            ([3, 5], Restack::Front, [1, 2, 4, 3, 5], [3]),
+            ([1, 3], Restack::Back, [1, 3, 2, 4, 5], [3]),
+            ([2, 5], Restack::Forward, [1, 3, 2, 4, 5], [2]),
+        ] {
+            let mut editor = Editor::new(arrows());
+            assert_eq!(editor.restack(&ids(moving), to).unwrap(), ids(touched));
+            assert_eq!(order(&editor), ids(expected), "{moving:?} {to:?}");
         }
     }
 
@@ -577,7 +822,7 @@ mod tests {
             (2, Restack::Back),
             (3, Restack::Front),
         ] {
-            assert!(editor.restack(id(element), to).unwrap().is_empty());
+            assert!(editor.restack(&[id(element)], to).unwrap().is_empty());
         }
         assert_eq!(editor.undo(), ids([4]));
     }
@@ -602,9 +847,92 @@ mod tests {
             (4, element(None, "a1", arrow())),
             (5, element(None, "a2", arrow())),
         ]));
-        editor.restack(id(1), Restack::Forward).unwrap();
+        editor.restack(&[id(1)], Restack::Forward).unwrap();
         assert_eq!(order(&editor), ids([2, 1, 3, 4, 5]));
         assert_eq!(editor.undo(), ids([1, 3, 4]));
+    }
+
+    #[test]
+    fn scaling_keeps_the_origin_in_place_and_rotations_as_they_are() {
+        let mut editor = Editor::new(board([(1, element(None, "a0", note(0.0)))]));
+        editor
+            .rotate(&ids([1]), Point { x: 0.0, y: 0.0 }, 30.0)
+            .unwrap();
+        let corners = editor.board().outline(id(1)).unwrap();
+        editor.scale(&ids([1]), corners[2], 3.0).unwrap();
+        let scaled = editor.board().outline(id(1)).unwrap();
+        assert!((scaled[2].x - corners[2].x).abs() < 1e-9);
+        assert!((scaled[2].y - corners[2].y).abs() < 1e-9);
+        let ElementKind::Note {
+            frame, rotation, ..
+        } = &editor.board().elements[&id(1)].kind
+        else {
+            unreachable!()
+        };
+        assert_eq!((frame.width, frame.height, *rotation), (30.0, 30.0, 30.0));
+    }
+
+    #[test]
+    fn rotating_turns_positions_around_the_pivot_and_keeps_one_spelling() {
+        let mut editor = editor();
+        editor
+            .rotate(&ids([4, 5]), Point { x: 20.0, y: 0.0 }, 90.0)
+            .unwrap();
+        let elements = &editor.board().elements;
+        let ElementKind::Note {
+            frame, rotation, ..
+        } = &elements[&id(4)].kind
+        else {
+            unreachable!()
+        };
+        // Its centre, (25, 5), turns to (15, 5).
+        assert!((frame.x - 10.0).abs() < 1e-9 && frame.y.abs() < 1e-9);
+        assert_eq!(*rotation, 90.0);
+        editor
+            .rotate(&ids([4]), Point { x: 0.0, y: 0.0 }, 300.0)
+            .unwrap();
+        let ElementKind::Note { rotation, .. } = &editor.board().elements[&id(4)].kind else {
+            unreachable!()
+        };
+        assert_eq!(*rotation, 30.0);
+        editor
+            .rotate(&ids([4]), Point { x: 0.0, y: 0.0 }, -30.000_000_000_000_004)
+            .unwrap();
+        let ElementKind::Note { rotation, .. } = &editor.board().elements[&id(4)].kind else {
+            unreachable!()
+        };
+        assert!((0.0..360.0).contains(rotation), "{rotation}");
+    }
+
+    #[test]
+    fn flipping_turns_over_only_the_images() {
+        let image = ElementKind::Image {
+            asset: crate::AssetId::of(b""),
+            natural_size: crate::Size {
+                width: 1,
+                height: 1,
+            },
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            rotation: 0.0,
+            edits: crate::ImageEdits::default(),
+        };
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", image)),
+            (3, element(Some(1), "a1", note(0.0))),
+        ]));
+        assert_eq!(editor.flip(&ids([1]), false).unwrap(), ids([2]));
+        let ElementKind::Image { edits, .. } = &editor.board().elements[&id(2)].kind else {
+            unreachable!()
+        };
+        assert!(edits.flip_vertical && !edits.flip_horizontal);
+        editor.flip(&ids([1]), false).unwrap();
+        assert!(editor.is_saved());
     }
 
     #[test]
@@ -734,6 +1062,25 @@ mod tests {
     }
 
     #[test]
+    fn a_rewound_gesture_edits_again_from_where_it_began() {
+        let mut editor = editor();
+        let start = editor.board().clone();
+        assert!(editor.rewind_gesture().is_empty());
+        editor.begin_gesture();
+        editor
+            .scale(&ids([4]), Point { x: 0.0, y: 0.0 }, 1.7)
+            .unwrap();
+        assert_eq!(editor.rewind_gesture(), ids([4]));
+        assert_eq!(editor.board(), &start);
+        editor
+            .scale(&ids([4]), Point { x: 0.0, y: 0.0 }, 1.0)
+            .unwrap();
+        editor.end_gesture();
+        assert!(editor.undo().is_empty());
+        assert!(editor.is_saved());
+    }
+
+    #[test]
     fn a_gesture_cannot_be_undone_halfway() {
         let mut editor = editor();
         editor.translate(&[id(5)], 1.0, 0.0).unwrap();
@@ -763,5 +1110,59 @@ mod tests {
         editor.translate(&[id(4)], -1.0, 0.0).unwrap();
         editor.end_gesture();
         assert_eq!(editor.redo(), ids([4]));
+    }
+
+    #[test]
+    fn restacking_moves_each_parents_elements_among_their_own_siblings() {
+        let mut editor = editor();
+        editor.restack(&ids([4, 2]), Restack::Front).unwrap();
+        assert_eq!(order(&editor), ids([1, 3, 2, 5, 4]));
+        editor.restack(&ids([5, 2]), Restack::Back).unwrap();
+        assert_eq!(order(&editor), ids([5, 1, 2, 3, 4]));
+        // One parent's elements are already there, the other's still move.
+        assert_eq!(
+            editor.restack(&ids([3, 1]), Restack::Front).unwrap(),
+            ids([1])
+        );
+        assert_eq!(order(&editor), ids([5, 4, 1, 2, 3]));
+        assert_sound(&editor);
+    }
+
+    #[test]
+    fn scaling_and_rotating_move_both_ends_of_an_arrow() {
+        let line = ElementKind::Arrow {
+            from: Point { x: 10.0, y: 0.0 },
+            to: Point { x: 20.0, y: 0.0 },
+        };
+        let ends = |editor: &Editor| match editor.board().elements[&id(1)].kind {
+            ElementKind::Arrow { from, to } => [from.x, from.y, to.x, to.y],
+            _ => unreachable!(),
+        };
+        let mut editor = Editor::new(board([(1, element(None, "a0", line))]));
+        editor
+            .scale(&ids([1]), Point { x: 10.0, y: 0.0 }, 2.0)
+            .unwrap();
+        assert_eq!(ends(&editor), [10.0, 0.0, 30.0, 0.0]);
+        editor
+            .rotate(&ids([1]), Point { x: 0.0, y: 0.0 }, 90.0)
+            .unwrap();
+        let expected = [0.0, 10.0, 0.0, 30.0];
+        for (end, expected) in ends(&editor).into_iter().zip(expected) {
+            assert!((end - expected).abs() < 1e-9, "{end} {expected}");
+        }
+    }
+
+    #[test]
+    fn scaling_or_rotating_by_nothing_still_refuses_unknown_elements() {
+        let mut editor = editor();
+        let origin = Point { x: 0.0, y: 0.0 };
+        assert_eq!(
+            editor.scale(&ids([9]), origin, 1.0),
+            Err(Error::UnknownElement(id(9)))
+        );
+        assert_eq!(
+            editor.rotate(&ids([9]), origin, 0.0),
+            Err(Error::UnknownElement(id(9)))
+        );
     }
 }

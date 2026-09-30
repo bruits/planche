@@ -38,6 +38,8 @@ pub enum Error {
     NotFinite(ElementId),
     #[error("only two elements or more of the same group can be grouped")]
     CannotGroup,
+    #[error("elements only scale by a positive factor")]
+    NotAScale,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

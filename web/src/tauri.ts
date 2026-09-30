@@ -4,7 +4,7 @@
 import type { Bytes } from "./core.js";
 import type { Platform } from "./platform.js";
 
-export function tauri({ core }: TauriApi): Platform {
+export function tauri({ core, event }: TauriApi): Platform {
   return {
     name: "desktop",
 
@@ -72,6 +72,23 @@ export function tauri({ core }: TauriApi): Platform {
 
     markUnsaved(value) {
       void core.invoke("mark_unsaved", { value });
+    },
+
+    // Only on Linux, where the shell takes drops itself.
+    watchDrops(dropped) {
+      type Dropped = [string[], string[], number, number];
+      void event.listen<Dropped>("dropped", ({ payload: [paths, addresses, clientX, clientY] }) => {
+        const readOne = async (path: string) => {
+          const name = basename(path);
+          try {
+            const bytes = await core.invoke<ArrayBuffer>("read_dropped", { path });
+            return { name, bytes: new Blob([bytes]) };
+          } catch (error) {
+            return { name, failure: String(error) };
+          }
+        };
+        dropped(() => Promise.all(paths.map(readOne)), addresses, { clientX, clientY });
+      });
     },
   };
 }

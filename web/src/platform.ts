@@ -1,6 +1,7 @@
 // What each host provides that the web app cannot do the same way everywhere. Picking a
 // folder and working in it are apart, so that measurements leave the user's pace out.
 
+import type { Incoming } from "./add.js";
 import type { Bytes } from "./core.js";
 import { browser } from "./browser.js";
 import { tauri } from "./tauri.js";
@@ -57,6 +58,13 @@ export interface Platform {
   confirm(question: string): Promise<boolean>;
   /** Whether closing the app would lose changes, so that it asks first. */
   markUnsaved(unsaved: boolean): void;
+  /**
+   * Drops that the page cannot see itself: files, read only once `read` is called, and the
+   * addresses of images from a web page, with where on the page.
+   */
+  watchDrops(
+    dropped: (read: () => Promise<Incoming[]>, addresses: string[], at: { clientX: number; clientY: number }) => void,
+  ): void;
 }
 
 export const platform: Platform = window.__TAURI__ ? tauri(window.__TAURI__) : browser;

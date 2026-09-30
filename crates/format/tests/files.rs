@@ -155,7 +155,7 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
     fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
-    let cases: [(Edit, &[u128]); 7] = [
+    let cases: [(Edit, &[u128]); 10] = [
         (
             |editor| editor.add(id(10), None, note(None, "New").kind),
             &[10],
@@ -165,7 +165,17 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
             &[3],
         ),
         (|editor| editor.translate(&[id(1)], 8.0, -8.0), &[2, 3]),
-        (|editor| editor.restack(id(4), Restack::Front), &[4]),
+        (
+            |editor| editor.scale(&[id(1)], Point { x: 0.0, y: 0.0 }, 1.5),
+            &[2, 3],
+        ),
+        (
+            |editor| editor.rotate(&[id(1)], Point { x: 5.0, y: 5.0 }, 90.0),
+            &[2, 3],
+        ),
+        // The note cannot flip.
+        (|editor| editor.flip(&[id(1)], true), &[2]),
+        (|editor| editor.restack(&[id(4)], Restack::Front), &[4]),
         (|editor| editor.group(id(10), &[id(4), ARROW]), &[4, 5, 10]),
         (|editor| editor.ungroup(id(1)), &[1, 2, 3]),
         (|editor| editor.remove(&[ARROW]), &[5]),

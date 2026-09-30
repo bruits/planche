@@ -10,12 +10,15 @@ export interface Placed {
   frame: Rect;
   /** Clockwise, in degrees, around the frame's centre. */
   rotation: number;
+  /** The part of the asset it shows, from 0 to 1 across and down, which a negative size flips. */
+  texture: Rect;
+  greyscale: boolean;
 }
 
 export interface Renderer {
   /** What it runs on, such as the GPU's name. */
   readonly backend: string;
-  /** Takes each asset's bitmap over, and closes them all even when it fails. */
+  /** Takes each asset's bitmap over, and closes them all even when it fails. Loaded ones stay. */
   load(bitmaps: Map<string, ImageBitmap>): void;
   /** What to draw from now on, back to front. Images whose asset is not loaded are left out. */
   place(images: Placed[]): void;
@@ -26,7 +29,7 @@ export interface Renderer {
 }
 
 /** Floats per image, as `draw` reads them. */
-const STRIDE = 6;
+const STRIDE = 11;
 
 /** Appends its canvas to `host`, sized in CSS pixels. */
 export async function create(host: HTMLElement, width: number, height: number): Promise<Renderer> {
@@ -60,7 +63,9 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
     load(bitmaps) {
       try {
         for (const [asset, bitmap] of bitmaps) {
-          textures.set(asset, renderer.upload(bitmap));
+          if (!textures.has(asset)) {
+            textures.set(asset, renderer.upload(bitmap));
+          }
           bitmap.close();
         }
       } finally {
@@ -71,8 +76,15 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
     place(placed) {
       const shown = placed.filter(({ asset }) => textures.has(asset));
       images = new Float32Array(shown.length * STRIDE);
-      shown.forEach(({ asset, frame, rotation }, at) => {
-        images.set([textures.get(asset)!, frame.x, frame.y, frame.width, frame.height, rotation], at * STRIDE);
+      shown.forEach(({ asset, frame, rotation, texture, greyscale }, at) => {
+        images.set(
+          [
+            textures.get(asset)!,
+            ...[frame.x, frame.y, frame.width, frame.height, rotation],
+            ...[texture.x, texture.y, texture.width, texture.height, greyscale ? 1 : 0],
+          ],
+          at * STRIDE,
+        );
       });
     },
     draw({ x, y, zoom }) {

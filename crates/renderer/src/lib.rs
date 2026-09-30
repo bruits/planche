@@ -14,9 +14,15 @@ struct Camera { origin: vec2f, zoom: f32, viewport: vec2f, padding: vec2f };
 @group(1) @binding(0) var image: texture_2d<f32>;
 @group(1) @binding(1) var image_sampler: sampler;
 
-struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f };
+struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f, @location(1) grey: f32 };
 
-@vertex fn vs(@builtin(vertex_index) index: u32, @location(0) rect: vec4f, @location(1) degrees: f32) -> Out {
+@vertex fn vs(
+    @builtin(vertex_index) index: u32,
+    @location(0) rect: vec4f,
+    @location(1) degrees: f32,
+    @location(2) crop: vec4f,
+    @location(3) grey: f32,
+) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
     let local = (corner - 0.5) * rect.zw;
     let angle = radians(degrees);
@@ -24,12 +30,15 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f };
     let screen = (rect.xy + rect.zw * 0.5 + turned - camera.origin) * camera.zoom;
     var out: Out;
     out.position = vec4f(screen.x / camera.viewport.x * 2.0 - 1.0, 1.0 - screen.y / camera.viewport.y * 2.0, 0.0, 1.0);
-    out.uv = corner;
+    out.uv = crop.xy + corner * crop.zw;
+    out.grey = grey;
     return out;
 }
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
-    return textureSample(image, image_sampler, in.uv);
+    let color = textureSample(image, image_sampler, in.uv);
+    let luma = dot(color.rgb, vec3f(0.2126, 0.7152, 0.0722));
+    return vec4f(mix(color.rgb, vec3f(luma), in.grey), color.a);
 }
 "#;
 
@@ -54,10 +63,12 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f };
 "#;
 
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-/// Floats per image in [`Renderer::draw`]: texture, x, y, width, height, and rotation.
-const STRIDE: usize = 6;
-/// Bytes per instance: x, y, width, height, and rotation.
-const INSTANCE: u64 = 5 * 4;
+/// Floats per image in [`Renderer::draw`]: texture, x, y, width, height, rotation, the crop's
+/// x, y, width, and height in texture coordinates, which a negative size flips, and 1 to draw
+/// in greys or 0.
+const STRIDE: usize = 11;
+/// Bytes per instance: all of an image's floats but its texture.
+const INSTANCE: u64 = (STRIDE as u64 - 1) * 4;
 
 #[wasm_bindgen]
 pub struct Renderer {
@@ -184,7 +195,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         &[Some(wgpu::VertexBufferLayout {
             array_stride: INSTANCE,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32],
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x4, 3 => Float32],
         })],
         wgpu::ColorTargetState {
             format: config.format,
