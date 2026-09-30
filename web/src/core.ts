@@ -74,8 +74,9 @@ export type Kind =
     }
   | { type: "note"; frame: Rect; rotation: number; text: Text }
   | { type: "sticky"; frame: Rect; rotation: number; text: Text }
-  | { type: "shape"; frame: Rect; rotation: number; shape: "rectangle" | "ellipse"; text: Text }
+  | { type: "shape"; frame: Rect; rotation: number; shape: "rectangle" | "ellipse" | "cross"; text: Text }
   | { type: "arrow"; from: Point; to: Point }
+  | { type: "line"; from: Point; to: Point }
   | { type: "group" };
 
 export interface Element {

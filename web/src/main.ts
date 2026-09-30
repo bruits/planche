@@ -23,18 +23,21 @@ import {
 import { fit } from "./camera.js";
 import { describe, listen, mac, typing, type Command, type Shortcut } from "./commands.js";
 import { edits, type Draw, type Restack } from "./edit.js";
+import type { Icon } from "./icons.js";
 import { menuOpen, openMenu, type Entry } from "./menu.js";
 import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./metrics.js";
 import { overlay } from "./overlay.js";
 import { platform, type Folder } from "./platform.js";
 import { create, type Renderer } from "./renderer.js";
 import { loadFont, texts } from "./text.js";
-import { toolbar } from "./toolbar.js";
+import { toolbar, type Button } from "./toolbar.js";
 import { view } from "./view.js";
 import { writeZip, zipFolder } from "./zip.js";
 
 /** WebGL2 guarantees textures this large. */
 const LONGEST_SIDE = 2048;
+/** Where the browser remembers that hints are hidden. */
+const HINTS = "planche.hints";
 const ZOOM_STEP = 1.25;
 
 const measurements = byId("measurements");
@@ -72,6 +75,7 @@ let tool: "select" | "hand" | Draw = "select";
 let spaceHeld = false;
 /** Kept while the measurements are hidden, so that they show at once when opened. */
 let frameRate = 0;
+let hintsShown = recall(HINTS) !== "hidden";
 
 const loadingBoard = () => (loading ? "A board is opening" : undefined);
 const noBoard = () => (opened === undefined ? "No board is open yet" : undefined);
@@ -99,8 +103,10 @@ const commands = {
   select: { label: "Select", keys: [{ key: "v" }], run: () => useTool("select") },
   hand: { label: "Hand", keys: [{ key: "h" }], run: () => useTool("hand") },
   arrow: { label: "Arrow", keys: [{ key: "a" }], unavailable: noneShown, run: () => useTool("arrow") },
+  line: { label: "Line", keys: [{ key: "l" }], unavailable: noneShown, run: () => useTool("line") },
   rectangle: { label: "Rectangle", keys: [{ key: "r" }], unavailable: noneShown, run: () => useTool("rectangle") },
   ellipse: { label: "Ellipse", keys: [{ key: "o" }], unavailable: noneShown, run: () => useTool("ellipse") },
+  cross: { label: "Cross", keys: [{ key: "x" }], unavailable: noneShown, run: () => useTool("cross") },
   note: { label: "Text", keys: [{ key: "t" }], unavailable: noneShown, run: () => useTool("note") },
   sticky: { label: "Sticky note", keys: [{ key: "n" }], unavailable: noneShown, run: () => useTool("sticky") },
   addImages: {
@@ -209,9 +215,16 @@ const commands = {
       }
     },
   },
+  hints: {
+    label: () => (hintsShown ? "Hide hints" : "Show hints"),
+    run: () => {
+      hintsShown = !hintsShown;
+      remember(HINTS, hintsShown ? undefined : "hidden");
+      refreshBar();
+    },
+  },
   measurements: {
-    label: "Show measurements",
-    checked: () => !measurements.hidden,
+    label: () => (measurements.hidden ? "Show measurements" : "Hide measurements"),
     run: () => {
       measurements.hidden = !measurements.hidden;
       showMetrics(frameRate);
@@ -233,11 +246,17 @@ const bar = toolbar(
       { command: commands.hand, icon: "hand", pressed: () => tool === "hand" },
     ],
     [
-      { command: commands.arrow, icon: "arrow", pressed: () => tool === "arrow" },
-      { command: commands.rectangle, icon: "square", pressed: () => tool === "rectangle" },
-      { command: commands.ellipse, icon: "circle", pressed: () => tool === "ellipse" },
-      { command: commands.note, icon: "typography", pressed: () => tool === "note" },
-      { command: commands.sticky, icon: "note", pressed: () => tool === "sticky" },
+      {
+        label: "Shapes",
+        tools: [
+          drawing("arrow", "arrow"),
+          drawing("line", "line"),
+          drawing("rectangle", "square"),
+          drawing("ellipse", "circle"),
+          drawing("cross", "cross"),
+        ],
+      },
+      { label: "Text and sticky notes", tools: [drawing("note", "typography"), drawing("sticky", "note")] },
       { command: commands.addImages, icon: "photo" },
     ],
   ],
@@ -254,6 +273,7 @@ const bar = toolbar(
     commands.fit,
     commands.actualSize,
     "separator",
+    commands.hints,
     commands.measurements,
   ],
 );
@@ -302,6 +322,10 @@ function busy(): boolean {
   return editing.busy() || viewport.panning();
 }
 
+function drawing(draw: Draw, name: Icon): Button {
+  return { command: commands[draw], icon: name, pressed: () => tool === draw };
+}
+
 function drawTool(): Draw | undefined {
   return tool === "select" || tool === "hand" ? undefined : tool;
 }
@@ -337,7 +361,8 @@ function selectsGroup(): boolean {
 }
 
 function refreshBar(): void {
-  bar.refresh(hint());
+  // Buttons still explain themselves when hovered or focused.
+  bar.refresh(hintsShown ? hint() : "");
 }
 
 function hint(): string {
@@ -355,7 +380,10 @@ function hint(): string {
   if (tool === "arrow") {
     return `Drag from where the arrow starts to where it points · ${escapeKey} to select again`;
   }
-  if (tool === "rectangle" || tool === "ellipse" || tool === "sticky") {
+  if (tool === "line") {
+    return `Drag from one end to the other · ${escapeKey} to select again`;
+  }
+  if (tool === "rectangle" || tool === "ellipse" || tool === "cross" || tool === "sticky") {
     return `Drag to draw, or click to place · ${escapeKey} to select again`;
   }
   if (tool === "note") {
@@ -371,7 +399,7 @@ function hint(): string {
   if (editing.writable()) {
     return `Drag to move · double-click or ${insideKey} to edit the text · right-click for more`;
   }
-  if (editing.loneArrow()) {
+  if (editing.loneSegment()) {
     return "Drag to move · drag an end to move it · right-click for more";
   }
   if (editing.selection().length > 0) {
@@ -663,6 +691,27 @@ function showMetrics(fps: number): void {
   byId("metrics").replaceChildren(
     ...[...lines].flatMap(([name, value]) => [text("dt", name), text("dd", value)]),
   );
+}
+
+/** Storage may be blocked, or throw. */
+function recall(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function remember(key: string, value: string | undefined): void {
+  try {
+    if (value === undefined) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, value);
+    }
+  } catch {
+    // Remembered for this session only.
+  }
 }
 
 function report(work: Promise<void>): void {

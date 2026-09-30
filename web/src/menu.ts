@@ -1,12 +1,14 @@
 // Menus of commands: the toolbar's, and the one a right-click opens. They follow the ARIA
 // menu pattern, so that the keyboard reaches every item, and only one is open at a time.
 
-import { ariaKeys, describe, type Command } from "./commands.js";
+import { ariaKeys, describe, named, type Command } from "./commands.js";
+import { icon, type Icon } from "./icons.js";
 
-export type Entry = Command | "separator";
+/** `checked` marks, among tools that share a button, the one in use. */
+export type Entry = (Command & { icon?: Icon; checked?: boolean }) | "separator";
 
-/** Its top-left corner at a point, or above an element's right end. */
-export type Place = { x: number; y: number } | { above: HTMLElement };
+/** Its top-left corner at a point, or above an element, lined up with its right end or `left`. */
+export type Place = { x: number; y: number } | { above: HTMLElement; left?: boolean };
 
 /** From the window's edges, in CSS pixels. */
 const MARGIN = 8;
@@ -110,17 +112,20 @@ export function openMenu(entries: Entry[], { label, place, owner, fromEnd = fals
   focus(fromEnd ? -1 : 0);
 }
 
-function menuItem(command: Command, activate: () => void): HTMLButtonElement {
+function menuItem(command: Exclude<Entry, "separator">, activate: () => void): HTMLButtonElement {
   const item = document.createElement("button");
   item.type = "button";
   item.tabIndex = -1;
-  const checked = command.checked?.();
-  item.setAttribute("role", checked === undefined ? "menuitem" : "menuitemcheckbox");
-  if (checked !== undefined) {
-    item.setAttribute("aria-checked", String(checked));
+  item.setAttribute("role", command.checked === undefined ? "menuitem" : "menuitemradio");
+  if (command.checked !== undefined) {
+    item.setAttribute("aria-checked", String(command.checked));
   }
   const label = document.createElement("span");
-  label.textContent = command.label;
+  label.className = "name";
+  if (command.icon) {
+    label.append(icon(command.icon));
+  }
+  label.append(named(command));
   item.append(label);
   // Named apart from its label, as its glyphs would otherwise be read out as part of it.
   const shortcut = command.keys?.[0];
@@ -153,7 +158,7 @@ function position(menu: HTMLElement, place: Place): void {
   let [x, y] = "above" in place ? [0, 0] : [place.x, place.y];
   if ("above" in place) {
     const anchor = place.above.getBoundingClientRect();
-    [x, y] = [anchor.right - width, anchor.top - height - MARGIN];
+    [x, y] = [place.left ? anchor.left : anchor.right - width, anchor.top - height - MARGIN];
   }
   // Opened near the right or bottom edge, it opens the other way.
   if (x + width > innerWidth - MARGIN && "x" in place) {

@@ -121,6 +121,33 @@ fn sample() -> Board {
                 },
             },
         ),
+        (
+            ElementId::from_random(7),
+            Element {
+                group: None,
+                z: z("a4"),
+                kind: ElementKind::Line {
+                    from: Point { x: -10.0, y: 5.0 },
+                    to: Point { x: 30.0, y: 5.0 },
+                },
+            },
+        ),
+        (
+            ElementId::from_random(8),
+            Element {
+                group: None,
+                z: z("a5"),
+                kind: ElementKind::Shape {
+                    frame: frame(40.0, 40.0),
+                    rotation: 0.0,
+                    shape: Shape::Cross,
+                    text: Text {
+                        content: String::new(),
+                        font_size: 20.0,
+                    },
+                },
+            },
+        ),
     ];
     Board {
         elements: elements.into_iter().collect(),
@@ -168,7 +195,7 @@ fn restacking_rewrites_one_file() {
 
     assert_eq!(changed(&before, &after), [format!("elements/{NOTE}.json")]);
     let order = format::read(&after).unwrap().draw_order();
-    assert_eq!(order, [1, 2, 3, 4, 5, 6].map(ElementId::from_random));
+    assert_eq!(order, [1, 2, 3, 4, 5, 6, 7, 8].map(ElementId::from_random));
 }
 
 #[test]

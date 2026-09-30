@@ -28,13 +28,17 @@ export interface Shortcut {
 }
 
 export interface Command {
-  label: string;
+  /** Read each time it shows, when it follows what it toggles. */
+  label: string | (() => string);
   /** The first one is the one shown. */
   keys?: Shortcut[];
   /** Why it cannot run now, `undefined` when it can. */
   unavailable?(): string | undefined;
-  checked?(): boolean;
   run(): void;
+}
+
+export function named({ label }: Command): string {
+  return typeof label === "string" ? label : label();
 }
 
 function pressed(commands: Command[], event: KeyboardEvent): Command | undefined {

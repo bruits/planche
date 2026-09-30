@@ -167,6 +167,8 @@ export function placed(board: Board, texts: Texts, hidden?: string): Placed[] {
         return [image(kind)];
       case "arrow":
         return arrow(kind.from, kind.to, width);
+      case "line":
+        return [{ kind: "line", from: kind.from, to: kind.to, width }];
       case "note":
         return written;
       case "sticky":

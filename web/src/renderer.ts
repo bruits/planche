@@ -27,7 +27,7 @@ export type Placed =
     }
   | { kind: "text"; id: string; frame: Rect; rotation: number; paint: Paint }
   | { kind: "line"; from: Point; to: Point; width: number }
-  | { kind: "rectangle" | "ellipse"; frame: Rect; rotation: number; width: number }
+  | { kind: "rectangle" | "ellipse" | "cross"; frame: Rect; rotation: number; width: number }
   | { kind: "fill"; frame: Rect; rotation: number; paint: Paint };
 
 export interface Renderer {
@@ -55,7 +55,7 @@ const STRIDE = 12;
 /** As the renderer tells its items apart. */
 const KINDS = { image: 0, stroke: 1, text: 2 };
 /** As the renderer tells its strokes apart. */
-const SHAPES = { line: 0, rectangle: 1, ellipse: 2, fill: 3 };
+const SHAPES = { line: 0, rectangle: 1, ellipse: 2, fill: 3, cross: 4 };
 
 type Paints = Record<Paint, number[]>;
 

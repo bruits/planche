@@ -188,7 +188,14 @@ pub enum ElementKind {
         text: Text,
     },
     /// Its head is at `to`.
-    Arrow { from: Point, to: Point },
+    Arrow {
+        from: Point,
+        to: Point,
+    },
+    Line {
+        from: Point,
+        to: Point,
+    },
     /// Draws nothing itself. Its elements are those whose `group` it is.
     Group,
 }
@@ -228,7 +235,9 @@ impl ElementKind {
                 shape: _,
                 text,
             } => frame.is_finite() && rotation.is_finite() && text.is_valid(),
-            Self::Arrow { from, to } => from.is_finite() && to.is_finite(),
+            Self::Arrow { from, to } | Self::Line { from, to } => {
+                from.is_finite() && to.is_finite()
+            }
             Self::Group => true,
         }
     }
@@ -280,7 +289,7 @@ impl Text {
     }
 }
 
-/// How wide arrows and the outlines of shapes draw, in board units, until elements hold a style.
+/// How wide arrows, lines, and shapes draw, in board units, until elements hold a style.
 pub const STROKE_WIDTH: f64 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,6 +297,8 @@ pub const STROKE_WIDTH: f64 = 2.0;
 pub enum Shape {
     Rectangle,
     Ellipse,
+    /// The two diagonals of its frame.
+    Cross,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -511,6 +522,7 @@ mod tests {
             text: text(font_size),
         };
         let arrow = |from, to| ElementKind::Arrow { from, to };
+        let line = |from, to| ElementKind::Line { from, to };
         let edits = ImageEdits::default();
 
         let valid = [
@@ -527,6 +539,7 @@ mod tests {
             sticky(rect, 0.0, 20.0),
             shape(rect, 0.0, 20.0),
             arrow(point, point),
+            line(point, point),
         ];
         assert!(valid.iter().all(ElementKind::is_valid));
 
@@ -570,6 +583,7 @@ mod tests {
                     ..point
                 },
             ),
+            line(point, Point { x: nan, ..point }),
         ];
         for kind in invalid {
             assert!(!kind.is_valid(), "{kind:?}");

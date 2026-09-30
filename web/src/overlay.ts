@@ -20,7 +20,7 @@ export interface Overlay {
   outline(outlines: Float64Array[]): void;
   /** The selection's box, clockwise from its top-left, or `undefined` to hide the handles. */
   box(corners: Point[] | undefined): void;
-  /** The ends of an arrow, each with a handle, or `undefined` to hide them. */
+  /** The ends of an arrow or a line, each with a handle, or `undefined` to hide them. */
   ends(points: Point[] | undefined): void;
   /** `undefined` hides it. */
   marquee(area: Rect | undefined): void;

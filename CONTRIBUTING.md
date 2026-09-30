@@ -28,7 +28,7 @@ The app is one web app in `web/`, in TypeScript without a framework, which runs 
 
 ### board
 
-The board as plain data: elements (images, notes, shapes, arrows, and groups), their geometry, their stacking, and non-destructive image edits. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle is repaired on read. Edits go through an `Editor`, whose undo history keeps every touched element as it was, in memory only.
+The board as plain data: elements (images, notes, sticky notes, shapes, arrows, lines, and groups), their geometry, their stacking, and non-destructive image edits. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle is repaired on read. Edits go through an `Editor`, whose undo history keeps every touched element as it was, in memory only.
 
 ### format
 
@@ -44,7 +44,7 @@ The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web 
 
 ### renderer
 
-The renderer, on wgpu: images as textured quads, text from textures the web app rasterises, the strokes of arrows and shapes, and the fill of sticky notes, in one list back to front, on WebGPU or WebGL2, for the web only so far. See the [foundation](./docs/technical/foundation.md#rendering).
+The renderer, on wgpu: images as textured quads, text from textures the web app rasterises, the strokes of arrows, lines, and shapes, and the fill of sticky notes, in one list back to front, on WebGPU or WebGL2, for the web only so far. See the [foundation](./docs/technical/foundation.md#rendering).
 
 ### folder
 

@@ -1,6 +1,6 @@
 //! The renderer: images as textured quads, text as textures of its coverage in a colour,
-//! strokes (lines, and the outlines of rectangles and ellipses), and filled rectangles, on
-//! WebGL2 or WebGPU, drawn in the order given.
+//! strokes (lines, the outlines of rectangles and ellipses, and crosses), and filled
+//! rectangles, on WebGL2 or WebGPU, drawn in the order given.
 
 #![cfg(target_arch = "wasm32")]
 
@@ -98,8 +98,9 @@ struct Out {
 };
 
 /// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, 1 or 2 for the outline of a
-/// rectangle or an ellipse in the frame `geometry`, turned by `degrees`, and 3 fills that
-/// rectangle. `width` is in board units, but never under a device pixel.
+/// rectangle or an ellipse in the frame `geometry`, turned by `degrees`, 3 fills that
+/// rectangle, and 4 draws its diagonals. `width` is in board units, but never under a device
+/// pixel.
 @vertex fn vs(
     @builtin(vertex_index) index: u32,
     @location(0) shape: f32,
@@ -146,6 +147,11 @@ fn box(local: vec2f, half: vec2f) -> f32 {
         away = length(vec2f(in.local.x - clamp(in.local.x, 0.0, in.size.x), in.local.y));
     } else if in.shape < 1.5 {
         away = abs(box(in.local, in.size));
+    } else if in.shape > 3.5 {
+        // Folded into one quarter, both diagonals run from the centre to the corner.
+        let point = abs(in.local);
+        let along = clamp(dot(point, in.size) / max(dot(in.size, in.size), 1e-6), 0.0, 1.0);
+        away = length(point - in.size * along);
     } else if in.shape > 2.5 {
         return vec4f(in.colour, clamp(0.5 - box(in.local, in.size), 0.0, 1.0));
     } else {

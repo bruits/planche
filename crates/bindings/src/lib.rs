@@ -277,7 +277,7 @@ pub fn file_depth() -> usize {
     format::DEPTH
 }
 
-/// How wide arrows and the outlines of shapes draw, in board units, as the core hits them.
+/// How wide arrows, lines, and shapes draw, in board units, as the core hits them.
 #[wasm_bindgen(js_name = strokeWidth)]
 pub fn stroke_width() -> f64 {
     board::STROKE_WIDTH

@@ -4,7 +4,7 @@
 // what it touches. Double-clicking a group goes into it, where clicks select its own elements
 // instead, and double-clicking a note, a sticky note, or a shape writes in it. The selection's
 // corners scale it around the opposite one, the handle above it rotates it around its centre,
-// and a lone arrow's ends move on their own.
+// and the ends of a lone arrow or line move on their own.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
@@ -40,7 +40,7 @@ export interface Editing {
 export type Restack = "forward" | "backward" | "front" | "back";
 
 /** What a press draws, while a tool to draw is in use. */
-export type Draw = "arrow" | "rectangle" | "ellipse" | "note" | "sticky";
+export type Draw = "arrow" | "line" | "rectangle" | "ellipse" | "cross" | "note" | "sticky";
 
 export interface Hooks {
   /**
@@ -55,7 +55,8 @@ export interface Hooks {
   drawn(): void;
 }
 
-type Arrow = Extract<Kind, { type: "arrow" }>;
+type Segment = Extract<Kind, { type: "arrow" | "line" }>;
+const SEGMENTS = new Set<string>(["arrow", "line"] satisfies Segment["type"][]);
 
 export interface Edits {
   /** Whether a gesture or some writing is under way, which edits from elsewhere would break. */
@@ -82,7 +83,7 @@ export interface Edits {
   up(): boolean;
   /** Into the one group selected, selecting its elements. */
   goInside(): void;
-  loneArrow(): boolean;
+  loneSegment(): boolean;
   /**
    * Selects what a right-click at `at` is about, the element there unless it is selected
    * already, or nothing unless `at` is within the selection. Whether anything is.
@@ -110,7 +111,7 @@ type Press =
   | { kind: "scale"; pointer: number; origin: Point; handle: Point }
   | { kind: "rotate"; pointer: number; pivot: Point; from: number }
   | { kind: "draw"; pointer: number; start: Point; last: Point; shape: Draw; id: string; dragging: boolean }
-  | { kind: "end"; pointer: number; start: Point; dragging: boolean; id: string; arrow: Arrow; end: "from" | "to" };
+  | { kind: "end"; pointer: number; start: Point; dragging: boolean; id: string; segment: Segment; end: "from" | "to" };
 
 export function edits(
   view: View,
@@ -139,18 +140,18 @@ export function edits(
   };
   const field = writer();
 
-  const lone = (editing: Editing): { id: string; arrow: Arrow } | undefined => {
+  const lone = (editing: Editing): { id: string; segment: Segment } | undefined => {
     const [id] = selected;
     const kind = selected.size === 1 ? editing.board.elements[id!]?.kind : undefined;
-    return kind?.type === "arrow" ? { id: id!, arrow: kind } : undefined;
+    return isSegment(kind) ? { id: id!, segment: kind } : undefined;
   };
   const show = () => {
     const editing = current();
     const ids = [...selected];
-    const arrow = editing && lone(editing)?.arrow;
+    const segment = editing && lone(editing)?.segment;
     overlay.outline(editing ? ids.map((id) => editing.editor.outline(id)) : []);
-    overlay.box(editing && ids.length > 0 && !arrow ? box(editing.editor, ids) : undefined);
-    overlay.ends(arrow ? [arrow.from, arrow.to] : undefined);
+    overlay.box(editing && ids.length > 0 && !segment ? box(editing.editor, ids) : undefined);
+    overlay.ends(segment ? [segment.from, segment.to] : undefined);
     overlay.entered(editing && entered !== undefined ? box(editing.editor, [entered]) : undefined);
     selectionChanged();
   };
@@ -221,9 +222,9 @@ export function edits(
     }
     const single = lone(editing);
     if (single) {
-      const ends = (["from", "to"] as const).filter((end) => distance(at, single.arrow[end]) * zoom <= REACH);
-      // The nearest, as they may overlap on a short arrow.
-      const end = ends.sort((a, b) => distance(at, single.arrow[a]) - distance(at, single.arrow[b]))[0];
+      const ends = (["from", "to"] as const).filter((end) => distance(at, single.segment[end]) * zoom <= REACH);
+      // The nearest, as they may overlap on a short segment.
+      const end = ends.sort((a, b) => distance(at, single.segment[a]) - distance(at, single.segment[b]))[0];
       if (end) {
         press = { kind: "end", pointer, start: at, dragging: false, ...single, end };
         editor.beginGesture();
@@ -342,14 +343,14 @@ export function edits(
         return;
       }
       case "end": {
-        const { id, arrow, end, start } = press;
+        const { id, segment, end, start } = press;
         // By as much as the pointer moved, so that the end never jumps to it.
         if (!press.dragging && distance(at, start) * zoom < DRAG) {
           return;
         }
         press.dragging = true;
-        const moved = { x: arrow[end].x + at.x - start.x, y: arrow[end].y + at.y - start.y };
-        again(() => editor.update(id, JSON.stringify({ ...arrow, [end]: moved })));
+        const moved = { x: segment[end].x + at.x - start.x, y: segment[end].y + at.y - start.y };
+        again(() => editor.update(id, JSON.stringify({ ...segment, [end]: moved })));
         return;
       }
     }
@@ -379,7 +380,7 @@ export function edits(
     settle();
   };
   /**
-   * A click places a shape at a size of its own, but draws no arrow, which has no such size. A
+   * A click places a shape at a size of its own, but draws no arrow or line, which has none. A
    * drag brought back to where it started counts as a click. A note or a sticky note is written
    * in at once, within the gesture that drew it.
    */
@@ -405,7 +406,7 @@ export function edits(
       }
     } else {
       const touched = dragging ? editor.rewindGesture() : [];
-      const placing = shape !== "arrow" && completed && zoom !== undefined;
+      const placing = !SEGMENTS.has(shape) && completed && zoom !== undefined;
       if (placing) {
         editor.beginGesture();
         touched.push(...editor.add(id, entered, JSON.stringify(placed(shape, start, zoom))));
@@ -548,7 +549,7 @@ export function edits(
     follow,
     selection: () => [...selected],
     entered: () => entered,
-    loneArrow() {
+    loneSegment() {
       const editing = current();
       return editing !== undefined && lone(editing) !== undefined;
     },
@@ -595,7 +596,7 @@ export function edits(
       }
       const { editor } = editing;
       const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
-      // As a left press would, with no box around a lone arrow.
+      // As a left press would, with no box around a lone arrow or line.
       const onSelection = hit === undefined && !lone(editing) && within(at, box(editor, [...selected]));
       const top = aimed(editor, hit, onSelection);
       if (top !== undefined && !selected.has(top)) {
@@ -694,7 +695,8 @@ function shaped(shape: Draw, from: Point, to: Point, size: number): Kind {
   const frame = rect(from, to);
   switch (shape) {
     case "arrow":
-      return { type: "arrow", from, to };
+    case "line":
+      return { type: shape, from, to };
     case "note":
     case "sticky":
       return { type: shape, frame, rotation: 0, text };
@@ -712,6 +714,10 @@ function placed(shape: Draw, at: Point, zoom: number): Kind {
   }
   const half = (shape === "sticky" ? STICKY_SIZE : PLACED_SIZE) / zoom / 2;
   return shaped(shape, { x: at.x - half, y: at.y - half }, { x: at.x + half, y: at.y + half }, size);
+}
+
+function isSegment(kind: Kind | undefined): kind is Segment {
+  return SEGMENTS.has(kind?.type ?? "");
 }
 
 function distance(a: Point, b: Point): number {

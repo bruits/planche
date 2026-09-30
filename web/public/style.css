@@ -211,6 +211,22 @@ body {
   height: 20px;
 }
 
+/* Close to the button whose tools it lists, and still as wide as a pointer needs. */
+.bar .chevron {
+  width: 24px;
+  margin-left: -4px;
+  color: var(--muted);
+}
+
+.bar .chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.bar button[aria-expanded="true"] {
+  background: var(--hover);
+}
+
 .bar .key {
   position: absolute;
   right: 3px;
@@ -284,7 +300,6 @@ body {
 }
 
 .menu button {
-  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -299,17 +314,20 @@ body {
   cursor: pointer;
 }
 
-/* Room for the tick. */
-.menu:has([role="menuitemcheckbox"]) button {
-  padding-left: 28px;
+.menu .name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-/* Left out of the item's name, which `aria-checked` says already, where the browser can. */
-.menu button[aria-checked="true"]::before {
-  content: "✓";
-  content: "✓" / "";
-  position: absolute;
-  left: 10px;
+.menu svg {
+  width: 18px;
+  height: 18px;
+}
+
+.menu [aria-checked="true"] .name {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* Hovering moves the focus, so the tint marks both. */

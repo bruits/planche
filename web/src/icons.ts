@@ -1,4 +1,5 @@
-// The toolbar's icons, from Tabler Icons (https://tabler.io/icons), outline, on a 24 grid.
+// The icons of the toolbar and its menus, from Tabler Icons (https://tabler.io/icons), outline,
+// on a 24 grid.
 //
 // Tabler Icons, MIT License. Copyright (c) 2020-2026 Paweł Kuna. Permission is hereby granted,
 // free of charge, to any person obtaining a copy of this software and associated documentation
@@ -26,8 +27,10 @@ const paths = {
     "M17 7.5a1.5 1.5 0 0 1 3 0v8.5a6 6 0 0 1 -6 6h-2h.208a6 6 0 0 1 -5.012 -2.7a69.74 69.74 0 0 1 -.196 -.3c-.312 -.479 -1.407 -2.388 -3.286 -5.728a1.5 1.5 0 0 1 .536 -2.022a1.867 1.867 0 0 1 2.28 .28l1.47 1.47",
   ],
   arrow: ["M5 12l14 0", "M15 16l4 -4", "M15 8l4 4"],
+  line: ["M4 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0", "M16 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0", "M7.5 16.5l9 -9"],
   square: ["M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14"],
   circle: ["M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"],
+  cross: ["M18 6l-12 12", "M6 6l12 12"],
   typography: ["M4 20l3 0", "M14 20l7 0", "M6.9 15l6.9 0", "M10.2 6.3l5.8 13.7", "M5 20l6 -16l2 0l7 16"],
   note: ["M13 20l7 -7", "M13 20v-6a1 1 0 0 1 1 -1h6v-7a2 2 0 0 0 -2 -2h-12a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7"],
   photo: [
@@ -36,6 +39,7 @@ const paths = {
     "M3 16l5 -5c.928 -.893 2.072 -.893 3 0l5 5",
     "M14 14l1 -1c.928 -.893 2.072 -.893 3 0l3 3",
   ],
+  chevron: ["M6 9l6 6l6 -6"],
   menu: [
     "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
     "M11 19a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",

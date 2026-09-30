@@ -58,8 +58,8 @@ impl Board {
     }
 
     /// The closed outline of what an element draws: a frame's corners, clockwise from its
-    /// top-left once rotated, an arrow's two ends, or the corners of the bounds of a group's
-    /// elements, if they draw anything. `None` when there is no such element.
+    /// top-left once rotated, an arrow's or a line's two ends, or the corners of the bounds of
+    /// a group's elements, if they draw anything. `None` when there is no such element.
     pub fn outline(&self, id: ElementId) -> Option<Vec<Point>> {
         let element = self.elements.get(&id)?;
         Some(match shape(&element.kind) {
@@ -111,7 +111,7 @@ fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
         | ElementKind::Shape {
             frame, rotation, ..
         } => Some(corners(frame, *rotation).to_vec()),
-        ElementKind::Arrow { from, to } => Some(vec![*from, *to]),
+        ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => Some(vec![*from, *to]),
         ElementKind::Group => None,
     }
 }
@@ -161,18 +161,30 @@ fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
         ElementKind::Shape {
             frame,
             rotation,
+            shape: Shape::Cross,
+            text,
+        } => {
+            let outline = corners(frame, *rotation);
+            diagonals(&outline).any(|(a, b)| distance(point, a, b) <= reach)
+                || (!text.is_blank() && inside(&outline, point))
+        }
+        ElementKind::Shape {
+            frame,
+            rotation,
             text,
             ..
         } => {
             let outline = corners(frame, *rotation);
             near_edges(&outline, point, reach) || (!text.is_blank() && inside(&outline, point))
         }
-        ElementKind::Arrow { from, to } => distance(point, *from, *to) <= reach,
+        ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
+            distance(point, *from, *to) <= reach
+        }
         _ => shape(kind).is_some_and(|shape| near(&shape, point, tolerance)),
     }
 }
 
-/// As [`hits`], a shape without text only draws its outline, so an area within it touches
+/// As [`hits`], a shape without text only draws its strokes, so an area between them touches
 /// none of it.
 fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
     match kind {
@@ -183,6 +195,19 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
             text,
         } if frame.width != 0.0 && frame.height != 0.0 => {
             ellipse_touches(frame, *rotation, area, !text.is_blank())
+        }
+        ElementKind::Shape {
+            frame,
+            rotation,
+            shape: Shape::Cross,
+            text,
+        } => {
+            let outline = corners(frame, *rotation);
+            if text.is_blank() {
+                diagonals(&outline).any(|(a, b)| overlap(&[a, b], area))
+            } else {
+                overlap(&outline, area)
+            }
         }
         ElementKind::Shape {
             frame,
@@ -214,6 +239,12 @@ fn ellipse_touches(frame: &Rect, degrees: f64, area: &[Point; 4], filled: bool) 
     let origin = Point { x: 0.0, y: 0.0 };
     let reaches = inside(&unit, origin) || edges(&unit).any(|(a, b)| distance(origin, a, b) <= 1.0);
     reaches && (filled || !unit.iter().all(|corner| corner.x.hypot(corner.y) < 1.0))
+}
+
+fn diagonals(corners: &[Point; 4]) -> impl Iterator<Item = (Point, Point)> + '_ {
+    [(0, 2), (1, 3)]
+        .into_iter()
+        .map(|(a, b)| (corners[a], corners[b]))
 }
 
 fn near(shape: &[Point], point: Point, tolerance: f64) -> bool {
@@ -688,11 +719,60 @@ mod tests {
     }
 
     #[test]
-    fn an_arrow_is_hit_near_its_line() {
-        let board = board([(1, element(None, "a0", arrow((0.0, 0.0), (100.0, 100.0))))]);
-        assert_eq!(board.hit(point(52.0, 48.0), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(60.0, 40.0), 3.0), None);
-        assert_eq!(board.hit(point(102.0, 102.0), 3.0), Some(id(1)));
+    fn an_arrow_or_a_line_is_hit_near_its_line() {
+        let (from, to) = (point(0.0, 0.0), point(100.0, 100.0));
+        for kind in [
+            ElementKind::Arrow { from, to },
+            ElementKind::Line { from, to },
+        ] {
+            let board = board([(1, element(None, "a0", kind))]);
+            assert_eq!(board.hit(point(52.0, 48.0), 3.0), Some(id(1)));
+            assert_eq!(board.hit(point(60.0, 40.0), 3.0), None);
+            assert_eq!(board.hit(point(102.0, 102.0), 3.0), Some(id(1)));
+            assert_eq!(board.touching(area(40.0, 40.0, 5.0, 5.0)), [id(1)]);
+        }
+    }
+
+    #[test]
+    fn a_cross_is_hit_and_touched_along_its_diagonals_until_it_holds_text() {
+        let board = board([
+            (
+                1,
+                element(
+                    None,
+                    "a0",
+                    framed(Shape::Cross, area(0.0, 0.0, 100.0, 100.0), 0.0),
+                ),
+            ),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    labelled(Shape::Cross, area(200.0, 0.0, 100.0, 100.0), 0.0, "C"),
+                ),
+            ),
+            // Turned a quarter, so that it stands 100 wide and 200 tall around (100, 250).
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    framed(Shape::Cross, area(0.0, 200.0, 200.0, 100.0), 90.0),
+                ),
+            ),
+        ]);
+        assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit(point(22.0, 78.0), 3.0), Some(id(1)));
+        // Between its arms, and on its frame away from them.
+        assert_eq!(board.hit(point(50.0, 20.0), 3.0), None);
+        assert_eq!(board.hit(point(50.0, 1.0), 3.0), None);
+        assert!(board.touching(area(40.0, 5.0, 20.0, 20.0)).is_empty());
+        assert_eq!(board.touching(area(0.0, 0.0, 10.0, 10.0)), [id(1)]);
+        assert_eq!(board.hit(point(250.0, 20.0), 0.0), Some(id(2)));
+        assert_eq!(board.touching(area(240.0, 5.0, 20.0, 20.0)), [id(2)]);
+        assert_eq!(board.hit(point(75.0, 200.0), 3.0), Some(id(3)));
+        assert_eq!(board.hit(point(50.0, 200.0), 3.0), None);
     }
 
     #[test]

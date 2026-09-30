@@ -134,7 +134,7 @@ impl Editor {
                 frame.x += dx;
                 frame.y += dy;
             }
-            ElementKind::Arrow { from, to } => {
+            ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
                 for point in [from, to] {
                     point.x += dx;
                     point.y += dy;
@@ -182,7 +182,7 @@ impl Editor {
                     frame.x = centre.x - frame.width / 2.0;
                     frame.y = centre.y - frame.height / 2.0;
                 }
-                ElementKind::Arrow { from, to } => {
+                ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
                     scaled(from);
                     scaled(to);
                 }
@@ -222,7 +222,7 @@ impl Editor {
                 let turned = (*rotation + degrees).rem_euclid(360.0);
                 *rotation = if turned < 360.0 { turned } else { 0.0 };
             }
-            ElementKind::Arrow { from, to } => {
+            ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
                 *from = from.turned(pivot, degrees);
                 *to = to.turned(pivot, degrees);
             }
@@ -1193,26 +1193,30 @@ mod tests {
     }
 
     #[test]
-    fn scaling_and_rotating_move_both_ends_of_an_arrow() {
-        let line = ElementKind::Arrow {
-            from: Point { x: 10.0, y: 0.0 },
-            to: Point { x: 20.0, y: 0.0 },
-        };
+    fn scaling_and_rotating_move_both_ends_of_an_arrow_or_a_line() {
+        let (from, to) = (Point { x: 10.0, y: 0.0 }, Point { x: 20.0, y: 0.0 });
         let ends = |editor: &Editor| match editor.board().elements[&id(1)].kind {
-            ElementKind::Arrow { from, to } => [from.x, from.y, to.x, to.y],
+            ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
+                [from.x, from.y, to.x, to.y]
+            }
             _ => unreachable!(),
         };
-        let mut editor = Editor::new(board([(1, element(None, "a0", line))]));
-        editor
-            .scale(&ids([1]), Point { x: 10.0, y: 0.0 }, 2.0)
-            .unwrap();
-        assert_eq!(ends(&editor), [10.0, 0.0, 30.0, 0.0]);
-        editor
-            .rotate(&ids([1]), Point { x: 0.0, y: 0.0 }, 90.0)
-            .unwrap();
-        let expected = [0.0, 10.0, 0.0, 30.0];
-        for (end, expected) in ends(&editor).into_iter().zip(expected) {
-            assert!((end - expected).abs() < 1e-9, "{end} {expected}");
+        for kind in [
+            ElementKind::Arrow { from, to },
+            ElementKind::Line { from, to },
+        ] {
+            let mut editor = Editor::new(board([(1, element(None, "a0", kind))]));
+            editor
+                .scale(&ids([1]), Point { x: 10.0, y: 0.0 }, 2.0)
+                .unwrap();
+            assert_eq!(ends(&editor), [10.0, 0.0, 30.0, 0.0]);
+            editor
+                .rotate(&ids([1]), Point { x: 0.0, y: 0.0 }, 90.0)
+                .unwrap();
+            let expected = [0.0, 10.0, 0.0, 30.0];
+            for (end, expected) in ends(&editor).into_iter().zip(expected) {
+                assert!((end - expected).abs() < 1e-9, "{end} {expected}");
+            }
         }
     }
 
