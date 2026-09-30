@@ -133,6 +133,17 @@ fn sample() -> Board {
             },
         ),
         (
+            ElementId::from_random(9),
+            Element {
+                group: None,
+                z: z("a6"),
+                kind: ElementKind::Comment {
+                    at: Point { x: 12.5, y: -3.0 },
+                    text: "Too dark\nfor the mood".to_owned(),
+                },
+            },
+        ),
+        (
             ElementId::from_random(8),
             Element {
                 group: None,
@@ -195,7 +206,10 @@ fn restacking_rewrites_one_file() {
 
     assert_eq!(changed(&before, &after), [format!("elements/{NOTE}.json")]);
     let order = format::read(&after).unwrap().draw_order();
-    assert_eq!(order, [1, 2, 3, 4, 5, 6, 7, 8].map(ElementId::from_random));
+    assert_eq!(
+        order,
+        [1, 2, 3, 4, 5, 6, 7, 8, 9].map(ElementId::from_random)
+    );
 }
 
 #[test]

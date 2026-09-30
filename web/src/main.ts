@@ -6,6 +6,7 @@ import type { Point } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import {
   decode,
+  extent,
   files,
   holdsImage,
   imageKind,
@@ -27,6 +28,7 @@ import type { Icon } from "./icons.js";
 import { menuOpen, openMenu, type Entry } from "./menu.js";
 import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./metrics.js";
 import { overlay } from "./overlay.js";
+import { pinned, pins } from "./pins.js";
 import { platform, type Folder } from "./platform.js";
 import { create, type Renderer } from "./renderer.js";
 import { loadFont, texts } from "./text.js";
@@ -46,6 +48,7 @@ const shown = overlay(byId("viewport"));
 const viewport = view(byId("viewport"), {
   frame(camera, size) {
     shown.frame(camera, size);
+    comments.frame(camera);
     editing.follow();
     if (opened && renderer && lettering.update(opened.board, renderer, camera, size, editing.writing())) {
       renderer.place(placed(opened.board, lettering, editing.writing()));
@@ -56,10 +59,14 @@ const viewport = view(byId("viewport"), {
 const lettering = texts(() => viewport.redraw());
 const editing = edits(viewport, shown, () => opened, {
   changed,
-  selectionChanged: () => refreshBar(),
+  selectionChanged() {
+    refreshBar();
+    showComments();
+  },
   drawing: () => drawTool(),
   drawn: () => useTool("select"),
 });
+const comments = pins(byId("viewport"), { choose: (id) => editing.choose(id), write: (id) => editing.write(id) });
 
 let opened: Opened | undefined;
 let renderer: Renderer | undefined;
@@ -109,6 +116,7 @@ const commands = {
   cross: { label: "Cross", keys: [{ key: "x" }], unavailable: noneShown, run: () => useTool("cross") },
   note: { label: "Text", keys: [{ key: "t" }], unavailable: noneShown, run: () => useTool("note") },
   sticky: { label: "Sticky note", keys: [{ key: "n" }], unavailable: noneShown, run: () => useTool("sticky") },
+  comment: { label: "Comment", keys: [{ key: "c" }], unavailable: noneShown, run: () => useTool("comment") },
   addImages: {
     label: "Add images…",
     keys: [{ key: "i" }],
@@ -179,7 +187,7 @@ const commands = {
   write: {
     label: "Edit text",
     keys: [{ key: "enter" }],
-    unavailable: () => (editing.writable() ? undefined : "Select one text, sticky note, or shape"),
+    unavailable: () => (editing.writable() ? undefined : "Select one text, sticky note, shape, or comment"),
     run: () => editing.write(),
   },
   zoomIn: {
@@ -211,7 +219,7 @@ const commands = {
     unavailable: noneShown,
     run: () => {
       if (opened) {
-        viewport.look(fit(core.bounds(opened.editor, opened.board.draw_order), viewport.size()));
+        viewport.look(fit(extent(opened), viewport.size()));
       }
     },
   },
@@ -256,7 +264,10 @@ const bar = toolbar(
           drawing("cross", "cross"),
         ],
       },
-      { label: "Text and sticky notes", tools: [drawing("note", "typography"), drawing("sticky", "note")] },
+      {
+        label: "Text, sticky notes, and comments",
+        tools: [drawing("note", "typography"), drawing("sticky", "note"), drawing("comment", "message")],
+      },
       { command: commands.addImages, icon: "photo" },
     ],
   ],
@@ -308,7 +319,7 @@ document.addEventListener("contextmenu", (event) => {
   if (at === undefined || menuOpen() || busy()) {
     return;
   }
-  contextMenu(editing.aim(at), at, { x: event.clientX, y: event.clientY });
+  contextMenu(editing.aim(at, pinned(event.target)), at, { x: event.clientX, y: event.clientY });
 });
 
 await Promise.all([core.start(), loadFont()]);
@@ -360,6 +371,12 @@ function selectsGroup(): boolean {
   return editing.selection().some((id) => opened?.board.elements[id]?.kind.type === "group");
 }
 
+function showComments(): void {
+  if (opened) {
+    comments.show(opened.board, editing.selection(), editing.writing());
+  }
+}
+
 function refreshBar(): void {
   // Buttons still explain themselves when hovered or focused.
   bar.refresh(hintsShown ? hint() : "");
@@ -385,6 +402,9 @@ function hint(): string {
   }
   if (tool === "rectangle" || tool === "ellipse" || tool === "cross" || tool === "sticky") {
     return `Drag to draw, or click to place · ${escapeKey} to select again`;
+  }
+  if (tool === "comment") {
+    return `Click where to comment · ${escapeKey} to select again`;
   }
   if (tool === "note") {
     return `Click to write, or drag to set how wide · ${escapeKey} to select again`;
@@ -494,6 +514,7 @@ async function show(next: Opened): Promise<void> {
   opened = next;
   renderer = undefined;
   lettering.reset();
+  comments.clear();
   showSaved();
   showTitle();
   editing.reset();
@@ -510,7 +531,7 @@ async function show(next: Opened): Promise<void> {
   const { width, height } = viewport.size();
   const created = await create(viewport.host, width, height);
   details.set("renderer", created.backend);
-  viewport.show(created, fit(core.bounds(next.editor, next.board.draw_order), viewport.size()));
+  viewport.show(created, fit(extent(next), viewport.size()));
   renderer = created;
   refreshBar();
   if (assets.length > 0) {

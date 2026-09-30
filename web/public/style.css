@@ -23,6 +23,9 @@
   /* Sticky notes keep their colours in either theme. */
   --sticky: #fde68a;
   --sticky-ink: #1d1d22;
+  /* A comment's pin, and how wide it grows to show its text. */
+  --pin: 28px;
+  --bubble: 240px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -53,12 +56,12 @@ body {
   background: var(--board);
 }
 
-/* The renderer reads its colour as the ink. */
+/* The renderer reads its colour as the ink. Clipped, as a focused pin would scroll what hides. */
 #viewport {
   position: fixed;
   inset: 0;
   color: var(--ink);
-  overflow: hidden;
+  overflow: clip;
   touch-action: none;
 }
 
@@ -87,6 +90,102 @@ body {
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+
+/* Over the board and its selection, where only the pins take the pointer. */
+#viewport > .pins {
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Placed at its comment's point, which its pin's sharp corner, at the top left, points at. */
+.comment {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.pin,
+.writer.bubble {
+  box-sizing: border-box;
+  border: 2px solid var(--surface);
+  border-radius: 0 calc(var(--pin) / 2) calc(var(--pin) / 2);
+  font: 14px/1.4 system-ui, sans-serif;
+  color: var(--surface);
+  background: var(--accent);
+  box-shadow: var(--shadow);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pin {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: max-content;
+  min-width: var(--pin);
+  max-width: var(--pin);
+  min-height: var(--pin);
+  max-height: var(--pin);
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    max-width 150ms ease-out,
+    max-height 150ms ease-out;
+}
+
+/* Laid out at its full width from the start, so that growing only uncovers it. */
+.pin .text {
+  display: block;
+  width: max-content;
+  max-width: calc(var(--bubble) - 28px);
+  padding: 6px 12px;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+
+.pins:not(.quiet) .comment:not(.writing, .blank) .pin:is(:hover, :focus-visible) {
+  max-width: var(--bubble);
+  max-height: 50vh;
+}
+
+.pins:not(.quiet) .comment:not(.writing, .blank) .pin:is(:hover, :focus-visible) .text {
+  opacity: 1;
+}
+
+.comment.writing .pin {
+  visibility: hidden;
+}
+
+.comment.selected .pin {
+  outline: 2px solid Highlight;
+  outline-offset: 1px;
+}
+
+/* After the selection's, which it would otherwise lose to. */
+.comment .pin:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* As the bubble grows, so that its text wraps alike. */
+.writer.bubble {
+  width: var(--bubble);
+  padding: 6px 12px;
+  caret-color: var(--surface);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pin,
+  .pin .text {
+    transition: none;
+  }
 }
 
 .selection > *,
@@ -387,6 +486,12 @@ body {
 
   .writer.sticky {
     color: var(--sticky-ink);
+  }
+
+  .writer.bubble {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
   }
 }
 

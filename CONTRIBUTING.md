@@ -2,7 +2,7 @@
 
 ## Philosophy
 
-Planche is a fast, open-source board to gather reference images. You drop in pictures from anywhere, lay them out on a canvas, and annotate them with notes, arrows, and shapes. A board is a folder of plain files that belongs to its user: it moves between machines without loss, diffs well in Git, and needs no account.
+Planche is a fast, open-source board to gather reference images. You drop in pictures from anywhere, lay them out on a canvas, and annotate them with notes, arrows, shapes, and comments. A board is a folder of plain files that belongs to its user: it moves between machines without loss, diffs well in Git, and needs no account.
 
 The app stays small on purpose. Its core covers what a reference board needs, including simple non-destructive edits (crop, rotation, flip, and greyscale), and anything beyond goes into plugins. An optional, paid cloud may add live collaboration and sync one day, but the app works fully without it.
 
@@ -28,7 +28,7 @@ The app is one web app in `web/`, in TypeScript without a framework, which runs 
 
 ### board
 
-The board as plain data: elements (images, notes, sticky notes, shapes, arrows, lines, and groups), their geometry, their stacking, and non-destructive image edits. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle is repaired on read. Edits go through an `Editor`, whose undo history keeps every touched element as it was, in memory only.
+The board as plain data: elements (images, notes, sticky notes, shapes, arrows, lines, comments, and groups), their geometry, their stacking, and non-destructive image edits. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle is repaired on read. Edits go through an `Editor`, whose undo history keeps every touched element as it was, in memory only.
 
 ### format
 

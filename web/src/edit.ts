@@ -2,16 +2,17 @@
 // delete, undo, and redo for the commands to run. A click selects the element under it, or the
 // outermost group holding it, and a drag from where nothing is draws a rectangle that selects
 // what it touches. Double-clicking a group goes into it, where clicks select its own elements
-// instead, and double-clicking a note, a sticky note, or a shape writes in it. The selection's
-// corners scale it around the opposite one, the handle above it rotates it around its centre,
-// and the ends of a lone arrow or line move on their own.
+// instead, and double-clicking a note, a sticky note, a shape, or a comment writes in it. The
+// selection's corners scale it around the opposite one, the handle above it rotates it around
+// its centre, and the ends of a lone arrow or line move on their own.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
 import type { Board, Editor, Kind, Point, Rect } from "./core.js";
 import { newId } from "./board.js";
 import { handles, type Overlay } from "./overlay.js";
-import { fitted, holdsText, isBlank, LINE_HEIGHT } from "./text.js";
+import { pinned } from "./pins.js";
+import { fitted, holdsText, LINE_HEIGHT, type Holder } from "./text.js";
 import type { View } from "./view.js";
 import { writer } from "./writer.js";
 
@@ -40,7 +41,7 @@ export interface Editing {
 export type Restack = "forward" | "backward" | "front" | "back";
 
 /** What a press draws, while a tool to draw is in use. */
-export type Draw = "arrow" | "line" | "rectangle" | "ellipse" | "cross" | "note" | "sticky";
+export type Draw = "arrow" | "line" | "rectangle" | "ellipse" | "cross" | "note" | "sticky" | "comment";
 
 export interface Hooks {
   /**
@@ -57,6 +58,7 @@ export interface Hooks {
 
 type Segment = Extract<Kind, { type: "arrow" | "line" }>;
 const SEGMENTS = new Set<string>(["arrow", "line"] satisfies Segment["type"][]);
+type Comment = Extract<Kind, { type: "comment" }>;
 
 export interface Edits {
   /** Whether a gesture or some writing is under way, which edits from elsewhere would break. */
@@ -67,8 +69,8 @@ export interface Edits {
   writing(): string | undefined;
   /** Whether the selection is one element that holds text. */
   writable(): boolean;
-  /** In the one element selected that holds text. */
-  write(): void;
+  /** In the one element selected that holds text, or in `id`, within its group. */
+  write(id?: string): void;
   /** Lays the field over the element being written in, as the camera moved. */
   follow(): void;
   /** Elements of the group gone into, or of the top level. */
@@ -77,6 +79,8 @@ export interface Edits {
   entered(): string | undefined;
   /** Selects the elements, or the groups holding them at the level of the selection. */
   select(ids: string[]): void;
+  /** Selects `id` itself, going into its group. */
+  choose(id: string): void;
   /** Everything in the group gone into, or on the board. */
   selectAll(): void;
   /** Selects the group gone into, which leaves it. Whether there was one. */
@@ -85,10 +89,10 @@ export interface Edits {
   goInside(): void;
   loneSegment(): boolean;
   /**
-   * Selects what a right-click at `at` is about, the element there unless it is selected
-   * already, or nothing unless `at` is within the selection. Whether anything is.
+   * Selects what a right-click at `at` is about, the element there, or `on`, unless it is
+   * selected already, or nothing unless `at` is within the selection. Whether anything is.
    */
-  aim(at: Point): boolean;
+  aim(at: Point, on?: string): boolean;
   /** The selection's centre, `undefined` when nothing is selected. */
   centre(): Point | undefined;
   remove(): void;
@@ -126,6 +130,8 @@ export function edits(
   let written: { id: string; fresh: boolean } | undefined;
   /** Whether the last press was a click, as browsers still send a double-click when it dragged. */
   let wasClick = false;
+  /** The comment whose pin the last press was on, which the pointer's capture hides from later events. */
+  let pressedPin: string | undefined;
   let waiting: (() => void)[] = [];
   const resolve = () => {
     if (press === undefined && written === undefined) {
@@ -206,6 +212,7 @@ export function edits(
 
   view.host.addEventListener("pointerdown", (event) => {
     wasClick = false;
+    pressedPin = pinned(event.target);
     const editing = current();
     const at = view.at(event);
     const zoom = view.zoom();
@@ -220,7 +227,8 @@ export function edits(
       view.host.setPointerCapture(pointer);
       return;
     }
-    const single = lone(editing);
+    // Over the selection's handles, a pin takes the press.
+    const single = pressedPin === undefined ? lone(editing) : undefined;
     if (single) {
       const ends = (["from", "to"] as const).filter((end) => distance(at, single.segment[end]) * zoom <= REACH);
       // The nearest, as they may overlap on a short segment.
@@ -235,8 +243,8 @@ export function edits(
     const corners = selected.size > 0 && !single ? box(editor, [...selected]) : undefined;
     const far = corners ? handles(corners, zoom).map((handle) => distance(at, handle) * zoom) : [];
     const nearest = far.indexOf(Math.min(...far));
-    const grabbed = far[nearest]! <= REACH ? nearest : -1;
-    const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
+    const grabbed = pressedPin === undefined && far[nearest]! <= REACH ? nearest : -1;
+    const hit = pressedPin ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
     // Ctrl on macOS opens the context menu instead.
     const toggling = event.shiftKey || event.metaKey || (event.ctrlKey && !mac);
     // Within the selection's box, which its hollow shapes mostly let through, a press drags it.
@@ -328,6 +336,10 @@ export function edits(
       }
       case "draw": {
         press.last = at;
+        // Pinned where it was pressed.
+        if (press.shape === "comment") {
+          return;
+        }
         if (!press.dragging) {
           if (distance(at, press.start) * zoom < DRAG) {
             return;
@@ -381,8 +393,8 @@ export function edits(
   };
   /**
    * A click places a shape at a size of its own, but draws no arrow or line, which has none. A
-   * drag brought back to where it started counts as a click. A note or a sticky note is written
-   * in at once, within the gesture that drew it.
+   * drag brought back to where it started counts as a click. A note, a sticky note, or a comment
+   * is written in at once, within the gesture that drew it.
    */
   const finishDrawing = (press: Extract<Press, { kind: "draw" }>, completed: boolean) => {
     const editing = current();
@@ -393,7 +405,7 @@ export function edits(
     }
     const { editor } = editing;
     const { id, shape, start, last, dragging } = press;
-    const writes = shape === "note" || shape === "sticky";
+    const writes = shape === "note" || shape === "sticky" || shape === "comment";
     // Nobody would write in it.
     if (writes && !completed) {
       edit(editing, editor.rewindGesture());
@@ -430,9 +442,16 @@ export function edits(
   const follow = () => {
     const kind = written && current()?.board.elements[written.id]?.kind;
     const zoom = view.zoom();
-    const at = holdsText(kind) ? view.client({ x: kind.frame.x, y: kind.frame.y }) : undefined;
-    if (holdsText(kind) && zoom !== undefined && at !== undefined) {
-      field.follow(kind, at, zoom);
+    if (kind?.type === "comment") {
+      const at = view.client(kind.at);
+      if (at) {
+        field.bubble(at);
+      }
+    } else if (holdsText(kind) && zoom !== undefined) {
+      const at = view.client({ x: kind.frame.x, y: kind.frame.y });
+      if (at) {
+        field.follow(kind, at, zoom);
+      }
     }
   };
   /**
@@ -442,7 +461,7 @@ export function edits(
   const write = (editing: Editing, id: string, fresh: boolean) => {
     const element = editing.board.elements[id];
     const kind = element?.kind;
-    if (!element || !holdsText(kind)) {
+    if (!element || !writesIn(kind)) {
       return;
     }
     const { editor } = editing;
@@ -450,21 +469,21 @@ export function edits(
     written = { id, fresh };
     selected = new Set();
     const rewrite = (content: string) => {
-      const next = JSON.stringify(fitted({ ...kind, text: { ...kind.text, content } }));
+      const next = JSON.stringify(rewritten(kind, content));
       const touched = editor.rewindGesture();
       touched.push(...(fresh ? editor.add(id, element.group, next) : editor.update(id, next)));
       edit(editing, touched);
       follow();
     };
-    field.open(kind.text.content, rewrite, () => finishWriting(editing, id, fresh));
+    field.open(contentOf(kind), rewrite, () => finishWriting(editing, id, fresh));
     if (fresh) {
-      rewrite(kind.text.content);
+      rewrite(contentOf(kind));
     } else {
       edit(editing, [id]);
       follow();
     }
   };
-  /** A note left blank goes, as one edit with its writing. */
+  /** A note or a comment left blank goes, as one edit with its writing. */
   const finishWriting = (editing: Editing, id: string, fresh: boolean) => {
     if (written?.id !== id || current() !== editing) {
       return;
@@ -473,7 +492,7 @@ export function edits(
     const { editor, board } = editing;
     const kind = board.elements[id]?.kind;
     const touched = [id];
-    if (kind?.type === "note" && isBlank(kind)) {
+    if ((kind?.type === "note" || kind?.type === "comment") && contentOf(kind).trim() === "") {
       touched.push(...editor.rewindGesture());
       if (!fresh) {
         touched.push(...editor.remove([id]));
@@ -502,7 +521,7 @@ export function edits(
       return;
     }
     const { editor, board } = editing;
-    const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
+    const hit = pressedPin ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
     const top = hit === undefined ? undefined : level(editor, hit);
     if (hit !== undefined && top !== undefined && board.elements[top]?.kind.type === "group") {
       const member = editor.memberOf(top, hit);
@@ -513,7 +532,7 @@ export function edits(
     }
     // Within a shape, whose text fills it once written.
     const target = top ?? surrounding(editing, at);
-    if (target !== undefined && holdsText(board.elements[target]?.kind)) {
+    if (target !== undefined && writesIn(board.elements[target]?.kind)) {
       write(editing, target, false);
     }
   });
@@ -530,7 +549,13 @@ export function edits(
       edited(editing, [...selected]);
     }
   };
-  const writable = ({ board }: Editing) => selected.size === 1 && holdsText(board.elements[[...selected][0]!]?.kind);
+  const writable = ({ board }: Editing) => selected.size === 1 && writesIn(board.elements[[...selected][0]!]?.kind);
+  const choose = ({ board }: Editing, id: string) => {
+    if (id in board.elements) {
+      entered = board.elements[id]!.group;
+      selected = new Set([id]);
+    }
+  };
 
   return {
     busy: () => press !== undefined || written !== undefined,
@@ -540,10 +565,13 @@ export function edits(
       const editing = current();
       return editing !== undefined && writable(editing);
     },
-    write: () =>
-      run((editing, [id]) => {
+    write: (id) =>
+      run((editing) => {
+        if (id !== undefined) {
+          choose(editing, id);
+        }
         if (writable(editing)) {
-          write(editing, id!, false);
+          write(editing, [...selected][0]!, false);
         }
       }),
     follow,
@@ -560,6 +588,11 @@ export function edits(
         show();
       }
     },
+    choose: (id) =>
+      run((editing) => {
+        choose(editing, id);
+        show();
+      }),
     selectAll() {
       const editing = current();
       if (editing) {
@@ -588,14 +621,14 @@ export function edits(
         selected = new Set(Object.keys(board.elements).filter((id) => board.elements[id]!.group === group));
         show();
       }),
-    aim(at) {
+    aim(at, on) {
       const editing = current();
       const zoom = view.zoom();
       if (!editing || !zoom || press) {
         return selected.size > 0;
       }
       const { editor } = editing;
-      const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
+      const hit = on ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
       // As a left press would, with no box around a lone arrow or line.
       const onSelection = hit === undefined && !lone(editing) && within(at, box(editor, [...selected]));
       const top = aimed(editor, hit, onSelection);
@@ -609,6 +642,11 @@ export function edits(
     },
     centre() {
       const editing = current();
+      const [id] = selected;
+      const kind = selected.size === 1 ? editing?.board.elements[id!]?.kind : undefined;
+      if (kind?.type === "comment") {
+        return kind.at;
+      }
       const corners = editing && selected.size > 0 ? box(editing.editor, [...selected]) : undefined;
       return corners && { x: (corners[0]!.x + corners[2]!.x) / 2, y: (corners[0]!.y + corners[2]!.y) / 2 };
     },
@@ -689,7 +727,7 @@ function box(editor: Editor, ids: string[]): Point[] | undefined {
   ];
 }
 
-/** Between two corners of its frame, or from one end to the other, with text of `size`. */
+/** Between two corners of its frame, from one end to the other, or pinned at `from`, with text of `size`. */
 function shaped(shape: Draw, from: Point, to: Point, size: number): Kind {
   const text = { content: "", font_size: size };
   const frame = rect(from, to);
@@ -700,20 +738,41 @@ function shaped(shape: Draw, from: Point, to: Point, size: number): Kind {
     case "note":
     case "sticky":
       return { type: shape, frame, rotation: 0, text };
+    case "comment":
+      return { type: "comment", at: from, text: "" };
     default:
       return { type: "shape", frame, rotation: 0, shape, text };
   }
 }
 
-/** As a click at `at` places it: centred there, but a note, whose first line starts there. */
+/**
+ * As a click at `at` places it: centred there, but a note, whose first line starts there, and a
+ * comment, pinned there.
+ */
 function placed(shape: Draw, at: Point, zoom: number): Kind {
   const size = FONT_SIZE / zoom;
+  if (shape === "comment") {
+    return shaped(shape, at, at, size);
+  }
   if (shape === "note") {
     const top = { x: at.x, y: at.y - (size * LINE_HEIGHT) / 2 };
     return shaped(shape, top, { x: top.x + NOTE_WIDTH / zoom, y: top.y + size * LINE_HEIGHT }, size);
   }
   const half = (shape === "sticky" ? STICKY_SIZE : PLACED_SIZE) / zoom / 2;
   return shaped(shape, { x: at.x - half, y: at.y - half }, { x: at.x + half, y: at.y + half }, size);
+}
+
+function writesIn(kind: Kind | undefined): kind is Holder | Comment {
+  return holdsText(kind) || kind?.type === "comment";
+}
+
+function contentOf(kind: Holder | Comment): string {
+  return kind.type === "comment" ? kind.text : kind.text.content;
+}
+
+/** With `content` written in it, and its frame grown to fit. */
+function rewritten(kind: Holder | Comment, content: string): Kind {
+  return kind.type === "comment" ? { ...kind, text: content } : fitted({ ...kind, text: { ...kind.text, content } });
 }
 
 function isSegment(kind: Kind | undefined): kind is Segment {

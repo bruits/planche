@@ -6,9 +6,9 @@ use std::collections::BTreeSet;
 use crate::{Board, ElementId, ElementKind, Point, Rect, STROKE_WIDTH, Shape};
 
 impl Board {
-    /// The topmost element that draws at `point`, or within `tolerance` of it. A group draws
-    /// nothing itself, so it is never the one hit, and a shape without text only draws its
-    /// outline, so what it surrounds stays within reach.
+    /// The topmost element that draws at `point`, or within `tolerance` of it. A group or a
+    /// comment covers nothing on the board, so it is never the one hit, and a shape without text
+    /// only draws its outline, so what it surrounds stays within reach.
     pub fn hit(&self, point: Point, tolerance: f64) -> Option<ElementId> {
         self.draw_order()
             .into_iter()
@@ -96,7 +96,8 @@ impl Board {
     }
 }
 
-/// What an element draws over, as a convex polygon or a segment. `None` for a group.
+/// What an element draws over, as a convex polygon or a segment. `None` for a comment or a
+/// group.
 fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
     match kind {
         ElementKind::Image {
@@ -112,7 +113,7 @@ fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
             frame, rotation, ..
         } => Some(corners(frame, *rotation).to_vec()),
         ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => Some(vec![*from, *to]),
-        ElementKind::Group => None,
+        ElementKind::Comment { .. } | ElementKind::Group => None,
     }
 }
 
@@ -831,6 +832,19 @@ mod tests {
             (2, element(Some(1), "a0", ElementKind::Group)),
         ]);
         assert_eq!(board.member(id(9), id(1)), None);
+    }
+
+    #[test]
+    fn a_comment_covers_nothing_on_the_board() {
+        let comment = ElementKind::Comment {
+            at: point(10.0, 10.0),
+            text: "Too dark".to_owned(),
+        };
+        let board = board([(1, element(None, "a0", comment))]);
+        assert_eq!(board.hit(point(10.0, 10.0), 3.0), None);
+        assert!(board.touching(area(0.0, 0.0, 20.0, 20.0)).is_empty());
+        assert_eq!(board.outline(id(1)), Some(Vec::new()));
+        assert_eq!(board.bounds(&[id(1)]), None);
     }
 
     #[test]

@@ -140,6 +140,10 @@ impl Editor {
                     point.y += dy;
                 }
             }
+            ElementKind::Comment { at, .. } => {
+                at.x += dx;
+                at.y += dy;
+            }
             ElementKind::Group => {}
         })
     }
@@ -186,6 +190,7 @@ impl Editor {
                     scaled(from);
                     scaled(to);
                 }
+                ElementKind::Comment { at, .. } => scaled(at),
                 ElementKind::Group => {}
             }
         })
@@ -226,6 +231,7 @@ impl Editor {
                 *from = from.turned(pivot, degrees);
                 *to = to.turned(pivot, degrees);
             }
+            ElementKind::Comment { at, .. } => *at = at.turned(pivot, degrees),
             ElementKind::Group => {}
         })
     }
@@ -1218,6 +1224,30 @@ mod tests {
                 assert!((end - expected).abs() < 1e-9, "{end} {expected}");
             }
         }
+    }
+
+    #[test]
+    fn a_comment_moves_scales_and_turns_with_its_pin() {
+        let comment = ElementKind::Comment {
+            at: Point { x: 10.0, y: 0.0 },
+            text: "Too dark".to_owned(),
+        };
+        let mut editor = Editor::new(board([(1, element(None, "a0", comment))]));
+        let at = |editor: &Editor| match &editor.board().elements[&id(1)].kind {
+            ElementKind::Comment { at, .. } => (at.x, at.y),
+            _ => unreachable!(),
+        };
+        editor.translate(&ids([1]), 5.0, 5.0).unwrap();
+        assert_eq!(at(&editor), (15.0, 5.0));
+        editor
+            .scale(&ids([1]), Point { x: 5.0, y: 5.0 }, 2.0)
+            .unwrap();
+        assert_eq!(at(&editor), (25.0, 5.0));
+        editor
+            .rotate(&ids([1]), Point { x: 5.0, y: 5.0 }, 90.0)
+            .unwrap();
+        let (x, y) = at(&editor);
+        assert!((x - 5.0).abs() < 1e-9 && (y - 25.0).abs() < 1e-9, "{x} {y}");
     }
 
     #[test]

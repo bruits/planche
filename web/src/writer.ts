@@ -9,6 +9,8 @@ export interface Writer {
   open(content: string, input: (content: string) => void, done: () => void): void;
   /** Over `kind`, whose frame's top-left is at `at` on the page, `zoom` CSS pixels per board unit. */
   follow(kind: Holder, at: { clientX: number; clientY: number }, zoom: number): void;
+  /** As the bubble of a comment pinned at `at` on the page, as tall as what it holds. */
+  bubble(at: { clientX: number; clientY: number }): void;
   close(): void;
 }
 
@@ -17,10 +19,15 @@ export function writer(): Writer {
   field.className = "writer";
   field.setAttribute("aria-label", "Text");
   field.hidden = true;
-  // As the renderer lays its text out.
-  field.style.setProperty("font-family", FONT);
-  field.style.setProperty("line-height", String(LINE_HEIGHT));
   document.body.append(field);
+  const style = (properties: Record<string, string>) => {
+    for (const name of [...field.style]) {
+      field.style.removeProperty(name);
+    }
+    for (const [name, value] of Object.entries(properties)) {
+      field.style.setProperty(name, value);
+    }
+  };
   let writing: { input: (content: string) => void; done: () => void } | undefined;
   const close = () => {
     // An input method still composing commits as the field loses the focus, which may close it.
@@ -59,7 +66,10 @@ export function writer(): Writer {
       const { frame, rotation, text } = kind;
       const size = text.font_size * zoom;
       const { area, centred, top } = layout(kind);
-      const properties = {
+      style({
+        // As the renderer lays its text out.
+        "font-family": FONT,
+        "line-height": String(LINE_HEIGHT),
         left: `${clientX}px`,
         top: `${clientY}px`,
         width: `${frame.width * zoom}px`,
@@ -70,13 +80,20 @@ export function writer(): Writer {
         "font-size": `${size}px`,
         "text-align": centred ? "center" : "left",
         transform: `rotate(${rotation}deg)`,
-      };
-      for (const [name, value] of Object.entries(properties)) {
-        field.style.setProperty(name, value);
-      }
+      });
       field.classList.toggle("sticky", kind.type === "sticky");
+      field.classList.remove("bubble");
+      field.setAttribute("aria-label", "Text");
       // Grown to fit, it may still be scrolled to where the caret was.
       field.scrollTop = 0;
+    },
+    bubble({ clientX, clientY }) {
+      field.classList.remove("sticky");
+      field.classList.add("bubble");
+      field.setAttribute("aria-label", "Comment");
+      style({ left: `${clientX}px`, top: `${clientY}px`, height: "0" });
+      const borders = field.offsetHeight - field.clientHeight;
+      field.style.setProperty("height", `${field.scrollHeight + borders}px`);
     },
     close,
   };

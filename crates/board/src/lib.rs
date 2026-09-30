@@ -196,6 +196,12 @@ pub enum ElementKind {
         from: Point,
         to: Point,
     },
+    /// Pinned at `at`, and shown at one size on screen, whatever the zoom, so it covers nothing
+    /// on the board.
+    Comment {
+        at: Point,
+        text: String,
+    },
     /// Draws nothing itself. Its elements are those whose `group` it is.
     Group,
 }
@@ -238,6 +244,7 @@ impl ElementKind {
             Self::Arrow { from, to } | Self::Line { from, to } => {
                 from.is_finite() && to.is_finite()
             }
+            Self::Comment { at, text: _ } => at.is_finite(),
             Self::Group => true,
         }
     }
@@ -523,6 +530,10 @@ mod tests {
         };
         let arrow = |from, to| ElementKind::Arrow { from, to };
         let line = |from, to| ElementKind::Line { from, to };
+        let comment = |at| ElementKind::Comment {
+            at,
+            text: String::new(),
+        };
         let edits = ImageEdits::default();
 
         let valid = [
@@ -540,6 +551,7 @@ mod tests {
             shape(rect, 0.0, 20.0),
             arrow(point, point),
             line(point, point),
+            comment(point),
         ];
         assert!(valid.iter().all(ElementKind::is_valid));
 
@@ -584,6 +596,7 @@ mod tests {
                 },
             ),
             line(point, Point { x: nan, ..point }),
+            comment(Point { y: nan, ..point }),
         ];
         for kind in invalid {
             assert!(!kind.is_valid(), "{kind:?}");

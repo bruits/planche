@@ -77,6 +77,7 @@ export type Kind =
   | { type: "shape"; frame: Rect; rotation: number; shape: "rectangle" | "ellipse" | "cross"; text: Text }
   | { type: "arrow"; from: Point; to: Point }
   | { type: "line"; from: Point; to: Point }
+  | { type: "comment"; at: Point; text: string }
   | { type: "group" };
 
 export interface Element {

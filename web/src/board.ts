@@ -175,6 +175,7 @@ export function placed(board: Board, texts: Texts, hidden?: string): Placed[] {
         return [{ kind: "fill", frame: kind.frame, rotation: kind.rotation, paint: "sticky" }, ...written];
       case "shape":
         return [{ kind: kind.shape, frame: kind.frame, rotation: kind.rotation, width }, ...written];
+      case "comment":
       case "group":
         return [];
     }
@@ -213,6 +214,24 @@ function arrow(from: Point, to: Point, width: number): Placed[] {
     to: { x: to.x + Math.cos(back + angle) * head, y: to.y + Math.sin(back + angle) * head },
   });
   return [line, side(HEAD_ANGLE), side(-HEAD_ANGLE)];
+}
+
+/** What the board draws over, with the points its comments are pinned at, `undefined` when nothing. */
+export function extent({ editor, board }: Opened): Rect | undefined {
+  const drawn = core.bounds(editor, board.draw_order);
+  const points = board.draw_order.flatMap((id) => {
+    const { kind } = board.elements[id]!;
+    return kind.type === "comment" ? [kind.at] : [];
+  });
+  if (drawn) {
+    points.push({ x: drawn.x, y: drawn.y }, { x: drawn.x + drawn.width, y: drawn.y + drawn.height });
+  }
+  if (points.length === 0) {
+    return undefined;
+  }
+  const [xs, ys] = [points.map(({ x }) => x), points.map(({ y }) => y)];
+  const [x, y] = [Math.min(...xs), Math.min(...ys)];
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
 
 /** Whether any of the elements is an image, or a group holding one. */
