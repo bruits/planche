@@ -74,6 +74,15 @@ impl Editor {
         Ok(strings(self.0.remove(&parse(ids)?)?))
     }
 
+    /// Puts `members`, two or more elements of the same group, into a new group.
+    pub fn group(&mut self, group: &str, members: Vec<String>) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.group(group.parse()?, &parse(members)?)?))
+    }
+
+    pub fn ungroup(&mut self, group: &str) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.ungroup(group.parse()?)?))
+    }
+
     /// On top of the top level, `kind` as JSON.
     pub fn add(&mut self, id: &str, kind: &str) -> Result<Vec<String>, JsError> {
         let kind: ElementKind = serde_json::from_str(kind)?;
@@ -197,6 +206,14 @@ impl Editor {
     pub fn top_level(&self, id: &str) -> Result<Option<String>, JsError> {
         let top = self.0.board().top_level(id.parse()?);
         Ok(top.as_ref().map(ElementId::to_string))
+    }
+
+    /// The element itself when in `group`, otherwise its group that is, `undefined` when it is
+    /// not within `group`.
+    #[wasm_bindgen(js_name = memberOf)]
+    pub fn member_of(&self, group: &str, id: &str) -> Result<Option<String>, JsError> {
+        let member = self.0.board().member(group.parse()?, id.parse()?);
+        Ok(member.as_ref().map(ElementId::to_string))
     }
 
     /// Each point's x then y, empty when the element draws nothing or is gone.

@@ -984,6 +984,25 @@ mod tests {
     }
 
     #[test]
+    fn ungrouping_several_groups_in_one_gesture_undoes_as_one() {
+        let mut editor = editor();
+        editor.group(id(6), &[id(4), id(5)]).unwrap();
+        let grouped = editor.board().clone();
+
+        editor.begin_gesture();
+        editor.ungroup(id(1)).unwrap();
+        editor.ungroup(id(6)).unwrap();
+        editor.end_gesture();
+        let ungrouped = editor.board().clone();
+        assert_eq!(order(&editor), ids([2, 3, 4, 5]));
+
+        assert_eq!(editor.undo(), ids([1, 2, 3, 4, 5, 6]));
+        assert_eq!(editor.board(), &grouped);
+        editor.redo();
+        assert_eq!(editor.board(), &ungrouped);
+    }
+
+    #[test]
     fn moving_a_group_moves_its_elements() {
         let mut editor = editor();
         editor.translate(&[id(1), id(5)], 5.0, -5.0).unwrap();

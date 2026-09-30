@@ -37,6 +37,24 @@ impl Board {
         Some(top)
     }
 
+    /// The element itself when in `group`, otherwise its group that is. `None` when it is not
+    /// within `group`.
+    pub fn member(&self, group: ElementId, id: ElementId) -> Option<ElementId> {
+        let mut member = id;
+        let mut seen = BTreeSet::from([id]);
+        loop {
+            let parent = self.elements.get(&member)?.group?;
+            if parent == group {
+                return Some(member);
+            }
+            // A cycle would loop forever.
+            if !seen.insert(parent) {
+                return None;
+            }
+            member = parent;
+        }
+    }
+
     /// The closed outline of what an element draws: a frame's corners, clockwise from its
     /// top-left once rotated, an arrow's two ends, or the corners of the bounds of a group's
     /// elements, if they draw anything. `None` when there is no such element.
@@ -307,6 +325,31 @@ mod tests {
         assert_eq!(board.top_level(id(3)), Some(id(1)));
         assert_eq!(board.top_level(id(4)), Some(id(4)));
         assert_eq!(board.top_level(id(9)), None);
+    }
+
+    #[test]
+    fn an_element_lifts_to_the_member_of_a_group_holding_it() {
+        let board = board([
+            (1, element(None, "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", ElementKind::Group)),
+            (3, element(Some(2), "a0", image(0.0, 0.0, 1.0, 1.0, 0.0))),
+            (4, element(None, "a1", image(0.0, 0.0, 1.0, 1.0, 0.0))),
+        ]);
+        assert_eq!(board.member(id(1), id(3)), Some(id(2)));
+        assert_eq!(board.member(id(2), id(3)), Some(id(3)));
+        assert_eq!(board.member(id(1), id(4)), None);
+        assert_eq!(board.member(id(1), id(1)), None);
+        assert_eq!(board.member(id(1), id(9)), None);
+    }
+
+    #[test]
+    fn a_cycle_holds_no_member_of_a_group_outside_it() {
+        // Unrepaired, as fresh from a merge.
+        let board = board([
+            (1, element(Some(2), "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", ElementKind::Group)),
+        ]);
+        assert_eq!(board.member(id(9), id(1)), None);
     }
 
     #[test]

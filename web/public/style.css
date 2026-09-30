@@ -7,8 +7,8 @@
   --muted: #6e6e78;
   --line: rgb(0 0 0 / 10%);
   --hover: rgb(0 0 0 / 5%);
-  --accent: #4f46e5;
-  --accent-soft: #e6e5ff;
+  --accent: #c0173e;
+  --accent-soft: #fde7ec;
   --shadow: 0 1px 2px rgb(0 0 0 / 8%), 0 4px 16px rgb(0 0 0 / 10%);
 }
 
@@ -20,8 +20,8 @@
     --muted: #9d9da8;
     --line: rgb(255 255 255 / 10%);
     --hover: rgb(255 255 255 / 6%);
-    --accent: #a8a5ff;
-    --accent-soft: rgb(168 165 255 / 18%);
+    --accent: #ff8fa8;
+    --accent-soft: rgb(255 143 168 / 18%);
     --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 16px rgb(0 0 0 / 40%);
   }
 }
@@ -69,7 +69,8 @@ body {
 }
 
 .selection > *,
-.marquee {
+.marquee,
+.entered {
   fill: none;
   stroke: Highlight;
   stroke-width: 2px;
@@ -79,6 +80,11 @@ body {
 .marquee {
   fill: color-mix(in srgb, Highlight 15%, transparent);
   stroke-width: 1px;
+}
+
+.entered {
+  stroke-width: 1px;
+  stroke-dasharray: 4 4;
 }
 
 .handles > * {

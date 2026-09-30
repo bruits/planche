@@ -1,6 +1,7 @@
-// Edits: select, move, scale, and rotate by pointer, and flip, restack, delete, undo, and redo
-// for the commands to run. A click selects the element under it, or the outermost group holding
-// it, and a drag from where nothing is draws a rectangle that selects what it touches. The
+// Edits: select, move, scale, and rotate by pointer, and flip, restack, group, delete, undo, and
+// redo for the commands to run. A click selects the element under it, or the outermost group
+// holding it, and a drag from where nothing is draws a rectangle that selects what it touches.
+// Double-clicking a group goes into it, where clicks select its own elements instead. The
 // selection's corners scale it around the opposite one, and the handle above it rotates it
 // around its centre.
 
@@ -31,10 +32,18 @@ export interface Edits {
   busy(): boolean;
   /** Once no gesture is under way. */
   idle(): Promise<void>;
-  /** Top-level elements only. */
+  /** Elements of the group gone into, or of the top level. */
   selection(): string[];
-  /** Selects the elements, or their outermost groups. */
+  /** The group gone into, `undefined` at the top level. */
+  entered(): string | undefined;
+  /** Selects the elements, or the groups holding them at the level of the selection. */
   select(ids: string[]): void;
+  /** Everything in the group gone into, or on the board. */
+  selectAll(): void;
+  /** Selects the group gone into, which leaves it. Whether there was one. */
+  up(): boolean;
+  /** Into the one group selected, selecting its elements. */
+  goInside(): void;
   /**
    * Selects what a right-click at `at` is about, the element there unless it is selected
    * already, or nothing unless `at` is within the selection. Whether anything is.
@@ -45,6 +54,10 @@ export interface Edits {
   remove(): void;
   flip(horizontally: boolean): void;
   restack(to: Restack): void;
+  /** Into a new group named `id`, which it selects. */
+  group(id: string): void;
+  /** Selects the elements of the groups it ungroups. */
+  ungroup(): void;
   undo(): void;
   redo(): void;
   /** Forgets the selection and any drag, as when another board opens. */
@@ -69,7 +82,10 @@ export function edits(
   selectionChanged: () => void,
 ): Edits {
   let selected = new Set<string>();
+  let entered: string | undefined;
   let press: Press | undefined;
+  /** Whether the last press was a click, as browsers still send a double-click when it dragged. */
+  let wasClick = false;
   let waiting: (() => void)[] = [];
   const settle = () => {
     press = undefined;
@@ -83,14 +99,47 @@ export function edits(
     const ids = [...selected];
     overlay.outline(editing ? ids.map((id) => editing.editor.outline(id)) : []);
     overlay.box(editing && ids.length > 0 ? box(editing.editor, ids) : undefined);
+    overlay.entered(editing && entered !== undefined ? box(editing.editor, [entered]) : undefined);
     selectionChanged();
   };
+  /** The element, or its group, at the level of the selection, `undefined` outside the group gone into. */
+  const level = (editor: Editor, id: string) =>
+    entered === undefined ? editor.topLevel(id) : editor.memberOf(entered, id);
+  /**
+   * Up to the group `to`, or the top level. A selection never mixes levels, as moving a group
+   * and one of its elements would move it twice.
+   */
+  const leave = (editor: Editor, to?: string) => {
+    entered = to;
+    selected = new Set([...selected].flatMap((id) => level(editor, id) ?? []));
+  };
+  /** What a press on `hit` is about. Pressing anything but the group's elements leaves it, unless `stays`. */
+  const aimed = (editor: Editor, hit: string | undefined, stays: boolean) => {
+    if (entered !== undefined && !stays && (hit === undefined || level(editor, hit) === undefined)) {
+      leave(editor);
+    }
+    return hit === undefined ? undefined : level(editor, hit);
+  };
   const select = (editing: Editing, ids: string[]) => {
-    selected = new Set(ids.flatMap((id) => editing.editor.topLevel(id) ?? []));
+    const { editor, board } = editing;
+    const present = ids.filter((id) => id in board.elements);
+    if (present.some((id) => level(editor, id) === undefined)) {
+      leave(editor);
+    }
+    selected = new Set(present.flatMap((id) => level(editor, id) ?? []));
   };
   /** Undoing and redoing select what they touch, and nothing touched keeps the selection. */
   const edit = (editing: Editing, touched: string[], reselect = false) => {
+    const { board } = editing;
+    // Read before the edit, which may remove the group gone into, and its emptied groups too.
+    const around: string[] = [];
+    for (let at = entered; at !== undefined && !around.includes(at); at = board.elements[at]?.group) {
+      around.push(at);
+    }
     changed(touched);
+    if (entered !== undefined && !(entered in board.elements)) {
+      leave(editing.editor, around.find((id) => id in board.elements));
+    }
     if (reselect && touched.length > 0) {
       select(editing, touched);
     }
@@ -103,6 +152,7 @@ export function edits(
   };
 
   view.host.addEventListener("pointerdown", (event) => {
+    wasClick = false;
     const editing = current();
     const at = view.at(event);
     const zoom = view.zoom();
@@ -115,8 +165,7 @@ export function edits(
     const far = corners ? handles(corners, zoom).map((handle) => distance(at, handle) * zoom) : [];
     const nearest = far.indexOf(Math.min(...far));
     const grabbed = far[nearest]! <= REACH ? nearest : -1;
-    const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
-    const top = hit === undefined ? undefined : editor.topLevel(hit);
+    const top = aimed(editor, editor.hit(at.x, at.y, TOLERANCE / zoom), grabbed >= 0);
     // Ctrl on macOS opens the context menu instead.
     const toggling = event.shiftKey || event.metaKey || (event.ctrlKey && !mac);
     if (corners && grabbed >= 0) {
@@ -207,6 +256,7 @@ export function edits(
     if (!press) {
       return;
     }
+    wasClick = press.kind === "move" && !press.dragging;
     if (press.kind === "marquee") {
       overlay.marquee(undefined);
     } else if (press.kind !== "move" || press.dragging) {
@@ -227,6 +277,25 @@ export function edits(
   }
   addEventListener("blur", release);
 
+  view.host.addEventListener("dblclick", (event) => {
+    const editing = current();
+    const at = view.at(event);
+    const zoom = view.zoom();
+    if (!wasClick || press || !editing || !at || !zoom || event.button !== 0 || view.pans(event)) {
+      return;
+    }
+    const { editor, board } = editing;
+    const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
+    const group = hit === undefined ? undefined : level(editor, hit);
+    if (hit === undefined || group === undefined || board.elements[group]?.kind.type !== "group") {
+      return;
+    }
+    const member = editor.memberOf(group, hit);
+    entered = group;
+    selected = new Set(member === undefined ? [] : [member]);
+    show();
+  });
+
   /** Unless a gesture is under way, since it would carry on over the edit. */
   const run = (edited: (editing: Editing, ids: string[]) => void) => {
     const editing = current();
@@ -239,6 +308,7 @@ export function edits(
     busy: () => press !== undefined,
     idle: () => (press ? new Promise((resolve) => waiting.push(resolve)) : Promise.resolve()),
     selection: () => [...selected],
+    entered: () => entered,
     select(ids) {
       const editing = current();
       if (editing) {
@@ -246,6 +316,34 @@ export function edits(
         show();
       }
     },
+    selectAll() {
+      const editing = current();
+      if (editing) {
+        const { editor, board } = editing;
+        selected = new Set(board.draw_order.flatMap((id) => level(editor, id) ?? []));
+        show();
+      }
+    },
+    up() {
+      const editing = current();
+      if (!editing || entered === undefined || press) {
+        return false;
+      }
+      selected = new Set([entered]);
+      entered = editing.board.elements[entered]?.group;
+      show();
+      return true;
+    },
+    goInside: () =>
+      run(({ board }, ids) => {
+        const group = ids[0];
+        if (ids.length !== 1 || board.elements[group!]?.kind.type !== "group") {
+          return;
+        }
+        entered = group;
+        selected = new Set(Object.keys(board.elements).filter((id) => board.elements[id]!.group === group));
+        show();
+      }),
     aim(at) {
       const editing = current();
       const zoom = view.zoom();
@@ -254,10 +352,11 @@ export function edits(
       }
       const { editor } = editing;
       const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
-      const top = hit === undefined ? undefined : editor.topLevel(hit);
+      const onSelection = hit === undefined && within(at, box(editor, [...selected]));
+      const top = aimed(editor, hit, onSelection);
       if (top !== undefined && !selected.has(top)) {
         selected = new Set([top]);
-      } else if (top === undefined && !within(at, box(editor, [...selected]))) {
+      } else if (top === undefined && !onSelection) {
         selected = new Set();
       }
       show();
@@ -271,14 +370,38 @@ export function edits(
     remove: () => run((editing, ids) => edit(editing, editing.editor.remove(ids))),
     flip: (horizontally) => run((editing, ids) => edit(editing, editing.editor.flip(ids, horizontally))),
     restack: (to) => run((editing, ids) => edit(editing, editing.editor.restack(ids, to))),
+    group: (id) =>
+      run((editing, ids) => {
+        const touched = editing.editor.group(id, ids);
+        selected = new Set([id]);
+        edit(editing, touched);
+      }),
+    ungroup: () =>
+      run((editing, ids) => {
+        const { editor, board } = editing;
+        const groups = new Set(ids.filter((id) => board.elements[id]?.kind.type === "group"));
+        const members = Object.keys(board.elements).filter((id) => groups.has(board.elements[id]!.group ?? ""));
+        const touched: string[] = [];
+        editor.beginGesture();
+        try {
+          groups.forEach((group) => touched.push(...editor.ungroup(group)));
+        } finally {
+          editor.endGesture();
+          // Even halfway, so that the board the app keeps matches the core's.
+          selected = new Set([...ids.filter((id) => !groups.has(id)), ...members]);
+          edit(editing, touched);
+        }
+      }),
     undo: () => run((editing) => edit(editing, editing.editor.undo(), true)),
     redo: () => run((editing) => edit(editing, editing.editor.redo(), true)),
     reset() {
       selected = new Set();
+      entered = undefined;
       settle();
       overlay.outline([]);
       overlay.box(undefined);
       overlay.marquee(undefined);
+      overlay.entered(undefined);
       selectionChanged();
     },
   };

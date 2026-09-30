@@ -27,7 +27,7 @@ export interface View {
   zoomBy(factor: number): void;
   /** Whether the main button pans, as the hand tool makes it. */
   hand(on: boolean): void;
-  pans(event: PointerEvent): boolean;
+  pans(event: MouseEvent): boolean;
   panning(): boolean;
 }
 
@@ -127,7 +127,7 @@ export function view(host: HTMLElement, { drawn, failed }: Drawing): View {
     event.preventDefault();
     pinching = undefined;
   });
-  const pans = (event: PointerEvent) =>
+  const pans = (event: MouseEvent) =>
     event.button === 1 || (event.button === 0 && !opensMenu(event) && (event.altKey || hand));
   host.addEventListener("pointerdown", (event) => {
     if (panning === undefined && pans(event)) {

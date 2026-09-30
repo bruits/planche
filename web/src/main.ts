@@ -21,7 +21,7 @@ import {
   type Opened,
 } from "./board.js";
 import { fit } from "./camera.js";
-import { listen, mac, typing, type Command, type Shortcut } from "./commands.js";
+import { describe, listen, mac, typing, type Command, type Shortcut } from "./commands.js";
 import { edits, type Restack } from "./edit.js";
 import { menuOpen, openMenu, type Entry } from "./menu.js";
 import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./metrics.js";
@@ -117,9 +117,9 @@ const commands = {
     keys: [{ key: "a", command: true }],
     // Not before the board shows, which would select what nobody sees yet.
     unavailable: () => noneShown() ?? (opened?.board.draw_order.length ? undefined : "The board is empty"),
-    run: () => editing.select(opened?.board.draw_order ?? []),
+    run: () => editing.selectAll(),
   },
-  escape: { label: "Deselect", keys: [{ key: "escape" }], run: escape },
+  escape: { label: "Go back up, or deselect", keys: [{ key: "escape" }], run: escape },
   remove: {
     label: "Delete",
     keys: mac ? [backspace, deleteKey] : [deleteKey, backspace],
@@ -134,6 +134,24 @@ const commands = {
   back: restack("Send to back", "back", { code: "BracketLeft", command: true, alt: true }),
   flipHorizontally: flip("Flip horizontally", "h", true),
   flipVertically: flip("Flip vertically", "v", false),
+  group: {
+    label: "Group",
+    keys: [{ key: "g", command: true }],
+    unavailable: () => (editing.selection().length < 2 ? "Select two elements or more" : undefined),
+    run: () => editing.group(newId()),
+  },
+  ungroup: {
+    label: "Ungroup",
+    keys: [{ key: "g", command: true, shift: true }],
+    unavailable: () => noneSelected() ?? (selectsGroup() ? undefined : "Only groups ungroup"),
+    run: () => editing.ungroup(),
+  },
+  goInside: {
+    label: "Go inside",
+    keys: [{ key: "enter" }],
+    unavailable: () => (editing.selection().length === 1 && selectsGroup() ? undefined : "Select one group"),
+    run: () => editing.goInside(),
+  },
   zoomIn: {
     label: "Zoom in",
     // Shift types + on most layouts, but not on a number pad.
@@ -255,13 +273,20 @@ function holdSpace(held: boolean): void {
   }
 }
 
-/** Esc lets go of the hand tool first, which leaves the selection to act on, then of the selection. */
+/**
+ * Esc lets go of the hand tool first, which leaves the selection to act on, then of the group
+ * gone into, one level at a time, then of the selection.
+ */
 function escape(): void {
   if (tool === "hand") {
     useTool("select");
-  } else {
+  } else if (!editing.up()) {
     editing.select([]);
   }
+}
+
+function selectsGroup(): boolean {
+  return editing.selection().some((id) => opened?.board.elements[id]?.kind.type === "group");
 }
 
 function refreshBar(): void {
@@ -269,11 +294,20 @@ function refreshBar(): void {
 }
 
 function hint(): string {
+  // As the menus name them.
+  const [escapeKey, insideKey] = [commands.escape, commands.goInside].map(({ keys }) => describe(keys[0]!));
   if (tool === "hand") {
-    return "Drag to move around · Esc to select again";
+    return `Drag to move around · ${escapeKey} to select again`;
   }
   if (spaceHeld) {
     return "Drag to move around";
+  }
+  const opens = commands.goInside.unavailable() === undefined;
+  if (editing.entered() !== undefined) {
+    return `Inside a group · ${opens ? `${insideKey} to go inside · ` : ""}${escapeKey} to go back up`;
+  }
+  if (opens) {
+    return `Drag to move · double-click or ${insideKey} to go inside · right-click for more`;
   }
   if (editing.selection().length > 0) {
     return "Drag to move · corners scale · the circle rotates · right-click for more";
@@ -285,6 +319,10 @@ function hint(): string {
 function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: number }): void {
   const entries: Entry[] = onSelection
     ? [
+        commands.group,
+        commands.ungroup,
+        commands.goInside,
+        "separator",
         commands.front,
         commands.forward,
         commands.backward,

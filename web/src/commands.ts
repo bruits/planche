@@ -84,7 +84,7 @@ export function ariaKeys(shortcut: Shortcut): string {
 
 function keyName({ key, code }: Shortcut): string {
   const names: Record<string, string> = mac
-    ? { backspace: "⌫", delete: "⌦", escape: "Esc", contextmenu: "Menu" }
+    ? { backspace: "⌫", delete: "⌦", enter: "↩", escape: "Esc", contextmenu: "Menu" }
     : { backspace: "Backspace", delete: "Del", escape: "Esc", contextmenu: "Menu" };
   if (key !== undefined) {
     return names[key] ?? (key.length === 1 ? key.toUpperCase() : capitalise(key));
@@ -106,6 +106,10 @@ export function listen(commands: Command[], listening: () => boolean): void {
   addEventListener("keydown", (event) => {
     // 229 is what a key composing text, such as an accent, reports in some browsers.
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || typing(event.target)) {
+      return;
+    }
+    // A focused button takes Enter to press itself.
+    if (event.key === "Enter" && event.target instanceof HTMLButtonElement) {
       return;
     }
     const command = pressed(commands, event);

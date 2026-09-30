@@ -1,6 +1,7 @@
 // What shows over the board without being part of it: the outlines of the selection, its
-// handles, and the rectangle that selects. It lies in board space, so following the camera
-// only moves its view box, and its strokes keep their width at any zoom.
+// handles, the rectangle that selects, and the bounds of the group gone into. It lies in board
+// space, so following the camera only moves its view box, and its strokes keep their width at
+// any zoom.
 
 import type { Camera, Viewport } from "./camera.js";
 import type { Point, Rect } from "./core.js";
@@ -21,6 +22,8 @@ export interface Overlay {
   box(corners: Point[] | undefined): void;
   /** `undefined` hides it. */
   marquee(area: Rect | undefined): void;
+  /** The corners of the group gone into, `undefined` to hide them. */
+  entered(corners: Point[] | undefined): void;
 }
 
 /** The four corners of `box` unless it is too small, then the rotation handle above its top side. */
@@ -48,7 +51,10 @@ export function overlay(host: HTMLElement): Overlay {
   const marquee = document.createElementNS(SVG, "rect");
   marquee.classList.add("marquee");
   marquee.setAttribute("display", "none");
-  svg.append(selection, grips, marquee);
+  const entered = document.createElementNS(SVG, "polygon");
+  entered.classList.add("entered");
+  entered.setAttribute("display", "none");
+  svg.append(entered, selection, grips, marquee);
   host.append(svg);
   let zoom = 1;
   let corners: Point[] | undefined;
@@ -108,6 +114,14 @@ export function overlay(host: HTMLElement): Overlay {
       marquee.setAttribute("width", String(width));
       marquee.setAttribute("height", String(height));
       marquee.removeAttribute("display");
+    },
+    entered(corners) {
+      if (corners === undefined) {
+        entered.setAttribute("display", "none");
+        return;
+      }
+      entered.setAttribute("points", corners.flatMap(({ x, y }) => [x, y]).join(" "));
+      entered.removeAttribute("display");
     },
   };
 }
