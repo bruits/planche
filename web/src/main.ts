@@ -65,6 +65,7 @@ const editing = edits(viewport, shown, () => opened, {
     refreshBar();
     showComments();
   },
+  settled: refreshBar,
   snapping: () => snapping,
   drawing: () => drawTool(),
   drawn: () => useTool("select"),
@@ -298,6 +299,10 @@ const bar = toolbar(
       },
       { command: commands.addImages, icon: "photo" },
     ],
+    [
+      { command: steady(commands.undo), icon: "undo" },
+      { command: steady(commands.redo), icon: "redo" },
+    ],
   ],
   () => [
     commands.newBoard,
@@ -305,9 +310,6 @@ const bar = toolbar(
     commands.openZip,
     commands.saveAs,
     commands.exportZip,
-    "separator",
-    commands.undo,
-    commands.redo,
     "separator",
     commands.fit,
     commands.actualSize,
@@ -366,6 +368,12 @@ function busy(): boolean {
 
 function drawing(draw: Draw, name: Icon): Button {
   return { command: commands[draw], icon: name, pressed: () => tool === draw };
+}
+
+/** For its button, which keeps its state while a gesture or writing holds undo and redo back. */
+function steady(command: Command): Command {
+  let reason = command.unavailable?.();
+  return { ...command, unavailable: () => (editing.busy() ? reason : (reason = command.unavailable?.())) };
 }
 
 function drawTool(): Draw | undefined {

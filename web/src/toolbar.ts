@@ -4,6 +4,7 @@
 import { ariaKeys, describe, named, type Command } from "./commands.js";
 import { icon, type Icon } from "./icons.js";
 import { closeMenu, openMenu, type Entry, type Place } from "./menu.js";
+import { scrolled } from "./view.js";
 
 export interface Button {
   command: Command;
@@ -31,7 +32,10 @@ export interface Toolbar {
 const MESSAGE_TIME = 4000;
 const READING_TIME = 40;
 
-/** `groups` of buttons, apart from each other, then the button of the menu that `entries` fills. */
+/**
+ * `groups` of buttons, apart from each other, the last one ending with the button of the menu
+ * that `entries` fills.
+ */
 export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entries: () => Entry[]): Toolbar {
   // Always there, even empty, as screen readers only follow a live region that already shows.
   const message = document.createElement("p");
@@ -43,6 +47,11 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
   bar.className = "bar";
   bar.setAttribute("role", "toolbar");
   bar.setAttribute("aria-label", "Tools");
+  // Inside the bar, whose edges stay put as its buttons scroll.
+  const row = document.createElement("div");
+  row.className = "row";
+  bar.append(row);
+  scrolls(bar, row);
   host.append(message, hint, bar);
 
   let base = "";
@@ -77,14 +86,14 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
       }
     });
     explain(button, () => explanation(current().command));
-    bar.append(button);
+    row.append(button);
     buttons.push({ button, current, shown });
     stops.push(button);
     return button;
   };
   groups.forEach((group, at) => {
     if (at > 0) {
-      bar.append(separator());
+      row.append(separator());
     }
     for (const item of group) {
       if (!("tools" in item)) {
@@ -102,7 +111,7 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
         item.tools.map(({ command, icon: name, pressed }) => ({ ...command, icon: name, checked: pressed?.() ?? false }));
       opens(chevron, item.label, tools, { above: button, left: true });
       explain(chevron, () => item.label);
-      bar.append(chevron);
+      row.append(chevron);
       stops.push(chevron);
       chevrons.push({ chevron, tools: item.tools });
     }
@@ -115,7 +124,7 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
   menuButton.append(icon("menu"));
   opens(menuButton, "Menu", entries, { above: menuButton });
   explain(menuButton, () => "Menu");
-  bar.append(separator(), menuButton);
+  row.append(menuButton);
   stops.push(menuButton);
 
   // One stop for Tab, and the arrow keys between buttons, as the toolbar pattern wants.
@@ -215,6 +224,46 @@ function opens(button: HTMLButtonElement, label: string, entries: () => Entry[],
   });
 }
 
+/**
+ * Sideways, where the window is too narrow for every button. A mouse wheel, which only turns
+ * vertically, scrolls it too.
+ */
+function scrolls(bar: HTMLElement, row: HTMLElement): void {
+  for (const [side, towards] of [["before", -1], ["after", 1]] as const) {
+    const edge = document.createElement("span");
+    edge.className = `edge ${side}`;
+    edge.append(icon("chevron"));
+    // A press leaves the focus, and any selection, where they were.
+    edge.addEventListener("mousedown", (event) => event.preventDefault());
+    edge.addEventListener("click", () => row.scrollBy({ left: (towards * row.clientWidth) / 2 }));
+    bar.append(edge);
+  }
+  const reach = () => {
+    const { scrollLeft, scrollWidth, clientWidth } = row;
+    // Scrolling may stop a fraction of a pixel short of an end.
+    bar.classList.toggle("before", scrollLeft > 1);
+    bar.classList.toggle("after", scrollLeft + clientWidth < scrollWidth - 1);
+  };
+  row.addEventListener("scroll", reach, { passive: true });
+  new ResizeObserver(reach).observe(row);
+  // The edges, outside the row, would otherwise stop it.
+  bar.addEventListener(
+    "wheel",
+    (event) => {
+      if (event.ctrlKey || event.metaKey || row.scrollWidth <= row.clientWidth) {
+        return;
+      }
+      event.preventDefault();
+      // It would point at a button moving away.
+      closeMenu();
+      const [dx, dy] = scrolled(event, row.clientWidth);
+      // At once, as the wheel's own steps already follow each other.
+      row.scrollBy({ left: Math.abs(dy) > Math.abs(dx) ? dy : dx, behavior: "instant" });
+    },
+    { passive: false },
+  );
+}
+
 function mark(button: HTMLButtonElement, states: Record<string, string | false | undefined>): void {
   for (const [name, value] of Object.entries(states)) {
     if (!value) {
@@ -237,6 +286,9 @@ function dress(button: HTMLButtonElement, { command, icon: name }: Button): void
   button.toggleAttribute("aria-keyshortcuts", shortcut !== undefined);
   if (shortcut) {
     button.setAttribute("aria-keyshortcuts", ariaKeys(shortcut));
+  }
+  // A lone key only, as a chord would not fit, which the hint names instead.
+  if (shortcut && !shortcut.command && !shortcut.ctrl && !shortcut.shift && !shortcut.alt) {
     const key = document.createElement("span");
     key.className = "key";
     key.setAttribute("aria-hidden", "true");

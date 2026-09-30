@@ -59,6 +59,8 @@ export interface Hooks {
    */
   changed(touched: string[]): void;
   selectionChanged(): void;
+  /** Once a press ends, whose gesture held undo and redo back. */
+  settled(): void;
   snapping(): boolean;
   /** What a press draws, `undefined` when it selects. */
   drawing(): Draw | undefined;
@@ -136,7 +138,7 @@ export function edits(
   view: View,
   overlay: Overlay,
   current: () => Editing | undefined,
-  { changed, selectionChanged, snapping, drawing, drawn }: Hooks,
+  { changed, selectionChanged, settled, snapping, drawing, drawn }: Hooks,
 ): Edits {
   let selected = new Set<string>();
   let entered: string | undefined;
@@ -464,6 +466,7 @@ export function edits(
       show();
     }
     settle();
+    settled();
   };
   /**
    * A click places a shape at a size of its own, but draws no arrow or line, which has none. A

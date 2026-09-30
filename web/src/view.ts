@@ -90,8 +90,7 @@ export function view(host: HTMLElement, { frame, failed }: Drawing): View {
       if (!shown) {
         return;
       }
-      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? LINE : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? host.clientHeight : 1;
-      let [dx, dy] = [event.deltaX * unit, event.deltaY * unit];
+      let [dx, dy] = scrolled(event, host.clientHeight);
       if (event.ctrlKey || event.metaKey) {
         // Safari may report its pinch both ways.
         if (pinching === undefined) {
@@ -233,4 +232,10 @@ export function view(host: HTMLElement, { frame, failed }: Drawing): View {
     pans,
     panning: () => panning !== undefined,
   };
+}
+
+/** How far a wheel scrolls, in CSS pixels, as some browsers count in lines, or in pages `page` long. */
+export function scrolled(event: WheelEvent, page: number): [number, number] {
+  const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? LINE : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? page : 1;
+  return [event.deltaX * unit, event.deltaY * unit];
 }

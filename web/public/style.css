@@ -273,13 +273,105 @@ body {
   box-shadow: var(--shadow);
 }
 
+/* No wider than the window, where its row scrolls. */
 .bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  --edge: 32px;
+  position: relative;
+  box-sizing: border-box;
+  max-width: 100%;
   padding: 4px;
   border-radius: 12px;
   pointer-events: auto;
+}
+
+/* Keys moving the focus bring its button out from under the edges. */
+.bar .row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  /* Swiping on past an end would go back a page. */
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+  scroll-padding-inline: var(--edge);
+}
+
+/* Where WebKit does not take `scrollbar-width` yet. */
+.bar .row::-webkit-scrollbar {
+  display: none;
+}
+
+.bar .row > * {
+  flex-shrink: 0;
+}
+
+/* Over each end that hides more, where the buttons fade out under a chevron. */
+.bar .edge {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  display: flex;
+  align-items: center;
+  width: var(--edge);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out;
+}
+
+.bar .edge:hover {
+  color: var(--text);
+}
+
+.bar .edge.before {
+  left: 4px;
+  justify-content: flex-start;
+  background: linear-gradient(to right, var(--surface) 50%, transparent);
+}
+
+.bar .edge.after {
+  right: 4px;
+  justify-content: flex-end;
+  background: linear-gradient(to left, var(--surface) 50%, transparent);
+}
+
+.bar.before .edge.before,
+.bar.after .edge.after {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Swiped through on a touch screen, as a swipe from them would scroll nothing. */
+@media (pointer: coarse) {
+  .bar.before .edge.before,
+  .bar.after .edge.after {
+    pointer-events: none;
+  }
+}
+
+.bar .edge svg {
+  width: 14px;
+  height: 14px;
+}
+
+.bar .edge.before svg {
+  transform: rotate(90deg);
+}
+
+.bar .edge.after svg {
+  transform: rotate(-90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar .row {
+    scroll-behavior: auto;
+  }
+
+  .bar .edge {
+    transition: none;
+  }
 }
 
 .bar button {
@@ -494,6 +586,12 @@ body {
   .bar button[aria-pressed="true"] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
+  }
+
+  /* Solid, as forced colours drop gradients. */
+  .bar .edge.before,
+  .bar .edge.after {
+    background: Canvas;
   }
 
   .bar .separator,
