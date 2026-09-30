@@ -4,8 +4,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use board::{
-    AssetId, Board, Editor, Element, ElementId, ElementKind, ImageEdits, Point, Rect, Restack,
-    Shape, Size, Text, ZIndex,
+    AssetId, Background, Board, Editor, Element, ElementId, ElementKind, ImageEdits, Point, Rect,
+    Restack, Shape, Size, Text, ZIndex,
 };
 use format::{Error, Files, zip};
 
@@ -162,6 +162,7 @@ fn sample() -> Board {
     ];
     Board {
         elements: elements.into_iter().collect(),
+        ..Board::default()
     }
 }
 
@@ -261,6 +262,38 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
         assert_eq!(editor.redo(), reported);
         assert_eq!(format::write(editor.board()).unwrap(), after);
     }
+}
+
+#[test]
+fn the_background_lives_in_the_manifest_and_only_once_chosen() {
+    let mut editor = Editor::new(sample());
+    let before = format::write(editor.board()).unwrap();
+    assert_eq!(before["board.json"], b"{\n  \"version\": 1\n}\n");
+
+    editor.set_background(Background::Dots);
+    let after = format::write(editor.board()).unwrap();
+    assert_eq!(changed(&before, &after), ["board.json"]);
+    assert_eq!(
+        after["board.json"],
+        b"{\n  \"version\": 1,\n  \"background\": \"dots\"\n}\n"
+    );
+    assert_eq!(format::read(&after).unwrap(), *editor.board());
+
+    editor.undo();
+    assert_eq!(format::write(editor.board()).unwrap(), before);
+}
+
+#[test]
+fn an_unknown_background_is_refused() {
+    let mut files = format::write(&sample()).unwrap();
+    files.insert(
+        "board.json".to_owned(),
+        br#"{ "version": 1, "background": "stripes" }"#.to_vec(),
+    );
+    assert!(matches!(
+        format::read(&files),
+        Err(Error::Json { path, .. }) if path == "board.json"
+    ));
 }
 
 #[test]

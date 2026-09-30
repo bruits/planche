@@ -4,11 +4,14 @@
 // what it touches. Double-clicking a group goes into it, where clicks select its own elements
 // instead, and double-clicking a note, a sticky note, a shape, or a comment writes in it. The
 // selection's corners scale it around the opposite one, the handle above it rotates it around
-// its centre, and the ends of a lone arrow or line move on their own.
+// its centre, and the ends of a lone arrow or line move on their own. While snapping, what
+// moves, scales, or is drawn lands on the grid's lines where near them, unless ⌘, or Ctrl
+// elsewhere than macOS, is held, and for a move once under way, as pressing an element with it
+// toggles the element instead.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
-import type { Board, Editor, Kind, Point, Rect } from "./core.js";
+import type { Background, Board, Editor, Kind, Point, Rect } from "./core.js";
 import { newId } from "./board.js";
 import { handles, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
@@ -46,10 +49,11 @@ export type Draw = "arrow" | "line" | "rectangle" | "ellipse" | "cross" | "note"
 export interface Hooks {
   /**
    * The elements every edit, undo, and redo touches, once `current` would have them up to date,
-   * as it must.
+   * as it must. The background may have changed too.
    */
   changed(touched: string[]): void;
   selectionChanged(): void;
+  snapping(): boolean;
   /** What a press draws, `undefined` when it selects. */
   drawing(): Draw | undefined;
   /** Once a press drew something, which it selects, or writes in. */
@@ -97,6 +101,7 @@ export interface Edits {
   centre(): Point | undefined;
   remove(): void;
   flip(horizontally: boolean): void;
+  background(to: Background): void;
   restack(to: Restack): void;
   /** Into a new group named `id`, which it selects. */
   group(id: string): void;
@@ -109,10 +114,13 @@ export interface Edits {
 }
 
 type Press =
-  /** `through` a press on nothing but the selection's box, which a click lets go of. */
-  | { kind: "move"; pointer: number; start: Point; dragging: boolean; clicked?: string; through?: true }
+  /**
+   * `through` a press on nothing but the selection's box, which a click lets go of. `bounds` as
+   * they were when the drag began.
+   */
+  | { kind: "move"; pointer: number; start: Point; dragging: boolean; clicked?: string; through?: true; bounds?: Rect }
   | { kind: "marquee"; pointer: number; start: Point; dragging: boolean; kept: Set<string> }
-  | { kind: "scale"; pointer: number; origin: Point; handle: Point }
+  | { kind: "scale"; pointer: number; origin: Point; corner: Point; handle: Point; upright: boolean }
   | { kind: "rotate"; pointer: number; pivot: Point; from: number }
   | { kind: "draw"; pointer: number; start: Point; last: Point; shape: Draw; id: string; dragging: boolean }
   | { kind: "end"; pointer: number; start: Point; dragging: boolean; id: string; segment: Segment; end: "from" | "to" };
@@ -121,11 +129,13 @@ export function edits(
   view: View,
   overlay: Overlay,
   current: () => Editing | undefined,
-  { changed, selectionChanged, drawing, drawn }: Hooks,
+  { changed, selectionChanged, snapping, drawing, drawn }: Hooks,
 ): Edits {
   let selected = new Set<string>();
   let entered: string | undefined;
   let press: Press | undefined;
+  /** Whether the grid pulls, as the last pointer event had its keys. */
+  let pulling = false;
   /** Its gesture stays open until the field closes, so that writing undoes in one step. */
   let written: { id: string; fresh: boolean } | undefined;
   /** Whether the last press was a click, as browsers still send a double-click when it dragged. */
@@ -145,6 +155,19 @@ export function edits(
     resolve();
   };
   const field = writer();
+  const pulled = (point: Point, zoom: number): Point =>
+    pulling
+      ? { x: point.x + (core.snapToGrid([point.x], zoom) ?? 0), y: point.y + (core.snapToGrid([point.y], zoom) ?? 0) }
+      : point;
+  /** As moving it would pull it. */
+  const aligned = (kind: Kind, zoom: number): Kind => {
+    if (!pulling || !("frame" in kind)) {
+      return kind;
+    }
+    const { frame } = kind;
+    const [x, y] = [edges(frame.x, frame.width), edges(frame.y, frame.height)].map((values) => core.snapToGrid(values, zoom) ?? 0);
+    return { ...kind, frame: { ...frame, x: frame.x + x!, y: frame.y + y! } };
+  };
 
   const lone = (editing: Editing): { id: string; segment: Segment } | undefined => {
     const [id] = selected;
@@ -221,6 +244,7 @@ export function edits(
     }
     const { editor } = editing;
     const pointer = event.pointerId;
+    pulling = snapping() && !freed(event);
     const shape = drawing();
     if (shape) {
       press = { kind: "draw", pointer, start: at, last: at, shape, id: newId(), dragging: false };
@@ -254,7 +278,8 @@ export function edits(
       // The rotation handle comes last, after the corners if the box is large enough for them.
       if (grabbed < far.length - 1) {
         // From where it is pressed, so that it starts at 1.
-        press = { kind: "scale", pointer, origin: corners[(grabbed + 2) % 4]!, handle: at };
+        const [origin, corner] = [corners[(grabbed + 2) % 4]!, corners[grabbed]!];
+        press = { kind: "scale", pointer, origin, corner, handle: at, upright: upright(corners) };
       } else {
         const pivot = { x: (corners[0]!.x + corners[2]!.x) / 2, y: (corners[0]!.y + corners[2]!.y) / 2 };
         press = { kind: "rotate", pointer, pivot, from: Math.atan2(at.y - pivot.y, at.x - pivot.x) };
@@ -292,8 +317,10 @@ export function edits(
     }
     const { editor } = editing;
     const ids = [...selected];
+    pulling = snapping() && !freed(event);
     // From where the gesture began, so that coming back there changes nothing.
     const again = (edited: () => string[]) => edit(editing, [...editor.rewindGesture(), ...edited()]);
+    const settled = (touched: string[], snapped: boolean) => (snapped ? [...touched, ...editor.settleOnGrid(ids)] : touched);
     switch (press.kind) {
       case "marquee": {
         press.dragging ||= distance(at, press.start) * zoom >= DRAG;
@@ -310,14 +337,21 @@ export function edits(
             return;
           }
           press.dragging = true;
+          press.bounds = bounding(box(editor, ids));
           editor.beginGesture();
         }
-        const { start } = press;
-        again(() => editor.translate(ids, at.x - start.x, at.y - start.y));
+        const { start, bounds } = press;
+        const [dx, dy] = [at.x - start.x, at.y - start.y];
+        const [nx, ny] =
+          pulling && bounds
+            ? [core.snapToGrid(edges(bounds.x + dx, bounds.width), zoom), core.snapToGrid(edges(bounds.y + dy, bounds.height), zoom)]
+            : [];
+        const snapped = nx !== undefined || ny !== undefined;
+        again(() => settled(editor.translate(ids, dx + (nx ?? 0), dy + (ny ?? 0)), snapped));
         return;
       }
       case "scale": {
-        const { origin, handle } = press;
+        const { origin, corner, handle } = press;
         const [dx, dy] = [handle.x - origin.x, handle.y - origin.y];
         const length = dx * dx + dy * dy;
         if (length === 0) {
@@ -325,7 +359,10 @@ export function edits(
         }
         // Along the diagonal, so that the scale is the same both ways.
         const along = ((at.x - origin.x) * dx + (at.y - origin.y) * dy) / length;
-        again(() => editor.scale(ids, origin.x, origin.y, Math.max(along, SMALLEST_SCALE)));
+        const factor = Math.max(along, SMALLEST_SCALE);
+        const pulled = pulling && press.upright ? core.snapScaleToGrid(origin, corner, factor, zoom) : undefined;
+        const snapped = pulled !== undefined && pulled >= SMALLEST_SCALE;
+        again(() => settled(editor.scale(ids, origin.x, origin.y, snapped ? pulled : factor), snapped));
         return;
       }
       case "rotate": {
@@ -348,10 +385,11 @@ export function edits(
           selected = new Set();
           editor.beginGesture();
         }
-        const { id, shape, start } = press;
+        const { id, shape } = press;
+        const [start, end] = [pulled(press.start, zoom), pulled(at, zoom)];
         // A note shows nothing until written in.
-        overlay.marquee(shape === "note" ? rect(start, at) : undefined);
-        again(() => editor.add(id, entered, JSON.stringify(shaped(shape, start, at, FONT_SIZE / zoom))));
+        overlay.marquee(shape === "note" ? rect(start, end) : undefined);
+        again(() => editor.add(id, entered, JSON.stringify(shaped(shape, start, end, FONT_SIZE / zoom))));
         return;
       }
       case "end": {
@@ -361,7 +399,7 @@ export function edits(
           return;
         }
         press.dragging = true;
-        const moved = { x: segment[end].x + at.x - start.x, y: segment[end].y + at.y - start.y };
+        const moved = pulled({ x: segment[end].x + at.x - start.x, y: segment[end].y + at.y - start.y }, zoom);
         again(() => editor.update(id, JSON.stringify({ ...segment, [end]: moved })));
         return;
       }
@@ -393,8 +431,8 @@ export function edits(
   };
   /**
    * A click places a shape at a size of its own, but draws no arrow or line, which has none. A
-   * drag brought back to where it started counts as a click. A note, a sticky note, or a comment
-   * is written in at once, within the gesture that drew it.
+   * drag brought back to where it started, or pulled back there by the grid, counts as a click. A
+   * note, a sticky note, or a comment is written in at once, within the gesture that drew it.
    */
   const finishDrawing = (press: Extract<Press, { kind: "draw" }>, completed: boolean) => {
     const editing = current();
@@ -412,7 +450,7 @@ export function edits(
       editor.endGesture();
       return;
     }
-    if (dragging && zoom !== undefined && distance(last, start) * zoom >= DRAG) {
+    if (dragging && zoom !== undefined && distance(pulled(last, zoom), pulled(start, zoom)) * zoom >= DRAG) {
       if (!writes) {
         editor.endGesture();
       }
@@ -421,7 +459,7 @@ export function edits(
       const placing = !SEGMENTS.has(shape) && completed && zoom !== undefined;
       if (placing) {
         editor.beginGesture();
-        touched.push(...editor.add(id, entered, JSON.stringify(placed(shape, start, zoom))));
+        touched.push(...editor.add(id, entered, JSON.stringify(aligned(placed(shape, start, zoom), zoom))));
       }
       if (!writes) {
         editor.endGesture();
@@ -653,6 +691,11 @@ export function edits(
     remove: () => run((editing, ids) => edit(editing, editing.editor.remove(ids))),
     flip: (horizontally) => run((editing, ids) => edit(editing, editing.editor.flip(ids, horizontally))),
     restack: (to) => run((editing, ids) => edit(editing, editing.editor.restack(ids, to))),
+    background: (to) =>
+      run((editing) => {
+        core.setBackground(editing.editor, to);
+        edit(editing, []);
+      }),
     group: (id) =>
       run((editing, ids) => {
         const touched = editing.editor.group(id, ids);
@@ -725,6 +768,32 @@ function box(editor: Editor, ids: string[]): Point[] | undefined {
     { x: right, y: bottom },
     { x, y: bottom },
   ];
+}
+
+/** Whether the box's sides run across and down, as when turned by a quarter or none. */
+function upright(corners: Point[]): boolean {
+  const [a, b] = corners;
+  const [dx, dy] = [b!.x - a!.x, b!.y - a!.y];
+  // Turning by a quarter leaves a hair, as sines and cosines do.
+  return Math.min(Math.abs(dx), Math.abs(dy)) <= 1e-9 * Math.max(Math.abs(dx), Math.abs(dy));
+}
+
+function bounding(corners: Point[] | undefined): Rect | undefined {
+  if (!corners) {
+    return undefined;
+  }
+  const [xs, ys] = [corners.map(({ x }) => x), corners.map(({ y }) => y)];
+  const [x, y] = [Math.min(...xs), Math.min(...ys)];
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+function edges(start: number, size: number): number[] {
+  return [start, start + size / 2, start + size];
+}
+
+/** ⌘ on macOS, where Ctrl opens the context menu. */
+function freed(event: MouseEvent): boolean {
+  return mac ? event.metaKey : event.ctrlKey;
 }
 
 /** Between two corners of its frame, from one end to the other, or pinned at `from`, with text of `size`. */

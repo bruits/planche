@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! .gitattributes        keeps Git off the bytes
-//! board.json            format version
+//! board.json            format version, and background
 //! elements/<id>.json    one per element
 //! assets/<sha-256>      image bytes
 //! ```
@@ -16,7 +16,7 @@ pub mod zip;
 
 use std::collections::BTreeMap;
 
-use board::{AssetId, Board, Element, ElementId};
+use board::{AssetId, Background, Board, Element, ElementId};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,9 @@ const ASSETS: &str = "assets/";
 #[derive(Serialize, Deserialize)]
 struct Manifest {
     version: u32,
+    /// Left out when plain, as on boards from before there was a choice.
+    #[serde(default, skip_serializing_if = "Background::is_plain")]
+    background: Background,
 }
 
 /// Returns every file but the assets. An element file missing from the result belongs to
@@ -78,6 +81,7 @@ pub fn write(board: &Board) -> Result<Files> {
     let mut files = Files::new();
     let manifest = Manifest {
         version: FORMAT_VERSION,
+        background: board.background,
     };
     files.insert(MANIFEST.to_owned(), to_json(&manifest));
     for (id, element) in &board.elements {
@@ -99,7 +103,10 @@ pub fn read(files: &Files) -> Result<Board> {
         return Err(Error::UnsupportedVersion(manifest.version));
     }
 
-    let mut board = Board::default();
+    let mut board = Board {
+        background: manifest.background,
+        ..Board::default()
+    };
     for (path, bytes) in files {
         let Some(name) = element_name(path) else {
             continue;

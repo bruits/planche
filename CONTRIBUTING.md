@@ -28,11 +28,11 @@ The app is one web app in `web/`, in TypeScript without a framework, which runs 
 
 ### board
 
-The board as plain data: elements (images, notes, sticky notes, shapes, arrows, lines, comments, and groups), their geometry, their stacking, and non-destructive image edits. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle is repaired on read. Edits go through an `Editor`, whose undo history keeps every touched element as it was, in memory only.
+The board as plain data: elements (images, notes, sticky notes, shapes, arrows, lines, comments, and groups), their geometry, their stacking, and non-destructive image edits, and what shows behind them, plain or a grid, whose lines what moves near them snaps to. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle is repaired on read. Edits go through an `Editor`, whose undo history keeps every touched element, and the background, as it was, in memory only.
 
 ### format
 
-The board as a folder of files, keyed by path, and back: a `board.json` manifest holding the format version, one JSON file per element in `elements/`, image bytes in `assets/`, and a `.gitattributes`, written when the board is created, that keeps Git from converting line endings and sends assets to Git LFS. The same files also travel as a single ZIP file, which the core reads and writes without I/O, so that a shell moves it a slice at a time. `samples/demo/` holds a board to try the shells on, and `samples/demo.zip` its ZIP file, which every platform must write byte for byte. Assets never change once named, so the caller writes each one once and checks it against its digest when loading it, which catches a board cloned without Git LFS. It implements the file format decided in the [foundation](./docs/technical/foundation.md): until the first release, it can change freely; from then on, any change to its shape bumps `FORMAT_VERSION`, and earlier versions are migrated on read.
+The board as a folder of files, keyed by path, and back: a `board.json` manifest holding the format version and the background, left out when plain, one JSON file per element in `elements/`, image bytes in `assets/`, and a `.gitattributes`, written when the board is created, that keeps Git from converting line endings and sends assets to Git LFS. The same files also travel as a single ZIP file, which the core reads and writes without I/O, so that a shell moves it a slice at a time. `samples/demo/` holds a board to try the shells on, and `samples/demo.zip` its ZIP file, which every platform must write byte for byte. Assets never change once named, so the caller writes each one once and checks it against its digest when loading it, which catches a board cloned without Git LFS. It implements the file format decided in the [foundation](./docs/technical/foundation.md): until the first release, it can change freely; from then on, any change to its shape bumps `FORMAT_VERSION`, and earlier versions are migrated on read.
 
 ### bindings
 
@@ -44,7 +44,7 @@ The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web 
 
 ### renderer
 
-The renderer, on wgpu: images as textured quads, text from textures the web app rasterises, the strokes of arrows, lines, and shapes, and the fill of sticky notes, in one list back to front, on WebGPU or WebGL2, for the web only so far. See the [foundation](./docs/technical/foundation.md#rendering).
+The renderer, on wgpu: images as textured quads, text from textures the web app rasterises, the strokes of arrows, lines, and shapes, and the fill of sticky notes, in one list back to front over the grid, if any, on WebGPU or WebGL2, for the web only so far. See the [foundation](./docs/technical/foundation.md#rendering).
 
 ### folder
 

@@ -1,6 +1,6 @@
 //! The renderer: images as textured quads, text as textures of its coverage in a colour,
 //! strokes (lines, the outlines of rectangles and ellipses, and crosses), and filled
-//! rectangles, on WebGL2 or WebGPU, drawn in the order given.
+//! rectangles, on WebGL2 or WebGPU, drawn in the order given over the grid, if any.
 
 #![cfg(target_arch = "wasm32")]
 
@@ -171,6 +171,40 @@ fn box(local: vec2f, half: vec2f) -> f32 {
 }
 "#;
 
+/// Lines `spacing` apart, or dots where they cross, over the whole viewport. Every `step`th
+/// line shows in full and the others by `fade`. `offset` is the board point at the viewport's
+/// top-left, less a whole number of those full lines' spacing, as far from the origin a float
+/// would not place the lines. `width` is a line's, or a dot's across, in device pixels, and
+/// each is put on whole pixels so that it draws sharp.
+const GRID: &str = r#"
+struct Grid { offset: vec2f, spacing: f32, fade: f32, colour: vec4f, width: f32, dots: f32, step: f32, padding: f32 };
+@group(1) @binding(0) var<uniform> grid: Grid;
+
+@vertex fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let corner = vec2f(f32((index << 1u) & 2u), f32(index & 2u));
+    return vec4f(corner.x * 2.0 - 1.0, 1.0 - corner.y * 2.0, 0.0, 1.0);
+}
+
+/// How far `screen` lies from the nearest line of each direction.
+fn away(screen: vec2f, spacing: f32) -> vec2f {
+    let line = round((grid.offset + screen / camera.zoom) / spacing) * spacing;
+    let start = round((line - grid.offset) * camera.zoom - grid.width * 0.5);
+    return abs(screen - start - grid.width * 0.5);
+}
+
+fn covered(screen: vec2f, spacing: f32) -> f32 {
+    let off = away(screen, spacing);
+    let distance = select(min(off.x, off.y), length(off), grid.dots > 0.5);
+    return clamp(grid.width * 0.5 - distance + 0.5, 0.0, 1.0);
+}
+
+@fragment fn fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let fine = covered(position.xy, grid.spacing) * grid.fade;
+    let coarse = covered(position.xy, grid.spacing * grid.step);
+    return vec4f(grid.colour.rgb, grid.colour.a * max(fine, coarse));
+}
+"#;
+
 /// Draws one mipmap level from the one above it.
 const BLIT: &str = r#"
 @group(0) @binding(0) var above: texture_2d<f32>;
@@ -206,6 +240,9 @@ const STROKE: f32 = 1.0;
 const INSTANCE: u64 = (STRIDE as u64 - 2) * 4;
 /// The camera's origin, zoom, and viewport, padded as [`CAMERA`] lays them out.
 const CAMERA_SIZE: u64 = 32;
+/// Floats of the grid, as [`GRID`] lays them out. Its offset, spacing, fade, colour's red,
+/// green, blue, and alpha from 0 to 1, width, 1 for dots or 0 for lines, step, and padding.
+const GRID_FLOATS: usize = 12;
 
 #[wasm_bindgen]
 pub struct Renderer {
@@ -216,10 +253,13 @@ pub struct Renderer {
     quads: wgpu::RenderPipeline,
     texts: wgpu::RenderPipeline,
     strokes: wgpu::RenderPipeline,
+    grid: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     image_layout: wgpu::BindGroupLayout,
     camera: wgpu::Buffer,
     camera_group: wgpu::BindGroup,
+    grid_uniform: wgpu::Buffer,
+    grid_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
     /// By index, which a released texture leaves free for the next one.
     textures: Vec<Option<Texture>>,
@@ -320,20 +360,25 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
             count: None,
         }],
     });
-    let camera = device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: CAMERA_SIZE,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &camera_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: camera.as_entire_binding(),
-        }],
-    });
+    let uniform = |size| {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+        (buffer, group)
+    };
+    let (camera, camera_group) = uniform(CAMERA_SIZE);
+    let (grid_uniform, grid_group) = uniform(GRID_FLOATS as u64 * 4);
     let target = wgpu::ColorTargetState {
         format: config.format,
         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -370,6 +415,13 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32, 1 => Float32x4, 2 => Float32, 3 => Float32, 4 => Float32x3],
         })],
+        target.clone(),
+    );
+    let grid = pipeline(
+        &device,
+        &[CAMERA, GRID].concat(),
+        &[&camera_layout, &camera_layout],
+        &[],
         target,
     );
     let blit = pipeline(&device, BLIT, &[&image_layout], &[], TEXTURE_FORMAT.into());
@@ -389,10 +441,13 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         quads,
         texts,
         strokes,
+        grid,
         blit,
         image_layout,
         camera,
         camera_group,
+        grid_uniform,
+        grid_group,
         sampler,
         textures: Vec::new(),
         backend: format!("wgpu {:?}, {}", info.backend, info.name),
@@ -443,9 +498,22 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// `zoom` is in device pixels per board unit, and `items` holds [`STRIDE`] floats per item,
-    /// back to front.
-    pub fn draw(&mut self, x: f32, y: f32, zoom: f32, items: &[f32]) -> Result<(), JsError> {
+    /// `zoom` is in device pixels per board unit, `items` holds [`STRIDE`] floats per item,
+    /// back to front, and `grid` its [`GRID_FLOATS`], or none when there is no grid.
+    pub fn draw(
+        &mut self,
+        x: f32,
+        y: f32,
+        zoom: f32,
+        items: &[f32],
+        grid: &[f32],
+    ) -> Result<(), JsError> {
+        if !(grid.is_empty() || grid.len() == GRID_FLOATS) {
+            return Err(JsError::new(&format!(
+                "a grid takes {GRID_FLOATS} floats, not {}",
+                grid.len()
+            )));
+        }
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             other => return Err(JsError::new(&format!("no frame to draw: {other:?}"))),
@@ -456,6 +524,10 @@ impl Renderer {
             .flat_map(|value| value.to_le_bytes())
             .collect();
         self.queue.write_buffer(&self.camera, 0, &camera);
+        if !grid.is_empty() {
+            let grid: Vec<u8> = grid.iter().flat_map(|value| value.to_le_bytes()).collect();
+            self.queue.write_buffer(&self.grid_uniform, 0, &grid);
+        }
         if self.instances.size() < (items.len() / STRIDE) as u64 * INSTANCE {
             self.instances = instance_buffer(&self.device, items.len() / STRIDE);
         }
@@ -476,6 +548,11 @@ impl Renderer {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             );
             pass.set_bind_group(0, &self.camera_group, &[]);
+            if !grid.is_empty() {
+                pass.set_pipeline(&self.grid);
+                pass.set_bind_group(1, &self.grid_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
             pass.set_vertex_buffer(0, self.instances.slice(..));
             // Strokes one after the other draw at once, as each draw rebinds the instances on
             // WebGL2.

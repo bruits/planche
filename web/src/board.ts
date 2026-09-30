@@ -147,6 +147,7 @@ export function refresh({ editor, board }: Opened, touched: string[]): void {
     }
   }
   board.draw_order = editor.drawOrder();
+  board.background = core.background(editor);
 }
 
 /** The longest an arrow's head is, in board units, and the most of its arrow it takes. */

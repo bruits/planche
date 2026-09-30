@@ -9,10 +9,13 @@ import init, {
   assetId,
   assetPath,
   fileDepth,
+  gridLevel as level,
   isAssetFile,
   isBoardFile,
   locateZipDirectory,
   newBoardFiles,
+  snapScaleToGrid as snapScale,
+  snapToGrid as snap,
   strokeWidth,
   verifyAsset,
   zipTailLength,
@@ -86,10 +89,23 @@ export interface Element {
   kind: Kind;
 }
 
+export type Background = "plain" | "grid" | "dots";
+
 export interface Board {
   elements: Record<string, Element>;
   /** Back to front. */
   draw_order: string[];
+  background: Background;
+}
+
+/** The grid's lines that show at a zoom, in board units apart. */
+export interface GridLevel {
+  /** The finest ones. */
+  spacing: number;
+  /** How much the finest ones show, from 0 to 1. */
+  fade: number;
+  /** Those that show in full. */
+  coarse: number;
 }
 
 let memory: WebAssembly.Memory | undefined;
@@ -115,6 +131,36 @@ export function board(editor: Editor): Board {
 export function element(editor: Editor, id: string): Element | undefined {
   const json = editor.element(id);
   return json === undefined ? undefined : (JSON.parse(json) as Element);
+}
+
+export function background(editor: Editor): Background {
+  return JSON.parse(editor.background()) as Background;
+}
+
+export function setBackground(editor: Editor, background: Background): void {
+  editor.setBackground(JSON.stringify(background));
+}
+
+/** At `zoom` CSS pixels per board unit. */
+export function gridLevel(zoom: number): GridLevel {
+  const [spacing, fade, coarse] = level(zoom);
+  return { spacing: spacing!, fade: fade!, coarse: coarse! };
+}
+
+/**
+ * How far to move along one axis for the nearest of `values` to land on a line of the grid that
+ * shows at `zoom`, `undefined` when none is near enough.
+ */
+export function snapToGrid(values: number[], zoom: number): number | undefined {
+  return snap(Float64Array.from(values), zoom);
+}
+
+/**
+ * The factor near `factor` that scales `corner` around `origin` onto a line of the grid that
+ * shows at `zoom`, `undefined` when none is near enough.
+ */
+export function snapScaleToGrid(origin: Point, corner: Point, factor: number, zoom: number): number | undefined {
+  return snapScale(origin.x, origin.y, corner.x, corner.y, factor, zoom);
 }
 
 /** What the elements draw over, their groups' elements included, `undefined` when nothing. */

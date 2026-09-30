@@ -1,7 +1,7 @@
 // The renderer, on wgpu compiled to WebAssembly.
 
 import type { Camera } from "./camera.js";
-import type { Point, Rect } from "./core.js";
+import { gridLevel, type Background, type Point, type Rect } from "./core.js";
 import start, { create as createWgpu } from "./wasm/renderer.js";
 
 /**
@@ -42,6 +42,8 @@ export interface Renderer {
   dropText(id: string): void;
   /** What to draw from now on, back to front. Images and texts without a texture are left out. */
   place(items: Placed[]): void;
+  /** What shows behind the items from now on. */
+  backdrop(background: Background): void;
   /** Reads the paints again, once the theme changed. */
   restyle(): void;
   draw(camera: Camera): void;
@@ -56,6 +58,11 @@ const STRIDE = 12;
 const KINDS = { image: 0, stroke: 1, text: 2 };
 /** As the renderer tells its strokes apart. */
 const SHAPES = { line: 0, rectangle: 1, ellipse: 2, fill: 3, cross: 4 };
+/** How wide a line of the grid is, or a dot across, in CSS pixels, and how much of the ink it takes. */
+const GRID = {
+  grid: { width: 1, alpha: 0.1 },
+  dots: { width: 2, alpha: 0.25 },
+};
 
 type Paints = Record<Paint, number[]>;
 
@@ -110,6 +117,7 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
   const images = new Map<string, number>();
   const texts = new Map<string, number>();
   let placed: Placed[] = [];
+  let background: Background = "plain";
   /** Packed at the next draw, as uploads and releases move the textures that items name. */
   let items: Float32Array | undefined;
   const pack = () => {
@@ -160,12 +168,16 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
       placed = next;
       items = undefined;
     },
+    backdrop(next) {
+      background = next;
+    },
     restyle() {
       painted = paints(host);
       items = undefined;
     },
-    draw({ x, y, zoom }) {
-      renderer.draw(x, y, zoom * devicePixelRatio, items ?? pack());
+    draw(camera) {
+      const { x, y, zoom } = camera;
+      renderer.draw(x, y, zoom * devicePixelRatio, items ?? pack(), grid(background, camera, painted.ink));
     },
     resize(width, height) {
       size(output, width, height);
@@ -212,6 +224,19 @@ function floats(item: Placed, texture: number, paints: Paints): number[] {
       return [KINDS.stroke, -1, SHAPES[item.kind], ...outline, ...paints.ink];
     }
   }
+}
+
+/** As the renderer lays out its grid, none when plain. */
+function grid(background: Background, { x, y, zoom }: Camera, ink: number[]): Float32Array {
+  if (background === "plain") {
+    return new Float32Array();
+  }
+  const { spacing, fade, coarse } = gridLevel(zoom);
+  // Here, where numbers are doubles, as the renderer's floats would lose the lines far out.
+  const offset = (value: number) => value - Math.floor(value / coarse) * coarse;
+  const { width, alpha } = GRID[background];
+  const dots = background === "dots" ? 1 : 0;
+  return Float32Array.of(offset(x), offset(y), spacing, fade, ...ink, alpha, width * devicePixelRatio, dots, coarse / spacing, 0);
 }
 
 function canvas(host: HTMLElement, width: number, height: number): HTMLCanvasElement {

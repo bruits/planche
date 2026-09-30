@@ -1,11 +1,13 @@
-//! Edits to a board, each one undoable. The history keeps every touched element as it was
-//! before and after, never a way to recompute it, so that undoing gives back the same bytes.
+//! Edits to a board, each one undoable. The history keeps every touched element, and the
+//! background, as it was before and after, never a way to recompute it, so that undoing gives
+//! back the same bytes.
 //! It lives in memory only.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
-use crate::{Board, Element, ElementId, ElementKind, Error, Point, Result, ZIndex};
+use crate::grid::settled;
+use crate::{Background, Board, Element, ElementId, ElementKind, Error, Point, Result, ZIndex};
 
 /// Where an element moves among the elements of its group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,7 +19,8 @@ pub enum Restack {
 }
 
 /// A board, and the history of the edits made through it. Every edit, undo, and redo returns
-/// the elements it touched, whose files alone change.
+/// the elements it touched, whose files alone change, but for the manifest when the background
+/// does.
 #[derive(Debug, Default)]
 pub struct Editor {
     board: Board,
@@ -28,12 +31,18 @@ pub struct Editor {
     gesture: Option<Step>,
 }
 
-type Step = BTreeMap<ElementId, Change>;
+#[derive(Debug, Default)]
+struct Step {
+    elements: Changes,
+    background: Option<Change<Background>>,
+}
 
-#[derive(Debug, Clone, PartialEq)]
-struct Change {
-    before: Option<Element>,
-    after: Option<Element>,
+type Changes = BTreeMap<ElementId, Change<Option<Element>>>;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Change<T> {
+    before: T,
+    after: T,
 }
 
 impl Editor {
@@ -117,7 +126,7 @@ impl Editor {
             return Err(Error::KindChanged(id));
         }
         check_valid(id, &kind)?;
-        let step = Step::from([(
+        let step = Changes::from([(
             id,
             self.change(id, |element| Some(Element { kind, ..element })),
         )]);
@@ -236,6 +245,37 @@ impl Editor {
         })
     }
 
+    /// Puts back on the grid's lines the coordinates that float arithmetic left a hair off them,
+    /// so that they write as they read. With the elements of the groups among them.
+    pub fn settle_on_grid(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        self.reshape(ids, |kind| match kind {
+            ElementKind::Image { frame, .. }
+            | ElementKind::Note { frame, .. }
+            | ElementKind::Sticky { frame, .. }
+            | ElementKind::Shape { frame, .. } => {
+                for value in [
+                    &mut frame.x,
+                    &mut frame.y,
+                    &mut frame.width,
+                    &mut frame.height,
+                ] {
+                    *value = settled(*value);
+                }
+            }
+            ElementKind::Arrow { from, to } | ElementKind::Line { from, to } => {
+                for point in [from, to] {
+                    point.x = settled(point.x);
+                    point.y = settled(point.y);
+                }
+            }
+            ElementKind::Comment { at, .. } => {
+                at.x = settled(at.x);
+                at.y = settled(at.y);
+            }
+            ElementKind::Group => {}
+        })
+    }
+
     /// Flips each image among the elements, with those of the flipped groups, in its place.
     pub fn flip(&mut self, ids: &[ElementId], horizontally: bool) -> Result<Vec<ElementId>> {
         self.reshape(ids, |kind| {
@@ -257,7 +297,7 @@ impl Editor {
         for id in ids {
             moving.entry(self.get(*id)?.group).or_default().insert(*id);
         }
-        let mut step = Step::new();
+        let mut step = Changes::new();
         for (parent, moving) in moving {
             let before: Vec<ElementId> = self
                 .siblings(parent, &BTreeSet::new())
@@ -430,6 +470,17 @@ impl Editor {
         self.record(step)
     }
 
+    pub fn set_background(&mut self, background: Background) {
+        let change = Change {
+            before: self.board.background,
+            after: background,
+        };
+        self.commit(Step {
+            background: Some(change),
+            ..Step::default()
+        });
+    }
+
     /// Edits between this and [`Editor::end_gesture`] undo as one, and cannot be undone halfway.
     pub fn begin_gesture(&mut self) {
         self.gesture.get_or_insert_default();
@@ -440,16 +491,12 @@ impl Editor {
         let Some(gesture) = &mut self.gesture else {
             return Vec::new();
         };
-        let step = mem::take(gesture);
-        for (id, change) in &step {
-            set(&mut self.board, *id, change.before.clone());
-        }
-        step.into_keys().collect()
+        mem::take(gesture).put(&mut self.board, false)
     }
 
     pub fn end_gesture(&mut self) {
         if let Some(mut gesture) = self.gesture.take() {
-            gesture.retain(|_, change| change.before != change.after);
+            gesture.prune();
             if !gesture.is_empty() {
                 self.undo.push(gesture);
                 self.redo.clear();
@@ -461,11 +508,7 @@ impl Editor {
         let Some(step) = self.undo.pop_if(|_| self.gesture.is_none()) else {
             return Vec::new();
         };
-        for (id, change) in &step {
-            debug_assert_eq!(self.board.elements.get(id), change.after.as_ref());
-            set(&mut self.board, *id, change.before.clone());
-        }
-        let touched = step.keys().copied().collect();
+        let touched = step.put(&mut self.board, false);
         self.redo.push(step);
         touched
     }
@@ -474,11 +517,7 @@ impl Editor {
         let Some(step) = self.redo.pop_if(|_| self.gesture.is_none()) else {
             return Vec::new();
         };
-        for (id, change) in &step {
-            debug_assert_eq!(self.board.elements.get(id), change.before.as_ref());
-            set(&mut self.board, *id, change.after.clone());
-        }
-        let touched = step.keys().copied().collect();
+        let touched = step.put(&mut self.board, true);
         self.undo.push(step);
         touched
     }
@@ -491,28 +530,25 @@ impl Editor {
         self.gesture.is_none() && !self.redo.is_empty()
     }
 
-    fn record(&mut self, mut step: Step) -> Result<Vec<ElementId>> {
-        step.retain(|_, change| change.before != change.after);
-        for (id, change) in &step {
-            set(&mut self.board, *id, change.after.clone());
-        }
-        let touched = step.keys().copied().collect();
+    fn record(&mut self, elements: Changes) -> Result<Vec<ElementId>> {
+        Ok(self.commit(Step {
+            elements,
+            background: None,
+        }))
+    }
+
+    fn commit(&mut self, mut step: Step) -> Vec<ElementId> {
+        step.prune();
+        let touched = step.put(&mut self.board, true);
         match &mut self.gesture {
-            Some(gesture) => {
-                for (id, change) in step {
-                    gesture
-                        .entry(id)
-                        .and_modify(|merged| merged.after.clone_from(&change.after))
-                        .or_insert(change);
-                }
-            }
+            Some(gesture) => gesture.merge(step),
             None if step.is_empty() => {}
             None => {
                 self.undo.push(step);
                 self.redo.clear();
             }
         }
-        Ok(touched)
+        touched
     }
 
     fn reshape(
@@ -520,7 +556,7 @@ impl Editor {
         ids: &[ElementId],
         edit: impl Fn(&mut ElementKind),
     ) -> Result<Vec<ElementId>> {
-        let mut step = Step::new();
+        let mut step = Changes::new();
         for id in self.with_descendants(ids)? {
             let change = self.change(id, |mut element| {
                 edit(&mut element.kind);
@@ -548,7 +584,11 @@ impl Editor {
     }
 
     /// The element must exist.
-    fn change(&self, id: ElementId, edit: impl FnOnce(Element) -> Option<Element>) -> Change {
+    fn change(
+        &self,
+        id: ElementId,
+        edit: impl FnOnce(Element) -> Option<Element>,
+    ) -> Change<Option<Element>> {
         let before = self.board.elements[&id].clone();
         Change {
             after: edit(before.clone()),
@@ -580,7 +620,7 @@ impl Editor {
         Ok(self.board.with_descendants(ids))
     }
 
-    fn rekey(&self, keys: Vec<(ElementId, ZIndex)>) -> Step {
+    fn rekey(&self, keys: Vec<(ElementId, ZIndex)>) -> Changes {
         keys.into_iter()
             .map(|(id, z)| {
                 (
@@ -589,6 +629,56 @@ impl Editor {
                 )
             })
             .collect()
+    }
+}
+
+impl Step {
+    fn is_empty(&self) -> bool {
+        self.elements.is_empty() && self.background.is_none()
+    }
+
+    fn prune(&mut self) {
+        self.elements
+            .retain(|_, change| change.before != change.after);
+        self.background
+            .take_if(|change| change.before == change.after);
+    }
+
+    /// With a later step of the same gesture, which starts where this one ends.
+    fn merge(&mut self, later: Step) {
+        for (id, change) in later.elements {
+            self.elements
+                .entry(id)
+                .and_modify(|merged| merged.after.clone_from(&change.after))
+                .or_insert(change);
+        }
+        if let Some(change) = later.background {
+            self.background.get_or_insert(change).after = change.after;
+        }
+    }
+
+    /// Puts the board as the step leaves it, or as it found it, and returns the elements it
+    /// touched.
+    fn put(&self, board: &mut Board, forward: bool) -> Vec<ElementId> {
+        for (id, change) in &self.elements {
+            let (from, to) = if forward {
+                (&change.before, &change.after)
+            } else {
+                (&change.after, &change.before)
+            };
+            debug_assert_eq!(board.elements.get(id), from.as_ref());
+            set(board, *id, to.clone());
+        }
+        if let Some(Change { before, after }) = self.background {
+            let (from, to) = if forward {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            debug_assert_eq!(board.background, from);
+            board.background = to;
+        }
+        self.elements.keys().copied().collect()
     }
 }
 
@@ -1180,6 +1270,82 @@ mod tests {
         editor.translate(&[id(4)], -1.0, 0.0).unwrap();
         editor.end_gesture();
         assert_eq!(editor.redo(), ids([4]));
+    }
+
+    #[test]
+    fn the_background_undoes_like_any_edit() {
+        let mut editor = editor();
+        editor.set_background(Background::Grid);
+        assert_eq!(editor.board().background, Background::Grid);
+        assert!(!editor.is_saved());
+        assert!(editor.undo().is_empty());
+        assert_eq!(editor.board().background, Background::Plain);
+        assert!(editor.is_saved());
+        assert!(editor.redo().is_empty());
+        assert_eq!(editor.board().background, Background::Grid);
+        assert!(editor.can_undo());
+
+        // To the one it has already, it records nothing.
+        editor.undo();
+        editor.set_background(Background::Plain);
+        assert!(editor.can_redo());
+    }
+
+    #[test]
+    fn a_gesture_undoes_the_background_with_the_elements() {
+        let mut editor = editor();
+        let start = editor.board().clone();
+        editor.begin_gesture();
+        editor.set_background(Background::Grid);
+        editor.translate(&[id(4)], 1.0, 0.0).unwrap();
+        editor.set_background(Background::Dots);
+        assert_eq!(editor.rewind_gesture(), ids([4]));
+        assert_eq!(editor.board(), &start);
+        editor.set_background(Background::Dots);
+        editor.translate(&[id(4)], 1.0, 0.0).unwrap();
+        editor.end_gesture();
+        assert_eq!(editor.undo(), ids([4]));
+        assert_eq!(editor.board(), &start);
+
+        // Back to where it began, it records nothing.
+        editor.begin_gesture();
+        editor.set_background(Background::Grid);
+        editor.set_background(Background::Plain);
+        editor.end_gesture();
+        assert_eq!(editor.redo(), ids([4]));
+    }
+
+    #[test]
+    fn what_moved_or_scaled_onto_the_grid_settles_exactly_on_it() {
+        let frame = |editor: &Editor| match editor.board().elements[&id(1)].kind {
+            ElementKind::Note { frame, .. } => frame,
+            _ => unreachable!(),
+        };
+        let at = |x, width| {
+            let mut kind = note(x);
+            if let ElementKind::Note { frame, .. } = &mut kind {
+                (frame.y, frame.width) = (17.3, width);
+            }
+            Editor::new(board([(1, element(None, "a0", kind))]))
+        };
+        // Moved onto the line at 900, it lands a hair short of it.
+        let x = -242.154_545_454_545_43;
+        let mut editor = at(x, 10.0);
+        editor.translate(&ids([1]), 900.0 - x, 0.0).unwrap();
+        assert_ne!(frame(&editor).x, 900.0);
+        assert_eq!(editor.settle_on_grid(&ids([1])).unwrap(), ids([1]));
+        assert_eq!((frame(&editor).x, frame(&editor).y), (900.0, 17.3));
+
+        // Its right edge scaled from 60 onto the line at 180, it is a hair too wide.
+        let mut editor = at(-40.0, 100.0);
+        editor
+            .scale(&ids([1]), Point { x: -40.0, y: 0.0 }, 2.2)
+            .unwrap();
+        assert_ne!(frame(&editor).width, 220.0);
+        editor.settle_on_grid(&ids([1])).unwrap();
+        assert_eq!((frame(&editor).x, frame(&editor).width), (-40.0, 220.0));
+
+        assert!(editor.settle_on_grid(&ids([1])).unwrap().is_empty());
     }
 
     #[test]

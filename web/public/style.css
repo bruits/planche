@@ -429,6 +429,29 @@ body {
   font-weight: 600;
 }
 
+.menu .end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.menu .opens {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  transform: rotate(-90deg);
+}
+
+.menu .tick {
+  color: var(--accent);
+}
+
+/* The tick takes the shortcut's place, which the toolbar's button shows already. */
+.menu [aria-checked="false"] .tick,
+.menu [aria-checked="true"] kbd {
+  display: none;
+}
+
 /* Hovering moves the focus, so the tint marks both. */
 .menu button:focus {
   outline: none;

@@ -5,7 +5,10 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use board::{AssetId, Board, Element, ElementId, ElementKind, Point, Rect, Restack};
+use board::{
+    AssetId, Background, Board, Element, ElementId, ElementKind, GRID_STEP, GridLevel, Point, Rect,
+    Restack,
+};
 use format::zip;
 use js_sys::{Map, Uint8Array};
 use serde::Serialize;
@@ -15,10 +18,11 @@ use wasm_bindgen::prelude::*;
 struct BoardJson<'a> {
     elements: &'a BTreeMap<ElementId, Element>,
     draw_order: Vec<ElementId>,
+    background: Background,
 }
 
 /// A board being edited, and the history of its edits. Every edit, undo, and redo returns the
-/// ids of the elements it touched.
+/// ids of the elements it touched, which leaves out the background.
 #[wasm_bindgen]
 #[derive(Default)]
 pub struct Editor(board::Editor);
@@ -40,14 +44,27 @@ impl Editor {
         Ok(Self(board::Editor::new(format::read(&files)?)))
     }
 
-    /// The board's elements by id, and its draw order.
+    /// The board's elements by id, its draw order, and its background.
     pub fn json(&self) -> Result<String, JsError> {
         let board = self.0.board();
         let json = BoardJson {
             elements: &board.elements,
             draw_order: board.draw_order(),
+            background: board.background,
         };
         Ok(serde_json::to_string(&json)?)
+    }
+
+    /// As JSON, as in [`Editor::json`].
+    pub fn background(&self) -> Result<String, JsError> {
+        Ok(serde_json::to_string(&self.0.board().background)?)
+    }
+
+    /// `background` as JSON.
+    #[wasm_bindgen(js_name = setBackground)]
+    pub fn set_background(&mut self, background: &str) -> Result<(), JsError> {
+        self.0.set_background(serde_json::from_str(background)?);
+        Ok(())
     }
 
     pub fn element(&self, id: &str) -> Result<Option<String>, JsError> {
@@ -127,6 +144,12 @@ impl Editor {
             Point { x, y },
             degrees,
         )?))
+    }
+
+    /// Once moved or scaled onto the grid, so that what is on it writes as it reads.
+    #[wasm_bindgen(js_name = settleOnGrid)]
+    pub fn settle_on_grid(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.settle_on_grid(&parse(ids)?)?))
     }
 
     pub fn flip(&mut self, ids: Vec<String>, horizontally: bool) -> Result<Vec<String>, JsError> {
@@ -281,6 +304,44 @@ pub fn file_depth() -> usize {
 #[wasm_bindgen(js_name = strokeWidth)]
 pub fn stroke_width() -> f64 {
     board::STROKE_WIDTH
+}
+
+/// The grid's finest lines that show at `zoom`, CSS pixels per board unit. How far apart they
+/// are in board units, how much they show from 0 to 1, and how far apart are those that show in
+/// full.
+#[wasm_bindgen(js_name = gridLevel)]
+pub fn grid_level(zoom: f64) -> Vec<f64> {
+    let GridLevel { spacing, fade } = GridLevel::at(zoom);
+    vec![spacing, fade, spacing * GRID_STEP]
+}
+
+/// How far to move along one axis for the nearest of `values` to land on a line of the grid
+/// that shows at `zoom`, `undefined` when none is near enough.
+#[wasm_bindgen(js_name = snapToGrid)]
+pub fn snap_to_grid(values: &[f64], zoom: f64) -> Option<f64> {
+    board::snap_to_grid(values, zoom)
+}
+
+/// The factor near `factor` that scales the corner around the origin onto a line of the grid
+/// that shows at `zoom`, `undefined` when none is near enough.
+#[wasm_bindgen(js_name = snapScaleToGrid)]
+pub fn snap_scale_to_grid(
+    origin_x: f64,
+    origin_y: f64,
+    corner_x: f64,
+    corner_y: f64,
+    factor: f64,
+    zoom: f64,
+) -> Option<f64> {
+    let origin = Point {
+        x: origin_x,
+        y: origin_y,
+    };
+    let corner = Point {
+        x: corner_x,
+        y: corner_y,
+    };
+    board::snap_scale_to_grid(origin, corner, factor, zoom)
 }
 
 #[wasm_bindgen(js_name = isBoardFile)]

@@ -6,6 +6,7 @@
 
 mod edit;
 mod geometry;
+mod grid;
 mod z_index;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,6 +17,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 pub use edit::{Editor, Restack};
+pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
 pub use z_index::ZIndex;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -45,6 +47,7 @@ pub enum Error {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Board {
     pub elements: BTreeMap<ElementId, Element>,
+    pub background: Background,
 }
 
 impl Board {
@@ -306,6 +309,23 @@ pub enum Shape {
     Ellipse,
     /// The two diagonals of its frame.
     Cross,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Background {
+    #[default]
+    Plain,
+    /// The lines of the grid, as [`GridLevel`] tells which.
+    Grid,
+    /// A dot where those lines cross.
+    Dots,
+}
+
+impl Background {
+    pub fn is_plain(&self) -> bool {
+        *self == Self::Plain
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -633,6 +653,7 @@ mod tests {
                 .into_iter()
                 .map(|(bits, element)| (id(bits), element))
                 .collect(),
+            ..Board::default()
         }
     }
 

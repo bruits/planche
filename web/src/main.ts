@@ -2,7 +2,7 @@
 // to it and edit it, and save it elsewhere or export it.
 
 import * as core from "./core.js";
-import type { Point } from "./core.js";
+import type { Background, Point } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import {
   decode,
@@ -41,6 +41,8 @@ const LONGEST_SIDE = 2048;
 /** Where the browser remembers that hints are hidden. */
 const HINTS = "planche.hints";
 const ZOOM_STEP = 1.25;
+/** In the order the key goes through them. */
+const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
 
 const measurements = byId("measurements");
 const details = new Map<string, string>();
@@ -63,6 +65,7 @@ const editing = edits(viewport, shown, () => opened, {
     refreshBar();
     showComments();
   },
+  snapping: () => snapping,
   drawing: () => drawTool(),
   drawn: () => useTool("select"),
 });
@@ -79,6 +82,8 @@ let loading = true;
 /** On the desktop, a second export to the same file would take over the first one's draft. */
 let exporting = false;
 let tool: "select" | "hand" | Draw = "select";
+/** Left out of the board, it starts as the board's background suggests. */
+let snapping = false;
 let spaceHeld = false;
 /** Kept while the measurements are hidden, so that they show at once when opened. */
 let frameRate = 0;
@@ -100,6 +105,11 @@ const flip = (label: string, key: string, horizontally: boolean): Command => ({
   unavailable: () =>
     noneSelected() ?? (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images flip"),
   run: () => editing.flip(horizontally),
+});
+const backdrop = (label: string, background: Background): Command => ({
+  label,
+  unavailable: noBoard,
+  run: () => useBackground(background),
 });
 const backspace: Shortcut = { key: "backspace" };
 const deleteKey: Shortcut = { key: "delete" };
@@ -231,6 +241,24 @@ const commands = {
       refreshBar();
     },
   },
+  plain: backdrop("No grid", "plain"),
+  grid: backdrop("Lines", "grid"),
+  dots: backdrop("Dots", "dots"),
+  nextBackground: {
+    label: "Grid",
+    keys: [{ key: "g" }],
+    unavailable: noBoard,
+    run: () => {
+      const at = BACKGROUNDS.indexOf(opened!.board.background);
+      useBackground(BACKGROUNDS[(at + 1) % BACKGROUNDS.length]!);
+    },
+  },
+  snap: {
+    label: () => (snapping ? "Stop snapping to grid" : "Snap to grid"),
+    run: () => {
+      snapping = !snapping;
+    },
+  },
   measurements: {
     label: () => (measurements.hidden ? "Show measurements" : "Hide measurements"),
     run: () => {
@@ -283,6 +311,9 @@ const bar = toolbar(
     "separator",
     commands.fit,
     commands.actualSize,
+    "separator",
+    grids(),
+    commands.snap,
     "separator",
     commands.hints,
     commands.measurements,
@@ -353,6 +384,18 @@ function holdSpace(held: boolean): void {
     spaceHeld = held;
     useTool(tool);
   }
+}
+
+function grids(): Entry {
+  const current = opened?.board.background;
+  return { ...commands.nextBackground, options: BACKGROUNDS.map((background) => ({ ...commands[background], checked: background === current })) };
+}
+
+function useBackground(background: Background): void {
+  if (background !== "plain") {
+    snapping = true;
+  }
+  editing.background(background);
 }
 
 /**
@@ -447,7 +490,15 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         "separator",
         commands.remove,
       ]
-    : [{ ...commands.addImages, run: () => addPicked(at) }, commands.selectAll, "separator", commands.fit];
+    : [
+        { ...commands.addImages, run: () => addPicked(at) },
+        commands.selectAll,
+        "separator",
+        commands.fit,
+        "separator",
+        grids(),
+        commands.snap,
+      ];
   openMenu(entries, { label: onSelection ? "Selection" : "Board", place });
 }
 
@@ -513,6 +564,7 @@ async function show(next: Opened): Promise<void> {
   opened?.editor.free();
   opened = next;
   renderer = undefined;
+  snapping = next.board.background !== "plain";
   lettering.reset();
   comments.clear();
   showSaved();
@@ -530,6 +582,8 @@ async function show(next: Opened): Promise<void> {
   details.set(`read ${assets.length} images`, milliseconds(reading));
   const { width, height } = viewport.size();
   const created = await create(viewport.host, width, height);
+  // Edits may have changed it while the renderer was created.
+  created.backdrop(next.board.background);
   details.set("renderer", created.backend);
   viewport.show(created, fit(extent(next), viewport.size()));
   renderer = created;
@@ -601,10 +655,11 @@ function summarise({ folder, board }: Opened): string {
 }
 
 function changed(touched: string[]): void {
-  if (opened === undefined || touched.length === 0) {
+  if (opened === undefined || (touched.length === 0 && core.background(opened.editor) === opened.board.background)) {
     return;
   }
   refresh(opened, touched);
+  renderer?.backdrop(opened.board.background);
   renderer?.place(placed(opened.board, lettering, editing.writing()));
   showSaved();
   viewport.redraw();
