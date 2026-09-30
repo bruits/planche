@@ -4,6 +4,9 @@
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "devDependencies": {
+    "@types/three": "^0.186.0",
+    "pixi.js": "^8.21.0",
+    "three": "^0.186.1",
     "typescript": "^7.0.2"
   }
 }

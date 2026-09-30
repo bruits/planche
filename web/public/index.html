@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Planche</title>
     <link rel="stylesheet" href="style.css" />
+    <script type="importmap">
+      { "imports": { "three/webgpu": "./js/vendor/three.webgpu.js" } }
+    </script>
     <script type="module" src="js/main.js"></script>
   </head>
   <body>
@@ -15,19 +18,56 @@
       <span id="platform"></span>
     </header>
     <main>
-      <table>
-        <thead>
-          <tr>
-            <th>Kind</th>
-            <th>Id</th>
-            <th>Z</th>
-            <th>Group</th>
-            <th>Details</th>
-          </tr>
-        </thead>
-        <tbody id="elements"></tbody>
-      </table>
-      <dl id="metrics"></dl>
+      <div id="viewport"></div>
+      <aside>
+        <form id="bench">
+          <label>Renderer <select id="candidate"></select></label>
+          <label>
+            Images
+            <select name="scene">
+              <option value="board">The open board</option>
+              <option value="20">20 photos</option>
+              <option value="100" selected>100 photos</option>
+              <option value="300">300 photos</option>
+            </select>
+          </label>
+          <label>
+            Longest side
+            <select name="cap">
+              <option value="1024">1024 px</option>
+              <option value="2048" selected>2048 px</option>
+              <option value="4096">4096 px</option>
+              <option value="Infinity">Full size</option>
+            </select>
+          </label>
+          <label>
+            Pace
+            <select name="mode">
+              <option value="paced">Real time</option>
+              <option value="stepped">Every frame</option>
+            </select>
+          </label>
+          <div>
+            <button type="submit">Run</button>
+            <button id="run-all" type="button">Run all</button>
+            <button id="copy" type="button">Copy as Markdown</button>
+          </div>
+        </form>
+        <table>
+          <thead>
+            <tr>
+              <th>Renderer</th>
+              <th>Images</th>
+              <th>Frame p50 / p95 / p99</th>
+              <th>Slow</th>
+              <th title="CPU time only: DOM and Canvas2D leave most of their work to the paint">Draw (CPU) p50 / p95</th>
+              <th title="From creating the renderer to its first frame, loading its code aside">Ready</th>
+            </tr>
+          </thead>
+          <tbody id="results"></tbody>
+        </table>
+        <dl id="metrics"></dl>
+      </aside>
     </main>
   </body>
 </html>

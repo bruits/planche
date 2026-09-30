@@ -47,6 +47,7 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p render-wgpu --target wasm32-unknown-unknown -- -D warnings
 
   test:
     name: Tests (${{ matrix.os }})
@@ -105,11 +106,9 @@ jobs:
         run: echo "version=$(cargo pkgid wasm-bindgen | sed 's/.*@//')" >> "$GITHUB_OUTPUT"
       - uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+          tool: just,wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
       - run: pnpm --dir web install --frozen-lockfile
-      - run: cargo build -p bindings --target wasm32-unknown-unknown
-      - run: wasm-bindgen target/wasm32-unknown-unknown/debug/bindings.wasm --target web --out-dir web/public/js/wasm
-      - run: pnpm --dir web exec tsc
+      - run: just web
 
   desktop:
     name: Desktop app (${{ matrix.os }})

@@ -4,6 +4,9 @@
 }
 
 body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
   margin: 0;
 }
 
@@ -22,27 +25,66 @@ header {
 
 main {
   display: flex;
-  gap: 2rem;
-  align-items: flex-start;
+  flex: 1;
+  min-height: 0;
+}
+
+#viewport {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  touch-action: none;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+#viewport > * {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.dom-world {
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.dom-world canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+aside {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 30rem;
   padding: 1rem;
+  overflow: auto;
+  border-left: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+}
+
+form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+label {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 table {
-  flex: 1;
   border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
 }
 
 th,
 td {
-  padding: 0.25rem 0.5rem;
+  padding: 0.25rem 0.4rem;
   text-align: left;
   border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
-}
-
-td:nth-child(2),
-td:nth-child(3),
-td:nth-child(4) {
-  font-family: ui-monospace, monospace;
 }
 
 dl {

@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "es2023",
     "module": "nodenext",
-    "lib": ["es2023", "dom", "dom.iterable", "dom.asynciterable"],
+    "lib": ["es2023", "esnext.disposable", "dom", "dom.iterable", "dom.asynciterable"],
     "types": [],
     "strict": true,
     "noUncheckedIndexedAccess": true,

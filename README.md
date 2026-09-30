@@ -1,18 +1,9 @@
 # Planche
 
-A free and open-source alternative to [PureRef](https://www.pureref.com/), for collecting reference images on a board 📌
+A fast, open-source board to gather your reference images, kept as plain files you own 📌
 
 > [!IMPORTANT]
-> Planche is a working title. Nothing is released yet, and the tech stack awaits a prototype, see the [technical foundation](./docs/technical/foundation.md).
-
-## Scope
-
-- A minimal canvas, between PureRef and Excalidraw: images, groups, notes, arrows, and shapes, with simple image edits (crop, rotation, flip, and greyscale).
-- An embedded MCP server, so that agents can read and edit a board.
-- A plugin API for anything else.
-- Boards are plain files: they move between machines without loss, and diff well in Git.
-- An optional, paid cloud for live collaboration and sync. The app works fully without it.
-- Browser, Windows, macOS, and Linux first; iOS and Android later.
+> Planche is a working title, and nothing is released yet. The prototype is under way: see the [philosophy](./CONTRIBUTING.md#philosophy) for what it aims at, and the [technical foundation](./docs/technical/foundation.md) for what is decided.
 
 ## Project Structure
 
@@ -21,7 +12,8 @@ A free and open-source alternative to [PureRef](https://www.pureref.com/), for c
 - `crates/bindings/` — the core for the web app, as WASM
 - `crates/desktop/` — the desktop shell, around the web app
 - `crates/folder/` — a folder on disk, as the desktop shell reads and writes it
+- `crates/render-wgpu/` — the renderer, on wgpu
 - `web/` — the app, which runs in a browser and in the desktop shell
 - `samples/` — boards to try the app on
-- `docs/technical/` — technical design, starting with the [foundation](./docs/technical/foundation.md)
+- `docs/technical/` — the [foundation](./docs/technical/foundation.md), and [rendering](./docs/technical/rendering.md)
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — contributing guidelines and project philosophy

@@ -1,42 +1,33 @@
 # Technical foundation
 
-Tracks to be validated by a prototype, not decisions yet. Once the prototype settles one, it becomes a rule here, and this document becomes the single source of truth for the architecture.
+What is decided, what is still being explored, and why. A track becomes a decision once the prototype has measured it; decisions are rules for the code, and nothing is frozen until a release.
 
-## Constraints
+## Decided
 
-- Mostly Rust, with a thin presentation layer in another language.
-- Tauri 2 is the current preference for the shell. The canvas will probably be custom-built, in Rust or TypeScript.
-- Browser, Windows, macOS, and Linux first; iOS and Android later, but planned for from the start.
+- **Stack.** Mostly Rust, with a thin presentation layer: one web app in TypeScript, without a framework, runs the Rust core as WASM in the browser and in the desktop shell's webview.
+- **Platforms.** The browser, Windows, macOS, and Linux first. iOS and Android come later, but the design must not rule them out.
+- **Rendering.** wgpu, on WebGPU where the webview has it and on WebGL2 otherwise. See [rendering](./rendering.md).
+- **Image pipeline.** The browser decodes, and the Rust core decides what stays on the GPU. See [rendering](./rendering.md#image-pipeline).
+- **File format.** A folder of deterministic JSON files, one per element, with images named by their SHA-256 digest (`crates/format`). A single-file export is a ZIP of that folder. Images need Git LFS. SQLite (as in BeeRef) was rejected because Git cannot merge it, and a single JSON with base64 images (as in `.excalidraw`) because it is heavy and its diffs are useless. JSON Canvas is too poor as a native format, but fits import and export.
+- **Licence.** MIT or Apache-2.0 for the client and the format. The sync server, if there is one, will be AGPL.
 
 ## Tracks
 
+Current preferences, not decisions yet.
+
 ### Shell
 
-Tauri 2 around an independent Rust core, built both natively and to WASM for the web.
+Tauri 2 around the web app, with the system webview.
 
-- **Limits:** WebKitGTK is slow on Linux, and Tauri's Chromium runtime (CEF) is still experimental. Mobile is less mature (e.g. the clipboard only handles text). Window transparency on macOS rules out the App Store. And Tauri does not target the browser, hence a platform abstraction layer.
-- **Alternatives:** wgpu and winit, without a webview, at the cost of handling text, IME, and accessibility ourselves. Dioxus has the same webview limits. Slint and Makepad fit this case less well.
-
-### Canvas rendering
-
-wgpu in Rust compiled to WASM, on WebGL2, with WebGPU only as a bonus. Images are drawn with mipmaps and tiles, Vello draws vectors, and a DOM layer edits text.
-
-- **Limits:** Vello Hybrid is in beta, and the upfront investment is heavy.
-- **Alternatives:** Canvas2D and Rough.js, Excalidraw's approach: simpler, but in TypeScript and slower with many large images. Or PixiJS.
-
-### File format
-
-A folder of deterministic JSON files, one per element, with images named by their SHA-256 digest. It is the source of truth for Git; a single-file export would be a ZIP of that folder. `crates/format` implements this track, so the core has something to test, but it is as open as the others.
-
-- **Limits:** not a single file day to day. Images need Git LFS, and ideally a dedicated merge driver.
-- **Alternatives:** SQLite, robust and single-file as in BeeRef, but opaque and impossible to merge in Git. A single JSON with base64 images, like `.excalidraw`, is heavy and makes useless diffs. JSON Canvas (Obsidian's format) is too poor as a native format, but useful for import and export.
+- **Limits:** WebKitGTK is slow on Linux, has no WebGPU, and may fall back to software WebGL without saying so. Tauri's Chromium runtime (CEF) is still an alpha. The clipboard handles only text on mobile. Transparent windows are buggy on every desktop platform.
+- **Alternatives:** wgpu and winit without a webview, at the cost of handling text, IME, and accessibility ourselves; since the renderer is wgpu, this stays open if webviews fall short. Dioxus shares the webview limits, and Slint and Makepad fit this case less well.
 
 ### Sync
 
-A Loro CRDT, whose movable tree maps well to groups. A Phoenix (Channels and Presence) or Axum server, and S3 storage for images.
+A Loro CRDT, whose movable tree maps well to groups. A Phoenix or Axum server, and S3 storage for images.
 
-- **Limits:** Loro is young, with a small community. Reconciling the CRDT with Git is ours to design.
-- **Alternatives:** Automerge 3, with a mature sync ecosystem, or Yjs/Yrs, the most proven, but without a native movable tree.
+- **Limits:** Loro is young, and reconciling the CRDT with Git is ours to design. Loro needs randomness and a clock, so it must live outside `board` and `format`.
+- **Alternatives:** Automerge 3, or Yjs/Yrs, the most proven but without a native movable tree.
 
 ### MCP
 
@@ -46,15 +37,11 @@ rmcp, the official SDK. On desktop, a stdio gateway and a local HTTP server prot
 
 ### Plugins
 
-WebAssembly components described in WIT (wasmtime on desktop, jco in the browser).
+WebAssembly components described in WIT: wasmtime on desktop, jco in the browser.
 
-- **Limits:** iOS needs the Pulley interpreter for lack of JIT, about ten times slower.
-- **Alternatives:** Extism, simpler to set up. A JavaScript sandbox, on Figma's model. Or Lua/Rhai.
-
-### Licence
-
-MIT/Apache for the client and the format, AGPL for the sync server. The niche seems open: PureRef is closed-source, and BeeRef has not shipped a release since May 2024.
+- **Limits:** iOS has no JIT, so it needs the Pulley interpreter, about ten times slower.
+- **Alternatives:** Extism, simpler to set up; a JavaScript sandbox, as Figma does; or Lua/Rhai.
 
 ## Main risk
 
-Canvas performance in webviews, especially on Linux and iPad. A 4 to 6 week prototype should settle it before committing to Tauri.
+Canvas performance in webviews, above all WebKitGTK on Linux and WebKit on iPad. The renderer bake-off measures it; the runs on real devices are still to come ([rendering](./rendering.md#bake-off)).
