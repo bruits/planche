@@ -148,28 +148,62 @@ export function refresh({ editor, board }: Opened, touched: string[]): void {
   board.draw_order = editor.drawOrder();
 }
 
-/** Its images, back to front. */
-export function images(board: Board): Placed[] {
-  return board.draw_order.flatMap((id) => {
+/** The longest an arrow's head is, in board units, and the most of its arrow it takes. */
+const HEAD_LENGTH = 16;
+const HEAD_SHARE = 1 / 3;
+/** Between each side of an arrow's head and its line, in radians. */
+const HEAD_ANGLE = Math.PI / 6;
+
+/** What draws, back to front. Notes do not yet. */
+export function placed(board: Board): Placed[] {
+  const width = core.strokeWidth();
+  return board.draw_order.flatMap((id): Placed[] => {
     const { kind } = board.elements[id]!;
-    if (kind.type !== "image") {
-      return [];
+    switch (kind.type) {
+      case "image":
+        return [image(kind)];
+      case "arrow":
+        return arrow(kind.from, kind.to, width);
+      case "shape":
+        return [{ kind: kind.shape, frame: kind.frame, rotation: kind.rotation, width }];
+      default:
+        return [];
     }
-    const { width, height } = kind.natural_size;
-    const { crop, flip_horizontal, flip_vertical, greyscale } = kind.edits;
-    const shown = crop ?? { x: 0, y: 0, width, height };
-    let [x, y] = [shown.x / width, shown.y / height];
-    let [across, down] = [shown.width / width, shown.height / height];
-    // Flipped within the crop.
-    if (flip_horizontal) {
-      [x, across] = [x + across, -across];
-    }
-    if (flip_vertical) {
-      [y, down] = [y + down, -down];
-    }
-    const texture = { x, y, width: across, height: down };
-    return [{ asset: kind.asset, frame: kind.frame, rotation: kind.rotation, texture, greyscale }];
   });
+}
+
+function image(kind: Extract<Kind, { type: "image" }>): Placed {
+  const { width, height } = kind.natural_size;
+  const { crop, flip_horizontal, flip_vertical, greyscale } = kind.edits;
+  const shown = crop ?? { x: 0, y: 0, width, height };
+  let [x, y] = [shown.x / width, shown.y / height];
+  let [across, down] = [shown.width / width, shown.height / height];
+  // Flipped within the crop.
+  if (flip_horizontal) {
+    [x, across] = [x + across, -across];
+  }
+  if (flip_vertical) {
+    [y, down] = [y + down, -down];
+  }
+  const texture = { x, y, width: across, height: down };
+  return { kind: "image", asset: kind.asset, frame: kind.frame, rotation: kind.rotation, texture, greyscale };
+}
+
+/** Its line, and the two strokes of an open head at `to`. */
+function arrow(from: Point, to: Point, width: number): Placed[] {
+  const line = { kind: "line" as const, from, to, width };
+  const span = Math.hypot(to.x - from.x, to.y - from.y);
+  if (span === 0) {
+    return [line];
+  }
+  const head = Math.min(HEAD_LENGTH, span * HEAD_SHARE);
+  const back = Math.atan2(from.y - to.y, from.x - to.x);
+  const side = (angle: number) => ({
+    ...line,
+    from: to,
+    to: { x: to.x + Math.cos(back + angle) * head, y: to.y + Math.sin(back + angle) * head },
+  });
+  return [line, side(HEAD_ANGLE), side(-HEAD_ANGLE)];
 }
 
 /** Whether any of the elements is an image, or a group holding one. */

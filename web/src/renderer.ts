@@ -1,19 +1,25 @@
 // The renderer, on wgpu compiled to WebAssembly.
 
 import type { Camera } from "./camera.js";
-import type { Rect } from "./core.js";
+import type { Point, Rect } from "./core.js";
 import start, { create as createWgpu } from "./wasm/renderer.js";
 
-/** An image, as it shows its asset. */
-export interface Placed {
-  asset: string;
-  frame: Rect;
-  /** Clockwise, in degrees, around the frame's centre. */
-  rotation: number;
-  /** The part of the asset it shows, from 0 to 1 across and down, which a negative size flips. */
-  texture: Rect;
-  greyscale: boolean;
-}
+/**
+ * An image, as it shows its asset, or a stroke in the theme's ink. Rotations are clockwise, in
+ * degrees, around the frame's centre, and stroke widths in board units.
+ */
+export type Placed =
+  | {
+      kind: "image";
+      asset: string;
+      frame: Rect;
+      rotation: number;
+      /** The part of the asset it shows, from 0 to 1 across and down, which a negative size flips. */
+      texture: Rect;
+      greyscale: boolean;
+    }
+  | { kind: "line"; from: Point; to: Point; width: number }
+  | { kind: "rectangle" | "ellipse"; frame: Rect; rotation: number; width: number };
 
 export interface Renderer {
   /** What it runs on, such as the GPU's name. */
@@ -21,15 +27,32 @@ export interface Renderer {
   /** Takes each asset's bitmap over, and closes them all even when it fails. Loaded ones stay. */
   load(bitmaps: Map<string, ImageBitmap>): void;
   /** What to draw from now on, back to front. Images whose asset is not loaded are left out. */
-  place(images: Placed[]): void;
+  place(items: Placed[]): void;
+  /** Reads the ink again, once the theme changed. */
+  restyle(): void;
   draw(camera: Camera): void;
   /** In CSS pixels. */
   resize(width: number, height: number): void;
   destroy(): void;
 }
 
-/** Floats per image, as `draw` reads them. */
+/** Floats per item, as `draw` reads them. */
 const STRIDE = 11;
+/** As the renderer tells its strokes apart. */
+const SHAPES = { line: 0, rectangle: 1, ellipse: 2 };
+
+/**
+ * The text colour of `host`, which forced colours override too, as straight red, green, blue,
+ * and alpha from 0 to 1. Drawn to a pixel and read back, as its computed value may be in any
+ * colour space.
+ */
+function ink(host: HTMLElement): number[] {
+  const canvas = Object.assign(document.createElement("canvas"), { width: 1, height: 1 });
+  const context = canvas.getContext("2d", { willReadFrequently: true })!;
+  context.fillStyle = getComputedStyle(host).color;
+  context.fillRect(0, 0, 1, 1);
+  return [...context.getImageData(0, 0, 1, 1).data].map((channel) => channel / 255);
+}
 
 /** Appends its canvas to `host`, sized in CSS pixels. */
 export async function create(host: HTMLElement, width: number, height: number): Promise<Renderer> {
@@ -46,6 +69,8 @@ export async function create(host: HTMLElement, width: number, height: number): 
 }
 
 async function on(webgpu: boolean, host: HTMLElement, width: number, height: number): Promise<Renderer> {
+  // Before the renderer exists, which nothing would free if this threw.
+  let inked = ink(host);
   const output = canvas(host, width, height);
   // A canvas keeps the first kind of context it gives, so a failed one is no use to the other backend.
   const renderer = await createWgpu(output, webgpu).catch((error: unknown) => {
@@ -57,7 +82,7 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
   });
   // Drawing a texture that was never uploaded would panic, and kill the module.
   const textures = new Map<string, number>();
-  let images = new Float32Array();
+  let items = new Float32Array();
   return {
     backend: renderer.backend,
     load(bitmaps) {
@@ -74,21 +99,17 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
       }
     },
     place(placed) {
-      const shown = placed.filter(({ asset }) => textures.has(asset));
-      images = new Float32Array(shown.length * STRIDE);
-      shown.forEach(({ asset, frame, rotation, texture, greyscale }, at) => {
-        images.set(
-          [
-            textures.get(asset)!,
-            ...[frame.x, frame.y, frame.width, frame.height, rotation],
-            ...[texture.x, texture.y, texture.width, texture.height, greyscale ? 1 : 0],
-          ],
-          at * STRIDE,
-        );
-      });
+      const shown = placed.filter((item) => item.kind !== "image" || textures.has(item.asset));
+      items = new Float32Array(shown.length * STRIDE);
+      shown.forEach((item, at) => items.set(floats(item, textures), at * STRIDE));
+    },
+    restyle() {
+      inked = ink(host);
     },
     draw({ x, y, zoom }) {
-      renderer.draw(x, y, zoom * devicePixelRatio, images);
+      const [red, green, blue, alpha] = inked;
+      renderer.setInk(red!, green!, blue!, alpha!);
+      renderer.draw(x, y, zoom * devicePixelRatio, items);
     },
     resize(width, height) {
       size(output, width, height);
@@ -103,6 +124,26 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
       output.remove();
     },
   };
+}
+
+/** As the renderer lays out its items, with an image's texture, or -1 for a stroke, first. */
+function floats(item: Placed, textures: Map<string, number>): number[] {
+  switch (item.kind) {
+    case "image": {
+      const { frame, texture } = item;
+      return [
+        textures.get(item.asset)!,
+        ...[frame.x, frame.y, frame.width, frame.height, item.rotation],
+        ...[texture.x, texture.y, texture.width, texture.height, item.greyscale ? 1 : 0],
+      ];
+    }
+    case "line":
+      return [-1, SHAPES.line, item.from.x, item.from.y, item.to.x, item.to.y, 0, item.width, 0, 0, 0];
+    default: {
+      const { frame } = item;
+      return [-1, SHAPES[item.kind], frame.x, frame.y, frame.width, frame.height, item.rotation, item.width, 0, 0, 0];
+    }
+  }
 }
 
 function canvas(host: HTMLElement, width: number, height: number): HTMLCanvasElement {

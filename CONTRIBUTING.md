@@ -44,7 +44,7 @@ The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web 
 
 ### renderer
 
-The renderer, on wgpu: images as textured quads, on WebGPU or WebGL2, for the web only so far. See the [foundation](./docs/technical/foundation.md#rendering).
+The renderer, on wgpu: images as textured quads, and the strokes of arrows and shapes in the theme's ink, in one list back to front, on WebGPU or WebGL2, for the web only so far. See the [foundation](./docs/technical/foundation.md#rendering).
 
 ### folder
 

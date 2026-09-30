@@ -4,6 +4,7 @@
   --board: #f1f1f3;
   --surface: #ffffff;
   --text: #1d1d22;
+  --ink: #1d1d22;
   --muted: #6e6e78;
   --line: rgb(0 0 0 / 10%);
   --hover: rgb(0 0 0 / 5%);
@@ -17,6 +18,7 @@
     --board: #121215;
     --surface: #232329;
     --text: #ececf1;
+    --ink: #ececf1;
     --muted: #9d9da8;
     --line: rgb(255 255 255 / 10%);
     --hover: rgb(255 255 255 / 6%);
@@ -39,11 +41,18 @@ body {
   background: var(--board);
 }
 
+/* The renderer reads its colour as the ink. */
 #viewport {
   position: fixed;
   inset: 0;
+  color: var(--ink);
   overflow: hidden;
   touch-action: none;
+}
+
+/* Before the hand's, which pans over a tool to draw. */
+#viewport.drawing {
+  cursor: crosshair;
 }
 
 #viewport.hand {

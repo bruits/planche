@@ -242,6 +242,9 @@ impl ImageEdits {
     }
 }
 
+/// How wide arrows and the outlines of shapes draw, in board units, until elements hold a style.
+pub const STROKE_WIDTH: f64 = 2.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Shape {

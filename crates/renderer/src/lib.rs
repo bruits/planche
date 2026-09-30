@@ -1,4 +1,5 @@
-//! The renderer: images as textured quads, on WebGL2 or WebGPU, drawn in the order given.
+//! The renderer: images as textured quads, and strokes (lines, and the outlines of rectangles
+//! and ellipses) in one colour, on WebGL2 or WebGPU, drawn in the order given.
 
 #![cfg(target_arch = "wasm32")]
 
@@ -8,9 +9,21 @@ use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, ImageBitmap};
 
 /// Uniform buffers take multiples of 16 bytes on WebGL2, hence the padding.
-const QUADS: &str = r#"
-struct Camera { origin: vec2f, zoom: f32, viewport: vec2f, padding: vec2f };
+const CAMERA: &str = r#"
+struct Camera { origin: vec2f, zoom: f32, viewport: vec2f, padding: vec2f, ink: vec4f };
 @group(0) @binding(0) var<uniform> camera: Camera;
+
+fn clip(screen: vec2f) -> vec4f {
+    return vec4f(screen.x / camera.viewport.x * 2.0 - 1.0, 1.0 - screen.y / camera.viewport.y * 2.0, 0.0, 1.0);
+}
+
+fn turn(point: vec2f, degrees: f32) -> vec2f {
+    let angle = radians(degrees);
+    return vec2f(point.x * cos(angle) - point.y * sin(angle), point.x * sin(angle) + point.y * cos(angle));
+}
+"#;
+
+const QUADS: &str = r#"
 @group(1) @binding(0) var image: texture_2d<f32>;
 @group(1) @binding(1) var image_sampler: sampler;
 
@@ -25,11 +38,9 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f, @locati
 ) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
     let local = (corner - 0.5) * rect.zw;
-    let angle = radians(degrees);
-    let turned = vec2f(local.x * cos(angle) - local.y * sin(angle), local.x * sin(angle) + local.y * cos(angle));
-    let screen = (rect.xy + rect.zw * 0.5 + turned - camera.origin) * camera.zoom;
+    let screen = (rect.xy + rect.zw * 0.5 + turn(local, degrees) - camera.origin) * camera.zoom;
     var out: Out;
-    out.position = vec4f(screen.x / camera.viewport.x * 2.0 - 1.0, 1.0 - screen.y / camera.viewport.y * 2.0, 0.0, 1.0);
+    out.position = clip(screen);
     out.uv = crop.xy + corner * crop.zw;
     out.grey = grey;
     return out;
@@ -39,6 +50,77 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f, @locati
     let color = textureSample(image, image_sampler, in.uv);
     let luma = dot(color.rgb, vec3f(0.2126, 0.7152, 0.0722));
     return vec4f(mix(color.rgb, vec3f(luma), in.grey), color.a);
+}
+"#;
+
+/// Each stroke covers a quad a pixel wider than itself, and its fragments measure in device
+/// pixels how far they are from the line, which smooths its edge over one pixel.
+const STROKES: &str = r#"
+struct Out {
+    @builtin(position) position: vec4f,
+    @location(0) local: vec2f,
+    @location(1) size: vec2f,
+    @location(2) radius: f32,
+    @location(3) shape: f32,
+};
+
+/// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, and 1 or 2 for the outline of
+/// a rectangle or an ellipse in the frame `geometry`, turned by `degrees`. `width` is in board
+/// units, but never under a device pixel.
+@vertex fn vs(
+    @builtin(vertex_index) index: u32,
+    @location(0) shape: f32,
+    @location(1) geometry: vec4f,
+    @location(2) degrees: f32,
+    @location(3) width: f32,
+) -> Out {
+    let corner = vec2f(f32(index & 1u), f32(index >> 1u));
+    let radius = max(width * camera.zoom, 1.0) * 0.5;
+    let margin = radius + 1.0;
+    var out: Out;
+    out.radius = radius;
+    out.shape = shape;
+    if shape < 0.5 {
+        let start = (geometry.xy - camera.origin) * camera.zoom;
+        let end = (geometry.zw - camera.origin) * camera.zoom;
+        let span = distance(start, end);
+        let along = select(vec2f(1.0, 0.0), (end - start) / span, span > 0.0);
+        let across = vec2f(-along.y, along.x);
+        out.local = vec2f(mix(-margin, span + margin, corner.x), mix(-margin, margin, corner.y));
+        out.size = vec2f(span, 0.0);
+        out.position = clip(start + along * out.local.x + across * out.local.y);
+    } else {
+        let half = abs(geometry.zw) * 0.5 * camera.zoom;
+        let centre = (geometry.xy + geometry.zw * 0.5 - camera.origin) * camera.zoom;
+        out.local = (corner * 2.0 - 1.0) * (half + margin);
+        out.size = half;
+        out.position = clip(centre + turn(out.local, degrees));
+    }
+    return out;
+}
+
+@fragment fn fs(in: Out) -> @location(0) vec4f {
+    var away: f32;
+    if in.shape < 0.5 {
+        away = length(vec2f(in.local.x - clamp(in.local.x, 0.0, in.size.x), in.local.y));
+    } else if in.shape < 1.5 {
+        let outside = abs(in.local) - in.size;
+        away = abs(length(max(outside, vec2f(0.0))) + min(max(outside.x, outside.y), 0.0));
+    } else {
+        // As the core measures it, bounded where a thin ellipse would otherwise show a gap or
+        // fat tips.
+        let axes = max(in.size, vec2f(0.5));
+        let point = abs(in.local);
+        let scaled = length(point / axes);
+        let gradient = length(point / (axes * axes));
+        let estimate = select(1e30, abs(scaled * (scaled - 1.0) / gradient), gradient > 0.0);
+        let unit = point / axes;
+        let straight = axes * sqrt(max(1.0 - unit.yx * unit.yx, vec2f(0.0))) - point;
+        let frame = length(max(point - axes, vec2f(0.0)));
+        away = select(max(estimate, frame), min(estimate, min(straight.x, straight.y)), scaled < 1.0);
+    }
+    let coverage = clamp(in.radius - away + 0.5, 0.0, 1.0);
+    return vec4f(camera.ink.rgb, camera.ink.a * coverage);
 }
 "#;
 
@@ -63,12 +145,15 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f };
 "#;
 
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-/// Floats per image in [`Renderer::draw`]: texture, x, y, width, height, rotation, the crop's
-/// x, y, width, and height in texture coordinates, which a negative size flips, and 1 to draw
-/// in greys or 0.
+/// Floats per item in [`Renderer::draw`], an image or a stroke. An image's are its texture, x, y,
+/// width, height, rotation, the crop's x, y, width, and height in texture coordinates, which a
+/// negative size flips, and 1 to draw in greys or 0. A stroke's are -1, then the shape, geometry,
+/// rotation, and width that [`STROKES`] reads, and padding.
 const STRIDE: usize = 11;
-/// Bytes per instance: all of an image's floats but its texture.
+/// Bytes per instance: all of an item's floats but the first, which tells an image from a stroke.
 const INSTANCE: u64 = (STRIDE as u64 - 1) * 4;
+/// The camera's origin, zoom, and viewport, then the ink, padded as [`CAMERA`] lays them out.
+const CAMERA_SIZE: u64 = 48;
 
 #[wasm_bindgen]
 pub struct Renderer {
@@ -77,7 +162,9 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     quads: wgpu::RenderPipeline,
+    strokes: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
+    ink: [f32; 4],
     image_layout: wgpu::BindGroupLayout,
     camera: wgpu::Buffer,
     camera_group: wgpu::BindGroup,
@@ -164,7 +251,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         label: None,
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
@@ -175,7 +262,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
     });
     let camera = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: 32,
+        size: CAMERA_SIZE,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -187,21 +274,32 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
             resource: camera.as_entire_binding(),
         }],
     });
-    let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
+    let target = wgpu::ColorTargetState {
+        format: config.format,
+        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+        write_mask: wgpu::ColorWrites::ALL,
+    };
     let quads = pipeline(
         &device,
-        QUADS,
+        &[CAMERA, QUADS].concat(),
         &[&camera_layout, &image_layout],
         &[Some(wgpu::VertexBufferLayout {
             array_stride: INSTANCE,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x4, 3 => Float32],
         })],
-        wgpu::ColorTargetState {
-            format: config.format,
-            blend,
-            write_mask: wgpu::ColorWrites::ALL,
-        },
+        target.clone(),
+    );
+    let strokes = pipeline(
+        &device,
+        &[CAMERA, STROKES].concat(),
+        &[&camera_layout],
+        &[Some(wgpu::VertexBufferLayout {
+            array_stride: INSTANCE,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![0 => Float32, 1 => Float32x4, 2 => Float32, 3 => Float32],
+        })],
+        target,
     );
     let blit = pipeline(&device, BLIT, &[&image_layout], &[], TEXTURE_FORMAT.into());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -218,7 +316,9 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         surface,
         config,
         quads,
+        strokes,
         blit,
+        ink: [0.0, 0.0, 0.0, 1.0],
         image_layout,
         camera,
         camera_group,
@@ -285,9 +385,15 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// `zoom` is in device pixels per board unit, and `images` holds [`STRIDE`] floats per
-    /// image.
-    pub fn draw(&mut self, x: f32, y: f32, zoom: f32, images: &[f32]) -> Result<(), JsError> {
+    /// The colour of strokes, as straight red, green, blue, and alpha from 0 to 1.
+    #[wasm_bindgen(js_name = setInk)]
+    pub fn set_ink(&mut self, red: f32, green: f32, blue: f32, alpha: f32) {
+        self.ink = [red, green, blue, alpha];
+    }
+
+    /// `zoom` is in device pixels per board unit, and `items` holds [`STRIDE`] floats per image
+    /// or stroke, back to front.
+    pub fn draw(&mut self, x: f32, y: f32, zoom: f32, items: &[f32]) -> Result<(), JsError> {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             other => return Err(JsError::new(&format!("no frame to draw: {other:?}"))),
@@ -295,16 +401,17 @@ impl Renderer {
         let viewport = [self.config.width as f32, self.config.height as f32];
         let camera: Vec<u8> = [x, y, zoom, 0.0, viewport[0], viewport[1], 0.0, 0.0]
             .iter()
+            .chain(&self.ink)
             .flat_map(|value| value.to_le_bytes())
             .collect();
         self.queue.write_buffer(&self.camera, 0, &camera);
-        if self.instances.size() < (images.len() / STRIDE) as u64 * INSTANCE {
-            self.instances = instance_buffer(&self.device, images.len() / STRIDE);
+        if self.instances.size() < (items.len() / STRIDE) as u64 * INSTANCE {
+            self.instances = instance_buffer(&self.device, items.len() / STRIDE);
         }
-        let (images, _) = images.as_chunks::<STRIDE>();
-        let instances: Vec<u8> = images
+        let (items, _) = items.as_chunks::<STRIDE>();
+        let instances: Vec<u8> = items
             .iter()
-            .flat_map(|image| &image[1..])
+            .flat_map(|item| &item[1..])
             .flat_map(|value| value.to_le_bytes())
             .collect();
         self.queue.write_buffer(&self.instances, 0, &instances);
@@ -317,14 +424,27 @@ impl Renderer {
                 &view,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             );
-            pass.set_pipeline(&self.quads);
             pass.set_bind_group(0, &self.camera_group, &[]);
             pass.set_vertex_buffer(0, self.instances.slice(..));
-            for (at, image) in images.iter().enumerate() {
-                let texture = &self.images[image[0] as usize];
-                let at = at as u32;
-                pass.set_bind_group(1, texture, &[]);
-                pass.draw(0..4, at..at + 1);
+            // Strokes one after the other draw at once, as each draw rebinds the instances on
+            // WebGL2.
+            let mut stroking = None;
+            let mut at = 0;
+            while at < items.len() {
+                let texture = items[at][0];
+                let stroke = texture < 0.0;
+                if stroking != Some(stroke) {
+                    pass.set_pipeline(if stroke { &self.strokes } else { &self.quads });
+                    stroking = Some(stroke);
+                }
+                let run = if stroke {
+                    items[at..].iter().take_while(|item| item[0] < 0.0).count()
+                } else {
+                    pass.set_bind_group(1, &self.images[texture as usize], &[]);
+                    1
+                };
+                pass.draw(0..4, at as u32..(at + run) as u32);
+                at += run;
             }
         }
         self.queue.submit([encoder.finish()]);

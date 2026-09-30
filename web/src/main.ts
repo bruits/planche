@@ -9,7 +9,7 @@ import {
   files,
   holdsImage,
   imageKind,
-  images,
+  placed,
   open,
   prepare,
   readAssets,
@@ -22,7 +22,7 @@ import {
 } from "./board.js";
 import { fit } from "./camera.js";
 import { describe, listen, mac, typing, type Command, type Shortcut } from "./commands.js";
-import { edits, type Restack } from "./edit.js";
+import { edits, type Draw, type Restack } from "./edit.js";
 import { menuOpen, openMenu, type Entry } from "./menu.js";
 import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./metrics.js";
 import { overlay } from "./overlay.js";
@@ -43,7 +43,12 @@ const viewport = view(byId("viewport"), {
   drawn: (camera, size) => shown.frame(camera, size),
   failed: (error) => fail(error),
 });
-const editing = edits(viewport, shown, () => opened, changed, () => refreshBar());
+const editing = edits(viewport, shown, () => opened, {
+  changed,
+  selectionChanged: () => refreshBar(),
+  drawing: () => drawTool(),
+  drawn: () => useTool("select"),
+});
 
 let opened: Opened | undefined;
 let renderer: Renderer | undefined;
@@ -55,7 +60,7 @@ let unsaved = false;
 let loading = true;
 /** On the desktop, a second export to the same file would take over the first one's draft. */
 let exporting = false;
-let tool: "select" | "hand" = "select";
+let tool: "select" | "hand" | Draw = "select";
 let spaceHeld = false;
 /** Kept while the measurements are hidden, so that they show at once when opened. */
 let frameRate = 0;
@@ -85,6 +90,9 @@ const ctrlY: Shortcut = { key: "y", ctrl: true };
 const commands = {
   select: { label: "Select", keys: [{ key: "v" }], run: () => useTool("select") },
   hand: { label: "Hand", keys: [{ key: "h" }], run: () => useTool("hand") },
+  arrow: { label: "Arrow", keys: [{ key: "a" }], unavailable: noneShown, run: () => useTool("arrow") },
+  rectangle: { label: "Rectangle", keys: [{ key: "r" }], unavailable: noneShown, run: () => useTool("rectangle") },
+  ellipse: { label: "Ellipse", keys: [{ key: "o" }], unavailable: noneShown, run: () => useTool("ellipse") },
   addImages: {
     label: "Add images…",
     keys: [{ key: "i" }],
@@ -208,7 +216,12 @@ const bar = toolbar(
       { command: commands.select, icon: "pointer", pressed: () => tool === "select" },
       { command: commands.hand, icon: "hand", pressed: () => tool === "hand" },
     ],
-    [{ command: commands.addImages, icon: "photo" }],
+    [
+      { command: commands.arrow, icon: "arrow", pressed: () => tool === "arrow" },
+      { command: commands.rectangle, icon: "square", pressed: () => tool === "rectangle" },
+      { command: commands.ellipse, icon: "circle", pressed: () => tool === "ellipse" },
+      { command: commands.addImages, icon: "photo" },
+    ],
   ],
   () => [
     commands.newBoard,
@@ -238,6 +251,13 @@ addEventListener("keydown", (event) => {
 });
 addEventListener("keyup", (event) => event.key === " " && holdSpace(false));
 addEventListener("blur", () => holdSpace(false));
+// Strokes draw in the theme's ink.
+for (const query of ["(prefers-color-scheme: dark)", "(forced-colors: active)"]) {
+  matchMedia(query).addEventListener("change", () => {
+    renderer?.restyle();
+    viewport.redraw();
+  });
+}
 document.addEventListener("contextmenu", (event) => {
   // The webview's own menu would offer to reload, and lose the board.
   event.preventDefault();
@@ -260,9 +280,14 @@ function busy(): boolean {
   return editing.busy() || viewport.panning();
 }
 
+function drawTool(): Draw | undefined {
+  return tool === "select" || tool === "hand" ? undefined : tool;
+}
+
 function useTool(next: typeof tool): void {
   tool = next;
   viewport.hand(tool === "hand" || spaceHeld);
+  viewport.host.classList.toggle("drawing", drawTool() !== undefined);
   refreshBar();
 }
 
@@ -274,11 +299,11 @@ function holdSpace(held: boolean): void {
 }
 
 /**
- * Esc lets go of the hand tool first, which leaves the selection to act on, then of the group
+ * Esc lets go of the tool in use first, which leaves the selection to act on, then of the group
  * gone into, one level at a time, then of the selection.
  */
 function escape(): void {
-  if (tool === "hand") {
+  if (tool !== "select") {
     useTool("select");
   } else if (!editing.up()) {
     editing.select([]);
@@ -302,12 +327,21 @@ function hint(): string {
   if (spaceHeld) {
     return "Drag to move around";
   }
+  if (tool === "arrow") {
+    return `Drag from where the arrow starts to where it points · ${escapeKey} to select again`;
+  }
+  if (tool === "rectangle" || tool === "ellipse") {
+    return `Drag to draw, or click to place · ${escapeKey} to select again`;
+  }
   const opens = commands.goInside.unavailable() === undefined;
   if (editing.entered() !== undefined) {
     return `Inside a group · ${opens ? `${insideKey} to go inside · ` : ""}${escapeKey} to go back up`;
   }
   if (opens) {
     return `Drag to move · double-click or ${insideKey} to go inside · right-click for more`;
+  }
+  if (editing.loneArrow()) {
+    return "Drag to move · drag an end to move it · right-click for more";
   }
   if (editing.selection().length > 0) {
     return "Drag to move · corners scale · the circle rotates · right-click for more";
@@ -425,7 +459,7 @@ async function show(next: Opened): Promise<void> {
   details.set("decode", milliseconds(decoding));
   const [, uploading] = await timed(() => created.load(bitmaps));
   details.set("upload", milliseconds(uploading));
-  created.place(images(next.board));
+  created.place(placed(next.board));
   viewport.redraw();
   if (!empty) {
     bar.say(summary);
@@ -459,11 +493,13 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
     );
     const ids = added.map(() => newId());
     const touched: string[] = [];
+    // Into the group gone into, where they stay selected.
+    const group = editing.entered();
     editor.beginGesture();
     try {
       added.forEach(({ asset, bytes, natural }, at) => {
         target.added.set(core.assetPath(asset), bytes);
-        touched.push(...editor.add(ids[at]!, JSON.stringify(imageKind(asset, natural, frames[at]!))));
+        touched.push(...editor.add(ids[at]!, group, JSON.stringify(imageKind(asset, natural, frames[at]!))));
       });
     } finally {
       editor.endGesture();
@@ -487,7 +523,7 @@ function changed(touched: string[]): void {
     return;
   }
   refresh(opened, touched);
-  renderer?.place(images(opened.board));
+  renderer?.place(placed(opened.board));
   showSaved();
   viewport.redraw();
 }

@@ -3,15 +3,17 @@
 
 use std::collections::BTreeSet;
 
-use crate::{Board, ElementId, ElementKind, Point, Rect};
+use crate::{Board, ElementId, ElementKind, Point, Rect, STROKE_WIDTH, Shape};
 
 impl Board {
     /// The topmost element that draws at `point`, or within `tolerance` of it. A group draws
-    /// nothing itself, so it is never the one hit.
+    /// nothing itself, so it is never the one hit, and a shape only draws its outline, so what
+    /// it surrounds stays within reach.
     pub fn hit(&self, point: Point, tolerance: f64) -> Option<ElementId> {
-        self.draw_order().into_iter().rev().find(|id| {
-            shape(&self.elements[id].kind).is_some_and(|shape| near(&shape, point, tolerance))
-        })
+        self.draw_order()
+            .into_iter()
+            .rev()
+            .find(|id| hits(&self.elements[id].kind, point, tolerance))
     }
 
     /// Every element that draws something within `area`, from back to front.
@@ -19,7 +21,7 @@ impl Board {
         let area = corners(&area, 0.0);
         self.draw_order()
             .into_iter()
-            .filter(|id| shape(&self.elements[id].kind).is_some_and(|shape| overlap(&shape, &area)))
+            .filter(|id| touches(&self.elements[id].kind, &area))
             .collect()
     }
 
@@ -140,8 +142,99 @@ fn corners(rect: &Rect, degrees: f64) -> [Point; 4] {
         .map(|(x, y)| Point { x, y }.turned(rect.centre(), degrees))
 }
 
+/// Strokes reach half their width beyond the line they follow.
+fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
+    let reach = tolerance + STROKE_WIDTH / 2.0;
+    match kind {
+        ElementKind::Shape {
+            frame,
+            rotation,
+            shape: Shape::Ellipse,
+        } => near_ellipse(frame, *rotation, point, reach),
+        ElementKind::Shape {
+            frame, rotation, ..
+        } => near_edges(&corners(frame, *rotation), point, reach),
+        ElementKind::Arrow { from, to } => distance(point, *from, *to) <= reach,
+        _ => shape(kind).is_some_and(|shape| near(&shape, point, tolerance)),
+    }
+}
+
+/// As [`hits`], a shape only draws its outline, so an area within it touches none of it.
+fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
+    match kind {
+        ElementKind::Shape {
+            frame,
+            rotation,
+            shape: Shape::Ellipse,
+        } if frame.width != 0.0 && frame.height != 0.0 => ellipse_touches(frame, *rotation, area),
+        ElementKind::Shape {
+            frame, rotation, ..
+        } => {
+            let outline = corners(frame, *rotation);
+            overlap(&outline, area) && !area.iter().all(|corner| inside(&outline, *corner))
+        }
+        _ => shape(kind).is_some_and(|shape| overlap(&shape, area)),
+    }
+}
+
+/// Where the ellipse is the unit circle, the area meets its curve when the circle's centre is
+/// within the area or near an edge of it, unless the whole area lies within the circle.
+fn ellipse_touches(frame: &Rect, degrees: f64, area: &[Point; 4]) -> bool {
+    let centre = frame.centre();
+    let (radius_x, radius_y) = ((frame.width / 2.0).abs(), (frame.height / 2.0).abs());
+    let unit = area.map(|corner| {
+        let upright = corner.turned(centre, -degrees);
+        Point {
+            x: (upright.x - centre.x) / radius_x,
+            y: (upright.y - centre.y) / radius_y,
+        }
+    });
+    let origin = Point { x: 0.0, y: 0.0 };
+    let reaches = inside(&unit, origin) || edges(&unit).any(|(a, b)| distance(origin, a, b) <= 1.0);
+    reaches && !unit.iter().all(|corner| corner.x.hypot(corner.y) < 1.0)
+}
+
 fn near(shape: &[Point], point: Point, tolerance: f64) -> bool {
-    inside(shape, point) || edges(shape).any(|(a, b)| distance(point, a, b) <= tolerance)
+    inside(shape, point) || near_edges(shape, point, tolerance)
+}
+
+fn near_edges(shape: &[Point], point: Point, tolerance: f64) -> bool {
+    edges(shape).any(|(a, b)| distance(point, a, b) <= tolerance)
+}
+
+/// Near the ellipse that fills `frame`, turned clockwise by `degrees` around its centre.
+fn near_ellipse(frame: &Rect, degrees: f64, point: Point, tolerance: f64) -> bool {
+    let (radius_x, radius_y) = ((frame.width / 2.0).abs(), (frame.height / 2.0).abs());
+    // Flat, it is the line across its frame.
+    if radius_x == 0.0 || radius_y == 0.0 {
+        return near_edges(&corners(frame, degrees), point, tolerance);
+    }
+    let centre = frame.centre();
+    let upright = point.turned(centre, -degrees);
+    let (x, y) = (upright.x - centre.x, upright.y - centre.y);
+    // The curve's implicit equation over its gradient, exact on the curve and close near it.
+    let scaled = (x / radius_x).hypot(y / radius_y);
+    let gradient = (x / (radius_x * radius_x)).hypot(y / (radius_y * radius_y));
+    let mut away = if gradient == 0.0 {
+        f64::INFINITY
+    } else {
+        (scaled * (scaled - 1.0) / gradient).abs()
+    };
+    // Inside a thin ellipse the estimate overshoots, while straight across to the curve,
+    // along either axis, never does.
+    if scaled < 1.0 {
+        let across = radius_y * (1.0 - (x / radius_x).powi(2)).sqrt() - y.abs();
+        let along = radius_x * (1.0 - (y / radius_y).powi(2)).sqrt() - x.abs();
+        away = away.min(across).min(along);
+    } else {
+        // Outside, it falls short, but the curve stays within its frame, so is never nearer.
+        away = away.max(
+            (x.abs() - radius_x)
+                .max(0.0)
+                .hypot((y.abs() - radius_y).max(0.0)),
+        );
+    }
+    away <= tolerance
 }
 
 /// Whichever way the polygon winds, as a negative width or height turns it over. A polygon
@@ -284,6 +377,220 @@ mod tests {
         assert_eq!(board.hit(point(7.0, 5.0), 0.0), Some(id(3)));
         assert_eq!(board.hit(point(2.0, 5.0), 0.0), Some(id(1)));
         assert_eq!(board.hit(point(17.0, 5.0), 0.0), None);
+    }
+
+    fn framed(shape: Shape, frame: Rect, rotation: f64) -> ElementKind {
+        ElementKind::Shape {
+            frame,
+            rotation,
+            shape,
+        }
+    }
+
+    #[test]
+    fn a_shape_is_hit_near_its_outline_only() {
+        let board = board([
+            (
+                1,
+                element(
+                    None,
+                    "a0",
+                    framed(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), 0.0),
+                ),
+            ),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    framed(Shape::Ellipse, area(200.0, 0.0, 100.0, 50.0), 0.0),
+                ),
+            ),
+            // Turned upright, 50 wide and 100 tall around (50, 225).
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    framed(Shape::Ellipse, area(0.0, 200.0, 100.0, 50.0), 90.0),
+                ),
+            ),
+        ]);
+        assert_eq!(board.hit(point(50.0, 50.0), 3.0), None);
+        assert_eq!(board.hit(point(2.0, 50.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(250.0, 25.0), 3.0), None);
+        // Inside the ellipse's frame, but outside the ellipse.
+        assert_eq!(board.hit(point(205.0, 5.0), 3.0), None);
+        assert_eq!(board.hit(point(201.0, 25.0), 3.0), Some(id(2)));
+        assert_eq!(board.hit(point(250.0, 1.0), 3.0), Some(id(2)));
+        assert_eq!(board.hit(point(50.0, 176.0), 3.0), Some(id(3)));
+        assert_eq!(board.hit(point(2.0, 225.0), 3.0), None);
+    }
+
+    #[test]
+    fn what_a_shape_surrounds_stays_within_reach() {
+        let board = board([
+            (1, element(None, "a0", image(40.0, 40.0, 20.0, 20.0, 0.0))),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    framed(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), 0.0),
+                ),
+            ),
+            // Turned a quarter, 100 by 20 around (250, 10) spans x 240 to 260 and y -40 to 60.
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    framed(Shape::Rectangle, area(200.0, 0.0, 100.0, 20.0), 90.0),
+                ),
+            ),
+        ]);
+        assert_eq!(board.hit(point(50.0, 50.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(2.0, 50.0), 3.0), Some(id(2)));
+        assert_eq!(board.hit(point(241.0, -30.0), 3.0), Some(id(3)));
+        assert_eq!(board.hit(point(205.0, 1.0), 3.0), None);
+    }
+
+    #[test]
+    fn a_selection_rectangle_within_a_shape_touches_none_of_it() {
+        let board = board([
+            (
+                1,
+                element(
+                    None,
+                    "a0",
+                    framed(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), 0.0),
+                ),
+            ),
+            (2, element(None, "a1", image(40.0, 40.0, 10.0, 10.0, 0.0))),
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    framed(Shape::Ellipse, area(200.0, 0.0, 100.0, 100.0), 0.0),
+                ),
+            ),
+        ]);
+        assert_eq!(board.touching(area(30.0, 30.0, 30.0, 30.0)), [id(2)]);
+        // Over the ellipse's frame, but outside its curve.
+        assert!(board.touching(area(200.0, 0.0, 5.0, 5.0)).is_empty());
+        assert!(board.touching(area(230.0, 30.0, 40.0, 40.0)).is_empty());
+        // Across their outline, or around them whole.
+        assert_eq!(board.touching(area(90.0, 40.0, 20.0, 20.0)), [id(1)]);
+        assert_eq!(
+            board.touching(area(-10.0, -10.0, 320.0, 120.0)),
+            [1, 2, 3].map(id)
+        );
+        assert_eq!(board.touching(area(190.0, 40.0, 20.0, 20.0)), [id(3)]);
+    }
+
+    #[test]
+    fn a_turned_ellipse_is_hit_and_touched_where_it_draws() {
+        // Turned 30° clockwise, 200 by 50 around (100, 25) has its long axis end near
+        // (186.6, 75), where turning it the other way would put it near (186.6, -25).
+        let board = board([(
+            1,
+            element(
+                None,
+                "a0",
+                framed(Shape::Ellipse, area(0.0, 0.0, 200.0, 50.0), 30.0),
+            ),
+        )]);
+        assert_eq!(board.hit(point(186.6, 75.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(186.6, -25.0), 3.0), None);
+        assert_eq!(board.touching(area(180.0, 70.0, 10.0, 10.0)), [id(1)]);
+        assert!(board.touching(area(180.0, -30.0, 10.0, 10.0)).is_empty());
+    }
+
+    #[test]
+    fn a_flat_ellipse_is_hit_and_touched_along_its_line() {
+        let board = board([
+            (
+                1,
+                element(
+                    None,
+                    "a0",
+                    framed(Shape::Ellipse, area(0.0, 0.0, 100.0, 0.0), 0.0),
+                ),
+            ),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    framed(Shape::Ellipse, area(200.0, 0.0, 0.0, 100.0), 0.0),
+                ),
+            ),
+        ]);
+        assert_eq!(board.hit(point(50.0, 2.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 10.0), 3.0), None);
+        // On the line through it, far beyond its ends.
+        assert_eq!(board.hit(point(150.0, 0.0), 3.0), None);
+        assert_eq!(board.hit(point(202.0, 50.0), 3.0), Some(id(2)));
+        assert_eq!(board.touching(area(40.0, -10.0, 20.0, 20.0)), [id(1)]);
+        assert_eq!(board.touching(area(190.0, 40.0, 20.0, 20.0)), [id(2)]);
+        assert!(board.touching(area(40.0, 10.0, 20.0, 20.0)).is_empty());
+    }
+
+    #[test]
+    fn a_thin_ellipse_is_hit_along_its_long_axis() {
+        // At x = 50 its curve is 1.73 from the axis.
+        let board = board([(
+            1,
+            element(
+                None,
+                "a0",
+                framed(Shape::Ellipse, area(0.0, 0.0, 200.0, 4.0), 0.0),
+            ),
+        )]);
+        assert_eq!(board.hit(point(50.0, 2.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 2.1), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(100.0, 2.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 10.0), 3.0), None);
+    }
+
+    #[test]
+    fn a_thin_ellipse_is_not_hit_far_beyond_its_tips() {
+        // These are 30 to 95 from its curve.
+        let board = board([(
+            1,
+            element(
+                None,
+                "a0",
+                framed(Shape::Ellipse, area(0.0, 0.0, 200.0, 4.0), 0.0),
+            ),
+        )]);
+        assert_eq!(board.hit(point(250.0, 7.0), 4.0), None);
+        assert_eq!(board.hit(point(280.0, 5.5), 4.0), None);
+        assert_eq!(board.hit(point(295.0, 5.2), 4.0), None);
+        assert_eq!(board.hit(point(230.0, 8.0), 4.0), None);
+        // Just off its tip, it still is.
+        assert_eq!(board.hit(point(204.0, 2.0), 4.0), Some(id(1)));
+    }
+
+    #[test]
+    fn a_stroke_is_hit_across_its_width() {
+        let board = board([
+            (
+                1,
+                element(
+                    None,
+                    "a0",
+                    framed(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), 0.0),
+                ),
+            ),
+            (2, element(None, "a1", arrow((200.0, 0.0), (300.0, 0.0)))),
+            (3, element(None, "a2", image(400.0, 0.0, 100.0, 100.0, 0.0))),
+        ]);
+        let half = STROKE_WIDTH / 2.0;
+        assert_eq!(board.hit(point(-half + 0.1, 50.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit(point(250.0, half - 0.1), 0.0), Some(id(2)));
+        assert_eq!(board.hit(point(400.0 - half + 0.1, 50.0), 0.0), None);
     }
 
     #[test]

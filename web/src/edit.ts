@@ -1,13 +1,14 @@
-// Edits: select, move, scale, and rotate by pointer, and flip, restack, group, delete, undo, and
-// redo for the commands to run. A click selects the element under it, or the outermost group
-// holding it, and a drag from where nothing is draws a rectangle that selects what it touches.
-// Double-clicking a group goes into it, where clicks select its own elements instead. The
-// selection's corners scale it around the opposite one, and the handle above it rotates it
-// around its centre.
+// Edits: draw, select, move, scale, and rotate by pointer, and flip, restack, group, delete,
+// undo, and redo for the commands to run. A click selects the element under it, or the
+// outermost group holding it, and a drag from where nothing is draws a rectangle that selects
+// what it touches. Double-clicking a group goes into it, where clicks select its own elements
+// instead. The selection's corners scale it around the opposite one, the handle above it rotates
+// it around its centre, and a lone arrow's ends move on their own.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
-import type { Board, Editor, Point, Rect } from "./core.js";
+import type { Board, Editor, Kind, Point, Rect } from "./core.js";
+import { newId } from "./board.js";
 import { handles, type Overlay } from "./overlay.js";
 import type { View } from "./view.js";
 
@@ -19,6 +20,8 @@ const REACH = 6;
 const DRAG = 3;
 /** Scaling down further would turn the selection over. */
 const SMALLEST_SCALE = 0.01;
+/** A shape placed by a click, in CSS pixels. */
+const PLACED_SIZE = 100;
 
 export interface Editing {
   editor: Editor;
@@ -26,6 +29,24 @@ export interface Editing {
 }
 
 export type Restack = "forward" | "backward" | "front" | "back";
+
+/** What a press draws, while a tool to draw is in use. */
+export type Draw = "arrow" | "rectangle" | "ellipse";
+
+export interface Hooks {
+  /**
+   * The elements every edit, undo, and redo touches, once `current` would have them up to date,
+   * as it must.
+   */
+  changed(touched: string[]): void;
+  selectionChanged(): void;
+  /** What a press draws, `undefined` when it selects. */
+  drawing(): Draw | undefined;
+  /** Once a press drew something, which it selects. */
+  drawn(): void;
+}
+
+type Arrow = Extract<Kind, { type: "arrow" }>;
 
 export interface Edits {
   /** Whether a gesture is under way, which edits from elsewhere would break. */
@@ -44,6 +65,7 @@ export interface Edits {
   up(): boolean;
   /** Into the one group selected, selecting its elements. */
   goInside(): void;
+  loneArrow(): boolean;
   /**
    * Selects what a right-click at `at` is about, the element there unless it is selected
    * already, or nothing unless `at` is within the selection. Whether anything is.
@@ -65,21 +87,19 @@ export interface Edits {
 }
 
 type Press =
-  | { kind: "move"; pointer: number; start: Point; dragging: boolean; clicked?: string }
+  /** `through` a press on nothing but the selection's box, which a click lets go of. */
+  | { kind: "move"; pointer: number; start: Point; dragging: boolean; clicked?: string; through?: true }
   | { kind: "marquee"; pointer: number; start: Point; kept: Set<string> }
   | { kind: "scale"; pointer: number; origin: Point; handle: Point }
-  | { kind: "rotate"; pointer: number; pivot: Point; from: number };
+  | { kind: "rotate"; pointer: number; pivot: Point; from: number }
+  | { kind: "draw"; pointer: number; start: Point; last: Point; shape: Draw; id: string; dragging: boolean }
+  | { kind: "end"; pointer: number; start: Point; dragging: boolean; id: string; arrow: Arrow; end: "from" | "to" };
 
-/**
- * `changed` receives the elements every edit, undo, and redo touches, once `current` would
- * have them up to date, as it must. `selectionChanged` hears whenever the selection may have.
- */
 export function edits(
   view: View,
   overlay: Overlay,
   current: () => Editing | undefined,
-  changed: (touched: string[]) => void,
-  selectionChanged: () => void,
+  { changed, selectionChanged, drawing, drawn }: Hooks,
 ): Edits {
   let selected = new Set<string>();
   let entered: string | undefined;
@@ -94,11 +114,18 @@ export function edits(
     ready.forEach((resolve) => resolve());
   };
 
+  const lone = (editing: Editing): { id: string; arrow: Arrow } | undefined => {
+    const [id] = selected;
+    const kind = selected.size === 1 ? editing.board.elements[id!]?.kind : undefined;
+    return kind?.type === "arrow" ? { id: id!, arrow: kind } : undefined;
+  };
   const show = () => {
     const editing = current();
     const ids = [...selected];
+    const arrow = editing && lone(editing)?.arrow;
     overlay.outline(editing ? ids.map((id) => editing.editor.outline(id)) : []);
-    overlay.box(editing && ids.length > 0 ? box(editing.editor, ids) : undefined);
+    overlay.box(editing && ids.length > 0 && !arrow ? box(editing.editor, ids) : undefined);
+    overlay.ends(arrow ? [arrow.from, arrow.to] : undefined);
     overlay.entered(editing && entered !== undefined ? box(editing.editor, [entered]) : undefined);
     selectionChanged();
   };
@@ -161,13 +188,34 @@ export function edits(
     }
     const { editor } = editing;
     const pointer = event.pointerId;
-    const corners = selected.size > 0 ? box(editor, [...selected]) : undefined;
+    const shape = drawing();
+    if (shape) {
+      press = { kind: "draw", pointer, start: at, last: at, shape, id: newId(), dragging: false };
+      view.host.setPointerCapture(pointer);
+      return;
+    }
+    const single = lone(editing);
+    if (single) {
+      const ends = (["from", "to"] as const).filter((end) => distance(at, single.arrow[end]) * zoom <= REACH);
+      // The nearest, as they may overlap on a short arrow.
+      const end = ends.sort((a, b) => distance(at, single.arrow[a]) - distance(at, single.arrow[b]))[0];
+      if (end) {
+        press = { kind: "end", pointer, start: at, dragging: false, ...single, end };
+        editor.beginGesture();
+        view.host.setPointerCapture(pointer);
+        return;
+      }
+    }
+    const corners = selected.size > 0 && !single ? box(editor, [...selected]) : undefined;
     const far = corners ? handles(corners, zoom).map((handle) => distance(at, handle) * zoom) : [];
     const nearest = far.indexOf(Math.min(...far));
     const grabbed = far[nearest]! <= REACH ? nearest : -1;
-    const top = aimed(editor, editor.hit(at.x, at.y, TOLERANCE / zoom), grabbed >= 0);
+    const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
     // Ctrl on macOS opens the context menu instead.
     const toggling = event.shiftKey || event.metaKey || (event.ctrlKey && !mac);
+    // Within the selection's box, which its hollow shapes mostly let through, a press drags it.
+    const onSelection = hit === undefined && !toggling && within(at, corners);
+    const top = aimed(editor, hit, grabbed >= 0 || onSelection);
     if (corners && grabbed >= 0) {
       // The rotation handle comes last, after the corners if the box is large enough for them.
       if (grabbed < far.length - 1) {
@@ -189,6 +237,8 @@ export function edits(
         selected = new Set([top]);
       }
       press = { kind: "move", pointer, start: at, dragging: false, clicked };
+    } else if (onSelection) {
+      press = { kind: "move", pointer, start: at, dragging: false, through: true };
     } else {
       press = { kind: "marquee", pointer, start: at, kept: toggling ? new Set(selected) : new Set() };
       selected = new Set(press.kept);
@@ -249,33 +299,98 @@ export function edits(
         again(() => editor.rotate(ids, pivot.x, pivot.y, turned));
         return;
       }
+      case "draw": {
+        press.last = at;
+        if (!press.dragging) {
+          if (distance(at, press.start) * zoom < DRAG) {
+            return;
+          }
+          press.dragging = true;
+          selected = new Set();
+          editor.beginGesture();
+        }
+        const { id, shape, start } = press;
+        again(() => editor.add(id, entered, JSON.stringify(shaped(shape, start, at))));
+        return;
+      }
+      case "end": {
+        const { id, arrow, end, start } = press;
+        // By as much as the pointer moved, so that the end never jumps to it.
+        if (!press.dragging && distance(at, start) * zoom < DRAG) {
+          return;
+        }
+        press.dragging = true;
+        const moved = { x: arrow[end].x + at.x - start.x, y: arrow[end].y + at.y - start.y };
+        again(() => editor.update(id, JSON.stringify({ ...arrow, [end]: moved })));
+        return;
+      }
     }
   });
 
-  const release = () => {
+  /** `completed` unless the press was lost, as to a blur. */
+  const release = (completed: boolean) => {
     if (!press) {
       return;
     }
     wasClick = press.kind === "move" && !press.dragging;
     if (press.kind === "marquee") {
       overlay.marquee(undefined);
+    } else if (press.kind === "draw") {
+      finishDrawing(press, completed);
     } else if (press.kind !== "move" || press.dragging) {
       current()?.editor.endGesture();
     } else if (press.clicked !== undefined) {
       selected = new Set([press.clicked]);
       show();
+    } else if (press.through && completed) {
+      // As a click on nothing does.
+      entered = undefined;
+      selected = new Set();
+      show();
     }
     settle();
+  };
+  /**
+   * A click places a shape at a size of its own, but draws no arrow, which has no such size. A
+   * drag brought back to where it started counts as a click.
+   */
+  const finishDrawing = (press: Extract<Press, { kind: "draw" }>, completed: boolean) => {
+    const editing = current();
+    const zoom = view.zoom();
+    if (!editing) {
+      return;
+    }
+    const { editor } = editing;
+    const { id, shape, start, last, dragging } = press;
+    if (dragging && zoom !== undefined && distance(last, start) * zoom >= DRAG) {
+      editor.endGesture();
+    } else {
+      const touched = dragging ? editor.rewindGesture() : [];
+      const placing = shape !== "arrow" && completed && zoom !== undefined;
+      if (placing) {
+        const half = PLACED_SIZE / zoom / 2;
+        const corner = (sign: number) => ({ x: start.x + sign * half, y: start.y + sign * half });
+        touched.push(...editor.add(id, entered, JSON.stringify(shaped(shape, corner(-1), corner(1)))));
+      }
+      editor.endGesture();
+      edit(editing, touched);
+      if (!placing) {
+        return;
+      }
+    }
+    selected = new Set([id]);
+    show();
+    drawn();
   };
   // A gesture left open would keep undo from ever working again.
   for (const type of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
     view.host.addEventListener(type, (event) => {
       if (event.pointerId === press?.pointer) {
-        release();
+        release(type === "pointerup");
       }
     });
   }
-  addEventListener("blur", release);
+  addEventListener("blur", () => release(false));
 
   view.host.addEventListener("dblclick", (event) => {
     const editing = current();
@@ -309,6 +424,10 @@ export function edits(
     idle: () => (press ? new Promise((resolve) => waiting.push(resolve)) : Promise.resolve()),
     selection: () => [...selected],
     entered: () => entered,
+    loneArrow() {
+      const editing = current();
+      return editing !== undefined && lone(editing) !== undefined;
+    },
     select(ids) {
       const editing = current();
       if (editing) {
@@ -352,7 +471,8 @@ export function edits(
       }
       const { editor } = editing;
       const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
-      const onSelection = hit === undefined && within(at, box(editor, [...selected]));
+      // As a left press would, with no box around a lone arrow.
+      const onSelection = hit === undefined && !lone(editing) && within(at, box(editor, [...selected]));
       const top = aimed(editor, hit, onSelection);
       if (top !== undefined && !selected.has(top)) {
         selected = new Set([top]);
@@ -400,6 +520,7 @@ export function edits(
       settle();
       overlay.outline([]);
       overlay.box(undefined);
+      overlay.ends(undefined);
       overlay.marquee(undefined);
       overlay.entered(undefined);
       selectionChanged();
@@ -438,6 +559,11 @@ function box(editor: Editor, ids: string[]): Point[] | undefined {
     { x: right, y: bottom },
     { x, y: bottom },
   ];
+}
+
+/** Between two corners of its frame, or from one end to the other. */
+function shaped(shape: Draw, from: Point, to: Point): Kind {
+  return shape === "arrow" ? { type: "arrow", from, to } : { type: "shape", frame: rect(from, to), rotation: 0, shape };
 }
 
 function distance(a: Point, b: Point): number {

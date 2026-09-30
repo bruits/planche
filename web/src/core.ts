@@ -13,6 +13,7 @@ import init, {
   isBoardFile,
   locateZipDirectory,
   newBoardFiles,
+  strokeWidth,
   verifyAsset,
   zipTailLength,
 } from "./wasm/bindings.js";
@@ -28,6 +29,7 @@ export {
   isAssetFile,
   isBoardFile,
   locateZipDirectory,
+  strokeWidth,
   verifyAsset,
   zipTailLength,
 };

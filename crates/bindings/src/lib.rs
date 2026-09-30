@@ -83,10 +83,22 @@ impl Editor {
         Ok(strings(self.0.ungroup(group.parse()?)?))
     }
 
-    /// On top of the top level, `kind` as JSON.
-    pub fn add(&mut self, id: &str, kind: &str) -> Result<Vec<String>, JsError> {
+    /// On top of `group`, or of the top level, `kind` as JSON.
+    pub fn add(
+        &mut self,
+        id: &str,
+        group: Option<String>,
+        kind: &str,
+    ) -> Result<Vec<String>, JsError> {
         let kind: ElementKind = serde_json::from_str(kind)?;
-        Ok(strings(self.0.add(id.parse()?, None, kind)?))
+        let group = group.map(|group| group.parse()).transpose()?;
+        Ok(strings(self.0.add(id.parse()?, group, kind)?))
+    }
+
+    /// `kind` as JSON, of the kind the element has.
+    pub fn update(&mut self, id: &str, kind: &str) -> Result<Vec<String>, JsError> {
+        let kind: ElementKind = serde_json::from_str(kind)?;
+        Ok(strings(self.0.update(id.parse()?, kind)?))
     }
 
     pub fn scale(
@@ -263,6 +275,12 @@ pub fn new_board_files() -> Map {
 #[wasm_bindgen(js_name = fileDepth)]
 pub fn file_depth() -> usize {
     format::DEPTH
+}
+
+/// How wide arrows and the outlines of shapes draw, in board units, as the core hits them.
+#[wasm_bindgen(js_name = strokeWidth)]
+pub fn stroke_width() -> f64 {
+    board::STROKE_WIDTH
 }
 
 #[wasm_bindgen(js_name = isBoardFile)]

@@ -20,6 +20,8 @@ export interface Overlay {
   outline(outlines: Float64Array[]): void;
   /** The selection's box, clockwise from its top-left, or `undefined` to hide the handles. */
   box(corners: Point[] | undefined): void;
+  /** The ends of an arrow, each with a handle, or `undefined` to hide them. */
+  ends(points: Point[] | undefined): void;
   /** `undefined` hides it. */
   marquee(area: Rect | undefined): void;
   /** The corners of the group gone into, `undefined` to hide them. */
@@ -58,12 +60,14 @@ export function overlay(host: HTMLElement): Overlay {
   host.append(svg);
   let zoom = 1;
   let corners: Point[] | undefined;
+  let ends: Point[] | undefined;
   const place = () => {
-    const points = corners ? handles(corners, zoom) : [];
+    const points = ends ?? (corners ? handles(corners, zoom) : []);
     const size = HANDLE_SIZE / zoom;
     grips.replaceChildren(
       ...points.map((point, at) => {
-        const corner = at < points.length - 1;
+        // Ends are round, as is the rotation handle, which comes last.
+        const corner = !ends && at < points.length - 1;
         const grip = document.createElementNS(SVG, corner ? "rect" : "circle");
         if (corner) {
           grip.setAttribute("x", String(point.x - size / 2));
@@ -101,6 +105,10 @@ export function overlay(host: HTMLElement): Overlay {
     },
     box(box) {
       corners = box;
+      place();
+    },
+    ends(points) {
+      ends = points;
       place();
     },
     marquee(area) {
