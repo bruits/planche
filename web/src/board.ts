@@ -7,6 +7,7 @@ import { milliseconds, timed } from "./metrics.js";
 import type { Folder } from "./platform.js";
 import type { Placed } from "./renderer.js";
 import { holdsText, type Texts } from "./text.js";
+import { picture, type Picture } from "./vector.js";
 
 export interface Opened {
   folder: Folder;
@@ -17,13 +18,15 @@ export interface Opened {
   added: Map<string, Blob>;
 }
 
+/** A bitmap capped as `decode` caps them, or an SVG, which is rasterised as it shows. */
+export type Decoded = ImageBitmap | Picture;
+
 /** An image to add, decoded. */
 export interface Added {
   asset: string;
   bytes: Blob;
   natural: Size;
-  /** Capped as `decode` caps them. */
-  bitmap: ImageBitmap;
+  decoded: Decoded;
 }
 
 /** An asset that images show, still encoded. */
@@ -31,6 +34,7 @@ export interface Asset {
   asset: string;
   blob: Blob;
   natural: Size;
+  vector: boolean;
 }
 
 /**
@@ -87,24 +91,45 @@ export function files({ folder, added }: Opened): Folder {
 
 /** Throws when the bytes are not an image the host can decode. */
 export async function prepare(bytes: Blob, cap: number): Promise<Added> {
-  const head = new Uint8Array(await bytes.slice(0, 256).arrayBuffer());
-  // Vector images have no size of their own in pixels, and hosts decode them unevenly.
-  if (new TextDecoder().decode(head).trimStart().startsWith("<")) {
-    throw new Error("an SVG or other vector image");
+  const whole = new Uint8Array(await bytes.arrayBuffer());
+  const vector = checkedSvgSize(whole);
+  const asset = await digest(whole);
+  if (vector !== undefined) {
+    return { asset, bytes, natural: vector, decoded: await picture(whole, vector) };
   }
-  const asset = await digest(new Uint8Array(await bytes.arrayBuffer()));
   const full = await createImageBitmap(bytes, { imageOrientation: "from-image" });
   const natural = { width: full.width, height: full.height };
   const { width, height } = capped(natural, cap);
   if (width === natural.width && height === natural.height) {
-    return { asset, bytes, natural, bitmap: full };
+    return { asset, bytes, natural, decoded: full };
   }
   const bitmap = await createImageBitmap(full, {
     resizeWidth: width,
     resizeHeight: height,
     resizeQuality: "high",
   }).finally(() => full.close());
-  return { asset, bytes, natural, bitmap };
+  return { asset, bytes, natural, decoded: bitmap };
+}
+
+export function release(decoded: Decoded): void {
+  if (decoded instanceof ImageBitmap) {
+    decoded.close();
+  }
+}
+
+/**
+ * An SVG's natural size, `undefined` for bytes that do not start as markup, which only then are
+ * worth copying into the core. Throws for other markup, such as HTML.
+ */
+function checkedSvgSize(bytes: Bytes): Size | undefined {
+  if (!new TextDecoder().decode(bytes.subarray(0, 256)).trimStart().startsWith("<")) {
+    return undefined;
+  }
+  const size = core.svgSize(bytes);
+  if (size === undefined) {
+    throw new Error("markup that is not an SVG");
+  }
+  return size;
 }
 
 export function newId(): string {
@@ -260,18 +285,23 @@ export async function readAssets({ folder, board }: Opened): Promise<Asset[]> {
     if (kind.type === "image" && !assets.has(kind.asset)) {
       const bytes = await folder.read(core.assetPath(kind.asset));
       core.verifyAsset(kind.asset, bytes);
-      assets.set(kind.asset, { asset: kind.asset, blob: new Blob([bytes]), natural: kind.natural_size });
+      const vector = checkedSvgSize(bytes) !== undefined;
+      assets.set(kind.asset, { asset: kind.asset, blob: new Blob([bytes]), natural: kind.natural_size, vector });
     }
   }
   return [...assets.values()];
 }
 
-/** With their longest side capped at `cap` pixels. Four decode at once, to bound the memory in flight. */
-export async function decode(assets: Asset[], cap: number): Promise<Map<string, ImageBitmap>> {
-  const bitmaps = new Map<string, ImageBitmap>();
+/** Bitmaps with their longest side capped at `cap` pixels. Four decode at once, to bound the memory in flight. */
+export async function decode(assets: Asset[], cap: number): Promise<Map<string, Decoded>> {
+  const decoded = new Map<string, Decoded>();
   const pending = assets.values();
   const worker = async () => {
-    for (const { asset, blob, natural } of pending) {
+    for (const { asset, blob, natural, vector } of pending) {
+      if (vector) {
+        decoded.set(asset, await picture(new Uint8Array(await blob.arrayBuffer()), natural));
+        continue;
+      }
       const { width, height } = capped(natural, cap);
       const bitmap = await createImageBitmap(blob, {
         imageOrientation: "from-image",
@@ -279,16 +309,16 @@ export async function decode(assets: Asset[], cap: number): Promise<Map<string, 
         resizeHeight: height,
         resizeQuality: "high",
       });
-      bitmaps.set(asset, bitmap);
+      decoded.set(asset, bitmap);
     }
   };
   const done = await Promise.allSettled(Array.from({ length: 4 }, worker));
   const failed = done.find((result) => result.status === "rejected");
   if (failed) {
-    bitmaps.forEach((bitmap) => bitmap.close());
+    decoded.forEach(release);
     throw failed.reason;
   }
-  return bitmaps;
+  return decoded;
 }
 
 function capped(size: Size, cap: number): Size {

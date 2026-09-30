@@ -28,7 +28,7 @@ The app is one web app in `web/`, in TypeScript without a framework, which runs 
 
 ### board
 
-The board as plain data: elements (images, notes, sticky notes, shapes, arrows, lines, comments, and groups), their geometry, their stacking, and non-destructive image edits, and what shows behind them, plain or a grid, whose lines what moves near them snaps to. The ends of arrows and lines stick to the element they land on, and notes, sticky notes, shapes, and comments to the image, note, sticky note, or shape with text they are set down on whole. What sticks follows its element, keeping to the same pixel of an image however it is moved, scaled, turned, cropped, or flipped. Element ids are drawn by the caller, and assets are named by the SHA-256 digest of their bytes. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle, or with something stuck to an element another branch deleted, or to what sticks to it, is repaired on read. Edits go through an `Editor`, whose undo history keeps every touched element, and the background, as it was, in memory only.
+The board as plain data: elements (images, notes, sticky notes, shapes, arrows, lines, comments, and groups), their geometry, their stacking, and non-destructive image edits, and what shows behind them, plain or a grid, whose lines what moves near them snaps to. The ends of arrows and lines stick to the element they land on, and notes, sticky notes, shapes, and comments to the image, note, sticky note, or shape with text they are set down on whole. What sticks follows its element, keeping to the same pixel of an image however it is moved, scaled, turned, cropped, or flipped. Element ids are drawn by the caller, assets are named by the SHA-256 digest of their bytes, and an SVG's natural size is read from its bytes by one rule, where engines disagree. Each element stacks among its siblings by a fractional z-index, so restacking one rewrites one file, and a board that Git merged into a group cycle, or with something stuck to an element another branch deleted, or to what sticks to it, is repaired on read. Edits go through an `Editor`, whose undo history keeps every touched element, and the background, as it was, in memory only.
 
 ### format
 
@@ -44,7 +44,7 @@ The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web 
 
 ### renderer
 
-The renderer, on wgpu: images as textured quads, text from textures the web app rasterises, the strokes of arrows, lines, and shapes, and the fill of sticky notes, in one list back to front over the grid, if any, on WebGPU or WebGL2, for the web only so far. See the [foundation](./docs/technical/foundation.md#rendering).
+The renderer, on wgpu: images as textured quads, SVGs and text from textures the web app rasterises, the strokes of arrows, lines, and shapes, and the fill of sticky notes, in one list back to front over the grid, if any, on WebGPU or WebGL2, for the web only so far. See the [foundation](./docs/technical/foundation.md#rendering).
 
 ### folder
 

@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use board::{
     AssetId, Background, Board, Element, ElementId, ElementKind, GRID_STEP, GridLevel, Point, Rect,
-    Restack,
+    Restack, Size,
 };
 use format::zip;
 use js_sys::{Map, Uint8Array};
@@ -390,6 +390,20 @@ pub fn asset_id(bytes: &[u8]) -> String {
 #[wasm_bindgen(js_name = verifyAsset)]
 pub fn verify_asset(asset: &str, bytes: &[u8]) -> Result<(), JsError> {
     Ok(format::verify_asset(asset.parse()?, bytes)?)
+}
+
+/// An SVG's natural size in CSS pixels, width then height, `undefined` when `bytes` are not
+/// an SVG document.
+#[wasm_bindgen(js_name = svgSize)]
+pub fn svg_size(bytes: &[u8]) -> Option<Vec<u32>> {
+    board::svg_size(bytes).map(|size| vec![size.width, size.height])
+}
+
+/// The SVG with its root sized to `width` by `height`, for every host to draw it at that size,
+/// `undefined` when `bytes` are not an SVG document.
+#[wasm_bindgen(js_name = sizedSvg)]
+pub fn sized_svg(bytes: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
+    board::sized_svg(bytes, Size { width, height })
 }
 
 /// Writes a board's ZIP file one entry at a time.

@@ -8,6 +8,7 @@ mod edit;
 mod geometry;
 mod grid;
 mod stick;
+mod svg;
 mod z_index;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 pub use edit::{Editor, Restack};
 pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
+pub use svg::{sized_svg, svg_size};
 pub use z_index::ZIndex;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -201,7 +203,7 @@ pub enum ElementKind {
     /// it, flips it within the crop, stretches it to fill `frame`, and rotates it.
     Image {
         asset: AssetId,
-        /// In pixels, as displayed.
+        /// In pixels, as displayed, or as [`svg_size`] reads them for an SVG.
         natural_size: Size,
         frame: Rect,
         #[serde(serialize_with = "without_negative_zero")]

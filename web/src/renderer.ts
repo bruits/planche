@@ -37,6 +37,8 @@ export interface Renderer {
   readonly textureBytes: number;
   /** Takes each asset's bitmap over, and closes them all even when it fails. Loaded ones stay. */
   load(bitmaps: Map<string, ImageBitmap>): void;
+  /** The asset as the canvas holds it, in place of any before. */
+  setImage(asset: string, canvas: HTMLCanvasElement): void;
   /** The text `id` as the canvas holds it, in place of any before. */
   setText(id: string, canvas: HTMLCanvasElement): void;
   dropText(id: string): void;
@@ -129,6 +131,14 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
     shown.forEach((item, at) => items!.set(item, at * STRIDE));
     return items;
   };
+  const replace = (textures: Map<string, number>, key: string, canvas: HTMLCanvasElement) => {
+    const before = textures.get(key);
+    textures.set(key, renderer.uploadCanvas(canvas));
+    if (before !== undefined) {
+      renderer.release(before);
+    }
+    items = undefined;
+  };
   return {
     backend: renderer.backend,
     get textureBytes() {
@@ -148,13 +158,11 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
         items = undefined;
       }
     },
+    setImage(asset, canvas) {
+      replace(images, asset, canvas);
+    },
     setText(id, canvas) {
-      const before = texts.get(id);
-      texts.set(id, renderer.uploadCanvas(canvas));
-      if (before !== undefined) {
-        renderer.release(before);
-      }
-      items = undefined;
+      replace(texts, id, canvas);
     },
     dropText(id) {
       const texture = texts.get(id);

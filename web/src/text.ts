@@ -5,6 +5,7 @@
 
 import type { Camera, Viewport } from "./camera.js";
 import type { Board, Kind, Point, Rect } from "./core.js";
+import { LONGEST_SIDE, overlaps, rounded, settling } from "./raster.js";
 import type { Placed, Renderer } from "./renderer.js";
 
 export const FONT = "Inter";
@@ -16,10 +17,6 @@ const STICKY_PADDING = 0.8;
 const SHAPE_PADDING = 0.5;
 /** Room around a texture for glyphs that reach past their advance or line, in font sizes. */
 const MARGIN = 0.25;
-/** WebGL2 guarantees textures this large. */
-const LONGEST_SIDE = 2048;
-/** How long the camera stays put before texts follow it, in milliseconds. */
-const SETTLE = 150;
 /** Pixels per font size of a text out of view, enough to show until it refines. */
 const FAR = 8;
 /** Font sizes are measured at this one, in pixels, and scaled. */
@@ -163,11 +160,7 @@ interface Rasterised {
 export function texts(again: () => void): Texts {
   const rasterised = new Map<string, Rasterised>();
   const canvas = document.createElement("canvas");
-  let seen: Camera | undefined;
-  /** Once the zoom settles, and once the camera does. */
-  let zoomed = 0;
-  let moved = 0;
-  let waiting: ReturnType<typeof setTimeout> | undefined;
+  const settle = settling(again);
   return {
     placed(id, kind) {
       const done = rasterised.get(id);
@@ -187,18 +180,8 @@ export function texts(again: () => void): Texts {
       return { kind: "text", id, frame: covers, rotation, paint: kind.type === "sticky" ? "sticky-ink" : "ink" };
     },
     update(board, renderer, camera, viewport, hidden) {
-      const now = performance.now();
-      if (camera.zoom !== seen?.zoom) {
-        zoomed = now + SETTLE;
-      }
-      if (camera.x !== seen?.x || camera.y !== seen?.y || camera.zoom !== seen?.zoom) {
-        moved = now + SETTLE;
-      }
-      seen = camera;
-      const { width, height } = viewport;
-      const shown = { x: camera.x, y: camera.y, width: width / camera.zoom, height: height / camera.zoom };
+      const shown = settle.follow(camera, viewport);
       let changed = false;
-      let wake = now;
       for (const id of rasterised.keys()) {
         const kind = board.elements[id]?.kind;
         if (!holdsText(kind) || isBlank(kind)) {
@@ -216,16 +199,9 @@ export function texts(again: () => void): Texts {
         const wanted = kind.text.font_size * camera.zoom * devicePixelRatio;
         const visible = overlaps(shown, kind.frame);
         // Out of view, a text drops to a density that costs little, so that memory follows what shows.
-        const density = Math.min(2 ** Math.ceil(Math.log2(Math.max(wanted, 1))), visible ? Infinity : FAR);
-        if (done && sameLayout(done.kind, kind)) {
-          if (done.density === density) {
-            continue;
-          }
-          const until = visible ? zoomed : moved;
-          if (now < until) {
-            wake = Math.max(wake, until);
-            continue;
-          }
+        const density = Math.min(rounded(Math.max(wanted, 1)), visible ? Infinity : FAR);
+        if (done && sameLayout(done.kind, kind) && (done.density === density || !settle.settled(visible))) {
+          continue;
         }
         const laid = layout(kind);
         const covers = {
@@ -246,17 +222,11 @@ export function texts(again: () => void): Texts {
         rasterised.set(id, { kind, density, covers });
         changed = true;
       }
-      if (wake > now && waiting === undefined) {
-        waiting = setTimeout(() => {
-          waiting = undefined;
-          again();
-        }, wake - now);
-      }
       return changed;
     },
     reset() {
       rasterised.clear();
-      seen = undefined;
+      settle.reset();
     },
     count: () => rasterised.size,
   };
@@ -299,14 +269,6 @@ function sameLayout(a: Holder, b: Holder): boolean {
 /** Its frame's size in font sizes. */
 function inEms({ frame, text }: Holder): { width: number; height: number } {
   return { width: frame.width / text.font_size, height: frame.height / text.font_size };
-}
-
-/** Whether the frame, however it turns, may show in `area`. */
-function overlaps(area: Rect, frame: Rect): boolean {
-  const reach = Math.hypot(frame.width, frame.height) / 2;
-  const [x, y] = [frame.x + frame.width / 2, frame.y + frame.height / 2];
-  const across = x + reach >= area.x && x - reach <= area.x + area.width;
-  return across && y + reach >= area.y && y - reach <= area.y + area.height;
 }
 
 /** Clockwise by `degrees`, as y points down. */

@@ -16,9 +16,11 @@ import {
   readAssets,
   newId,
   refresh,
+  release,
   row,
   untitled,
   type Added,
+  type Decoded,
   type Opened,
 } from "./board.js";
 import { fit } from "./camera.js";
@@ -30,14 +32,14 @@ import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./met
 import { overlay } from "./overlay.js";
 import { pinned, pins } from "./pins.js";
 import { platform, type Folder } from "./platform.js";
+import { LONGEST_SIDE } from "./raster.js";
 import { create, type Renderer } from "./renderer.js";
 import { loadFont, texts } from "./text.js";
 import { toolbar, type Button } from "./toolbar.js";
+import { vectors } from "./vector.js";
 import { view } from "./view.js";
 import { writeZip, zipFolder } from "./zip.js";
 
-/** WebGL2 guarantees textures this large. */
-const LONGEST_SIDE = 2048;
 /** Where the browser remembers that hints are hidden. */
 const HINTS = "planche.hints";
 const ZOOM_STEP = 1.25;
@@ -52,13 +54,17 @@ const viewport = view(byId("viewport"), {
     shown.frame(camera, size);
     comments.frame(camera);
     editing.follow();
-    if (opened && renderer && lettering.update(opened.board, renderer, camera, size, editing.writing())) {
-      renderer.place(placed(opened.board, lettering, editing.writing()));
+    if (opened && renderer) {
+      drawings.update(opened.board, renderer, camera, size);
+      if (lettering.update(opened.board, renderer, camera, size, editing.writing())) {
+        renderer.place(placed(opened.board, lettering, editing.writing()));
+      }
     }
   },
   failed: (error) => fail(error),
 });
 const lettering = texts(() => viewport.redraw());
+const drawings = vectors(() => viewport.redraw());
 const editing = edits(viewport, shown, () => opened, {
   changed,
   selectionChanged() {
@@ -575,6 +581,7 @@ async function show(next: Opened): Promise<void> {
   renderer = undefined;
   snapping = next.board.background !== "plain";
   lettering.reset();
+  drawings.reset();
   comments.clear();
   showSaved();
   showTitle();
@@ -600,9 +607,9 @@ async function show(next: Opened): Promise<void> {
   if (assets.length > 0) {
     bar.say(`${summary}, decoding ${assets.length} images…`, true);
   }
-  const [bitmaps, decoding] = await timed(() => decode(assets, LONGEST_SIDE));
+  const [decoded, decoding] = await timed(() => decode(assets, LONGEST_SIDE));
   details.set("decode", milliseconds(decoding));
-  const [, uploading] = await timed(() => created.load(bitmaps));
+  const [, uploading] = await timed(() => load(created, decoded));
   details.set("upload", milliseconds(uploading));
   created.place(placed(next.board, lettering));
   viewport.redraw();
@@ -630,7 +637,7 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   }
   await editing.idle();
   if (added.length > 0 && target !== undefined && target === opened && renderer !== undefined) {
-    renderer.load(new Map(added.map(({ asset, bitmap }) => [asset, bitmap])));
+    load(renderer, new Map(added.map(({ asset, decoded }) => [asset, decoded])));
     const { editor } = target;
     const frames = row(
       added.map(({ natural }) => natural),
@@ -652,11 +659,24 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
     changed(touched);
     editing.select(ids);
   } else {
-    added.forEach(({ bitmap }) => bitmap.close());
+    added.forEach(({ decoded }) => release(decoded));
   }
   if (failures.length > 0) {
     bar.say(`Not added, ${failures.join("; ")}`);
   }
+}
+
+/** Bitmaps to the renderer, which takes them over, and SVGs to rasterise as they show. */
+function load(into: Renderer, decoded: Map<string, Decoded>): void {
+  const bitmaps = new Map<string, ImageBitmap>();
+  for (const [asset, image] of decoded) {
+    if (image instanceof ImageBitmap) {
+      bitmaps.set(asset, image);
+    } else {
+      drawings.keep(asset, image);
+    }
+  }
+  into.load(bitmaps);
 }
 
 function summarise({ folder, board }: Opened): string {

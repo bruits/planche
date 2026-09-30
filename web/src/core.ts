@@ -16,7 +16,9 @@ import init, {
   newBoardFiles,
   snapScaleToGrid as snapScale,
   snapToGrid as snap,
+  sizedSvg as sized,
   strokeWidth,
+  svgSize as vectorSize,
   verifyAsset,
   zipTailLength,
 } from "./wasm/bindings.js";
@@ -145,6 +147,17 @@ export function setBackground(editor: Editor, background: Background): void {
 export function gridLevel(zoom: number): GridLevel {
   const [spacing, fade, coarse] = level(zoom);
   return { spacing: spacing!, fade: fade!, coarse: coarse! };
+}
+
+/** An SVG's natural size, in CSS pixels, `undefined` when the bytes do not start as one. */
+export function svgSize(bytes: Bytes): Size | undefined {
+  const size = vectorSize(bytes);
+  return size && { width: size[0]!, height: size[1]! };
+}
+
+/** The SVG with its root sized to `natural`, for every host to draw it at that size. */
+export function sizedSvg(bytes: Bytes, natural: Size): Bytes | undefined {
+  return sized(bytes, natural.width, natural.height) as Bytes | undefined;
 }
 
 /**
