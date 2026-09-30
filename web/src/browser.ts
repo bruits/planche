@@ -5,6 +5,13 @@
 import type { Bytes } from "./core.js";
 import type { Folder, Platform } from "./platform.js";
 
+let unsaved = false;
+addEventListener("beforeunload", (event) => {
+  if (unsaved) {
+    event.preventDefault();
+  }
+});
+
 export const browser: Platform = {
   name: "browser",
   cannotSave: window.showDirectoryPicker
@@ -84,6 +91,8 @@ export const browser: Platform = {
       append: async (bytes) => {
         parts.push(new Blob([bytes]));
       },
+      // The page never learns whether the download lands, but the user asked for it, so the
+      // board counts as saved.
       close: async () => {
         const url = URL.createObjectURL(new Blob(parts, { type: "application/zip" }));
         const link = document.createElement("a");
@@ -97,6 +106,12 @@ export const browser: Platform = {
         parts = [];
       },
     };
+  },
+
+  confirm: async (question) => window.confirm(question),
+
+  markUnsaved(value) {
+    unsaved = value;
   },
 };
 

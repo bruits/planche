@@ -14,19 +14,14 @@ export interface Viewport {
   height: number;
 }
 
-export function fit(bounds: Rect, viewport: Viewport): Camera {
-  const zoom = 0.9 * Math.min(viewport.width / bounds.width, viewport.height / bounds.height);
+/** Centred on `bounds`, or on the origin at 1:1 when there is nothing to fit. */
+export function fit(bounds: Rect | undefined, viewport: Viewport): Camera {
+  const { x, y, width, height } = bounds ?? { x: 0, y: 0, width: 0, height: 0 };
+  const fitted = 0.9 * Math.min(viewport.width / width, viewport.height / height);
+  const zoom = Number.isFinite(fitted) ? fitted : 1;
   return {
-    x: bounds.x + (bounds.width - viewport.width / zoom) / 2,
-    y: bounds.y + (bounds.height - viewport.height / zoom) / 2,
+    x: x + (width - viewport.width / zoom) / 2,
+    y: y + (height - viewport.height / zoom) / 2,
     zoom,
   };
-}
-
-export function bounds(frames: Rect[]): Rect {
-  const left = Math.min(...frames.map((frame) => frame.x));
-  const top = Math.min(...frames.map((frame) => frame.y));
-  const right = Math.max(...frames.map((frame) => frame.x + frame.width));
-  const bottom = Math.max(...frames.map((frame) => frame.y + frame.height));
-  return { x: left, y: top, width: right - left, height: bottom - top };
 }

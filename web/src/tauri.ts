@@ -66,6 +66,13 @@ export function tauri({ core }: TauriApi): Platform {
         discard: () => core.invoke("discard_export", { path }),
       };
     },
+
+    // The dialog plugin replaces the webview's own `confirm` with one that fails.
+    confirm: (question) => core.invoke<boolean>("confirm", { question }),
+
+    markUnsaved(value) {
+      void core.invoke("mark_unsaved", { value });
+    },
   };
 }
 

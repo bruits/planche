@@ -5,9 +5,10 @@
 //! rotation, and an element with a frame rotates clockwise, in degrees, around its centre.
 
 mod edit;
+mod geometry;
 mod z_index;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -115,6 +116,29 @@ impl Board {
         if let Some(element) = self.elements.get_mut(&id) {
             element.group = None;
         }
+    }
+
+    fn members(&self, group: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        self.elements
+            .iter()
+            .filter(move |(_, element)| element.group == Some(group))
+            .map(|(id, _)| *id)
+    }
+
+    /// With the elements of the groups among them, all the way down. Unknown ids are left out.
+    fn with_descendants(&self, ids: &[ElementId]) -> BTreeSet<ElementId> {
+        let mut found = BTreeSet::new();
+        let mut pending: Vec<ElementId> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.elements.contains_key(id))
+            .collect();
+        while let Some(id) = pending.pop() {
+            if found.insert(id) {
+                pending.extend(self.members(id));
+            }
+        }
+        found
     }
 }
 

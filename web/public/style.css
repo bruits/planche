@@ -43,6 +43,31 @@ main {
   left: 0;
 }
 
+/* Over the renderer's canvas, which each board opened adds after it. */
+#viewport > svg {
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.selection > *,
+.marquee {
+  fill: none;
+  stroke: Highlight;
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.marquee {
+  fill: color-mix(in srgb, Highlight 15%, transparent);
+  stroke-width: 1px;
+}
+
+#unsaved {
+  opacity: 0.6;
+}
+
 aside {
   width: 16rem;
   padding: 1rem;

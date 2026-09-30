@@ -54,6 +54,9 @@ export interface Platform {
   openZip(): Promise<Slices | null>;
   /** Where to export a ZIP file, suggested as `name`. `null` when the user cancels. */
   pickZip(name: string): Promise<Sink | null>;
+  confirm(question: string): Promise<boolean>;
+  /** Whether closing the app would lose changes, so that it asks first. */
+  markUnsaved(unsaved: boolean): void;
 }
 
 export const platform: Platform = window.__TAURI__ ? tauri(window.__TAURI__) : browser;

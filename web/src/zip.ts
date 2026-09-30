@@ -2,7 +2,7 @@
 // written a slice at a time, so that a large board never sits whole in memory.
 
 import * as core from "./core.js";
-import type { Board, Bytes } from "./core.js";
+import type { Bytes, Snapshot } from "./core.js";
 import type { Folder, Sink, Slices } from "./platform.js";
 
 /** The board in a ZIP file. Throws when the file cannot hold one. */
@@ -28,11 +28,11 @@ export async function zipFolder(file: Slices): Promise<Folder> {
  * Writes the board's ZIP file into `sink`, its assets read from `folder` one at a time, and
  * returns how many files it holds. Leaves no trace when it throws.
  */
-export async function writeZip(board: Board, folder: Folder, sink: Sink): Promise<number> {
+export async function writeZip(snapshot: Snapshot, folder: Folder, sink: Sink): Promise<number> {
   let count: number;
   try {
-    const paths = core.zipPaths(board);
-    const files = core.write(board);
+    const paths = snapshot.zipPaths();
+    const files = core.write(snapshot);
     const writer = new core.ZipWriter();
     for (const path of paths) {
       const bytes = files.get(path) ?? (await folder.read(path));

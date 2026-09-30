@@ -2,6 +2,8 @@
 // move bytes.
 
 import init, {
+  Editor,
+  Snapshot,
   ZipIndex,
   ZipWriter,
   assetPath,
@@ -10,14 +12,13 @@ import init, {
   isBoardFile,
   locateZipDirectory,
   newBoardFiles,
-  readBoard,
   verifyAsset,
-  writeBoard,
-  zipPaths as boardZipPaths,
   zipTailLength,
 } from "./wasm/bindings.js";
 
 export {
+  Editor,
+  Snapshot,
   ZipIndex,
   ZipWriter,
   assetPath,
@@ -84,21 +85,31 @@ export function coreMemory(): number {
 }
 
 /** Throws the core's error when the files are not a board. */
-export function read(files: Files): Board {
-  return JSON.parse(readBoard([...files.keys()], [...files.values()])) as Board;
+export function read(files: Files): Editor {
+  return Editor.read([...files.keys()], [...files.values()]);
+}
+
+export function board(editor: Editor): Board {
+  return JSON.parse(editor.json()) as Board;
+}
+
+export function element(editor: Editor, id: string): Element | undefined {
+  const json = editor.element(id);
+  return json === undefined ? undefined : (JSON.parse(json) as Element);
+}
+
+/** What the whole board draws over, `undefined` when it draws nothing. */
+export function bounds(editor: Editor): Rect | undefined {
+  const bounds = editor.bounds();
+  return bounds && { x: bounds[0]!, y: bounds[1]!, width: bounds[2]!, height: bounds[3]! };
 }
 
 /** Every file but the assets. */
-export function write(board: Board): Files {
-  return writeBoard(JSON.stringify(board)) as Files;
+export function write(snapshot: Snapshot): Files {
+  return snapshot.write() as Files;
 }
 
 /** The files a new board folder starts with, besides those of `write`. */
 export function newFiles(): Files {
   return newBoardFiles() as Files;
-}
-
-/** The paths of the board's ZIP file, in the order it holds them. */
-export function zipPaths(board: Board): string[] {
-  return boardZipPaths(JSON.stringify(board));
 }

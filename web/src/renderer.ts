@@ -4,8 +4,9 @@ import type { Camera } from "./camera.js";
 import type { Rect } from "./core.js";
 import start, { create as createWgpu } from "./wasm/renderer.js";
 
-export interface Quad {
-  bitmap: ImageBitmap;
+/** An image, as it shows its asset. */
+export interface Placed {
+  asset: string;
   frame: Rect;
   /** Clockwise, in degrees, around the frame's centre. */
   rotation: number;
@@ -14,8 +15,10 @@ export interface Quad {
 export interface Renderer {
   /** What it runs on, such as the GPU's name. */
   readonly backend: string;
-  /** Takes the bitmaps over, and closes them all even when it fails. */
-  load(quads: Quad[]): void;
+  /** Takes each asset's bitmap over, and closes them all even when it fails. */
+  load(bitmaps: Map<string, ImageBitmap>): void;
+  /** What to draw from now on, back to front. Images whose asset is not loaded are left out. */
+  place(images: Placed[]): void;
   draw(camera: Camera): void;
   /** In CSS pixels. */
   resize(width: number, height: number): void;
@@ -49,24 +52,28 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
     output.remove();
     throw error;
   });
+  // Drawing a texture that was never uploaded would panic, and kill the module.
+  const textures = new Map<string, number>();
   let images = new Float32Array();
   return {
     backend: renderer.backend,
-    load(quads) {
-      images = new Float32Array(quads.length * STRIDE);
+    load(bitmaps) {
       try {
-        quads.forEach(({ bitmap, frame, rotation }, at) => {
-          const texture = renderer.upload(bitmap);
+        for (const [asset, bitmap] of bitmaps) {
+          textures.set(asset, renderer.upload(bitmap));
           bitmap.close();
-          images.set([texture, frame.x, frame.y, frame.width, frame.height, rotation], at * STRIDE);
-        });
-      } catch (error) {
+        }
+      } finally {
         // Closing one twice does nothing.
-        quads.forEach(({ bitmap }) => bitmap.close());
-        // Drawing a texture that was never uploaded would panic, and kill the module.
-        images = new Float32Array();
-        throw error;
+        bitmaps.forEach((bitmap) => bitmap.close());
       }
+    },
+    place(placed) {
+      const shown = placed.filter(({ asset }) => textures.has(asset));
+      images = new Float32Array(shown.length * STRIDE);
+      shown.forEach(({ asset, frame, rotation }, at) => {
+        images.set([textures.get(asset)!, frame.x, frame.y, frame.width, frame.height, rotation], at * STRIDE);
+      });
     },
     draw({ x, y, zoom }) {
       renderer.draw(x, y, zoom * devicePixelRatio, images);

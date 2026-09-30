@@ -7,17 +7,50 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use percent_encoding::percent_decode_str;
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::{AppHandle, State};
-use tauri_plugin_dialog::DialogExt;
+use tauri::{AppHandle, Manager, State, Window, WindowEvent, Wry};
+use tauri_plugin_dialog::{
+    DialogExt, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind,
+};
+
+/// The menu item that quits by closing every window, as closing one asks first.
+const QUIT: &str = "quit";
 
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Picked::default())
+        .manage(Unsaved::default())
+        .on_window_event(|window, event| {
+            let WindowEvent::CloseRequested { api, .. } = event else {
+                return;
+            };
+            if !window.state::<Unsaved>().0.load(Ordering::Relaxed) {
+                return;
+            }
+            // The dialog cannot block here, on the main thread, so the window closes later.
+            api.prevent_close();
+            let closing = window.clone();
+            ask(window, "Close, and lose the changes to this board?").show(move |close| {
+                if close {
+                    // It only fails once the window is gone anyway.
+                    let _ = closing.destroy();
+                }
+            });
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == QUIT {
+                for window in app.webview_windows().values() {
+                    let _ = window.close();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            confirm,
+            mark_unsaved,
             pick_folder,
             pick_target,
             list_files,
@@ -29,7 +62,33 @@ fn main() {
             append_export,
             finish_export,
             discard_export
-        ])
+        ]);
+    // The predefined Quit of macOS ends the app without closing its windows, so without asking.
+    // Quitting from the Dock or logging out still does, as tao never lets the app refuse.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(|app| {
+        let menu = tauri::menu::Menu::default(app)?;
+        let items = menu.items()?;
+        // Tauri only tells a predefined item by its text, "Quit" and the app's name.
+        let (app_menu, at) = items
+            .first()
+            .and_then(|item| item.as_submenu())
+            .and_then(|app_menu| {
+                let at = app_menu.items().ok()?.iter().position(|item| {
+                    item.as_predefined_menuitem()
+                        .and_then(|item| item.text().ok())
+                        .is_some_and(|text| text.starts_with("Quit"))
+                })?;
+                Some((app_menu, at))
+            })
+            .expect("the app's menu has a predefined Quit");
+        app_menu.remove_at(at)?;
+        let label = format!("Quit {}", app.package_info().name);
+        let quit = tauri::menu::MenuItem::with_id(app, QUIT, label, true, Some("CmdOrCtrl+Q"))?;
+        app_menu.insert(&quit, at)?;
+        Ok(menu)
+    });
+    builder
         .run(tauri::generate_context!())
         .expect("the app runs");
 }
@@ -46,6 +105,19 @@ struct Picked {
     exports: Mutex<BTreeMap<PathBuf, folder::Draft>>,
 }
 
+#[derive(Default)]
+struct Unsaved(AtomicBool);
+
+/// Over `window`, which it keeps from taking clicks meanwhile, but on Linux.
+fn ask(window: &Window, question: &str) -> MessageDialogBuilder<Wry> {
+    window
+        .dialog()
+        .message(question)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancel)
+        .parent(window)
+}
+
 fn check(picked: &Mutex<BTreeSet<PathBuf>>, root: &Path) -> Result<(), String> {
     if picked.lock().expect("never poisoned").contains(root) {
         Ok(())
@@ -59,6 +131,17 @@ fn not_picked(path: &Path) -> String {
 }
 
 // Commands run off the main thread, which would otherwise freeze the window on every file.
+
+/// The webview's own `confirm` does not work here.
+#[tauri::command(async)]
+fn confirm(window: Window, question: String) -> bool {
+    ask(&window, &question).blocking_show()
+}
+
+#[tauri::command]
+fn mark_unsaved(unsaved: State<'_, Unsaved>, value: bool) {
+    unsaved.0.store(value, Ordering::Relaxed);
+}
 
 /// A folder to read. `None` when the user cancels.
 #[tauri::command(async)]

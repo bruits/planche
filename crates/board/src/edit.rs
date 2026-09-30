@@ -21,6 +21,8 @@ pub enum Restack {
 #[derive(Debug, Default)]
 pub struct Editor {
     board: Board,
+    /// As the board was when opened or last saved.
+    saved: Board,
     undo: Vec<Step>,
     redo: Vec<Step>,
     gesture: Option<Step>,
@@ -37,6 +39,7 @@ struct Change {
 impl Editor {
     pub fn new(board: Board) -> Self {
         Self {
+            saved: board.clone(),
             board,
             ..Self::default()
         }
@@ -44,6 +47,17 @@ impl Editor {
 
     pub fn board(&self) -> &Board {
         &self.board
+    }
+
+    /// Whether the board is as it was when opened or last saved, however it got back there.
+    pub fn is_saved(&self) -> bool {
+        self.board == self.saved
+    }
+
+    /// `board` is the board as written, so that edits made while it was being written stay
+    /// unsaved.
+    pub fn mark_saved(&mut self, board: &Board) {
+        self.saved.clone_from(board);
     }
 
     /// On top of the elements of `group`, or of the top level.
@@ -83,7 +97,7 @@ impl Editor {
                 .iter()
                 .filter_map(|id| self.board.elements[id].group)
                 .filter(|group| !removed.contains(group))
-                .filter(|group| self.members(*group).all(|id| removed.contains(&id)))
+                .filter(|group| self.board.members(*group).all(|id| removed.contains(&id)))
                 .collect();
             if emptied.is_empty() {
                 break;
@@ -344,24 +358,11 @@ impl Editor {
         siblings
     }
 
-    fn members(&self, group: ElementId) -> impl Iterator<Item = ElementId> {
-        self.board
-            .elements
-            .iter()
-            .filter(move |(_, element)| element.group == Some(group))
-            .map(|(id, _)| *id)
-    }
-
     fn with_descendants(&self, ids: &[ElementId]) -> Result<BTreeSet<ElementId>> {
-        let mut found = BTreeSet::new();
-        let mut pending = ids.to_vec();
-        while let Some(id) = pending.pop() {
-            self.get(id)?;
-            if found.insert(id) {
-                pending.extend(self.members(id));
-            }
+        for id in ids {
+            self.get(*id)?;
         }
-        Ok(found)
+        Ok(self.board.with_descendants(ids))
     }
 
     fn rekey(&self, keys: Vec<(ElementId, ZIndex)>) -> Step {
@@ -683,6 +684,34 @@ mod tests {
         editor.redo();
         editor.remove(&[id(5)]).unwrap();
         assert!(editor.redo().is_empty());
+    }
+
+    #[test]
+    fn a_board_is_saved_until_it_changes_and_again_once_back() {
+        let mut editor = editor();
+        assert!(editor.is_saved());
+        editor.translate(&[id(4)], 1.0, 0.0).unwrap();
+        assert!(!editor.is_saved());
+        editor.undo();
+        assert!(editor.is_saved());
+        editor.redo();
+        let written = editor.board().clone();
+        editor.mark_saved(&written);
+        assert!(editor.is_saved());
+        editor.undo();
+        assert!(!editor.is_saved());
+    }
+
+    #[test]
+    fn an_edit_made_while_saving_stays_unsaved() {
+        let mut editor = editor();
+        editor.translate(&[id(4)], 1.0, 0.0).unwrap();
+        let written = editor.board().clone();
+        editor.translate(&[id(5)], 1.0, 0.0).unwrap();
+        editor.mark_saved(&written);
+        assert!(!editor.is_saved());
+        editor.undo();
+        assert!(editor.is_saved());
     }
 
     #[test]

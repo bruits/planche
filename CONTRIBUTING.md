@@ -36,11 +36,11 @@ The board as a folder of files, keyed by path, and back: a `board.json` manifest
 
 ### bindings
 
-The core for the web app, through [wasm-bindgen](https://github.com/wasm-bindgen/wasm-bindgen): boards cross as JSON, and files as paths and bytes. Its CLI must match the crate's version in `Cargo.lock`, which `just setup` installs.
+The core for the web app, through [wasm-bindgen](https://github.com/wasm-bindgen/wasm-bindgen): an `Editor` holds the board being edited, elements cross as JSON, ids as strings, and files as paths and bytes. Its CLI must match the crate's version in `Cargo.lock`, which `just setup` installs.
 
 ### desktop
 
-The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web app, and the file system that a browser lacks, limited to the folders and ZIP files the user picks, and writing only into folders that were empty and to files picked to export to. It is the Tauri track from the [foundation](./docs/technical/foundation.md), under test in the prototype.
+The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web app, and the file system that a browser lacks, limited to the folders and ZIP files the user picks, and writing only into folders that were empty and to files picked to export to. It asks before closing a window loses changes. It is the Tauri track from the [foundation](./docs/technical/foundation.md), under test in the prototype.
 
 ### renderer
 

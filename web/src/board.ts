@@ -1,25 +1,24 @@
-// A board as the app opens it: its files through the platform, parsed by the core, and its
+// A board as the app opens it: its files through the platform, edited by the core, and its
 // images decoded by the browser.
 
 import * as core from "./core.js";
-import type { Board, Files, Rect } from "./core.js";
+import type { Board, Editor, Files } from "./core.js";
 import { milliseconds, timed } from "./metrics.js";
 import type { Folder } from "./platform.js";
-import type { Quad } from "./renderer.js";
+import type { Placed } from "./renderer.js";
 
 export interface Opened {
   folder: Folder;
-  /** All its files, the assets included. */
-  paths: string[];
+  editor: Editor;
+  /** The editor's board, as `refresh` keeps it. */
   board: Board;
 }
 
-/** An image element, still encoded. */
-export interface BoardImage {
+/** An asset that images show, still encoded. */
+export interface Asset {
+  asset: string;
   blob: Blob;
   natural: { width: number; height: number };
-  frame: Rect;
-  rotation: number;
 }
 
 /**
@@ -42,35 +41,54 @@ export async function open(
     }
     return files;
   });
-  const [board, parsing] = await timed(() => core.read(files));
+  const [editor, parsing] = await timed(() => core.read(files));
   timings.clear();
   timings.set(`list ${paths.length} files`, milliseconds(listing));
   timings.set(`read ${files.size} files`, milliseconds(reading));
   timings.set("parse", milliseconds(parsing));
-  return { folder, paths, board };
+  return { folder, editor, board: core.board(editor) };
 }
 
-/** In draw order. Throws when an asset is missing or does not match its digest. */
-export async function readImages({ folder, board }: Opened): Promise<BoardImage[]> {
-  const images: BoardImage[] = [];
-  for (const id of board.draw_order) {
-    const { kind } = board.elements[id]!;
-    if (kind.type === "image") {
-      const bytes = await folder.read(core.assetPath(kind.asset));
-      core.verifyAsset(kind.asset, bytes);
-      const { natural_size: natural, frame, rotation } = kind;
-      images.push({ blob: new Blob([bytes]), natural, frame, rotation });
+export function refresh({ editor, board }: Opened, touched: string[]): void {
+  for (const id of touched) {
+    const element = core.element(editor, id);
+    if (element === undefined) {
+      delete board.elements[id];
+    } else {
+      board.elements[id] = element;
     }
   }
-  return images;
+  board.draw_order = editor.drawOrder();
+}
+
+/** Its images, back to front. */
+export function images(board: Board): Placed[] {
+  return board.draw_order.flatMap((id) => {
+    const { kind } = board.elements[id]!;
+    return kind.type === "image" ? [{ asset: kind.asset, frame: kind.frame, rotation: kind.rotation }] : [];
+  });
+}
+
+/** Each asset its images show, once. Throws when one is missing or does not match its digest. */
+export async function readAssets({ folder, board }: Opened): Promise<Asset[]> {
+  const assets = new Map<string, Asset>();
+  for (const id of board.draw_order) {
+    const { kind } = board.elements[id]!;
+    if (kind.type === "image" && !assets.has(kind.asset)) {
+      const bytes = await folder.read(core.assetPath(kind.asset));
+      core.verifyAsset(kind.asset, bytes);
+      assets.set(kind.asset, { asset: kind.asset, blob: new Blob([bytes]), natural: kind.natural_size });
+    }
+  }
+  return [...assets.values()];
 }
 
 /** With their longest side capped at `cap` pixels. Four decode at once, to bound the memory in flight. */
-export async function decode(images: BoardImage[], cap: number): Promise<Quad[]> {
-  const quads: Quad[] = [];
-  const pending = images.entries();
+export async function decode(assets: Asset[], cap: number): Promise<Map<string, ImageBitmap>> {
+  const bitmaps = new Map<string, ImageBitmap>();
+  const pending = assets.values();
   const worker = async () => {
-    for (const [at, { blob, natural, frame, rotation }] of pending) {
+    for (const { asset, blob, natural } of pending) {
       const scale = Math.min(1, cap / Math.max(natural.width, natural.height));
       const bitmap = await createImageBitmap(blob, {
         imageOrientation: "from-image",
@@ -78,14 +96,14 @@ export async function decode(images: BoardImage[], cap: number): Promise<Quad[]>
         resizeHeight: Math.round(natural.height * scale),
         resizeQuality: "high",
       });
-      quads[at] = { bitmap, frame, rotation };
+      bitmaps.set(asset, bitmap);
     }
   };
   const done = await Promise.allSettled(Array.from({ length: 4 }, worker));
   const failed = done.find((result) => result.status === "rejected");
   if (failed) {
-    quads.forEach(({ bitmap }) => bitmap.close());
+    bitmaps.forEach((bitmap) => bitmap.close());
     throw failed.reason;
   }
-  return quads;
+  return bitmaps;
 }
