@@ -28,6 +28,7 @@ import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./met
 import { overlay } from "./overlay.js";
 import { platform, type Folder } from "./platform.js";
 import { create, type Renderer } from "./renderer.js";
+import { loadFont, texts } from "./text.js";
 import { toolbar } from "./toolbar.js";
 import { view } from "./view.js";
 import { writeZip, zipFolder } from "./zip.js";
@@ -40,9 +41,16 @@ const measurements = byId("measurements");
 const details = new Map<string, string>();
 const shown = overlay(byId("viewport"));
 const viewport = view(byId("viewport"), {
-  drawn: (camera, size) => shown.frame(camera, size),
+  frame(camera, size) {
+    shown.frame(camera, size);
+    editing.follow();
+    if (opened && renderer && lettering.update(opened.board, renderer, camera, size, editing.writing())) {
+      renderer.place(placed(opened.board, lettering, editing.writing()));
+    }
+  },
   failed: (error) => fail(error),
 });
+const lettering = texts(() => viewport.redraw());
 const editing = edits(viewport, shown, () => opened, {
   changed,
   selectionChanged: () => refreshBar(),
@@ -93,6 +101,8 @@ const commands = {
   arrow: { label: "Arrow", keys: [{ key: "a" }], unavailable: noneShown, run: () => useTool("arrow") },
   rectangle: { label: "Rectangle", keys: [{ key: "r" }], unavailable: noneShown, run: () => useTool("rectangle") },
   ellipse: { label: "Ellipse", keys: [{ key: "o" }], unavailable: noneShown, run: () => useTool("ellipse") },
+  note: { label: "Text", keys: [{ key: "t" }], unavailable: noneShown, run: () => useTool("note") },
+  sticky: { label: "Sticky note", keys: [{ key: "n" }], unavailable: noneShown, run: () => useTool("sticky") },
   addImages: {
     label: "Add images…",
     keys: [{ key: "i" }],
@@ -160,6 +170,12 @@ const commands = {
     unavailable: () => (editing.selection().length === 1 && selectsGroup() ? undefined : "Select one group"),
     run: () => editing.goInside(),
   },
+  write: {
+    label: "Edit text",
+    keys: [{ key: "enter" }],
+    unavailable: () => (editing.writable() ? undefined : "Select one text, sticky note, or shape"),
+    run: () => editing.write(),
+  },
   zoomIn: {
     label: "Zoom in",
     // Shift types + on most layouts, but not on a number pad.
@@ -220,6 +236,8 @@ const bar = toolbar(
       { command: commands.arrow, icon: "arrow", pressed: () => tool === "arrow" },
       { command: commands.rectangle, icon: "square", pressed: () => tool === "rectangle" },
       { command: commands.ellipse, icon: "circle", pressed: () => tool === "ellipse" },
+      { command: commands.note, icon: "typography", pressed: () => tool === "note" },
+      { command: commands.sticky, icon: "note", pressed: () => tool === "sticky" },
       { command: commands.addImages, icon: "photo" },
     ],
   ],
@@ -251,7 +269,7 @@ addEventListener("keydown", (event) => {
 });
 addEventListener("keyup", (event) => event.key === " " && holdSpace(false));
 addEventListener("blur", () => holdSpace(false));
-// Strokes draw in the theme's ink.
+// Strokes and text draw in the theme's colours.
 for (const query of ["(prefers-color-scheme: dark)", "(forced-colors: active)"]) {
   matchMedia(query).addEventListener("change", () => {
     renderer?.restyle();
@@ -259,6 +277,10 @@ for (const query of ["(prefers-color-scheme: dark)", "(forced-colors: active)"])
   });
 }
 document.addEventListener("contextmenu", (event) => {
+  // The field's own menu offers to paste.
+  if (typing(event.target)) {
+    return;
+  }
   // The webview's own menu would offer to reload, and lose the board.
   event.preventDefault();
   const at = viewport.host.contains(event.target as Node) ? viewport.at(event) : undefined;
@@ -269,7 +291,7 @@ document.addEventListener("contextmenu", (event) => {
   contextMenu(editing.aim(at), at, { x: event.clientX, y: event.clientY });
 });
 
-await core.start();
+await Promise.all([core.start(), loadFont()]);
 receive(viewport, (incoming, at) => report(addImages(incoming, at)));
 watchFrameRate(showMetrics);
 // Something to drop images on from the start.
@@ -321,6 +343,9 @@ function refreshBar(): void {
 function hint(): string {
   // As the menus name them.
   const [escapeKey, insideKey] = [commands.escape, commands.goInside].map(({ keys }) => describe(keys[0]!));
+  if (editing.writing() !== undefined) {
+    return `${escapeKey} or click away to finish`;
+  }
   if (tool === "hand") {
     return `Drag to move around · ${escapeKey} to select again`;
   }
@@ -330,8 +355,11 @@ function hint(): string {
   if (tool === "arrow") {
     return `Drag from where the arrow starts to where it points · ${escapeKey} to select again`;
   }
-  if (tool === "rectangle" || tool === "ellipse") {
+  if (tool === "rectangle" || tool === "ellipse" || tool === "sticky") {
     return `Drag to draw, or click to place · ${escapeKey} to select again`;
+  }
+  if (tool === "note") {
+    return `Click to write, or drag to set how wide · ${escapeKey} to select again`;
   }
   const opens = commands.goInside.unavailable() === undefined;
   if (editing.entered() !== undefined) {
@@ -339,6 +367,9 @@ function hint(): string {
   }
   if (opens) {
     return `Drag to move · double-click or ${insideKey} to go inside · right-click for more`;
+  }
+  if (editing.writable()) {
+    return `Drag to move · double-click or ${insideKey} to edit the text · right-click for more`;
   }
   if (editing.loneArrow()) {
     return "Drag to move · drag an end to move it · right-click for more";
@@ -356,6 +387,7 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.group,
         commands.ungroup,
         commands.goInside,
+        commands.write,
         "separator",
         commands.front,
         commands.forward,
@@ -433,6 +465,7 @@ async function show(next: Opened): Promise<void> {
   opened?.editor.free();
   opened = next;
   renderer = undefined;
+  lettering.reset();
   showSaved();
   showTitle();
   editing.reset();
@@ -459,7 +492,7 @@ async function show(next: Opened): Promise<void> {
   details.set("decode", milliseconds(decoding));
   const [, uploading] = await timed(() => created.load(bitmaps));
   details.set("upload", milliseconds(uploading));
-  created.place(placed(next.board));
+  created.place(placed(next.board, lettering));
   viewport.redraw();
   if (!empty) {
     bar.say(summary);
@@ -523,7 +556,7 @@ function changed(touched: string[]): void {
     return;
   }
   refresh(opened, touched);
-  renderer?.place(placed(opened.board));
+  renderer?.place(placed(opened.board, lettering, editing.writing()));
   showSaved();
   viewport.redraw();
 }
@@ -618,6 +651,12 @@ function showMetrics(fps: number): void {
     ["platform", platform.name],
     ["frames", `${fps.toFixed(0)} fps`],
     ["core memory", megabytes(core.coreMemory())],
+    ...(renderer === undefined
+      ? []
+      : [
+          ["textures", megabytes(renderer.textureBytes)] as [string, string],
+          ["texts", String(lettering.count())] as [string, string],
+        ]),
     ...(heap === undefined ? [] : [["JS heap", megabytes(heap)] as [string, string]]),
     ...details,
   ]);

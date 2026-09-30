@@ -1,5 +1,6 @@
-//! The renderer: images as textured quads, and strokes (lines, and the outlines of rectangles
-//! and ellipses) in one colour, on WebGL2 or WebGPU, drawn in the order given.
+//! The renderer: images as textured quads, text as textures of its coverage in a colour,
+//! strokes (lines, and the outlines of rectangles and ellipses), and filled rectangles, on
+//! WebGL2 or WebGPU, drawn in the order given.
 
 #![cfg(target_arch = "wasm32")]
 
@@ -10,7 +11,7 @@ use web_sys::{HtmlCanvasElement, ImageBitmap};
 
 /// Uniform buffers take multiples of 16 bytes on WebGL2, hence the padding.
 const CAMERA: &str = r#"
-struct Camera { origin: vec2f, zoom: f32, viewport: vec2f, padding: vec2f, ink: vec4f };
+struct Camera { origin: vec2f, zoom: f32, viewport: vec2f, padding: vec2f };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
 fn clip(screen: vec2f) -> vec4f {
@@ -20,6 +21,12 @@ fn clip(screen: vec2f) -> vec4f {
 fn turn(point: vec2f, degrees: f32) -> vec2f {
     let angle = radians(degrees);
     return vec2f(point.x * cos(angle) - point.y * sin(angle), point.x * sin(angle) + point.y * cos(angle));
+}
+
+/// A corner of `rect`, from (0, 0) at its top-left to (1, 1), turned by `degrees` around its centre.
+fn place(corner: vec2f, rect: vec4f, degrees: f32) -> vec4f {
+    let local = (corner - 0.5) * rect.zw;
+    return clip((rect.xy + rect.zw * 0.5 + turn(local, degrees) - camera.origin) * camera.zoom);
 }
 "#;
 
@@ -37,10 +44,8 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f, @locati
     @location(3) grey: f32,
 ) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
-    let local = (corner - 0.5) * rect.zw;
-    let screen = (rect.xy + rect.zw * 0.5 + turn(local, degrees) - camera.origin) * camera.zoom;
     var out: Out;
-    out.position = clip(screen);
+    out.position = place(corner, rect, degrees);
     out.uv = crop.xy + corner * crop.zw;
     out.grey = grey;
     return out;
@@ -53,6 +58,33 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f, @locati
 }
 "#;
 
+/// Only the texture's alpha counts, as filtering its colour would darken the edges of the
+/// letters with the transparent black around them.
+const TEXT: &str = r#"
+@group(1) @binding(0) var coverage: texture_2d<f32>;
+@group(1) @binding(1) var coverage_sampler: sampler;
+
+struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f, @location(1) colour: vec3f };
+
+@vertex fn vs(
+    @builtin(vertex_index) index: u32,
+    @location(0) rect: vec4f,
+    @location(1) degrees: f32,
+    @location(2) colour: vec3f,
+) -> Out {
+    let corner = vec2f(f32(index & 1u), f32(index >> 1u));
+    var out: Out;
+    out.position = place(corner, rect, degrees);
+    out.uv = corner;
+    out.colour = colour;
+    return out;
+}
+
+@fragment fn fs(in: Out) -> @location(0) vec4f {
+    return vec4f(in.colour, textureSample(coverage, coverage_sampler, in.uv).a);
+}
+"#;
+
 /// Each stroke covers a quad a pixel wider than itself, and its fragments measure in device
 /// pixels how far they are from the line, which smooths its edge over one pixel.
 const STROKES: &str = r#"
@@ -62,17 +94,19 @@ struct Out {
     @location(1) size: vec2f,
     @location(2) radius: f32,
     @location(3) shape: f32,
+    @location(4) colour: vec3f,
 };
 
-/// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, and 1 or 2 for the outline of
-/// a rectangle or an ellipse in the frame `geometry`, turned by `degrees`. `width` is in board
-/// units, but never under a device pixel.
+/// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, 1 or 2 for the outline of a
+/// rectangle or an ellipse in the frame `geometry`, turned by `degrees`, and 3 fills that
+/// rectangle. `width` is in board units, but never under a device pixel.
 @vertex fn vs(
     @builtin(vertex_index) index: u32,
     @location(0) shape: f32,
     @location(1) geometry: vec4f,
     @location(2) degrees: f32,
     @location(3) width: f32,
+    @location(4) colour: vec3f,
 ) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
     let radius = max(width * camera.zoom, 1.0) * 0.5;
@@ -80,6 +114,7 @@ struct Out {
     var out: Out;
     out.radius = radius;
     out.shape = shape;
+    out.colour = colour;
     if shape < 0.5 {
         let start = (geometry.xy - camera.origin) * camera.zoom;
         let end = (geometry.zw - camera.origin) * camera.zoom;
@@ -99,13 +134,20 @@ struct Out {
     return out;
 }
 
+/// Negative within the box.
+fn box(local: vec2f, half: vec2f) -> f32 {
+    let outside = abs(local) - half;
+    return length(max(outside, vec2f(0.0))) + min(max(outside.x, outside.y), 0.0);
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
     var away: f32;
     if in.shape < 0.5 {
         away = length(vec2f(in.local.x - clamp(in.local.x, 0.0, in.size.x), in.local.y));
     } else if in.shape < 1.5 {
-        let outside = abs(in.local) - in.size;
-        away = abs(length(max(outside, vec2f(0.0))) + min(max(outside.x, outside.y), 0.0));
+        away = abs(box(in.local, in.size));
+    } else if in.shape > 2.5 {
+        return vec4f(in.colour, clamp(0.5 - box(in.local, in.size), 0.0, 1.0));
     } else {
         // As the core measures it, bounded where a thin ellipse would otherwise show a gap or
         // fat tips.
@@ -119,8 +161,7 @@ struct Out {
         let frame = length(max(point - axes, vec2f(0.0)));
         away = select(max(estimate, frame), min(estimate, min(straight.x, straight.y)), scaled < 1.0);
     }
-    let coverage = clamp(in.radius - away + 0.5, 0.0, 1.0);
-    return vec4f(camera.ink.rgb, camera.ink.a * coverage);
+    return vec4f(in.colour, clamp(in.radius - away + 0.5, 0.0, 1.0));
 }
 "#;
 
@@ -145,15 +186,20 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f };
 "#;
 
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-/// Floats per item in [`Renderer::draw`], an image or a stroke. An image's are its texture, x, y,
-/// width, height, rotation, the crop's x, y, width, and height in texture coordinates, which a
-/// negative size flips, and 1 to draw in greys or 0. A stroke's are -1, then the shape, geometry,
-/// rotation, and width that [`STROKES`] reads, and padding.
-const STRIDE: usize = 11;
-/// Bytes per instance: all of an item's floats but the first, which tells an image from a stroke.
-const INSTANCE: u64 = (STRIDE as u64 - 1) * 4;
-/// The camera's origin, zoom, and viewport, then the ink, padded as [`CAMERA`] lays them out.
-const CAMERA_SIZE: u64 = 48;
+/// Floats per item in [`Renderer::draw`]: its kind, which is 0 for an image, 1 for a stroke, and
+/// 2 for a text, its texture or -1, then its instance.
+///
+/// An image's instance is its x, y, width, height, rotation, the crop's x, y, width, and height
+/// in texture coordinates, which a negative size flips, and 1 to draw in greys or 0. A text's is
+/// its x, y, width, height, rotation, colour, and padding. A stroke's is the shape, geometry,
+/// rotation, width, and colour that [`STROKES`] reads. Colours are red, green, and blue from 0 to 1.
+const STRIDE: usize = 12;
+const IMAGE: f32 = 0.0;
+const STROKE: f32 = 1.0;
+/// Bytes per instance, which every kind shares, as WebGL2 finds instances by one stride.
+const INSTANCE: u64 = (STRIDE as u64 - 2) * 4;
+/// The camera's origin, zoom, and viewport, padded as [`CAMERA`] lays them out.
+const CAMERA_SIZE: u64 = 32;
 
 #[wasm_bindgen]
 pub struct Renderer {
@@ -162,18 +208,26 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     quads: wgpu::RenderPipeline,
+    texts: wgpu::RenderPipeline,
     strokes: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
-    ink: [f32; 4],
     image_layout: wgpu::BindGroupLayout,
     camera: wgpu::Buffer,
     camera_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
-    images: Vec<wgpu::BindGroup>,
+    /// By index, which a released texture leaves free for the next one.
+    textures: Vec<Option<Texture>>,
     instances: wgpu::Buffer,
     backend: String,
     /// wgpu's default is to panic, which would leave the page waiting on a dead module.
     error: Arc<Mutex<Option<String>>>,
+}
+
+struct Texture {
+    /// Dropping it frees nothing on WebGPU, where only destroying it does.
+    texture: wgpu::Texture,
+    group: wgpu::BindGroup,
+    bytes: u64,
 }
 
 #[wasm_bindgen]
@@ -290,6 +344,17 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         })],
         target.clone(),
     );
+    let texts = pipeline(
+        &device,
+        &[CAMERA, TEXT].concat(),
+        &[&camera_layout, &image_layout],
+        &[Some(wgpu::VertexBufferLayout {
+            array_stride: INSTANCE,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x3],
+        })],
+        target.clone(),
+    );
     let strokes = pipeline(
         &device,
         &[CAMERA, STROKES].concat(),
@@ -297,7 +362,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         &[Some(wgpu::VertexBufferLayout {
             array_stride: INSTANCE,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32, 1 => Float32x4, 2 => Float32, 3 => Float32],
+            attributes: &wgpu::vertex_attr_array![0 => Float32, 1 => Float32x4, 2 => Float32, 3 => Float32, 4 => Float32x3],
         })],
         target,
     );
@@ -316,14 +381,14 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         surface,
         config,
         quads,
+        texts,
         strokes,
         blit,
-        ink: [0.0, 0.0, 0.0, 1.0],
         image_layout,
         camera,
         camera_group,
         sampler,
-        images: Vec::new(),
+        textures: Vec::new(),
         backend: format!("wgpu {:?}, {}", info.backend, info.name),
         error,
     })
@@ -336,46 +401,33 @@ impl Renderer {
         self.backend.clone()
     }
 
-    /// The texture's index, for [`Renderer::draw`].
+    /// The texture's index, for [`Renderer::draw`], until it is released.
     pub fn upload(&mut self, bitmap: ImageBitmap) -> Result<u32, JsError> {
-        let size = wgpu::Extent3d {
-            width: bitmap.width(),
-            height: bitmap.height(),
-            depth_or_array_layers: 1,
-        };
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size,
-            mip_level_count: size.max_mips(wgpu::TextureDimension::D2),
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: TEXTURE_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        self.queue.copy_external_image_to_texture(
-            &wgpu::CopyExternalImageSourceInfo {
-                source: wgpu::ExternalImageSource::ImageBitmap(bitmap),
-                origin: wgpu::Origin2d::ZERO,
-                flip_y: false,
-            },
-            wgpu::CopyExternalImageDestInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-                color_space: wgpu::PredefinedColorSpace::Srgb,
-                premultiplied_alpha: false,
-            },
-            size,
-        );
-        self.generate_mipmaps(&texture);
-        let view = texture.create_view(&Default::default());
-        self.images.push(self.image_group(&view));
-        self.check()?;
-        Ok(u32::try_from(self.images.len() - 1).expect("fewer than 2³² images"))
+        self.upload_from(wgpu::ExternalImageSource::ImageBitmap(bitmap))
+    }
+
+    /// As [`Renderer::upload`], from what the canvas holds.
+    #[wasm_bindgen(js_name = uploadCanvas)]
+    pub fn upload_canvas(&mut self, canvas: HtmlCanvasElement) -> Result<u32, JsError> {
+        self.upload_from(wgpu::ExternalImageSource::HTMLCanvasElement(canvas))
+    }
+
+    /// Frees the texture, whose index the next upload may take. Items that still name it draw
+    /// nothing.
+    pub fn release(&mut self, index: u32) {
+        if let Some(texture) = self.textures.get_mut(index as usize).and_then(Option::take) {
+            texture.texture.destroy();
+        }
+    }
+
+    /// What the textures take on the GPU, their mipmaps included.
+    #[wasm_bindgen(getter, js_name = textureBytes)]
+    pub fn texture_bytes(&self) -> f64 {
+        self.textures
+            .iter()
+            .flatten()
+            .map(|texture| texture.bytes)
+            .sum::<u64>() as f64
     }
 
     /// In device pixels.
@@ -385,14 +437,8 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// The colour of strokes, as straight red, green, blue, and alpha from 0 to 1.
-    #[wasm_bindgen(js_name = setInk)]
-    pub fn set_ink(&mut self, red: f32, green: f32, blue: f32, alpha: f32) {
-        self.ink = [red, green, blue, alpha];
-    }
-
-    /// `zoom` is in device pixels per board unit, and `items` holds [`STRIDE`] floats per image
-    /// or stroke, back to front.
+    /// `zoom` is in device pixels per board unit, and `items` holds [`STRIDE`] floats per item,
+    /// back to front.
     pub fn draw(&mut self, x: f32, y: f32, zoom: f32, items: &[f32]) -> Result<(), JsError> {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
@@ -401,7 +447,6 @@ impl Renderer {
         let viewport = [self.config.width as f32, self.config.height as f32];
         let camera: Vec<u8> = [x, y, zoom, 0.0, viewport[0], viewport[1], 0.0, 0.0]
             .iter()
-            .chain(&self.ink)
             .flat_map(|value| value.to_le_bytes())
             .collect();
         self.queue.write_buffer(&self.camera, 0, &camera);
@@ -411,7 +456,7 @@ impl Renderer {
         let (items, _) = items.as_chunks::<STRIDE>();
         let instances: Vec<u8> = items
             .iter()
-            .flat_map(|item| &item[1..])
+            .flat_map(|item| &item[2..])
             .flat_map(|value| value.to_le_bytes())
             .collect();
         self.queue.write_buffer(&self.instances, 0, &instances);
@@ -428,21 +473,34 @@ impl Renderer {
             pass.set_vertex_buffer(0, self.instances.slice(..));
             // Strokes one after the other draw at once, as each draw rebinds the instances on
             // WebGL2.
-            let mut stroking = None;
+            let mut drawing = None;
             let mut at = 0;
             while at < items.len() {
-                let texture = items[at][0];
-                let stroke = texture < 0.0;
-                if stroking != Some(stroke) {
-                    pass.set_pipeline(if stroke { &self.strokes } else { &self.quads });
-                    stroking = Some(stroke);
-                }
-                let run = if stroke {
-                    items[at..].iter().take_while(|item| item[0] < 0.0).count()
+                let [kind, texture, ..] = items[at];
+                let (pipeline, run) = if kind == STROKE {
+                    let run = items[at..]
+                        .iter()
+                        .take_while(|item| item[0] == STROKE)
+                        .count();
+                    (&self.strokes, run)
+                } else if let Some(Some(texture)) = self.textures.get(texture as usize) {
+                    pass.set_bind_group(1, &texture.group, &[]);
+                    (
+                        if kind == IMAGE {
+                            &self.quads
+                        } else {
+                            &self.texts
+                        },
+                        1,
+                    )
                 } else {
-                    pass.set_bind_group(1, &self.images[texture as usize], &[]);
-                    1
+                    at += 1;
+                    continue;
                 };
+                if drawing != Some(kind) {
+                    pass.set_pipeline(pipeline);
+                    drawing = Some(kind);
+                }
                 pass.draw(0..4, at as u32..(at + run) as u32);
                 at += run;
             }
@@ -461,6 +519,67 @@ impl Drop for Renderer {
 }
 
 impl Renderer {
+    fn upload_from(&mut self, source: wgpu::ExternalImageSource) -> Result<u32, JsError> {
+        let size = wgpu::Extent3d {
+            width: source.width(),
+            height: source.height(),
+            depth_or_array_layers: 1,
+        };
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size,
+            mip_level_count: size.max_mips(wgpu::TextureDimension::D2),
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEXTURE_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        self.queue.copy_external_image_to_texture(
+            &wgpu::CopyExternalImageSourceInfo {
+                source,
+                origin: wgpu::Origin2d::ZERO,
+                flip_y: false,
+            },
+            wgpu::CopyExternalImageDestInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+                color_space: wgpu::PredefinedColorSpace::Srgb,
+                premultiplied_alpha: false,
+            },
+            size,
+        );
+        self.generate_mipmaps(&texture);
+        let view = texture.create_view(&Default::default());
+        let bytes = (0..texture.mip_level_count())
+            .map(|level| {
+                let size = size.mip_level_size(level, wgpu::TextureDimension::D2);
+                u64::from(size.width) * u64::from(size.height) * 4
+            })
+            .sum();
+        let uploaded = Texture {
+            group: self.image_group(&view),
+            texture,
+            bytes,
+        };
+        let index = match self.textures.iter().position(Option::is_none) {
+            Some(free) => {
+                self.textures[free] = Some(uploaded);
+                free
+            }
+            None => {
+                self.textures.push(Some(uploaded));
+                self.textures.len() - 1
+            }
+        };
+        self.check()?;
+        Ok(u32::try_from(index).expect("fewer than 2³² textures"))
+    }
+
     fn check(&self) -> Result<(), JsError> {
         match self.error.lock().expect("never poisoned").take() {
             Some(error) => Err(JsError::new(&error)),

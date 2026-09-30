@@ -1,3 +1,12 @@
+/* Bundled, so that text wraps alike everywhere. */
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("fonts/Inter-Regular.woff2") format("woff2");
+}
+
 :root {
   color-scheme: light dark;
   font: 14px/1.4 system-ui, sans-serif;
@@ -11,6 +20,9 @@
   --accent: #c0173e;
   --accent-soft: #fde7ec;
   --shadow: 0 1px 2px rgb(0 0 0 / 8%), 0 4px 16px rgb(0 0 0 / 10%);
+  /* Sticky notes keep their colours in either theme. */
+  --sticky: #fde68a;
+  --sticky-ink: #1d1d22;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -101,6 +113,29 @@ body {
   stroke: Highlight;
   stroke-width: 1.5px;
   vector-effect: non-scaling-stroke;
+}
+
+/* Over the board, where the renderer leaves out the text written in it. */
+.writer {
+  position: fixed;
+  z-index: 1;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  color: var(--ink);
+  background: none;
+  font-weight: 400;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  transform-origin: center;
+}
+
+.writer.sticky {
+  color: var(--sticky-ink);
 }
 
 /* Only the bar and the message take the pointer, so the board stays reachable around them. */
@@ -323,6 +358,17 @@ body {
   .menu button:focus {
     color: HighlightText;
     background: Highlight;
+  }
+
+  /* As the renderer draws it, which forced colours leave alone. */
+  .writer {
+    forced-color-adjust: none;
+    color: CanvasText;
+    background: none;
+  }
+
+  .writer.sticky {
+    color: var(--sticky-ink);
   }
 }
 

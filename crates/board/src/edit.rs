@@ -73,7 +73,7 @@ impl Editor {
         if let Some(group) = group {
             self.existing_group(group)?;
         }
-        check_finite(id, &kind)?;
+        check_valid(id, &kind)?;
         let siblings = self.siblings(group, &BTreeSet::new());
         let mut keys = place(&siblings, siblings.len(), &[id]);
         let (_, z) = keys.remove(0);
@@ -116,7 +116,7 @@ impl Editor {
         if mem::discriminant(&self.get(id)?.kind) != mem::discriminant(&kind) {
             return Err(Error::KindChanged(id));
         }
-        check_finite(id, &kind)?;
+        check_valid(id, &kind)?;
         let step = Step::from([(
             id,
             self.change(id, |element| Some(Element { kind, ..element })),
@@ -129,6 +129,7 @@ impl Editor {
         self.reshape(ids, |kind| match kind {
             ElementKind::Image { frame, .. }
             | ElementKind::Note { frame, .. }
+            | ElementKind::Sticky { frame, .. }
             | ElementKind::Shape { frame, .. } => {
                 frame.x += dx;
                 frame.y += dy;
@@ -162,22 +163,31 @@ impl Editor {
             point.x = origin.x + (point.x - origin.x) * factor;
             point.y = origin.y + (point.y - origin.y) * factor;
         };
-        self.reshape(ids, |kind| match kind {
-            ElementKind::Image { frame, .. }
-            | ElementKind::Note { frame, .. }
-            | ElementKind::Shape { frame, .. } => {
-                let mut centre = frame.centre();
-                scaled(&mut centre);
-                frame.width *= factor;
-                frame.height *= factor;
-                frame.x = centre.x - frame.width / 2.0;
-                frame.y = centre.y - frame.height / 2.0;
+        self.reshape(ids, |kind| {
+            if let ElementKind::Note { text, .. }
+            | ElementKind::Sticky { text, .. }
+            | ElementKind::Shape { text, .. } = kind
+            {
+                text.font_size *= factor;
             }
-            ElementKind::Arrow { from, to } => {
-                scaled(from);
-                scaled(to);
+            match kind {
+                ElementKind::Image { frame, .. }
+                | ElementKind::Note { frame, .. }
+                | ElementKind::Sticky { frame, .. }
+                | ElementKind::Shape { frame, .. } => {
+                    let mut centre = frame.centre();
+                    scaled(&mut centre);
+                    frame.width *= factor;
+                    frame.height *= factor;
+                    frame.x = centre.x - frame.width / 2.0;
+                    frame.y = centre.y - frame.height / 2.0;
+                }
+                ElementKind::Arrow { from, to } => {
+                    scaled(from);
+                    scaled(to);
+                }
+                ElementKind::Group => {}
             }
-            ElementKind::Group => {}
         })
     }
 
@@ -196,6 +206,9 @@ impl Editor {
                 frame, rotation, ..
             }
             | ElementKind::Note {
+                frame, rotation, ..
+            }
+            | ElementKind::Sticky {
                 frame, rotation, ..
             }
             | ElementKind::Shape {
@@ -507,7 +520,7 @@ impl Editor {
                 edit(&mut element.kind);
                 Some(element)
             });
-            check_finite(id, &change.after.as_ref().expect("reshaped").kind)?;
+            check_valid(id, &change.after.as_ref().expect("reshaped").kind)?;
             step.insert(id, change);
         }
         self.record(step)
@@ -603,11 +616,11 @@ fn place(
         .collect()
 }
 
-fn check_finite(id: ElementId, kind: &ElementKind) -> Result<()> {
-    if kind.is_finite() {
+fn check_valid(id: ElementId, kind: &ElementKind) -> Result<()> {
+    if kind.is_valid() {
         Ok(())
     } else {
-        Err(Error::NotFinite(id))
+        Err(Error::Invalid(id))
     }
 }
 
@@ -621,8 +634,8 @@ fn set(board: &mut Board, id: ElementId, element: Option<Element>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Rect;
     use crate::tests::{arrow, board, element, id};
+    use crate::{Rect, Text};
 
     fn note(x: f64) -> ElementKind {
         ElementKind::Note {
@@ -633,7 +646,10 @@ mod tests {
                 height: 10.0,
             },
             rotation: 0.0,
-            text: String::new(),
+            text: Text {
+                content: String::new(),
+                font_size: 2.0,
+            },
         }
     }
 
@@ -697,8 +713,8 @@ mod tests {
                 Error::TakenId(id(4)),
                 Error::UnknownElement(id(9)),
                 Error::NotAGroup(id(4)),
-                Error::NotFinite(id(6)),
-                Error::NotFinite(id(4)),
+                Error::Invalid(id(6)),
+                Error::Invalid(id(4)),
                 Error::KindChanged(id(4)),
                 Error::UnknownElement(id(9)),
                 Error::UnknownElement(id(9)),
@@ -861,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn scaling_keeps_the_origin_in_place_and_rotations_as_they_are() {
+    fn scaling_keeps_the_origin_in_place_and_rotations_as_they_are_and_scales_text() {
         let mut editor = Editor::new(board([(1, element(None, "a0", note(0.0)))]));
         editor
             .rotate(&ids([1]), Point { x: 0.0, y: 0.0 }, 30.0)
@@ -872,12 +888,15 @@ mod tests {
         assert!((scaled[2].x - corners[2].x).abs() < 1e-9);
         assert!((scaled[2].y - corners[2].y).abs() < 1e-9);
         let ElementKind::Note {
-            frame, rotation, ..
+            frame,
+            rotation,
+            text,
         } = &editor.board().elements[&id(1)].kind
         else {
             unreachable!()
         };
         assert_eq!((frame.width, frame.height, *rotation), (30.0, 30.0, 30.0));
+        assert_eq!(text.font_size, 6.0);
     }
 
     #[test]
@@ -1208,6 +1227,45 @@ mod tests {
         assert_eq!(
             editor.rotate(&ids([9]), origin, 0.0),
             Err(Error::UnknownElement(id(9)))
+        );
+    }
+
+    #[test]
+    fn a_font_size_that_is_not_positive_is_refused() {
+        let sized = |font_size| ElementKind::Note {
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            rotation: 0.0,
+            text: Text {
+                content: "a".to_owned(),
+                font_size,
+            },
+        };
+        for font_size in [0.0, -0.0, -2.0] {
+            let mut editor = editor();
+            assert!(
+                editor.add(id(6), None, sized(font_size)).is_err(),
+                "{font_size}"
+            );
+            assert!(
+                editor.update(id(4), sized(font_size)).is_err(),
+                "{font_size}"
+            );
+        }
+        // Scaling by tiny factors underflows to zero.
+        let mut editor = editor();
+        let origin = Point { x: 0.0, y: 0.0 };
+        let underflowed = editor
+            .scale(&[id(4)], origin, f64::MIN_POSITIVE)
+            .and_then(|_| editor.scale(&[id(4)], origin, f64::MIN_POSITIVE));
+        assert!(
+            underflowed.is_err(),
+            "{:?}",
+            editor.board().elements[&id(4)].kind
         );
     }
 }

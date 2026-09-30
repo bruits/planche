@@ -7,8 +7,8 @@ use crate::{Board, ElementId, ElementKind, Point, Rect, STROKE_WIDTH, Shape};
 
 impl Board {
     /// The topmost element that draws at `point`, or within `tolerance` of it. A group draws
-    /// nothing itself, so it is never the one hit, and a shape only draws its outline, so what
-    /// it surrounds stays within reach.
+    /// nothing itself, so it is never the one hit, and a shape without text only draws its
+    /// outline, so what it surrounds stays within reach.
     pub fn hit(&self, point: Point, tolerance: f64) -> Option<ElementId> {
         self.draw_order()
             .into_iter()
@@ -105,6 +105,9 @@ fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
         | ElementKind::Note {
             frame, rotation, ..
         }
+        | ElementKind::Sticky {
+            frame, rotation, ..
+        }
         | ElementKind::Shape {
             frame, rotation, ..
         } => Some(corners(frame, *rotation).to_vec()),
@@ -142,7 +145,7 @@ fn corners(rect: &Rect, degrees: f64) -> [Point; 4] {
         .map(|(x, y)| Point { x, y }.turned(rect.centre(), degrees))
 }
 
-/// Strokes reach half their width beyond the line they follow.
+/// Strokes reach half their width beyond the line they follow, and a shape's text fills it.
 fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
     let reach = tolerance + STROKE_WIDTH / 2.0;
     match kind {
@@ -150,36 +153,55 @@ fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
             frame,
             rotation,
             shape: Shape::Ellipse,
-        } => near_ellipse(frame, *rotation, point, reach),
+            text,
+        } => {
+            near_ellipse(frame, *rotation, point, reach)
+                || (!text.is_blank() && within_ellipse(frame, *rotation, point))
+        }
         ElementKind::Shape {
-            frame, rotation, ..
-        } => near_edges(&corners(frame, *rotation), point, reach),
+            frame,
+            rotation,
+            text,
+            ..
+        } => {
+            let outline = corners(frame, *rotation);
+            near_edges(&outline, point, reach) || (!text.is_blank() && inside(&outline, point))
+        }
         ElementKind::Arrow { from, to } => distance(point, *from, *to) <= reach,
         _ => shape(kind).is_some_and(|shape| near(&shape, point, tolerance)),
     }
 }
 
-/// As [`hits`], a shape only draws its outline, so an area within it touches none of it.
+/// As [`hits`], a shape without text only draws its outline, so an area within it touches
+/// none of it.
 fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
     match kind {
         ElementKind::Shape {
             frame,
             rotation,
             shape: Shape::Ellipse,
-        } if frame.width != 0.0 && frame.height != 0.0 => ellipse_touches(frame, *rotation, area),
+            text,
+        } if frame.width != 0.0 && frame.height != 0.0 => {
+            ellipse_touches(frame, *rotation, area, !text.is_blank())
+        }
         ElementKind::Shape {
-            frame, rotation, ..
+            frame,
+            rotation,
+            text,
+            ..
         } => {
             let outline = corners(frame, *rotation);
-            overlap(&outline, area) && !area.iter().all(|corner| inside(&outline, *corner))
+            overlap(&outline, area)
+                && (!text.is_blank() || !area.iter().all(|corner| inside(&outline, *corner)))
         }
         _ => shape(kind).is_some_and(|shape| overlap(&shape, area)),
     }
 }
 
 /// Where the ellipse is the unit circle, the area meets its curve when the circle's centre is
-/// within the area or near an edge of it, unless the whole area lies within the circle.
-fn ellipse_touches(frame: &Rect, degrees: f64, area: &[Point; 4]) -> bool {
+/// within the area or near an edge of it, unless the whole area lies within the circle and
+/// the ellipse is not `filled`.
+fn ellipse_touches(frame: &Rect, degrees: f64, area: &[Point; 4], filled: bool) -> bool {
     let centre = frame.centre();
     let (radius_x, radius_y) = ((frame.width / 2.0).abs(), (frame.height / 2.0).abs());
     let unit = area.map(|corner| {
@@ -191,7 +213,7 @@ fn ellipse_touches(frame: &Rect, degrees: f64, area: &[Point; 4]) -> bool {
     });
     let origin = Point { x: 0.0, y: 0.0 };
     let reaches = inside(&unit, origin) || edges(&unit).any(|(a, b)| distance(origin, a, b) <= 1.0);
-    reaches && !unit.iter().all(|corner| corner.x.hypot(corner.y) < 1.0)
+    reaches && (filled || !unit.iter().all(|corner| corner.x.hypot(corner.y) < 1.0))
 }
 
 fn near(shape: &[Point], point: Point, tolerance: f64) -> bool {
@@ -235,6 +257,13 @@ fn near_ellipse(frame: &Rect, degrees: f64, point: Point, tolerance: f64) -> boo
         );
     }
     away <= tolerance
+}
+
+fn within_ellipse(frame: &Rect, degrees: f64, point: Point) -> bool {
+    let (radius_x, radius_y) = ((frame.width / 2.0).abs(), (frame.height / 2.0).abs());
+    let centre = frame.centre();
+    let upright = point.turned(centre, -degrees);
+    ((upright.x - centre.x) / radius_x).hypot((upright.y - centre.y) / radius_y) <= 1.0
 }
 
 /// Whichever way the polygon winds, as a negative width or height turns it over. A polygon
@@ -293,7 +322,7 @@ fn edges(shape: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
 mod tests {
     use super::*;
     use crate::tests::{board, element, id};
-    use crate::{AssetId, ImageEdits, Size};
+    use crate::{AssetId, ImageEdits, Size, Text};
 
     fn image(x: f64, y: f64, width: f64, height: f64, rotation: f64) -> ElementKind {
         ElementKind::Image {
@@ -380,10 +409,18 @@ mod tests {
     }
 
     fn framed(shape: Shape, frame: Rect, rotation: f64) -> ElementKind {
+        labelled(shape, frame, rotation, "")
+    }
+
+    fn labelled(shape: Shape, frame: Rect, rotation: f64, content: &str) -> ElementKind {
         ElementKind::Shape {
             frame,
             rotation,
             shape,
+            text: Text {
+                content: content.to_owned(),
+                font_size: 20.0,
+            },
         }
     }
 
@@ -487,6 +524,63 @@ mod tests {
             [1, 2, 3].map(id)
         );
         assert_eq!(board.touching(area(190.0, 40.0, 20.0, 20.0)), [id(3)]);
+    }
+
+    #[test]
+    fn a_shape_with_text_is_hit_and_touched_over_its_area() {
+        let board = board([
+            (
+                1,
+                element(
+                    None,
+                    "a0",
+                    labelled(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), 0.0, "A"),
+                ),
+            ),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    labelled(Shape::Ellipse, area(200.0, 0.0, 100.0, 100.0), 0.0, "B"),
+                ),
+            ),
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    labelled(Shape::Rectangle, area(400.0, 0.0, 100.0, 100.0), 0.0, " \n"),
+                ),
+            ),
+        ]);
+        assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit(point(250.0, 50.0), 0.0), Some(id(2)));
+        // Over the ellipse's frame, but outside its curve.
+        assert_eq!(board.hit(point(205.0, 5.0), 0.0), None);
+        assert_eq!(board.hit(point(450.0, 50.0), 0.0), None);
+        assert_eq!(board.touching(area(30.0, 30.0, 30.0, 30.0)), [id(1)]);
+        assert_eq!(board.touching(area(230.0, 30.0, 40.0, 40.0)), [id(2)]);
+        assert!(board.touching(area(200.0, 0.0, 5.0, 5.0)).is_empty());
+        assert!(board.touching(area(430.0, 30.0, 40.0, 40.0)).is_empty());
+    }
+
+    #[test]
+    fn a_sticky_note_is_hit_and_touched_over_its_area() {
+        let text = Text {
+            content: String::new(),
+            font_size: 20.0,
+        };
+        let sticky = ElementKind::Sticky {
+            frame: area(0.0, 0.0, 100.0, 100.0),
+            rotation: 45.0,
+            text,
+        };
+        let board = board([(1, element(None, "a0", sticky))]);
+        assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(1)));
+        // Within its frame, before it turned.
+        assert_eq!(board.hit(point(2.0, 2.0), 0.0), None);
+        assert_eq!(board.touching(area(40.0, 40.0, 20.0, 20.0)), [id(1)]);
     }
 
     #[test]

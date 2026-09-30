@@ -32,8 +32,8 @@ export interface View {
 }
 
 export interface Drawing {
-  /** After the renderer draws each frame. */
-  drawn(camera: Camera, viewport: Viewport): void;
+  /** Before the renderer draws each frame. */
+  frame(camera: Camera, viewport: Viewport): void;
   failed(error: unknown): void;
 }
 
@@ -48,7 +48,7 @@ const LINE = 16;
  * Scrolling pans, and zooms with Ctrl or ⌘ held, which is how browsers report pinching a
  * trackpad. The middle button pans, and so does the main one with Alt or the hand tool.
  */
-export function view(host: HTMLElement, { drawn, failed }: Drawing): View {
+export function view(host: HTMLElement, { frame, failed }: Drawing): View {
   let shown: { renderer: Renderer; camera: Camera } | undefined;
   let pending = false;
   let panning: number | undefined;
@@ -61,8 +61,8 @@ export function view(host: HTMLElement, { drawn, failed }: Drawing): View {
       return;
     }
     try {
+      frame(shown.camera, size());
       shown.renderer.draw(shown.camera);
-      drawn(shown.camera, size());
     } catch (error) {
       failed(error);
     }

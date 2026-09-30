@@ -2,6 +2,7 @@
 // images from a web page, which may give only their address.
 
 import { choose } from "./browser.js";
+import { typing } from "./commands.js";
 import type { Point } from "./core.js";
 import { platform } from "./platform.js";
 import type { View } from "./view.js";
@@ -45,7 +46,7 @@ export function receive(view: View, received: (incoming: Promise<Incoming[]>, at
   });
   document.addEventListener("paste", (event) => {
     const at = view.centre();
-    if (!at || !event.clipboardData) {
+    if (!at || !event.clipboardData || typing(event.target)) {
       return;
     }
     event.preventDefault();
@@ -55,7 +56,7 @@ export function receive(view: View, received: (incoming: Promise<Incoming[]>, at
   });
   // WebKit enables its Paste menu item, which Cmd+V goes through, only for editable content,
   // unless this is cancelled.
-  document.addEventListener("beforepaste", (event) => event.preventDefault());
+  document.addEventListener("beforepaste", (event) => typing(event.target) || event.preventDefault());
 }
 
 /** Reads what it needs before its first `await`, as the transfer empties once its event ends. */

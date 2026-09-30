@@ -44,8 +44,11 @@ function pressed(commands: Command[], event: KeyboardEvent): Command | undefined
     (shortcut.ctrl !== true || event.ctrlKey) &&
     Boolean(shortcut.shift) === event.shiftKey &&
     Boolean(shortcut.alt) === event.altKey;
-  const find = (hit: (shortcut: Shortcut) => boolean) =>
-    commands.find(({ keys }) => keys?.some((shortcut) => held(shortcut) && hit(shortcut)));
+  // Commands may share a key, which goes to whichever can run.
+  const find = (hit: (shortcut: Shortcut) => boolean) => {
+    const matching = commands.filter(({ keys }) => keys?.some((shortcut) => held(shortcut) && hit(shortcut)));
+    return matching.find((command) => command.unavailable?.() === undefined) ?? matching[0];
+  };
   const key = typed(event);
   return find((shortcut) => shortcut.key === key) ?? find((shortcut) => shortcut.code === event.code);
 }

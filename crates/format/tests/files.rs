@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use board::{
     AssetId, Board, Editor, Element, ElementId, ElementKind, ImageEdits, Point, Rect, Restack,
-    Shape, Size, ZIndex,
+    Shape, Size, Text, ZIndex,
 };
 use format::{Error, Files, zip};
 
@@ -33,7 +33,10 @@ fn note(group: Option<ElementId>, text: &str) -> Element {
         kind: ElementKind::Note {
             frame: frame(200.0, 80.0),
             rotation: 0.0,
-            text: text.to_owned(),
+            text: Text {
+                content: text.to_owned(),
+                font_size: 20.0,
+            },
         },
     }
 }
@@ -81,6 +84,10 @@ fn sample() -> Board {
                     frame: frame(100.0, 100.0),
                     rotation: -12.5,
                     shape: Shape::Ellipse,
+                    text: Text {
+                        content: "Key light".to_owned(),
+                        font_size: 16.0,
+                    },
                 },
             },
         ),
@@ -95,6 +102,21 @@ fn sample() -> Board {
                     to: Point {
                         x: 1.0 / 11.0,
                         y: 2.0 / 13.0,
+                    },
+                },
+            },
+        ),
+        (
+            ElementId::from_random(6),
+            Element {
+                group: None,
+                z: z("a3"),
+                kind: ElementKind::Sticky {
+                    frame: frame(160.0, 160.0),
+                    rotation: 5.0,
+                    text: Text {
+                        content: "Try a warmer grade\nfor the dusk shots".to_owned(),
+                        font_size: 20.0,
                     },
                 },
             },
@@ -128,7 +150,7 @@ fn an_edit_rewrites_one_file() {
     let mut board = sample();
     let before = format::write(&board).unwrap();
     if let ElementKind::Note { text, .. } = &mut board.elements.get_mut(&NOTE).unwrap().kind {
-        text.push('!');
+        text.content.push('!');
     }
     let after = format::write(&board).unwrap();
 
@@ -146,7 +168,7 @@ fn restacking_rewrites_one_file() {
 
     assert_eq!(changed(&before, &after), [format!("elements/{NOTE}.json")]);
     let order = format::read(&after).unwrap().draw_order();
-    assert_eq!(order, [1, 2, 3, 4, 5].map(ElementId::from_random));
+    assert_eq!(order, [1, 2, 3, 4, 5, 6].map(ElementId::from_random));
 }
 
 #[test]
@@ -258,7 +280,10 @@ fn an_element_is_plain_json() {
       "height": 80.0
     },
     "rotation": 0.0,
-    "text": "Warm light from the left"
+    "text": {
+      "content": "Warm light from the left",
+      "font_size": 20.0
+    }
   }
 }
 "#
@@ -305,6 +330,10 @@ fn equal_boards_write_the_same_bytes() {
         frame: zero,
         rotation: 0.0,
         shape: Shape::Rectangle,
+        text: Text {
+            content: String::new(),
+            font_size: 1.0,
+        },
     };
     for (bits, kind) in [(20, image), (21, shape)] {
         let element = Element {
@@ -337,10 +366,18 @@ fn a_nan_is_refused_on_write() {
     if let ElementKind::Arrow { to, .. } = &mut board.elements.get_mut(&ARROW).unwrap().kind {
         to.x = f64::NAN;
     }
-    assert!(matches!(
-        format::write(&board),
-        Err(Error::NotFinite(ARROW))
-    ));
+    assert!(matches!(format::write(&board), Err(Error::Invalid(ARROW))));
+}
+
+#[test]
+fn text_of_no_size_is_refused_on_read() {
+    let mut files = format::write(&sample()).unwrap();
+    let path = format!("elements/{NOTE}.json");
+    let note = String::from_utf8(files[&path].clone()).unwrap();
+    let sizeless = note.replace(r#""font_size": 20.0"#, r#""font_size": 0.0"#);
+    assert_ne!(sizeless, note);
+    files.insert(path, sizeless.into_bytes());
+    assert!(matches!(format::read(&files), Err(Error::Invalid(NOTE))));
 }
 
 #[test]

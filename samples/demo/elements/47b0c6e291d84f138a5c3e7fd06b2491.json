@@ -10,6 +10,9 @@
       "height": 60.0
     },
     "rotation": 0.0,
-    "text": "Warm light from the left, cool shadows"
+    "text": {
+      "content": "Warm light from the left, cool shadows",
+      "font_size": 20.0
+    }
   }
 }

@@ -1,16 +1,19 @@
-// Edits: draw, select, move, scale, and rotate by pointer, and flip, restack, group, delete,
-// undo, and redo for the commands to run. A click selects the element under it, or the
+// Edits: draw, write, select, move, scale, and rotate by pointer, and flip, restack, group,
+// delete, undo, and redo for the commands to run. A click selects the element under it, or the
 // outermost group holding it, and a drag from where nothing is draws a rectangle that selects
 // what it touches. Double-clicking a group goes into it, where clicks select its own elements
-// instead. The selection's corners scale it around the opposite one, the handle above it rotates
-// it around its centre, and a lone arrow's ends move on their own.
+// instead, and double-clicking a note, a sticky note, or a shape writes in it. The selection's
+// corners scale it around the opposite one, the handle above it rotates it around its centre,
+// and a lone arrow's ends move on their own.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
 import type { Board, Editor, Kind, Point, Rect } from "./core.js";
 import { newId } from "./board.js";
 import { handles, type Overlay } from "./overlay.js";
+import { fitted, holdsText, isBlank, LINE_HEIGHT } from "./text.js";
 import type { View } from "./view.js";
+import { writer } from "./writer.js";
 
 /** How near the pointer counts as on an element, in CSS pixels. */
 const TOLERANCE = 4;
@@ -22,6 +25,12 @@ const DRAG = 3;
 const SMALLEST_SCALE = 0.01;
 /** A shape placed by a click, in CSS pixels. */
 const PLACED_SIZE = 100;
+/** A sticky note placed by a click, in CSS pixels. */
+const STICKY_SIZE = 200;
+/** How wide a note placed by a click wraps, in CSS pixels. */
+const NOTE_WIDTH = 240;
+/** Of the text drawn or placed, in CSS pixels. */
+const FONT_SIZE = 20;
 
 export interface Editing {
   editor: Editor;
@@ -31,7 +40,7 @@ export interface Editing {
 export type Restack = "forward" | "backward" | "front" | "back";
 
 /** What a press draws, while a tool to draw is in use. */
-export type Draw = "arrow" | "rectangle" | "ellipse";
+export type Draw = "arrow" | "rectangle" | "ellipse" | "note" | "sticky";
 
 export interface Hooks {
   /**
@@ -42,17 +51,25 @@ export interface Hooks {
   selectionChanged(): void;
   /** What a press draws, `undefined` when it selects. */
   drawing(): Draw | undefined;
-  /** Once a press drew something, which it selects. */
+  /** Once a press drew something, which it selects, or writes in. */
   drawn(): void;
 }
 
 type Arrow = Extract<Kind, { type: "arrow" }>;
 
 export interface Edits {
-  /** Whether a gesture is under way, which edits from elsewhere would break. */
+  /** Whether a gesture or some writing is under way, which edits from elsewhere would break. */
   busy(): boolean;
-  /** Once no gesture is under way. */
+  /** Once neither is under way. */
   idle(): Promise<void>;
+  /** The element being written in, whose text the renderer leaves to the field. */
+  writing(): string | undefined;
+  /** Whether the selection is one element that holds text. */
+  writable(): boolean;
+  /** In the one element selected that holds text. */
+  write(): void;
+  /** Lays the field over the element being written in, as the camera moved. */
+  follow(): void;
   /** Elements of the group gone into, or of the top level. */
   selection(): string[];
   /** The group gone into, `undefined` at the top level. */
@@ -89,7 +106,7 @@ export interface Edits {
 type Press =
   /** `through` a press on nothing but the selection's box, which a click lets go of. */
   | { kind: "move"; pointer: number; start: Point; dragging: boolean; clicked?: string; through?: true }
-  | { kind: "marquee"; pointer: number; start: Point; kept: Set<string> }
+  | { kind: "marquee"; pointer: number; start: Point; dragging: boolean; kept: Set<string> }
   | { kind: "scale"; pointer: number; origin: Point; handle: Point }
   | { kind: "rotate"; pointer: number; pivot: Point; from: number }
   | { kind: "draw"; pointer: number; start: Point; last: Point; shape: Draw; id: string; dragging: boolean }
@@ -104,15 +121,23 @@ export function edits(
   let selected = new Set<string>();
   let entered: string | undefined;
   let press: Press | undefined;
+  /** Its gesture stays open until the field closes, so that writing undoes in one step. */
+  let written: { id: string; fresh: boolean } | undefined;
   /** Whether the last press was a click, as browsers still send a double-click when it dragged. */
   let wasClick = false;
   let waiting: (() => void)[] = [];
+  const resolve = () => {
+    if (press === undefined && written === undefined) {
+      const ready = waiting;
+      waiting = [];
+      ready.forEach((resolve) => resolve());
+    }
+  };
   const settle = () => {
     press = undefined;
-    const ready = waiting;
-    waiting = [];
-    ready.forEach((resolve) => resolve());
+    resolve();
   };
+  const field = writer();
 
   const lone = (editing: Editing): { id: string; arrow: Arrow } | undefined => {
     const [id] = selected;
@@ -240,7 +265,7 @@ export function edits(
     } else if (onSelection) {
       press = { kind: "move", pointer, start: at, dragging: false, through: true };
     } else {
-      press = { kind: "marquee", pointer, start: at, kept: toggling ? new Set(selected) : new Set() };
+      press = { kind: "marquee", pointer, start: at, dragging: false, kept: toggling ? new Set(selected) : new Set() };
       selected = new Set(press.kept);
     }
     if (press) {
@@ -262,6 +287,7 @@ export function edits(
     const again = (edited: () => string[]) => edit(editing, [...editor.rewindGesture(), ...edited()]);
     switch (press.kind) {
       case "marquee": {
+        press.dragging ||= distance(at, press.start) * zoom >= DRAG;
         const area = rect(press.start, at);
         const touched = editor.touching(area.x, area.y, area.width, area.height);
         selected = new Set([...press.kept, ...touched.flatMap((id) => editor.topLevel(id) ?? [])]);
@@ -310,7 +336,9 @@ export function edits(
           editor.beginGesture();
         }
         const { id, shape, start } = press;
-        again(() => editor.add(id, entered, JSON.stringify(shaped(shape, start, at))));
+        // A note shows nothing until written in.
+        overlay.marquee(shape === "note" ? rect(start, at) : undefined);
+        again(() => editor.add(id, entered, JSON.stringify(shaped(shape, start, at, FONT_SIZE / zoom))));
         return;
       }
       case "end": {
@@ -332,7 +360,7 @@ export function edits(
     if (!press) {
       return;
     }
-    wasClick = press.kind === "move" && !press.dragging;
+    wasClick = (press.kind === "move" || press.kind === "marquee") && !press.dragging;
     if (press.kind === "marquee") {
       overlay.marquee(undefined);
     } else if (press.kind === "draw") {
@@ -352,27 +380,39 @@ export function edits(
   };
   /**
    * A click places a shape at a size of its own, but draws no arrow, which has no such size. A
-   * drag brought back to where it started counts as a click.
+   * drag brought back to where it started counts as a click. A note or a sticky note is written
+   * in at once, within the gesture that drew it.
    */
   const finishDrawing = (press: Extract<Press, { kind: "draw" }>, completed: boolean) => {
     const editing = current();
     const zoom = view.zoom();
+    overlay.marquee(undefined);
     if (!editing) {
       return;
     }
     const { editor } = editing;
     const { id, shape, start, last, dragging } = press;
-    if (dragging && zoom !== undefined && distance(last, start) * zoom >= DRAG) {
+    const writes = shape === "note" || shape === "sticky";
+    // Nobody would write in it.
+    if (writes && !completed) {
+      edit(editing, editor.rewindGesture());
       editor.endGesture();
+      return;
+    }
+    if (dragging && zoom !== undefined && distance(last, start) * zoom >= DRAG) {
+      if (!writes) {
+        editor.endGesture();
+      }
     } else {
       const touched = dragging ? editor.rewindGesture() : [];
       const placing = shape !== "arrow" && completed && zoom !== undefined;
       if (placing) {
-        const half = PLACED_SIZE / zoom / 2;
-        const corner = (sign: number) => ({ x: start.x + sign * half, y: start.y + sign * half });
-        touched.push(...editor.add(id, entered, JSON.stringify(shaped(shape, corner(-1), corner(1)))));
+        editor.beginGesture();
+        touched.push(...editor.add(id, entered, JSON.stringify(placed(shape, start, zoom))));
       }
-      editor.endGesture();
+      if (!writes) {
+        editor.endGesture();
+      }
       edit(editing, touched);
       if (!placing) {
         return;
@@ -381,6 +421,67 @@ export function edits(
     selected = new Set([id]);
     show();
     drawn();
+    if (writes) {
+      write(editing, id, true);
+    }
+  };
+
+  const follow = () => {
+    const kind = written && current()?.board.elements[written.id]?.kind;
+    const zoom = view.zoom();
+    const at = holdsText(kind) ? view.client({ x: kind.frame.x, y: kind.frame.y }) : undefined;
+    if (holdsText(kind) && zoom !== undefined && at !== undefined) {
+      field.follow(kind, at, zoom);
+    }
+  };
+  /**
+   * Its frame grows to fit what is written, as one edit from the text it started with, `fresh`
+   * when its gesture holds its adding too.
+   */
+  const write = (editing: Editing, id: string, fresh: boolean) => {
+    const element = editing.board.elements[id];
+    const kind = element?.kind;
+    if (!element || !holdsText(kind)) {
+      return;
+    }
+    const { editor } = editing;
+    editor.beginGesture();
+    written = { id, fresh };
+    selected = new Set();
+    const rewrite = (content: string) => {
+      const next = JSON.stringify(fitted({ ...kind, text: { ...kind.text, content } }));
+      const touched = editor.rewindGesture();
+      touched.push(...(fresh ? editor.add(id, element.group, next) : editor.update(id, next)));
+      edit(editing, touched);
+      follow();
+    };
+    field.open(kind.text.content, rewrite, () => finishWriting(editing, id, fresh));
+    if (fresh) {
+      rewrite(kind.text.content);
+    } else {
+      edit(editing, [id]);
+      follow();
+    }
+  };
+  /** A note left blank goes, as one edit with its writing. */
+  const finishWriting = (editing: Editing, id: string, fresh: boolean) => {
+    if (written?.id !== id || current() !== editing) {
+      return;
+    }
+    written = undefined;
+    const { editor, board } = editing;
+    const kind = board.elements[id]?.kind;
+    const touched = [id];
+    if (kind?.type === "note" && isBlank(kind)) {
+      touched.push(...editor.rewindGesture());
+      if (!fresh) {
+        touched.push(...editor.remove([id]));
+      }
+    }
+    editor.endGesture();
+    selected = new Set([id]);
+    edit(editing, touched);
+    resolve();
   };
   // A gesture left open would keep undo from ever working again.
   for (const type of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
@@ -401,27 +502,50 @@ export function edits(
     }
     const { editor, board } = editing;
     const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
-    const group = hit === undefined ? undefined : level(editor, hit);
-    if (hit === undefined || group === undefined || board.elements[group]?.kind.type !== "group") {
+    const top = hit === undefined ? undefined : level(editor, hit);
+    if (hit !== undefined && top !== undefined && board.elements[top]?.kind.type === "group") {
+      const member = editor.memberOf(top, hit);
+      entered = top;
+      selected = new Set(member === undefined ? [] : [member]);
+      show();
       return;
     }
-    const member = editor.memberOf(group, hit);
-    entered = group;
-    selected = new Set(member === undefined ? [] : [member]);
-    show();
+    // Within a shape, whose text fills it once written.
+    const target = top ?? surrounding(editing, at);
+    if (target !== undefined && holdsText(board.elements[target]?.kind)) {
+      write(editing, target, false);
+    }
   });
+  /** The topmost shape at the level of the selection whose frame holds `at`. */
+  const surrounding = ({ editor, board }: Editing, at: Point) =>
+    board.draw_order.findLast(
+      (id) => board.elements[id]!.kind.type === "shape" && level(editor, id) === id && within(at, box(editor, [id])),
+    );
 
-  /** Unless a gesture is under way, since it would carry on over the edit. */
+  /** Unless a gesture or some writing is under way, since it would carry on over the edit. */
   const run = (edited: (editing: Editing, ids: string[]) => void) => {
     const editing = current();
-    if (editing && !press) {
+    if (editing && !press && !written) {
       edited(editing, [...selected]);
     }
   };
+  const writable = ({ board }: Editing) => selected.size === 1 && holdsText(board.elements[[...selected][0]!]?.kind);
 
   return {
-    busy: () => press !== undefined,
-    idle: () => (press ? new Promise((resolve) => waiting.push(resolve)) : Promise.resolve()),
+    busy: () => press !== undefined || written !== undefined,
+    idle: () => (press || written ? new Promise((resolve) => waiting.push(resolve)) : Promise.resolve()),
+    writing: () => written?.id,
+    writable() {
+      const editing = current();
+      return editing !== undefined && writable(editing);
+    },
+    write: () =>
+      run((editing, [id]) => {
+        if (writable(editing)) {
+          write(editing, id!, false);
+        }
+      }),
+    follow,
     selection: () => [...selected],
     entered: () => entered,
     loneArrow() {
@@ -517,6 +641,9 @@ export function edits(
     reset() {
       selected = new Set();
       entered = undefined;
+      // Its board is gone, and its gesture with it.
+      written = undefined;
+      field.close();
       settle();
       overlay.outline([]);
       overlay.box(undefined);
@@ -561,9 +688,30 @@ function box(editor: Editor, ids: string[]): Point[] | undefined {
   ];
 }
 
-/** Between two corners of its frame, or from one end to the other. */
-function shaped(shape: Draw, from: Point, to: Point): Kind {
-  return shape === "arrow" ? { type: "arrow", from, to } : { type: "shape", frame: rect(from, to), rotation: 0, shape };
+/** Between two corners of its frame, or from one end to the other, with text of `size`. */
+function shaped(shape: Draw, from: Point, to: Point, size: number): Kind {
+  const text = { content: "", font_size: size };
+  const frame = rect(from, to);
+  switch (shape) {
+    case "arrow":
+      return { type: "arrow", from, to };
+    case "note":
+    case "sticky":
+      return { type: shape, frame, rotation: 0, text };
+    default:
+      return { type: "shape", frame, rotation: 0, shape, text };
+  }
+}
+
+/** As a click at `at` places it: centred there, but a note, whose first line starts there. */
+function placed(shape: Draw, at: Point, zoom: number): Kind {
+  const size = FONT_SIZE / zoom;
+  if (shape === "note") {
+    const top = { x: at.x, y: at.y - (size * LINE_HEIGHT) / 2 };
+    return shaped(shape, top, { x: top.x + NOTE_WIDTH / zoom, y: top.y + size * LINE_HEIGHT }, size);
+  }
+  const half = (shape === "sticky" ? STICKY_SIZE : PLACED_SIZE) / zoom / 2;
+  return shaped(shape, { x: at.x - half, y: at.y - half }, { x: at.x + half, y: at.y + half }, size);
 }
 
 function distance(a: Point, b: Point): number {

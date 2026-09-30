@@ -16,7 +16,7 @@ pub mod zip;
 
 use std::collections::BTreeMap;
 
-use board::{AssetId, Board, ElementId};
+use board::{AssetId, Board, Element, ElementId};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -41,8 +41,8 @@ pub enum Error {
     },
     #[error("`{0}` is not named after a valid id")]
     InvalidName(String),
-    #[error("element {0} holds a NaN or an infinity")]
-    NotFinite(ElementId),
+    #[error("element {0} holds a NaN, an infinity, or a font size that is not positive")]
+    Invalid(ElementId),
     #[error(
         "asset {0} does not match its digest; if the board lives in Git, is Git LFS installed?"
     )]
@@ -81,8 +81,8 @@ pub fn write(board: &Board) -> Result<Files> {
     };
     files.insert(MANIFEST.to_owned(), to_json(&manifest));
     for (id, element) in &board.elements {
-        if !element.kind.is_finite() {
-            return Err(Error::NotFinite(*id));
+        if !element.kind.is_valid() {
+            return Err(Error::Invalid(*id));
         }
         files.insert(format!("{ELEMENTS}{id}.json"), to_json(element));
     }
@@ -105,7 +105,11 @@ pub fn read(files: &Files) -> Result<Board> {
             continue;
         };
         let id = name.parse().map_err(|_| Error::InvalidName(path.clone()))?;
-        board.elements.insert(id, from_json(path, bytes)?);
+        let element: Element = from_json(path, bytes)?;
+        if !element.kind.is_valid() {
+            return Err(Error::Invalid(id));
+        }
+        board.elements.insert(id, element);
     }
     board.repair();
     Ok(board)

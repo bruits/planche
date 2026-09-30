@@ -5,8 +5,15 @@ import type { Point, Rect } from "./core.js";
 import start, { create as createWgpu } from "./wasm/renderer.js";
 
 /**
- * An image, as it shows its asset, or a stroke in the theme's ink. Rotations are clockwise, in
- * degrees, around the frame's centre, and stroke widths in board units.
+ * A colour of the theme, as its host's style gives it: the ink is its text colour, which forced
+ * colours override too, and the others are its `--sticky` and `--sticky-ink` properties.
+ */
+export type Paint = "ink" | "sticky" | "sticky-ink";
+
+/**
+ * An image, as it shows its asset, a text from its texture, a stroke in the ink, or a filled
+ * rectangle. Rotations are clockwise, in degrees, around the frame's centre, and stroke widths in
+ * board units.
  */
 export type Placed =
   | {
@@ -18,17 +25,24 @@ export type Placed =
       texture: Rect;
       greyscale: boolean;
     }
+  | { kind: "text"; id: string; frame: Rect; rotation: number; paint: Paint }
   | { kind: "line"; from: Point; to: Point; width: number }
-  | { kind: "rectangle" | "ellipse"; frame: Rect; rotation: number; width: number };
+  | { kind: "rectangle" | "ellipse"; frame: Rect; rotation: number; width: number }
+  | { kind: "fill"; frame: Rect; rotation: number; paint: Paint };
 
 export interface Renderer {
   /** What it runs on, such as the GPU's name. */
   readonly backend: string;
+  /** What its textures take on the GPU. */
+  readonly textureBytes: number;
   /** Takes each asset's bitmap over, and closes them all even when it fails. Loaded ones stay. */
   load(bitmaps: Map<string, ImageBitmap>): void;
-  /** What to draw from now on, back to front. Images whose asset is not loaded are left out. */
+  /** The text `id` as the canvas holds it, in place of any before. */
+  setText(id: string, canvas: HTMLCanvasElement): void;
+  dropText(id: string): void;
+  /** What to draw from now on, back to front. Images and texts without a texture are left out. */
   place(items: Placed[]): void;
-  /** Reads the ink again, once the theme changed. */
+  /** Reads the paints again, once the theme changed. */
   restyle(): void;
   draw(camera: Camera): void;
   /** In CSS pixels. */
@@ -37,21 +51,33 @@ export interface Renderer {
 }
 
 /** Floats per item, as `draw` reads them. */
-const STRIDE = 11;
+const STRIDE = 12;
+/** As the renderer tells its items apart. */
+const KINDS = { image: 0, stroke: 1, text: 2 };
 /** As the renderer tells its strokes apart. */
-const SHAPES = { line: 0, rectangle: 1, ellipse: 2 };
+const SHAPES = { line: 0, rectangle: 1, ellipse: 2, fill: 3 };
+
+type Paints = Record<Paint, number[]>;
 
 /**
- * The text colour of `host`, which forced colours override too, as straight red, green, blue,
- * and alpha from 0 to 1. Drawn to a pixel and read back, as its computed value may be in any
- * colour space.
+ * Straight red, green, and blue from 0 to 1. Drawn to a pixel and read back, as a computed colour
+ * may be in any colour space.
  */
-function ink(host: HTMLElement): number[] {
+function paints(host: HTMLElement): Paints {
   const canvas = Object.assign(document.createElement("canvas"), { width: 1, height: 1 });
   const context = canvas.getContext("2d", { willReadFrequently: true })!;
-  context.fillStyle = getComputedStyle(host).color;
-  context.fillRect(0, 0, 1, 1);
-  return [...context.getImageData(0, 0, 1, 1).data].map((channel) => channel / 255);
+  const style = getComputedStyle(host);
+  const read = (colour: string) => {
+    context.clearRect(0, 0, 1, 1);
+    context.fillStyle = colour;
+    context.fillRect(0, 0, 1, 1);
+    return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)].map((channel) => channel / 255);
+  };
+  return {
+    ink: read(style.color),
+    sticky: read(style.getPropertyValue("--sticky")),
+    "sticky-ink": read(style.getPropertyValue("--sticky-ink")),
+  };
 }
 
 /** Appends its canvas to `host`, sized in CSS pixels. */
@@ -70,7 +96,7 @@ export async function create(host: HTMLElement, width: number, height: number): 
 
 async function on(webgpu: boolean, host: HTMLElement, width: number, height: number): Promise<Renderer> {
   // Before the renderer exists, which nothing would free if this threw.
-  let inked = ink(host);
+  let painted = paints(host);
   const output = canvas(host, width, height);
   // A canvas keeps the first kind of context it gives, so a failed one is no use to the other backend.
   const renderer = await createWgpu(output, webgpu).catch((error: unknown) => {
@@ -81,35 +107,65 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
     throw error;
   });
   // Drawing a texture that was never uploaded would panic, and kill the module.
-  const textures = new Map<string, number>();
-  let items = new Float32Array();
+  const images = new Map<string, number>();
+  const texts = new Map<string, number>();
+  let placed: Placed[] = [];
+  /** Packed at the next draw, as uploads and releases move the textures that items name. */
+  let items: Float32Array | undefined;
+  const pack = () => {
+    const shown = placed.flatMap((item) => {
+      const texture = item.kind === "image" ? images.get(item.asset) : item.kind === "text" ? texts.get(item.id) : -1;
+      return texture === undefined ? [] : [floats(item, texture, painted)];
+    });
+    items = new Float32Array(shown.length * STRIDE);
+    shown.forEach((item, at) => items!.set(item, at * STRIDE));
+    return items;
+  };
   return {
     backend: renderer.backend,
+    get textureBytes() {
+      return renderer.textureBytes;
+    },
     load(bitmaps) {
       try {
         for (const [asset, bitmap] of bitmaps) {
-          if (!textures.has(asset)) {
-            textures.set(asset, renderer.upload(bitmap));
+          if (!images.has(asset)) {
+            images.set(asset, renderer.upload(bitmap));
           }
           bitmap.close();
         }
       } finally {
         // Closing one twice does nothing.
         bitmaps.forEach((bitmap) => bitmap.close());
+        items = undefined;
       }
     },
-    place(placed) {
-      const shown = placed.filter((item) => item.kind !== "image" || textures.has(item.asset));
-      items = new Float32Array(shown.length * STRIDE);
-      shown.forEach((item, at) => items.set(floats(item, textures), at * STRIDE));
+    setText(id, canvas) {
+      const before = texts.get(id);
+      texts.set(id, renderer.uploadCanvas(canvas));
+      if (before !== undefined) {
+        renderer.release(before);
+      }
+      items = undefined;
+    },
+    dropText(id) {
+      const texture = texts.get(id);
+      if (texture !== undefined) {
+        renderer.release(texture);
+        texts.delete(id);
+        items = undefined;
+      }
+    },
+    place(next) {
+      placed = next;
+      items = undefined;
     },
     restyle() {
-      inked = ink(host);
+      painted = paints(host);
+      items = undefined;
     },
     draw({ x, y, zoom }) {
-      const [red, green, blue, alpha] = inked;
-      renderer.setInk(red!, green!, blue!, alpha!);
-      renderer.draw(x, y, zoom * devicePixelRatio, items);
+      renderer.draw(x, y, zoom * devicePixelRatio, items ?? pack());
     },
     resize(width, height) {
       size(output, width, height);
@@ -126,22 +182,34 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
   };
 }
 
-/** As the renderer lays out its items, with an image's texture, or -1 for a stroke, first. */
-function floats(item: Placed, textures: Map<string, number>): number[] {
+/** As the renderer lays out its items: its kind, its texture, then its instance. */
+function floats(item: Placed, texture: number, paints: Paints): number[] {
   switch (item.kind) {
     case "image": {
-      const { frame, texture } = item;
+      const { frame, texture: shown } = item;
       return [
-        textures.get(item.asset)!,
-        ...[frame.x, frame.y, frame.width, frame.height, item.rotation],
-        ...[texture.x, texture.y, texture.width, texture.height, item.greyscale ? 1 : 0],
+        ...[KINDS.image, texture, frame.x, frame.y, frame.width, frame.height, item.rotation],
+        ...[shown.x, shown.y, shown.width, shown.height, item.greyscale ? 1 : 0],
       ];
     }
-    case "line":
-      return [-1, SHAPES.line, item.from.x, item.from.y, item.to.x, item.to.y, 0, item.width, 0, 0, 0];
+    case "text": {
+      const { frame } = item;
+      const quad = [frame.x, frame.y, frame.width, frame.height, item.rotation];
+      return [KINDS.text, texture, ...quad, ...paints[item.paint], 0, 0];
+    }
+    case "line": {
+      const { from, to } = item;
+      return [KINDS.stroke, -1, SHAPES.line, from.x, from.y, to.x, to.y, 0, item.width, ...paints.ink];
+    }
+    case "fill": {
+      const { frame } = item;
+      const fill = [frame.x, frame.y, frame.width, frame.height, item.rotation, 0];
+      return [KINDS.stroke, -1, SHAPES.fill, ...fill, ...paints[item.paint]];
+    }
     default: {
       const { frame } = item;
-      return [-1, SHAPES[item.kind], frame.x, frame.y, frame.width, frame.height, item.rotation, item.width, 0, 0, 0];
+      const outline = [frame.x, frame.y, frame.width, frame.height, item.rotation, item.width];
+      return [KINDS.stroke, -1, SHAPES[item.kind], ...outline, ...paints.ink];
     }
   }
 }

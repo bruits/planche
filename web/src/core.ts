@@ -56,6 +56,12 @@ export interface Size {
   height: number;
 }
 
+export interface Text {
+  content: string;
+  /** In board units. */
+  font_size: number;
+}
+
 /** Mirrors `board::ElementKind`, as far as the shells read it. */
 export type Kind =
   | {
@@ -66,8 +72,9 @@ export type Kind =
       rotation: number;
       edits: { crop: Rect | null; flip_horizontal: boolean; flip_vertical: boolean; greyscale: boolean };
     }
-  | { type: "note"; frame: Rect; rotation: number; text: string }
-  | { type: "shape"; frame: Rect; rotation: number; shape: "rectangle" | "ellipse" }
+  | { type: "note"; frame: Rect; rotation: number; text: Text }
+  | { type: "sticky"; frame: Rect; rotation: number; text: Text }
+  | { type: "shape"; frame: Rect; rotation: number; shape: "rectangle" | "ellipse"; text: Text }
   | { type: "arrow"; from: Point; to: Point }
   | { type: "group" };
 

@@ -9,6 +9,10 @@
       "height": 100.0
     },
     "rotation": 0.0,
-    "shape": "ellipse"
+    "shape": "ellipse",
+    "text": {
+      "content": "Key light",
+      "font_size": 20.0
+    }
   }
 }

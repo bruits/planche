@@ -6,6 +6,7 @@ import type { Board, Bytes, Editor, Files, Kind, Point, Rect, Size } from "./cor
 import { milliseconds, timed } from "./metrics.js";
 import type { Folder } from "./platform.js";
 import type { Placed } from "./renderer.js";
+import { holdsText, type Texts } from "./text.js";
 
 export interface Opened {
   folder: Folder;
@@ -154,19 +155,25 @@ const HEAD_SHARE = 1 / 3;
 /** Between each side of an arrow's head and its line, in radians. */
 const HEAD_ANGLE = Math.PI / 6;
 
-/** What draws, back to front. Notes do not yet. */
-export function placed(board: Board): Placed[] {
+/** What draws, back to front, but the text of `hidden`, which is being written. */
+export function placed(board: Board, texts: Texts, hidden?: string): Placed[] {
   const width = core.strokeWidth();
   return board.draw_order.flatMap((id): Placed[] => {
     const { kind } = board.elements[id]!;
+    const text = holdsText(kind) ? texts.placed(id, kind) : undefined;
+    const written = text && id !== hidden ? [text] : [];
     switch (kind.type) {
       case "image":
         return [image(kind)];
       case "arrow":
         return arrow(kind.from, kind.to, width);
+      case "note":
+        return written;
+      case "sticky":
+        return [{ kind: "fill", frame: kind.frame, rotation: kind.rotation, paint: "sticky" }, ...written];
       case "shape":
-        return [{ kind: kind.shape, frame: kind.frame, rotation: kind.rotation, width }];
-      default:
+        return [{ kind: kind.shape, frame: kind.frame, rotation: kind.rotation, width }, ...written];
+      case "group":
         return [];
     }
   });

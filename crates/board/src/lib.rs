@@ -34,8 +34,8 @@ pub enum Error {
     NotAGroup(ElementId),
     #[error("element {0} cannot change kind")]
     KindChanged(ElementId),
-    #[error("element {0} would hold a NaN or an infinity")]
-    NotFinite(ElementId),
+    #[error("element {0} would hold a NaN, an infinity, or a font size that is not positive")]
+    Invalid(ElementId),
     #[error("only two elements or more of the same group can be grouped")]
     CannotGroup,
     #[error("elements only scale by a positive factor")]
@@ -166,18 +166,26 @@ pub enum ElementKind {
         rotation: f64,
         edits: ImageEdits,
     },
-    /// Its text wraps to the width of its frame.
+    /// Text alone.
     Note {
         frame: Rect,
         #[serde(serialize_with = "without_negative_zero")]
         rotation: f64,
-        text: String,
+        text: Text,
+    },
+    /// A sticky note, in a colour of its own.
+    Sticky {
+        frame: Rect,
+        #[serde(serialize_with = "without_negative_zero")]
+        rotation: f64,
+        text: Text,
     },
     Shape {
         frame: Rect,
         #[serde(serialize_with = "without_negative_zero")]
         rotation: f64,
         shape: Shape,
+        text: Text,
     },
     /// Its head is at `to`.
     Arrow { from: Point, to: Point },
@@ -193,9 +201,9 @@ impl ElementKind {
         }
     }
 
-    /// JSON cannot hold a NaN or an infinity. Fields are destructured in full, so a new one
-    /// fails to compile until it is checked here.
-    pub fn is_finite(&self) -> bool {
+    /// JSON cannot hold a NaN or an infinity, and text of no size cannot be laid out. Fields
+    /// are destructured in full, so a new one fails to compile until it is checked here.
+    pub fn is_valid(&self) -> bool {
         match self {
             Self::Image {
                 asset: _,
@@ -207,13 +215,19 @@ impl ElementKind {
             Self::Note {
                 frame,
                 rotation,
-                text: _,
+                text,
+            }
+            | Self::Sticky {
+                frame,
+                rotation,
+                text,
             }
             | Self::Shape {
                 frame,
                 rotation,
                 shape: _,
-            } => frame.is_finite() && rotation.is_finite(),
+                text,
+            } => frame.is_finite() && rotation.is_finite() && text.is_valid(),
             Self::Arrow { from, to } => from.is_finite() && to.is_finite(),
             Self::Group => true,
         }
@@ -239,6 +253,30 @@ impl ImageEdits {
             greyscale: _,
         } = self;
         crop.is_none_or(|crop| crop.is_finite())
+    }
+}
+
+/// Wraps to the width of what holds it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Text {
+    pub content: String,
+    /// In board units, which scaling what holds it scales too.
+    #[serde(serialize_with = "without_negative_zero")]
+    pub font_size: f64,
+}
+
+impl Text {
+    /// Draws nothing.
+    pub fn is_blank(&self) -> bool {
+        self.content.trim().is_empty()
+    }
+
+    fn is_valid(&self) -> bool {
+        let Self {
+            content: _,
+            font_size,
+        } = self;
+        font_size.is_finite() && *font_size > 0.0
     }
 }
 
@@ -434,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn every_float_is_checked_for_nan() {
+    fn every_float_is_checked_for_nan_and_every_font_size_for_a_size() {
         let rect = Rect {
             x: 0.0,
             y: 0.0,
@@ -452,15 +490,25 @@ mod tests {
             rotation,
             edits,
         };
+        let text = |font_size| Text {
+            content: String::new(),
+            font_size,
+        };
         let note = |frame, rotation| ElementKind::Note {
             frame,
             rotation,
-            text: String::new(),
+            text: text(20.0),
         };
-        let shape = |frame, rotation| ElementKind::Shape {
+        let sticky = |frame, rotation, font_size| ElementKind::Sticky {
+            frame,
+            rotation,
+            text: text(font_size),
+        };
+        let shape = |frame, rotation, font_size| ElementKind::Shape {
             frame,
             rotation,
             shape: Shape::Rectangle,
+            text: text(font_size),
         };
         let arrow = |from, to| ElementKind::Arrow { from, to };
         let edits = ImageEdits::default();
@@ -476,10 +524,11 @@ mod tests {
                 },
             ),
             note(rect, -45.0),
-            shape(rect, 0.0),
+            sticky(rect, 0.0, 20.0),
+            shape(rect, 0.0, 20.0),
             arrow(point, point),
         ];
-        assert!(valid.iter().all(ElementKind::is_finite));
+        assert!(valid.iter().all(ElementKind::is_valid));
 
         let nan = f64::NAN;
         let invalid = [
@@ -505,8 +554,14 @@ mod tests {
             image(rect, nan, edits),
             note(Rect { x: nan, ..rect }, 0.0),
             note(rect, f64::INFINITY),
-            shape(Rect { x: nan, ..rect }, 0.0),
-            shape(rect, nan),
+            sticky(Rect { x: nan, ..rect }, 0.0, 20.0),
+            sticky(rect, nan, 20.0),
+            sticky(rect, 0.0, nan),
+            sticky(rect, 0.0, 0.0),
+            shape(Rect { x: nan, ..rect }, 0.0, 20.0),
+            shape(rect, nan, 20.0),
+            shape(rect, 0.0, f64::INFINITY),
+            shape(rect, 0.0, -1.0),
             arrow(Point { x: nan, ..point }, point),
             arrow(
                 point,
@@ -517,7 +572,7 @@ mod tests {
             ),
         ];
         for kind in invalid {
-            assert!(!kind.is_finite(), "{kind:?}");
+            assert!(!kind.is_valid(), "{kind:?}");
         }
     }
 
