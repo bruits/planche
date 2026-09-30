@@ -1,8 +1,10 @@
-// Edits by pointer and keyboard: select, move, scale, rotate, flip, restack, delete, undo, and
-// redo. A click selects the element under it, or the outermost group holding it, and a drag
-// from where nothing is draws a rectangle that selects what it touches. The selection's corners
-// scale it around the opposite one, and the handle above it rotates it around its centre.
+// Edits: select, move, scale, and rotate by pointer, and flip, restack, delete, undo, and redo
+// for the commands to run. A click selects the element under it, or the outermost group holding
+// it, and a drag from where nothing is draws a rectangle that selects what it touches. The
+// selection's corners scale it around the opposite one, and the handle above it rotates it
+// around its centre.
 
+import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
 import type { Board, Editor, Point, Rect } from "./core.js";
 import { handles, type Overlay } from "./overlay.js";
@@ -22,11 +24,29 @@ export interface Editing {
   board: Board;
 }
 
+export type Restack = "forward" | "backward" | "front" | "back";
+
 export interface Edits {
-  /** Once no gesture is under way, which edits from elsewhere would break. */
+  /** Whether a gesture is under way, which edits from elsewhere would break. */
+  busy(): boolean;
+  /** Once no gesture is under way. */
   idle(): Promise<void>;
+  /** Top-level elements only. */
+  selection(): string[];
   /** Selects the elements, or their outermost groups. */
   select(ids: string[]): void;
+  /**
+   * Selects what a right-click at `at` is about, the element there unless it is selected
+   * already, or nothing unless `at` is within the selection. Whether anything is.
+   */
+  aim(at: Point): boolean;
+  /** The selection's centre, `undefined` when nothing is selected. */
+  centre(): Point | undefined;
+  remove(): void;
+  flip(horizontally: boolean): void;
+  restack(to: Restack): void;
+  undo(): void;
+  redo(): void;
   /** Forgets the selection and any drag, as when another board opens. */
   reset(): void;
 }
@@ -39,13 +59,14 @@ type Press =
 
 /**
  * `changed` receives the elements every edit, undo, and redo touches, once `current` would
- * have them up to date, as it must.
+ * have them up to date, as it must. `selectionChanged` hears whenever the selection may have.
  */
 export function edits(
   view: View,
   overlay: Overlay,
   current: () => Editing | undefined,
   changed: (touched: string[]) => void,
+  selectionChanged: () => void,
 ): Edits {
   let selected = new Set<string>();
   let press: Press | undefined;
@@ -62,6 +83,7 @@ export function edits(
     const ids = [...selected];
     overlay.outline(editing ? ids.map((id) => editing.editor.outline(id)) : []);
     overlay.box(editing && ids.length > 0 ? box(editing.editor, ids) : undefined);
+    selectionChanged();
   };
   const select = (editing: Editing, ids: string[]) => {
     selected = new Set(ids.flatMap((id) => editing.editor.topLevel(id) ?? []));
@@ -84,7 +106,7 @@ export function edits(
     const editing = current();
     const at = view.at(event);
     const zoom = view.zoom();
-    if (press || !editing || !at || !zoom || event.button !== 0 || event.altKey) {
+    if (press || !editing || !at || !zoom || event.button !== 0 || view.pans(event) || opensMenu(event)) {
       return;
     }
     const { editor } = editing;
@@ -95,7 +117,8 @@ export function edits(
     const grabbed = far[nearest]! <= REACH ? nearest : -1;
     const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
     const top = hit === undefined ? undefined : editor.topLevel(hit);
-    const toggling = event.shiftKey || event.metaKey || event.ctrlKey;
+    // Ctrl on macOS opens the context menu instead.
+    const toggling = event.shiftKey || event.metaKey || (event.ctrlKey && !mac);
     if (corners && grabbed >= 0) {
       // The rotation handle comes last, after the corners if the box is large enough for them.
       if (grabbed < far.length - 1) {
@@ -204,36 +227,18 @@ export function edits(
   }
   addEventListener("blur", release);
 
-  window.addEventListener("keydown", (event) => {
+  /** Unless a gesture is under way, since it would carry on over the edit. */
+  const run = (edited: (editing: Editing, ids: string[]) => void) => {
     const editing = current();
-    if (!editing || press) {
-      return;
+    if (editing && !press) {
+      edited(editing, [...selected]);
     }
-    const { editor } = editing;
-    const ids = [...selected];
-    const key = event.key.toLowerCase();
-    const command = event.metaKey || event.ctrlKey;
-    // Brackets by where they sit, as other layouts type them with more keys.
-    const bracket = event.code === "BracketRight" ? "forward" : event.code === "BracketLeft" ? "backward" : undefined;
-    if ((key === "delete" || key === "backspace") && ids.length > 0) {
-      edit(editing, editor.remove(ids));
-    } else if (command && key === "z" && !event.shiftKey) {
-      edit(editing, editor.undo(), true);
-    } else if (command && ((key === "z" && event.shiftKey) || (key === "y" && event.ctrlKey))) {
-      edit(editing, editor.redo(), true);
-    } else if (event.shiftKey && !command && (key === "h" || key === "v") && ids.length > 0) {
-      edit(editing, editor.flip(ids, key === "h"));
-    } else if (command && bracket && ids.length > 0) {
-      const to = event.altKey ? (bracket === "forward" ? "front" : "back") : bracket;
-      edit(editing, editor.restack(ids, to));
-    } else {
-      return;
-    }
-    event.preventDefault();
-  });
+  };
 
   return {
+    busy: () => press !== undefined,
     idle: () => (press ? new Promise((resolve) => waiting.push(resolve)) : Promise.resolve()),
+    selection: () => [...selected],
     select(ids) {
       const editing = current();
       if (editing) {
@@ -241,14 +246,55 @@ export function edits(
         show();
       }
     },
+    aim(at) {
+      const editing = current();
+      const zoom = view.zoom();
+      if (!editing || !zoom || press) {
+        return selected.size > 0;
+      }
+      const { editor } = editing;
+      const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
+      const top = hit === undefined ? undefined : editor.topLevel(hit);
+      if (top !== undefined && !selected.has(top)) {
+        selected = new Set([top]);
+      } else if (top === undefined && !within(at, box(editor, [...selected]))) {
+        selected = new Set();
+      }
+      show();
+      return selected.size > 0;
+    },
+    centre() {
+      const editing = current();
+      const corners = editing && selected.size > 0 ? box(editing.editor, [...selected]) : undefined;
+      return corners && { x: (corners[0]!.x + corners[2]!.x) / 2, y: (corners[0]!.y + corners[2]!.y) / 2 };
+    },
+    remove: () => run((editing, ids) => edit(editing, editing.editor.remove(ids))),
+    flip: (horizontally) => run((editing, ids) => edit(editing, editing.editor.flip(ids, horizontally))),
+    restack: (to) => run((editing, ids) => edit(editing, editing.editor.restack(ids, to))),
+    undo: () => run((editing) => edit(editing, editing.editor.undo(), true)),
+    redo: () => run((editing) => edit(editing, editing.editor.redo(), true)),
     reset() {
       selected = new Set();
       settle();
       overlay.outline([]);
       overlay.box(undefined);
       overlay.marquee(undefined);
+      selectionChanged();
     },
   };
+}
+
+/** Whether `point` is inside the box, whichever way it is turned. */
+function within(point: Point, corners: Point[] | undefined): boolean {
+  if (!corners) {
+    return false;
+  }
+  // On the same side of every edge, as the box is convex.
+  const sides = corners.map((from, at) => {
+    const to = corners[(at + 1) % corners.length]!;
+    return Math.sign((to.x - from.x) * (point.y - from.y) - (to.y - from.y) * (point.x - from.x));
+  });
+  return sides.every((side) => side >= 0) || sides.every((side) => side <= 0);
 }
 
 /** Clockwise from its top-left: a lone element's own, turned with it, or the upright bounds of all. */

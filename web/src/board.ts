@@ -172,6 +172,23 @@ export function images(board: Board): Placed[] {
   });
 }
 
+/** Whether any of the elements is an image, or a group holding one. */
+export function holdsImage({ elements }: Board, ids: string[]): boolean {
+  const chosen = new Set(ids);
+  return Object.entries(elements).some(([id, { kind }]) => {
+    if (kind.type !== "image") {
+      return false;
+    }
+    // Up through its groups, which reading a board leaves without cycles.
+    for (let at: string | undefined = id; at !== undefined; at = elements[at]?.group) {
+      if (chosen.has(at)) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
 /** Each asset its images show, once. Throws when one is missing or does not match its digest. */
 export async function readAssets({ folder, board }: Opened): Promise<Asset[]> {
   const assets = new Map<string, Asset>();

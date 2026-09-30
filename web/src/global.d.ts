@@ -7,6 +7,20 @@ interface Window {
   __TAURI__?: TauriApi;
 }
 
+/** Safari's pinch on a trackpad, which it reports instead of Ctrl-scrolling as others do. */
+interface GestureEvent extends UIEvent {
+  /** Since the gesture started. */
+  readonly scale: number;
+  readonly clientX: number;
+  readonly clientY: number;
+}
+
+interface DocumentEventMap {
+  gesturestart: GestureEvent;
+  gesturechange: GestureEvent;
+  gestureend: GestureEvent;
+}
+
 interface TauriApi {
   core: {
     invoke<T>(

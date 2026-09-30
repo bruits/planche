@@ -1,12 +1,25 @@
-// Images brought in by dropping them on the viewport or pasting them: files, or images from a
-// web page, which may give only their address.
+// Images brought in by picking them, dropping them on the viewport, or pasting them: files, or
+// images from a web page, which may give only their address.
 
+import { choose } from "./browser.js";
 import type { Point } from "./core.js";
 import { platform } from "./platform.js";
 import type { View } from "./view.js";
 
 /** An image to add, still encoded, or why it cannot be. */
 export type Incoming = { name: string; bytes: Blob } | { name: string; failure: string };
+
+/**
+ * Image files the user picks, none when they cancel. The macOS webview offers every file,
+ * whatever the input accepts, so that others fail to decode as any unknown format does.
+ */
+export async function pick(): Promise<Incoming[]> {
+  const files = await choose((input) => {
+    input.accept = "image/*";
+    input.multiple = true;
+  });
+  return (files ?? []).map((file) => ({ name: file.name, bytes: file }));
+}
 
 /** Hands each drop or paste over with where it goes: under the pointer, or at the view's centre. */
 export function receive(view: View, received: (incoming: Promise<Incoming[]>, at: Point) => void): void {

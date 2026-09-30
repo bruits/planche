@@ -192,8 +192,8 @@ async function pickWithInput(): Promise<Folder | null> {
   };
 }
 
-/** `null` when the user cancels. */
-function choose(setUp: (input: HTMLInputElement) => void): Promise<File[] | null> {
+/** `null` when the user cancels. The desktop app's webviews show a file input's picker too. */
+export function choose(setUp: (input: HTMLInputElement) => void): Promise<File[] | null> {
   const input = document.createElement("input");
   input.type = "file";
   setUp(input);

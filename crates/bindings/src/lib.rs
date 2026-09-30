@@ -165,6 +165,16 @@ impl Editor {
         strings(self.0.redo())
     }
 
+    #[wasm_bindgen(js_name = canUndo)]
+    pub fn can_undo(&self) -> bool {
+        self.0.can_undo()
+    }
+
+    #[wasm_bindgen(js_name = canRedo)]
+    pub fn can_redo(&self) -> bool {
+        self.0.can_redo()
+    }
+
     /// The topmost element that draws at a point, or within `tolerance` of it.
     pub fn hit(&self, x: f64, y: f64, tolerance: f64) -> Option<String> {
         let hit = self.0.board().hit(Point { x, y }, tolerance);

@@ -1,10 +1,20 @@
 // The desktop shell, which picks folders and works in them through commands of its own. It
 // checks every file access itself, since it cannot trust the page.
 
+import { typed } from "./commands.js";
 import type { Bytes } from "./core.js";
 import type { Platform } from "./platform.js";
 
 export function tauri({ core, event }: TauriApi): Platform {
+  let unsaved = false;
+  // Reloading would lose the changes without asking, as the webview never does before. With or
+  // without Shift, as WebView2 reloads either way.
+  addEventListener("keydown", (event) => {
+    const reload = event.key === "F5" || ((event.ctrlKey || event.metaKey) && typed(event) === "r");
+    if (reload && unsaved) {
+      event.preventDefault();
+    }
+  });
   return {
     name: "desktop",
 
@@ -71,6 +81,7 @@ export function tauri({ core, event }: TauriApi): Platform {
     confirm: (question) => core.invoke<boolean>("confirm", { question }),
 
     markUnsaved(value) {
+      unsaved = value;
       void core.invoke("mark_unsaved", { value });
     },
 

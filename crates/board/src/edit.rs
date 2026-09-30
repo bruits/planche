@@ -464,6 +464,14 @@ impl Editor {
         touched
     }
 
+    pub fn can_undo(&self) -> bool {
+        self.gesture.is_none() && !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.gesture.is_none() && !self.redo.is_empty()
+    }
+
     fn record(&mut self, mut step: Step) -> Result<Vec<ElementId>> {
         step.retain(|_, change| change.before != change.after);
         for (id, change) in &step {
@@ -1012,6 +1020,24 @@ mod tests {
         editor.redo();
         editor.remove(&[id(5)]).unwrap();
         assert!(editor.redo().is_empty());
+    }
+
+    #[test]
+    fn undo_and_redo_tell_whether_they_would_change_anything() {
+        let mut editor = editor();
+        assert!(!editor.can_undo());
+        editor.translate(&[id(4)], 1.0, 0.0).unwrap();
+        assert!(editor.can_undo());
+        assert!(!editor.can_redo());
+
+        editor.undo();
+        assert!(!editor.can_undo());
+        assert!(editor.can_redo());
+
+        editor.begin_gesture();
+        assert!(!editor.can_redo());
+        editor.end_gesture();
+        assert!(editor.can_redo());
     }
 
     #[test]
