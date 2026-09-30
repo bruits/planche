@@ -6,10 +6,30 @@ What is decided, what is still being explored, and why. A track becomes a decisi
 
 - **Stack.** Mostly Rust, with a thin presentation layer: one web app in TypeScript, without a framework, runs the Rust core as WASM in the browser and in the desktop shell's webview.
 - **Platforms.** The browser, Windows, macOS, and Linux first. iOS and Android come later, but the design must not rule them out.
-- **Rendering.** wgpu, on WebGPU where the webview has it and on WebGL2 otherwise. See [rendering](./rendering.md).
-- **Image pipeline.** The browser decodes, and the Rust core decides what stays on the GPU. See [rendering](./rendering.md#image-pipeline).
 - **File format.** A folder of deterministic JSON files, one per element, with images named by their SHA-256 digest (`crates/format`). A single-file export is a ZIP of that folder. Images need Git LFS. SQLite (as in BeeRef) was rejected because Git cannot merge it, and a single JSON with base64 images (as in `.excalidraw`) because it is heavy and its diffs are useless. JSON Canvas is too poor as a native format, but fits import and export.
 - **Licence.** MIT or Apache-2.0 for the client and the format. The sync server, if there is one, will be AGPL.
+
+### Rendering
+
+wgpu, compiled to WASM (`crates/renderer`) and driven by the web app, on WebGPU where the webview has it and on WebGL2 otherwise. A bake-off against DOM, Canvas2D, raw WebGL2, PixiJS, and Three.js (its bench and results are at commit `ac764a9`) found that the renderer is not the bottleneck: every GPU candidate held 60 fps with 300 photos. wgpu is the WebGPU API in Rust, drew at the lowest cost on WebGPU, and can later run natively, without a webview. It costs a breaking release about every quarter, and on WebGL2 about six times the CPU time of raw WebGL2: 1.3 ms against 0.1 ms per frame for 300 images.
+
+- WebGL2 stays a first-class target: WebKitGTK, the Linux webview, has no WebGPU.
+- Request the adapter's limits (`Limits::using_resolution`), since WebGL2's defaults cap textures at 2048 px.
+- Uniform buffers are multiples of 16 bytes on WebGL2.
+- Catch validation errors (`Device::on_uncaptured_error`) and hand them to the app: by default wgpu panics, which kills the WASM module.
+- Vello stays out for now: its GPU renderer is being rewritten, and its image atlas cannot hold many photos. It may come back for notes and arrows.
+
+### Image pipeline
+
+The direction is decided, and nothing of it is built yet. The pipeline, not the renderer, sets performance: a 12 MP photo takes 48 MB once decoded, so what sits on the GPU must follow what is on screen, whatever the number of photos.
+
+- **Decoding** happens in the browser, off the main thread, with `createImageBitmap` (resized, `imageOrientation: "from-image"`). It beat Rust in WASM, 65 ms against 83 ms for 12 MP, and is the same code in every webview. The formats are the platform's, so HEIC only on Apple platforms.
+- **Residency** is planned by the Rust core, without I/O: from the camera and the visible images, it gives uploads and evictions within a memory budget. It keeps a coarse level of every image, never evicts what is on screen, and serves each image at its size on screen. No crate does this; `lru` or `quick_cache` can serve as parts.
+- **Levels of detail** are whole images at halving sizes, with mipmaps generated on the GPU (`wgpu::util::TextureBlitter`) into `Rgba8UnormSrgb` textures, drawn to an sRGB surface format or view, so that filtering happens in linear light. The current `Rgba8Unorm` mipmaps darken detail when zoomed out.
+- **Tiles** only past the texture limit, cut with a cropped `createImageBitmap`, since wgpu's WebGL2 backend only copies whole images.
+- **Caches** of derived levels stay out of the board: the app's cache folder on desktop, OPFS on the web, keyed by the asset's digest.
+
+Later, only if measurements call for it: native decoding on desktop, Rust decoders in WASM for what browsers lack (`jxl`, `moxcms`), GPU texture compression (WebGPU only), and rendering in a worker. Not viable today: WASM threads, which need nightly Rust and a cross-origin isolation that WKWebView may not grant under `tauri://`, and a HEIC or AVIF decoder in Rust under a permissive licence.
 
 ## Tracks
 
@@ -44,4 +64,4 @@ WebAssembly components described in WIT: wasmtime on desktop, jco in the browser
 
 ## Main risk
 
-Canvas performance in webviews, above all WebKitGTK on Linux and WebKit on iPad. The renderer bake-off measures it; the runs on real devices are still to come ([rendering](./rendering.md#bake-off)).
+Canvas performance in webviews, above all WebKitGTK on Linux and WebKit on iPad. The bake-off only ran in headless Chrome on an Apple M5 Pro. Safari and WKWebView, Firefox, WebView2, and WebKitGTK, on modest GPUs, are still to run, with the bench at `ac764a9`.

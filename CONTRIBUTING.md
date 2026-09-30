@@ -6,7 +6,7 @@ Planche is a fast, open-source board to gather reference images. You drop in pic
 
 The app stays small on purpose. Its core covers what a reference board needs, including simple non-destructive edits (crop, rotation, flip, and greyscale), and anything beyond goes into plugins. An optional, paid cloud may add live collaboration and sync one day, but the app works fully without it.
 
-Three priorities guide the trade-offs. Performance: a board of hundreds of large photos opens quickly and stays smooth to pan and zoom on ordinary hardware, and the [rendering](./docs/technical/rendering.md) choices follow from this. Agentic workflows: an embedded MCP server lets agents read and edit a board as people do, and plain files let them work on it like any other file in a repository. Every platform: the browser, Windows, macOS, and Linux first, then iOS and Android, all running the same Rust core behind thin shells. The core does no I/O, so the same code builds natively and for the browser.
+Three priorities guide the trade-offs. Performance: a board of hundreds of large photos opens quickly and stays smooth to pan and zoom on ordinary hardware, and the rendering choices in the [foundation](./docs/technical/foundation.md#rendering) follow from this. Agentic workflows: an embedded MCP server lets agents read and edit a board as people do, and plain files let them work on it like any other file in a repository. Every platform: the browser, Windows, macOS, and Linux first, then iOS and Android, all running the same Rust core behind thin shells. The core does no I/O, so the same code builds natively and for the browser.
 
 ## Quality Guidelines
 
@@ -24,7 +24,7 @@ Three priorities guide the trade-offs. Performance: a board of hundreds of large
 
 Planche is a Rust monorepo using [Cargo workspaces](https://doc.rust-lang.org/book/ch14-03-cargo-workspaces.html). The core needs [rustup](https://rustup.rs/), which installs the toolchain and the WASM target pinned in `rust-toolchain.toml`, and [just](https://github.com/casey/just) for the recipes listed in [AGENTS.md](./AGENTS.md). The app also needs [Node.js](https://nodejs.org/) and [pnpm](https://pnpm.io/), then `just setup`, Python 3 for `just serve`, and on Linux the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). On Windows, `just` runs its recipes with the `sh` of [Git for Windows](https://gitforwindows.org/).
 
-The app is one web app in `web/`, in TypeScript without a framework, which runs the core as WASM on every platform: in a browser, and in the desktop shell's webview. It also holds the renderer bake-off, in `web/src/render/` and `web/src/bench/`: every candidate draws the same images along the same camera path, and «Copy as Markdown» gives the results to record in [rendering](./docs/technical/rendering.md#bake-off). The npm candidates are dev dependencies that `just web` copies next to the app, since there is no bundler. Dependencies only point inward: `bindings` → `format` → `board`, and `desktop` → `folder`, which know nothing of boards. The crates live in `crates/`:
+The app is one web app in `web/`, in TypeScript without a framework, which runs the core as WASM on every platform: in a browser, and in the desktop shell's webview. Dependencies only point inward: `bindings` → `format` → `board`, and `desktop` → `folder`, which know nothing of boards. The crates live in `crates/`:
 
 ### board
 
@@ -42,9 +42,9 @@ The core for the web app, through [wasm-bindgen](https://github.com/wasm-bindgen
 
 The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web app, and the file system that a browser lacks, limited to the folders the user picks, and writing only into those that were empty. It is the Tauri track from the [foundation](./docs/technical/foundation.md), under test in the prototype.
 
-### render-wgpu
+### renderer
 
-The renderer, on wgpu: images as textured quads, on WebGPU or WebGL2, for the web only so far. See [rendering](./docs/technical/rendering.md).
+The renderer, on wgpu: images as textured quads, on WebGPU or WebGL2, for the web only so far. See the [foundation](./docs/technical/foundation.md#rendering).
 
 ### folder
 

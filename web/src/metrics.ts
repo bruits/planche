@@ -1,4 +1,4 @@
-// Measurements for the renderer bake-off, taken the same way on every platform.
+// Measurements the app shows, taken the same way on every platform.
 
 /** Calls `show` about once a second with the frames per second over that second. */
 export function watchFrameRate(show: (fps: number) => void): void {

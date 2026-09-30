@@ -1,5 +1,4 @@
-//! The wgpu candidate of the renderer bake-off: images as textured quads, on WebGL2 or
-//! WebGPU, drawn in the order given.
+//! The renderer: images as textured quads, on WebGL2 or WebGPU, drawn in the order given.
 
 #![cfg(target_arch = "wasm32")]
 
@@ -115,7 +114,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
     let mut config = surface
         .get_default_config(&adapter, width, height)
         .ok_or_else(|| JsError::new("the canvas cannot be drawn to"))?;
-    // Like the other candidates, which draw image bytes as they are.
+    // Textures hold sRGB bytes as they are, which an sRGB surface would encode again.
     if let Some(format) = capabilities.formats.iter().find(|format| !format.is_srgb()) {
         config.format = *format;
     }
@@ -323,7 +322,7 @@ impl Renderer {
     }
 }
 
-/// Dropping a device frees nothing on WebGPU, which would leave its textures to the next run.
+/// Dropping a device frees nothing on WebGPU, so its textures would outlive the renderer.
 impl Drop for Renderer {
     fn drop(&mut self) {
         self.device.destroy();

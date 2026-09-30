@@ -9,7 +9,7 @@ fmt:
 # Lint exactly as CI does
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
-    cargo clippy -p render-wgpu --target wasm32-unknown-unknown -- -D warnings
+    cargo clippy -p renderer --target wasm32-unknown-unknown -- -D warnings
 
 # Test exactly as CI does, or only the tests whose name holds a word: just test lfs
 test *args:
@@ -28,10 +28,8 @@ setup:
 web:
     cargo build -p bindings --target wasm32-unknown-unknown
     wasm-bindgen target/wasm32-unknown-unknown/debug/bindings.wasm --target web --out-dir web/public/js/wasm
-    cargo build -p render-wgpu --release --target wasm32-unknown-unknown
-    wasm-bindgen target/wasm32-unknown-unknown/release/render_wgpu.wasm --target web --out-dir web/public/js/wasm
-    mkdir -p web/public/js/vendor
-    cp web/node_modules/pixi.js/dist/pixi.min.js web/node_modules/pixi.js/dist/packages/unsafe-eval.min.js web/node_modules/three/build/three.webgpu.js web/node_modules/three/build/three.core.js web/public/js/vendor/
+    cargo build -p renderer --release --target wasm32-unknown-unknown
+    wasm-bindgen target/wasm32-unknown-unknown/release/renderer.wasm --target web --out-dir web/public/js/wasm
     pnpm --dir web exec tsc
 
 # Serve the web app on http://localhost:8080
@@ -46,7 +44,7 @@ desktop: web
 ci:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
-    cargo clippy -p render-wgpu --target wasm32-unknown-unknown -- -D warnings
+    cargo clippy -p renderer --target wasm32-unknown-unknown -- -D warnings
     cargo test --workspace
     cargo build -p board -p format -p bindings --target wasm32-unknown-unknown
     just web

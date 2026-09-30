@@ -12,8 +12,8 @@ A fast, open-source board to gather your reference images, kept as plain files y
 - `crates/bindings/` — the core for the web app, as WASM
 - `crates/desktop/` — the desktop shell, around the web app
 - `crates/folder/` — a folder on disk, as the desktop shell reads and writes it
-- `crates/render-wgpu/` — the renderer, on wgpu
+- `crates/renderer/` — the renderer, on wgpu
 - `web/` — the app, which runs in a browser and in the desktop shell
 - `samples/` — boards to try the app on
-- `docs/technical/` — the [foundation](./docs/technical/foundation.md), and [rendering](./docs/technical/rendering.md)
+- `docs/technical/` — the [technical foundation](./docs/technical/foundation.md)
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — contributing guidelines and project philosophy

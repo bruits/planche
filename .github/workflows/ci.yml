@@ -47,7 +47,7 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo clippy -p render-wgpu --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo clippy -p renderer --target wasm32-unknown-unknown -- -D warnings
 
   test:
     name: Tests (${{ matrix.os }})

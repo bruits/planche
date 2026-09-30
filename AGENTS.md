@@ -20,7 +20,7 @@ just ci                                # everything CI checks, in CI order
 ## Useful Resources
 
 - In [CONTRIBUTING.md](./CONTRIBUTING.md): [Quality Guidelines](./CONTRIBUTING.md#quality-guidelines) applies to agents and humans equally, [Getting Started](./CONTRIBUTING.md#getting-started) helps you understand the project structure, and [Philosophy](./CONTRIBUTING.md#philosophy) is the project's north star.
-- [docs/technical/foundation.md](./docs/technical/foundation.md) says what is decided and which tracks are still open, and [docs/technical/rendering.md](./docs/technical/rendering.md) covers the renderer and the image pipeline. Read them before adding a crate or a dependency.
+- [docs/technical/foundation.md](./docs/technical/foundation.md) says what is decided, the renderer and the image pipeline included, and which tracks are still open. Read it before adding a crate or a dependency.
 
 ## Agent Guardrails
 
