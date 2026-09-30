@@ -36,6 +36,36 @@ export function tauri({ core }: TauriApi): Platform {
         },
       };
     },
+
+    async openZip() {
+      const title = "Open a board's ZIP file";
+      const picked = await core.invoke<[string, number] | null>("pick_zip", { title });
+      if (picked === null) {
+        return null;
+      }
+      const [path, size] = picked;
+      return {
+        name: basename(path),
+        size,
+        read: async (start, end) =>
+          new Uint8Array(await core.invoke<ArrayBuffer>("read_zip", { path, start, end })),
+      };
+    },
+
+    async pickZip(name) {
+      const title = "Export the board as a ZIP file";
+      const path = await core.invoke<string | null>("pick_export", { title, name });
+      if (path === null) {
+        return null;
+      }
+      const headers = { path: encodeURIComponent(path) };
+      return {
+        name: basename(path),
+        append: (bytes) => core.invoke("append_export", bytes, { headers }),
+        close: () => core.invoke("finish_export", { path }),
+        discard: () => core.invoke("discard_export", { path }),
+      };
+    },
   };
 }
 

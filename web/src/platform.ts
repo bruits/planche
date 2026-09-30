@@ -26,6 +26,22 @@ export interface Target {
   write(path: string, bytes: Bytes): Promise<void>;
 }
 
+/** A file read in slices, so that a large one never sits whole in memory. */
+export interface Slices {
+  name: string;
+  size: number;
+  read(start: number, end: number): Promise<Bytes>;
+}
+
+/** A file written from start to end, which only takes its place once closed. */
+export interface Sink {
+  name: string;
+  append(bytes: Bytes): Promise<void>;
+  close(): Promise<void>;
+  /** Leaves no trace of what was appended. */
+  discard(): Promise<void>;
+}
+
 export interface Platform {
   name: string;
   /** Why saving is impossible here, if it is. */
@@ -34,6 +50,10 @@ export interface Platform {
   open(): Promise<Folder | null>;
   /** `null` when the user cancels. Throws when the folder is not empty. */
   pickTarget(): Promise<Target | null>;
+  /** A board's ZIP file. `null` when the user cancels. */
+  openZip(): Promise<Slices | null>;
+  /** Where to export a ZIP file, suggested as `name`. `null` when the user cancels. */
+  pickZip(name: string): Promise<Sink | null>;
 }
 
 export const platform: Platform = window.__TAURI__ ? tauri(window.__TAURI__) : browser;

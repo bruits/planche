@@ -32,7 +32,7 @@ The board as plain data: elements (images, notes, shapes, arrows, and groups), t
 
 ### format
 
-The board as a folder of files, keyed by path, and back: a `board.json` manifest holding the format version, one JSON file per element in `elements/`, image bytes in `assets/`, and a `.gitattributes`, written when the board is created, that keeps Git from converting line endings and sends assets to Git LFS. `samples/demo/` holds a board to try the shells on. Assets never change once named, so the caller writes each one once and checks it against its digest when loading it, which catches a board cloned without Git LFS. It implements the file format decided in the [foundation](./docs/technical/foundation.md): until the first release, it can change freely; from then on, any change to its shape bumps `FORMAT_VERSION`, and earlier versions are migrated on read.
+The board as a folder of files, keyed by path, and back: a `board.json` manifest holding the format version, one JSON file per element in `elements/`, image bytes in `assets/`, and a `.gitattributes`, written when the board is created, that keeps Git from converting line endings and sends assets to Git LFS. The same files also travel as a single ZIP file, which the core reads and writes without I/O, so that a shell moves it a slice at a time. `samples/demo/` holds a board to try the shells on, and `samples/demo.zip` its ZIP file, which every platform must write byte for byte. Assets never change once named, so the caller writes each one once and checks it against its digest when loading it, which catches a board cloned without Git LFS. It implements the file format decided in the [foundation](./docs/technical/foundation.md): until the first release, it can change freely; from then on, any change to its shape bumps `FORMAT_VERSION`, and earlier versions are migrated on read.
 
 ### bindings
 
@@ -40,7 +40,7 @@ The core for the web app, through [wasm-bindgen](https://github.com/wasm-bindgen
 
 ### desktop
 
-The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web app, and the file system that a browser lacks, limited to the folders the user picks, and writing only into those that were empty. It is the Tauri track from the [foundation](./docs/technical/foundation.md), under test in the prototype.
+The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web app, and the file system that a browser lacks, limited to the folders and ZIP files the user picks, and writing only into folders that were empty and to files picked to export to. It is the Tauri track from the [foundation](./docs/technical/foundation.md), under test in the prototype.
 
 ### renderer
 
@@ -48,4 +48,4 @@ The renderer, on wgpu: images as textured quads, on WebGPU or WebGL2, for the we
 
 ### folder
 
-A folder on disk as the desktop shell reads and writes it: paths with `/` between segments, atomic writes, and nothing that leads out of it, neither links nor dot folders such as `.git/`. It needs no Tauri, so its tests run on every platform.
+A folder on disk as the desktop shell reads and writes it: paths with `/` between segments, atomic writes, and nothing that leads out of it, neither links nor dot folders such as `.git/`. A single picked file, such as a ZIP file, is read in ranges and written in parts, just as atomically. It needs no Tauri, so its tests run on every platform.

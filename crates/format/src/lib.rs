@@ -9,7 +9,10 @@
 //!
 //! Paths use `/` on every platform. The browser has no file system, so the caller does the
 //! I/O. It writes each asset once, before any element that draws it, and checks it with
-//! [`verify_asset`] when loading it.
+//! [`verify_asset`] when loading it. The same files also travel as a single ZIP file, see
+//! [`zip`].
+
+pub mod zip;
 
 use std::collections::BTreeMap;
 
@@ -44,6 +47,20 @@ pub enum Error {
         "asset {0} does not match its digest; if the board lives in Git, is Git LFS installed?"
     )]
     CorruptAsset(AssetId),
+    #[error("`{0}` is not a path inside a board")]
+    UnsafePath(String),
+    #[error("this is not a ZIP file")]
+    NotAZip,
+    #[error("this ZIP file is damaged: {0}")]
+    DamagedZip(String),
+    #[error("`{0}` is compressed or encrypted in this ZIP file, so unzip it and open its folder")]
+    Compressed(String),
+    #[error("this ZIP file needs ZIP64 or spans several files, which a board never does")]
+    UnsupportedZip,
+    #[error("a board's ZIP file holds 65,534 files and 4 GiB at most")]
+    TooLarge,
+    #[error("`{0}` comes out of order in the ZIP file")]
+    OutOfOrder(String),
 }
 
 const MANIFEST: &str = "board.json";

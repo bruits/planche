@@ -2,12 +2,16 @@
 //! relative to it with `/` between segments, a crash never leaves one half-written, and
 //! nothing leads out of it. Links are no part of it, and neither are dot files and folders,
 //! such as `.git/`, though the app may create a missing top-level dot file, such as
-//! `.gitattributes`, which it never reads or lists. It knows nothing of boards, and needs no
+//! `.gitattributes`, which it never reads or lists. A single file the user picks, such as a
+//! ZIP file, is read in ranges and written in parts. It knows nothing of boards, and needs no
 //! Tauri, so its tests run on every platform.
 
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// Every file in `root` and in its folders, down to `depth` levels in all, sorted. Names
 /// that are not UTF-8 are left out too.
@@ -73,22 +77,115 @@ pub fn write(root: &Path, path: &str, bytes: &[u8]) -> io::Result<()> {
     if is_link(&file) {
         return Err(refused(path));
     }
-    let folder = file.parent().expect("inside the root");
-    fs::create_dir_all(folder)?;
-    // A dot file too, so that one left behind by a crash is no part of the folder. It must
-    // be new, since a link in its place would lead the write elsewhere.
-    let temporary = folder.join(format!(".{name}.tmp"));
-    match fs::remove_file(&temporary) {
-        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-        _ => {}
+    fs::create_dir_all(file.parent().expect("inside the root"))?;
+    let mut draft = Draft::create(&file)?;
+    draft.append(bytes)?;
+    draft.commit()
+}
+
+/// A file written in parts through a temporary file beside it, which takes the file's place
+/// once complete, so that a crash never leaves it half-written. Short of a crash, the
+/// temporary file goes away with the draft, however it ends.
+#[derive(Debug)]
+pub struct Draft {
+    file: PathBuf,
+    temporary: PathBuf,
+    /// `None` once closed, which Windows needs before removing it.
+    out: Option<File>,
+    /// Whether the temporary file was renamed or removed, after which another draft of the
+    /// same file may have taken its name.
+    gone: bool,
+}
+
+impl Draft {
+    /// In a folder that exists.
+    pub fn create(file: &Path) -> io::Result<Self> {
+        let name = file
+            .file_name()
+            .ok_or_else(|| refused(&file.display().to_string()))?;
+        // A dot file, so that one left behind by a crash is no part of the folder. It must be
+        // new, since a link in its place would lead the write elsewhere.
+        let mut temporary = OsString::from(".");
+        temporary.push(name);
+        temporary.push(".tmp");
+        let temporary = file.with_file_name(temporary);
+        match fs::remove_file(&temporary) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        let out = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        Ok(Self {
+            file: file.to_owned(),
+            temporary,
+            out: Some(out),
+            gone: false,
+        })
     }
-    let mut out = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    out.write_all(bytes)?;
-    out.sync_all()?;
-    fs::rename(&temporary, file)
+
+    pub fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let out = self.out.as_mut().expect("open until the draft ends");
+        out.write_all(bytes)
+    }
+
+    pub fn commit(mut self) -> io::Result<()> {
+        let out = self.out.take().expect("open until the draft ends");
+        out.sync_all()?;
+        drop(out);
+        fs::rename(&self.temporary, &self.file)?;
+        self.gone = true;
+        Ok(())
+    }
+
+    /// Leaves the file as it was.
+    pub fn discard(mut self) -> io::Result<()> {
+        drop(self.out.take());
+        fs::remove_file(&self.temporary)?;
+        self.gone = true;
+        Ok(())
+    }
+}
+
+impl Drop for Draft {
+    fn drop(&mut self) {
+        drop(self.out.take());
+        if !self.gone {
+            let _ = fs::remove_file(&self.temporary);
+        }
+    }
+}
+
+/// A file's size and modification time, which tell that it changed since it was opened.
+pub type Stamp = (u64, Option<SystemTime>);
+
+pub fn stamp(file: &Path) -> io::Result<Stamp> {
+    Ok(stamp_of(&fs::metadata(file)?))
+}
+
+fn stamp_of(metadata: &fs::Metadata) -> Stamp {
+    (metadata.len(), metadata.modified().ok())
+}
+
+/// The bytes of `range` in `file`, refused once it no longer bears the `stamp` it had when
+/// the caller located the range.
+pub fn read_range(file: &Path, range: Range<u64>, stamp: Stamp) -> io::Result<Vec<u8>> {
+    let mut file = File::open(file)?;
+    let metadata = file.metadata()?;
+    if stamp_of(&metadata) != stamp {
+        return Err(io::Error::other(
+            "it changed since it was opened, so open it again",
+        ));
+    }
+    let outside = || io::Error::new(io::ErrorKind::InvalidInput, "the range is not in the file");
+    if range.start > range.end || range.end > metadata.len() {
+        return Err(outside());
+    }
+    let mut bytes = vec![0; usize::try_from(range.end - range.start).map_err(|_| outside())?];
+    file.seek(SeekFrom::Start(range.start))?;
+    file.read_exact(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// The segments of `path`, unless it could climb out of the folder. A `~` could name a dot
@@ -219,6 +316,93 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, ["a.json"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_draft_takes_the_files_place_once_committed() {
+        let root = scratch("draft");
+        let file = root.join("board.zip");
+        fs::write(&file, b"before").unwrap();
+        let mut draft = Draft::create(&file).unwrap();
+        draft.append(b"af").unwrap();
+        draft.append(b"ter").unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"before");
+        draft.commit().unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"after");
+
+        let mut draft = Draft::create(&file).unwrap();
+        draft.append(b"never").unwrap();
+        draft.discard().unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"after");
+        let names: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["board.zip"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_draft_that_fails_to_commit_leaves_nothing_behind() {
+        let root = scratch("draft-fails");
+        // A file cannot take the place of a folder that holds something, on any system.
+        let file = root.join("board.zip");
+        touch(&root, "board.zip/inside");
+        let mut draft = Draft::create(&file).unwrap();
+        draft.append(b"never").unwrap();
+        assert!(draft.commit().is_err());
+        let names: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["board.zip"]);
+
+        let other = root.join("other.zip");
+        drop(Draft::create(&other).unwrap());
+        assert!(!root.join(".other.zip.tmp").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_range_reads_only_its_bytes() {
+        let root = scratch("range");
+        let file = root.join("board.zip");
+        fs::write(&file, b"0123456789").unwrap();
+        let opened = stamp(&file).unwrap();
+        assert_eq!(read_range(&file, 2..5, opened).unwrap(), b"234");
+        assert_eq!(read_range(&file, 10..10, opened).unwrap(), b"");
+        assert!(refuses(read_range(&file, 8..11, opened)));
+        assert!(refuses(read_range(
+            &file,
+            Range { start: 5, end: 2 },
+            opened
+        )));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_range_is_refused_once_its_file_changed() {
+        let root = scratch("changed");
+        let file = root.join("board.zip");
+        fs::write(&file, b"0123456789").unwrap();
+        let opened = stamp(&file).unwrap();
+        let changed = |result: io::Result<Vec<u8>>| {
+            result.is_err_and(|error| error.kind() == io::ErrorKind::Other)
+        };
+
+        // Rewritten at the same size, which only its modification time tells.
+        fs::write(&file, b"9876543210").unwrap();
+        let later = opened.1.unwrap() + std::time::Duration::from_secs(3600);
+        let rewritten = File::options().write(true).open(&file).unwrap();
+        rewritten.set_modified(later).unwrap();
+        drop(rewritten);
+        assert!(changed(read_range(&file, 2..5, opened)));
+
+        let mut draft = Draft::create(&file).unwrap();
+        draft.append(b"a longer file").unwrap();
+        draft.commit().unwrap();
+        assert!(changed(read_range(&file, 2..5, opened)));
         fs::remove_dir_all(root).unwrap();
     }
 

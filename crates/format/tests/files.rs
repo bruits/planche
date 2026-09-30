@@ -1,12 +1,13 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use board::{
     AssetId, Board, Editor, Element, ElementId, ElementKind, ImageEdits, Point, Rect, Restack,
     Shape, Size, ZIndex,
 };
-use format::{Error, Files};
+use format::{Error, Files, zip};
 
 const NOTE: ElementId = ElementId::from_random(3);
 const ARROW: ElementId = ElementId::from_random(5);
@@ -415,6 +416,10 @@ fn an_asset_cloned_without_git_lfs_is_refused() {
     ));
 }
 
+fn samples() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples")
+}
+
 fn load(folder: &Path) -> Files {
     let mut files = Files::new();
     let mut pending = vec![folder.to_owned()];
@@ -441,8 +446,7 @@ fn load(folder: &Path) -> Files {
 
 #[test]
 fn the_demo_board_reads_back_as_written() {
-    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/demo");
-    let files = load(&folder);
+    let files = load(&samples().join("demo"));
     let board = format::read(&files).unwrap();
 
     let written = format::write(&board).unwrap();
@@ -471,5 +475,313 @@ fn the_demo_board_reads_back_as_written() {
             let height = u32::from_be_bytes(header[12..16].try_into().unwrap());
             assert_eq!(*natural_size, Size { width, height });
         }
+    }
+}
+
+/// Zips a board the way a shell does: its files from `format::write`, its assets from
+/// `files`.
+fn zip_of(files: &Files) -> format::Result<Vec<u8>> {
+    let board = format::read(files)?;
+    let written = format::write(&board)?;
+    let mut writer = zip::Writer::new();
+    let mut out = Vec::new();
+    for path in zip::paths(&board)? {
+        let bytes = written.get(&path).unwrap_or_else(|| &files[&path]);
+        out.extend(writer.entry(&path, bytes)?);
+        out.extend_from_slice(bytes);
+    }
+    out.extend(writer.finish()?);
+    Ok(out)
+}
+
+fn zip_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut writer = zip::Writer::new();
+    let mut out = Vec::new();
+    for (path, bytes) in entries {
+        out.extend(writer.entry(path, bytes).unwrap());
+        out.extend_from_slice(bytes);
+    }
+    out.extend(writer.finish().unwrap());
+    out
+}
+
+/// Unzips every file the way a shell does, reading only the ranges the core asks for.
+fn unzip(file: &[u8]) -> format::Result<Files> {
+    let length = file.len() as u64;
+    let tail = &file[at(length - zip::tail_length(length)..length)];
+    let directory = zip::locate(length, tail)?;
+    let index = zip::Index::read(directory.start, &file[at(directory)])?;
+    let mut files = Files::new();
+    for path in index.paths() {
+        let entry = index.entry(path).unwrap();
+        let bytes = &file[at(entry.data(&file[at(entry.header())])?)];
+        entry.check(bytes)?;
+        files.insert(path.to_owned(), bytes.to_vec());
+    }
+    Ok(files)
+}
+
+fn at(range: Range<u64>) -> Range<usize> {
+    range.start as usize..range.end as usize
+}
+
+/// Overwrites the bytes at `at` in the first record with this signature.
+fn patch(file: &mut [u8], signature: &[u8; 4], at: usize, bytes: &[u8]) {
+    let record = file
+        .windows(4)
+        .position(|window| window == signature)
+        .unwrap();
+    file[record + at..record + at + bytes.len()].copy_from_slice(bytes);
+}
+
+fn get32(file: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(file[at..at + 4].try_into().unwrap())
+}
+
+const LOCAL: &[u8; 4] = b"PK\x03\x04";
+const CENTRAL: &[u8; 4] = b"PK\x01\x02";
+const END: &[u8; 4] = b"PK\x05\x06";
+
+#[test]
+fn the_demo_board_zips_as_its_sample() {
+    let zipped = zip_of(&load(&samples().join("demo"))).unwrap();
+    assert!(zipped == fs::read(samples().join("demo.zip")).unwrap());
+}
+
+#[test]
+fn a_zip_reads_back_as_its_folder() {
+    let files = load(&samples().join("demo"));
+    let zipped = zip_of(&files).unwrap();
+    let unzipped = unzip(&zipped).unwrap();
+    assert_eq!(unzipped, files);
+    assert!(zip_of(&unzipped).unwrap() == zipped);
+}
+
+#[test]
+fn a_zip_holds_only_the_board_and_the_assets_it_draws() {
+    let board = sample();
+    let mut files = format::write(&board).unwrap();
+    files.insert(format::asset_path(AssetId::of(IMAGE)), IMAGE.to_vec());
+    let orphan = format::asset_path(AssetId::of(b"drawn by nothing"));
+    files.insert(orphan.clone(), b"drawn by nothing".to_vec());
+    files.insert(".gitattributes".to_owned(), format::git_attributes().1);
+
+    let unzipped = unzip(&zip_of(&files).unwrap()).unwrap();
+    files.remove(&orphan);
+    files.remove(".gitattributes");
+    assert_eq!(unzipped, files);
+}
+
+#[test]
+fn a_corrupt_asset_is_not_zipped() {
+    let asset = AssetId::of(IMAGE);
+    let mut writer = zip::Writer::new();
+    assert!(matches!(
+        writer.entry(&format::asset_path(asset), b"version https://git-lfs.github.com/spec/v1\n"),
+        Err(Error::CorruptAsset(corrupt)) if corrupt == asset
+    ));
+}
+
+#[test]
+fn zip_entries_come_in_path_order_once() {
+    let mut writer = zip::Writer::new();
+    writer.entry("elements/b", b"").unwrap();
+    for path in ["elements/a", "elements/b"] {
+        assert!(matches!(writer.entry(path, b""), Err(Error::OutOfOrder(named)) if named == path));
+    }
+}
+
+#[test]
+fn a_path_out_of_the_board_is_neither_zipped_nor_unzipped() {
+    let mut writer = zip::Writer::new();
+    for path in [
+        "../board.json",
+        "elements//a",
+        "a\\b",
+        "c:a",
+        ".gitattributes",
+        "a~b",
+    ] {
+        assert!(matches!(writer.entry(path, b""), Err(Error::UnsafePath(named)) if named == path));
+    }
+
+    let mut file = zip_entries(&[("inside/a", b"")]);
+    let escaping = b"../../ab";
+    for record in [LOCAL, CENTRAL] {
+        let name = if record == CENTRAL { 46 } else { 30 };
+        patch(&mut file, record, name, escaping);
+    }
+    assert!(matches!(unzip(&file), Err(Error::UnsafePath(path)) if path == "../../ab"));
+}
+
+#[test]
+fn folders_dot_files_and_backups_are_left_out_of_a_zip() {
+    let mut file = zip_entries(&[
+        ("board.json", b"{}"),
+        ("board.jsonx", b"old"),
+        ("elements.", b""),
+        ("xDS_Store", b""),
+    ]);
+    // Renamed in the central directory, as another tool may name entries.
+    for (from, to) in [
+        (b"board.jsonx".as_slice(), b"board.json~".as_slice()),
+        (b"elements.", b"elements/"),
+        (b"xDS_Store", b".DS_Store"),
+    ] {
+        let at = file
+            .windows(from.len())
+            .rposition(|window| window == from)
+            .unwrap();
+        file[at..at + from.len()].copy_from_slice(to);
+    }
+    assert_eq!(
+        unzip(&file).unwrap().into_keys().collect::<Vec<_>>(),
+        ["board.json"]
+    );
+}
+
+#[test]
+fn a_compressed_or_encrypted_zip_is_refused() {
+    for (at, value) in [(10, 8), (8, 1)] {
+        let mut file = zip_entries(&[("board.json", b"{}")]);
+        patch(&mut file, CENTRAL, at, &[value]);
+        assert!(matches!(unzip(&file), Err(Error::Compressed(path)) if path == "board.json"));
+    }
+}
+
+#[test]
+fn a_zip_from_another_tool_opens() {
+    // Info-ZIP's `zip -0` gives each entry timestamps and owner ids, 28 bytes in its local
+    // header and 24 in the directory, and other tools add comments to entries and to files.
+    let (local, central, comment) = ([7; 28], [9; 24], b"a comment");
+    let mut file = zip_entries(&[("board.json", b"{}")]);
+    let end = file.len() - 22;
+    let (size, start) = (get32(&file, end + 12), get32(&file, end + 16));
+    file.splice(end..end, central.iter().chain(comment).copied());
+    file.splice(30 + 10..30 + 10, local);
+    patch(&mut file, LOCAL, 28, &(local.len() as u16).to_le_bytes());
+    patch(
+        &mut file,
+        CENTRAL,
+        30,
+        &(central.len() as u16).to_le_bytes(),
+    );
+    patch(
+        &mut file,
+        CENTRAL,
+        32,
+        &(comment.len() as u16).to_le_bytes(),
+    );
+    let grown = size + (central.len() + comment.len()) as u32;
+    patch(&mut file, END, 12, &grown.to_le_bytes());
+    patch(
+        &mut file,
+        END,
+        16,
+        &(start + local.len() as u32).to_le_bytes(),
+    );
+    patch(&mut file, END, 20, &(comment.len() as u16).to_le_bytes());
+    file.extend_from_slice(comment);
+
+    assert_eq!(unzip(&file).unwrap()["board.json"], b"{}");
+}
+
+#[test]
+fn a_zip_holding_a_path_twice_is_refused() {
+    let mut file = zip_entries(&[("elements/a", b"[1]"), ("elements/b", b"[2]")]);
+    // Renamed in its header and in the directory alike, so that either copy would read.
+    while let Some(name) = file.windows(10).position(|window| window == b"elements/b") {
+        file[name..name + 10].copy_from_slice(b"elements/a");
+    }
+    assert!(
+        matches!(unzip(&file), Err(Error::DamagedZip(reason)) if reason.contains("elements/a"))
+    );
+}
+
+#[test]
+fn entries_sharing_bytes_are_refused() {
+    let mut file = zip_entries(&[("elements/a", b"[1]"), ("elements/b", b"[2]")]);
+    let second = file
+        .windows(4)
+        .rposition(|window| window == CENTRAL)
+        .unwrap();
+    file[second + 42..second + 46].copy_from_slice(&0u32.to_le_bytes());
+    let directory = zip::locate(file.len() as u64, &file).unwrap();
+    assert!(matches!(
+        zip::Index::read(directory.start, &file[at(directory)]),
+        Err(Error::DamagedZip(reason)) if reason.contains("runs into")
+    ));
+}
+
+#[test]
+fn a_damaged_zip_is_refused() {
+    let file = zip_entries(&[("board.json", b"{}"), ("elements/a", b"[1, 2]")]);
+    for damaged in [&file[..file.len() - 1], b"PK".as_slice(), b"".as_slice()] {
+        assert!(matches!(unzip(damaged), Err(Error::NotAZip)));
+    }
+
+    let mut flipped = file.clone();
+    let data = flipped
+        .windows(6)
+        .position(|window| window == b"[1, 2]")
+        .unwrap();
+    flipped[data + 1] = b'3';
+    assert!(
+        matches!(unzip(&flipped), Err(Error::DamagedZip(reason)) if reason.contains("elements/a"))
+    );
+
+    let mut past_the_end = file.clone();
+    patch(
+        &mut past_the_end,
+        END,
+        16,
+        &(file.len() as u32).to_le_bytes(),
+    );
+    assert!(matches!(unzip(&past_the_end), Err(Error::DamagedZip(_))));
+
+    let mut misplaced = file.clone();
+    patch(&mut misplaced, CENTRAL, 42, &4u32.to_le_bytes());
+    assert!(
+        matches!(unzip(&misplaced), Err(Error::DamagedZip(reason)) if reason.contains("board.json"))
+    );
+
+    // Refused before a shell reads a header past the directory.
+    for fields in [&[42][..], &[20, 24]] {
+        let mut past = file.clone();
+        for &at in fields {
+            patch(&mut past, CENTRAL, at, &1_000_000u32.to_le_bytes());
+        }
+        assert!(
+            matches!(unzip(&past), Err(Error::DamagedZip(reason)) if reason.contains("board.json"))
+        );
+    }
+
+    // Refused before a shell reads bytes that a header's extra field moves past the directory,
+    // where they could still match their checksum.
+    for extra in [50u16, u16::MAX] {
+        let mut moved = file.clone();
+        patch(&mut moved, LOCAL, 28, &extra.to_le_bytes());
+        let runs_into = |reason: &str| reason == "`board.json` runs into its directory";
+        assert!(
+            matches!(unzip(&moved), Err(Error::DamagedZip(reason)) if runs_into(&reason)),
+            "{extra}"
+        );
+    }
+}
+
+#[test]
+fn a_zip_never_needs_zip64() {
+    let mut writer = zip::Writer::new();
+    for at in 0..65_534 {
+        writer.entry(&format!("{at:05}"), b"").unwrap();
+    }
+    assert!(matches!(writer.entry("65534", b""), Err(Error::TooLarge)));
+    assert!(writer.finish().is_ok());
+
+    let file = zip_entries(&[("board.json", b"{}")]);
+    for (record, at) in [(END, 8), (CENTRAL, 20), (CENTRAL, 24), (CENTRAL, 42)] {
+        let mut marked = file.clone();
+        patch(&mut marked, record, at, &[0xff; 4]);
+        assert!(matches!(unzip(&marked), Err(Error::UnsupportedZip)), "{at}");
     }
 }

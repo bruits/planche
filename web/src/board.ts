@@ -4,7 +4,7 @@
 import * as core from "./core.js";
 import type { Board, Files, Rect } from "./core.js";
 import { milliseconds, timed } from "./metrics.js";
-import { platform, type Folder } from "./platform.js";
+import type { Folder } from "./platform.js";
 import type { Quad } from "./renderer.js";
 
 export interface Opened {
@@ -22,9 +22,15 @@ export interface BoardImage {
   rotation: number;
 }
 
-/** `null` when the user cancels. Otherwise replaces `timings` with how long each step took. */
-export async function open(timings: Map<string, string>): Promise<Opened | null> {
-  const folder = await platform.open();
+/**
+ * The board in the folder that `pick` gives, `null` when the user cancels. Otherwise replaces
+ * `timings` with how long each step took.
+ */
+export async function open(
+  pick: () => Promise<Folder | null>,
+  timings: Map<string, string>,
+): Promise<Opened | null> {
+  const folder = await pick();
   if (folder === null) {
     return null;
   }

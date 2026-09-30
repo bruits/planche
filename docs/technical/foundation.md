@@ -6,7 +6,7 @@ What is decided, what is still being explored, and why. A track becomes a decisi
 
 - **Stack.** Mostly Rust, with a thin presentation layer: one web app in TypeScript, without a framework, runs the Rust core as WASM in the browser and in the desktop shell's webview.
 - **Platforms.** The browser, Windows, macOS, and Linux first. iOS and Android come later, but the design must not rule them out.
-- **File format.** A folder of deterministic JSON files, one per element, with images named by their SHA-256 digest (`crates/format`). A single-file export is a ZIP of that folder. Images need Git LFS. SQLite (as in BeeRef) was rejected because Git cannot merge it, and a single JSON with base64 images (as in `.excalidraw`) because it is heavy and its diffs are useless. JSON Canvas is too poor as a native format, but fits import and export.
+- **File format.** A folder of deterministic JSON files, one per element, with images named by their SHA-256 digest (`crates/format`). A single-file export is a ZIP of that folder, holding the board's files and the images it draws: stored rather than deflated, since images are compressed already, dated 1980-01-01, and never ZIP64, so that the same board gives the same bytes and a shell reads an image straight out of it. A ZIP file that another tool compressed is refused rather than inflated. Images need Git LFS. SQLite (as in BeeRef) was rejected because Git cannot merge it, and a single JSON with base64 images (as in `.excalidraw`) because it is heavy and its diffs are useless. JSON Canvas is too poor as a native format, but fits import and export.
 - **Licence.** MIT or Apache-2.0 for the client and the format. The sync server, if there is one, will be AGPL.
 
 ### Rendering

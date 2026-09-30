@@ -1,5 +1,6 @@
 // The browser, where only Chromium lets a page read and write a folder. Elsewhere a folder
-// can still be picked through a file input, read-only.
+// can still be picked through a file input, read-only, and a board saved by exporting its ZIP
+// file, which downloads.
 
 import type { Bytes } from "./core.js";
 import type { Folder, Platform } from "./platform.js";
@@ -8,7 +9,7 @@ export const browser: Platform = {
   name: "browser",
   cannotSave: window.showDirectoryPicker
     ? undefined
-    : "This browser cannot write to a folder, try a Chromium-based one or the desktop app.",
+    : "This browser cannot write to a folder: export a ZIP file, or try a Chromium-based browser or the desktop app.",
 
   async open() {
     if (!window.showDirectoryPicker) {
@@ -61,6 +62,42 @@ export const browser: Platform = {
       },
     };
   },
+
+  async openZip() {
+    const picked = await choose((input) => (input.accept = ".zip,application/zip"));
+    const file = picked?.[0];
+    if (file === undefined) {
+      return null;
+    }
+    return {
+      name: file.name,
+      size: file.size,
+      read: (start, end) => bytesOf(file.slice(start, end)),
+    };
+  },
+
+  async pickZip(name) {
+    // A blob per part, which the browser may keep out of memory until the download.
+    let parts: Blob[] = [];
+    return {
+      name,
+      append: async (bytes) => {
+        parts.push(new Blob([bytes]));
+      },
+      close: async () => {
+        const url = URL.createObjectURL(new Blob(parts, { type: "application/zip" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = name;
+        link.click();
+        // Revoked at once, the URL could cancel a download that has yet to start.
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      },
+      discard: async () => {
+        parts = [];
+      },
+    };
+  },
 };
 
 async function walk(folder: FileSystemDirectoryHandle, prefix: string, depth: number): Promise<string[]> {
@@ -109,42 +146,48 @@ async function exists(folder: FileSystemDirectoryHandle, name: string): Promise<
   }
 }
 
-function pickWithInput(): Promise<Folder | null> {
+async function pickWithInput(): Promise<Folder | null> {
+  const picked = await choose((input) => (input.webkitdirectory = true));
+  if (picked === null) {
+    return null;
+  }
+  // Relative paths start with the picked folder's own name.
+  const root = picked[0]?.webkitRelativePath.split("/")[0] ?? "";
+  const files = new Map<string, File>();
+  for (const file of picked) {
+    const path = file.webkitRelativePath.slice(root.length + 1);
+    if (!path.split("/").some((segment) => segment.startsWith("."))) {
+      files.set(path, file);
+    }
+  }
+  return {
+    name: root,
+    // The browser listed the whole folder before handing it over.
+    list: async (depth) => [...files.keys()].filter((path) => path.split("/").length <= depth).sort(),
+    read: async (path) => {
+      const file = files.get(path);
+      if (file === undefined) {
+        throw new Error(`${path} is not in ${root}`);
+      }
+      return bytesOf(file);
+    },
+  };
+}
+
+/** `null` when the user cancels. */
+function choose(setUp: (input: HTMLInputElement) => void): Promise<File[] | null> {
   const input = document.createElement("input");
   input.type = "file";
-  input.webkitdirectory = true;
+  setUp(input);
   return new Promise((resolve) => {
     input.addEventListener("cancel", () => resolve(null));
-    input.addEventListener("change", () => {
-      const picked = [...(input.files ?? [])];
-      // Relative paths start with the picked folder's own name.
-      const root = picked[0]?.webkitRelativePath.split("/")[0] ?? "";
-      const files = new Map<string, File>();
-      for (const file of picked) {
-        const path = file.webkitRelativePath.slice(root.length + 1);
-        if (!path.split("/").some((segment) => segment.startsWith("."))) {
-          files.set(path, file);
-        }
-      }
-      resolve({
-        name: root,
-        // The browser listed the whole folder before handing it over.
-        list: async (depth) => [...files.keys()].filter((path) => path.split("/").length <= depth).sort(),
-        read: async (path) => {
-          const file = files.get(path);
-          if (file === undefined) {
-            throw new Error(`${path} is not in ${root}`);
-          }
-          return bytesOf(file);
-        },
-      });
-    });
+    input.addEventListener("change", () => resolve([...(input.files ?? [])]));
     input.click();
   });
 }
 
-async function bytesOf(file: File): Promise<Bytes> {
-  return new Uint8Array(await file.arrayBuffer());
+async function bytesOf(blob: Blob): Promise<Bytes> {
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /** `null` when the user dismisses the picker. */

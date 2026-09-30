@@ -2,17 +2,32 @@
 // move bytes.
 
 import init, {
+  ZipIndex,
+  ZipWriter,
   assetPath,
   fileDepth,
   isAssetFile,
   isBoardFile,
+  locateZipDirectory,
   newBoardFiles,
   readBoard,
   verifyAsset,
   writeBoard,
+  zipPaths as boardZipPaths,
+  zipTailLength,
 } from "./wasm/bindings.js";
 
-export { assetPath, fileDepth, isAssetFile, isBoardFile, verifyAsset };
+export {
+  ZipIndex,
+  ZipWriter,
+  assetPath,
+  fileDepth,
+  isAssetFile,
+  isBoardFile,
+  locateZipDirectory,
+  verifyAsset,
+  zipTailLength,
+};
 
 export type Bytes = Uint8Array<ArrayBuffer>;
 
@@ -81,4 +96,9 @@ export function write(board: Board): Files {
 /** The files a new board folder starts with, besides those of `write`. */
 export function newFiles(): Files {
   return newBoardFiles() as Files;
+}
+
+/** The paths of the board's ZIP file, in the order it holds them. */
+export function zipPaths(board: Board): string[] {
+  return boardZipPaths(JSON.stringify(board));
 }
