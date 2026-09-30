@@ -75,12 +75,12 @@ export type Kind =
       rotation: number;
       edits: { crop: Rect | null; flip_horizontal: boolean; flip_vertical: boolean; greyscale: boolean };
     }
-  | { type: "note"; frame: Rect; rotation: number; text: Text }
-  | { type: "sticky"; frame: Rect; rotation: number; text: Text }
-  | { type: "shape"; frame: Rect; rotation: number; shape: "rectangle" | "ellipse" | "cross"; text: Text }
+  | { type: "note"; frame: Rect; rotation: number; text: Text; target?: string }
+  | { type: "sticky"; frame: Rect; rotation: number; text: Text; target?: string }
+  | { type: "shape"; frame: Rect; rotation: number; shape: "rectangle" | "ellipse" | "cross"; text: Text; target?: string }
   | { type: "arrow"; from: Point; to: Point; from_target?: string; to_target?: string }
   | { type: "line"; from: Point; to: Point; from_target?: string; to_target?: string }
-  | { type: "comment"; at: Point; text: string }
+  | { type: "comment"; at: Point; text: string; target?: string }
   | { type: "group" };
 
 export interface Element {

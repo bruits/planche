@@ -1,9 +1,13 @@
-//! The ends of arrows and lines that stick to elements. Each end keeps to the same point of what
-//! its element draws: a pixel of the picture for an image, and a point of the frame otherwise,
-//! which it follows wherever the element goes.
+//! What sticks to elements: the ends of arrows and lines, and notes, sticky notes, shapes, and
+//! comments whole. Each keeps to the same point of what its element draws, which it follows
+//! wherever the element goes: a pixel of the picture for an image, a point of the frame for an
+//! end, and a point as far from the frame's top-left corner, in widths of it, for what sticks
+//! whole, which turns, scales, and mirrors with it too.
 
-use crate::geometry::{apart, covers, hits, nearest_on_outline};
-use crate::{Board, ElementId, ElementKind, Point, Rect, STROKE_WIDTH};
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::geometry::{anchor, apart, covers, hits, holds, nearest_on_outline, surface_bounds};
+use crate::{Board, ElementId, ElementKind, Point, Rect, STROKE_WIDTH, angle};
 
 impl Board {
     /// Where an arrow's or a line's end let go at `point` sticks: to the topmost element it can
@@ -21,6 +25,89 @@ impl Board {
             .filter(|on| apart(*on, point) <= reach || !covers(kind, point));
         Some((id, outline.unwrap_or(point)))
     }
+
+    /// The element, and what sticks to it whole, and so on.
+    pub(crate) fn stuck_to(&self, id: ElementId) -> BTreeSet<ElementId> {
+        stuck_to(&holding(self), id)
+    }
+}
+
+/// Where notes, sticky notes, shapes, and comments land, one after another, each seeing where
+/// those before it landed, so that none lands on what sticks to it.
+pub(crate) struct Landing<'a> {
+    board: &'a Board,
+    /// With the bounds of each element's surface, which hold whatever lands on it.
+    order: Vec<(ElementId, Option<Rect>)>,
+    holding: Holding,
+}
+
+impl<'a> Landing<'a> {
+    pub(crate) fn new(board: &'a Board) -> Self {
+        let order = board.draw_order().into_iter();
+        Self {
+            board,
+            order: order
+                .map(|id| (id, surface_bounds(&board.elements[&id].kind)))
+                .collect(),
+            holding: holding(board),
+        }
+    }
+
+    /// What the element sticks to where it lies: the topmost element drawn below it, bar what
+    /// sticks to it, whose surface holds it whole, or holds the pin of a comment, which shows
+    /// above everything. `None` for what cannot stick whole.
+    pub(crate) fn land(&mut self, id: ElementId) -> Option<ElementId> {
+        let board = self.board;
+        let kind = &board.elements.get(&id)?.kind;
+        let below = match kind {
+            ElementKind::Comment { .. } => &self.order[..],
+            ElementKind::Note { .. } | ElementKind::Sticky { .. } | ElementKind::Shape { .. } => {
+                &self.order[..self.order.iter().position(|(other, _)| *other == id)?]
+            }
+            _ => return None,
+        };
+        let anchor = anchor(kind)?;
+        let stuck = stuck_to(&self.holding, id);
+        let target = below.iter().rev().find_map(|(other, bounds)| {
+            (bounds.is_some_and(|bounds| bounds.contains(anchor))
+                && !stuck.contains(other)
+                && holds(&board.elements[other].kind, kind))
+            .then_some(*other)
+        });
+        for held in self.holding.values_mut() {
+            held.remove(&id);
+        }
+        if let Some(target) = target {
+            self.holding.entry(target).or_default().insert(id);
+        }
+        target
+    }
+}
+
+/// What sticks to each element whole.
+type Holding = BTreeMap<ElementId, BTreeSet<ElementId>>;
+
+fn holding(board: &Board) -> Holding {
+    let mut holding = Holding::new();
+    for (id, element) in &board.elements {
+        if let Some(target) = element.kind.target() {
+            holding.entry(target).or_default().insert(*id);
+        }
+    }
+    holding
+}
+
+fn stuck_to(holding: &Holding, id: ElementId) -> BTreeSet<ElementId> {
+    let mut stuck = BTreeSet::from([id]);
+    let mut pending = vec![id];
+    while let Some(target) = pending.pop() {
+        for held in holding.get(&target).into_iter().flatten() {
+            if stuck.insert(*held) {
+                pending.push(*held);
+            }
+        }
+    }
+    stuck
 }
 
 /// Within half a stroke, as float arithmetic leaves an end a hair off the outline it snapped
@@ -29,23 +116,117 @@ pub(crate) fn lands_on(target: &ElementKind, point: Point) -> bool {
     hits(target, point, STROKE_WIDTH / 2.0)
 }
 
-pub(crate) fn moves_ends(before: &ElementKind, after: &ElementKind) -> bool {
-    Surface::of(before) != Surface::of(after)
+pub(crate) enum Motion {
+    /// As a move alone gives exactly, so that what follows lands where moving it would.
+    Shift(Point),
+    Map {
+        before: Surface,
+        after: Surface,
+    },
 }
 
-/// `None` when float arithmetic overflows.
-pub(crate) fn followed(before: &ElementKind, after: &ElementKind, point: Point) -> Option<Point> {
-    Surface::of(after)?.to_board(Surface::of(before)?.to_content(point)?)
+impl Motion {
+    /// `None` when what sticks to it stays.
+    pub(crate) fn of(before: &ElementKind, after: &ElementKind) -> Option<Self> {
+        let (before, after) = (Surface::of(before)?, Surface::of(after)?);
+        let shifted = Surface {
+            frame: Rect {
+                x: after.frame.x,
+                y: after.frame.y,
+                ..before.frame
+            },
+            ..before
+        };
+        if before == after {
+            None
+        } else if shifted == after {
+            Some(Self::Shift(Point {
+                x: after.frame.x - before.frame.x,
+                y: after.frame.y - before.frame.y,
+            }))
+        } else {
+            Some(Self::Map { before, after })
+        }
+    }
+
+    /// Where an end at `point` goes. `None` when float arithmetic overflows.
+    pub(crate) fn point(&self, point: Point) -> Option<Point> {
+        self.map(point, false)
+    }
+
+    /// `whole` for what sticks whole, which a frame growing down to fit its text leaves where
+    /// it is on the text.
+    fn map(&self, point: Point, whole: bool) -> Option<Point> {
+        match self {
+            Self::Shift(by) => Some(Point {
+                x: point.x + by.x,
+                y: point.y + by.y,
+            }),
+            Self::Map { before, after } => after.to_board(before.to_content(point, whole)?, whole),
+        }
+    }
+
+    /// A note, a sticky note, a shape, or a comment stuck to it whole, moved along. `None` when
+    /// float arithmetic overflows.
+    pub(crate) fn element(&self, kind: &ElementKind) -> Option<ElementKind> {
+        let mut kind = kind.clone();
+        match &mut kind {
+            ElementKind::Note {
+                frame,
+                rotation,
+                text,
+                ..
+            }
+            | ElementKind::Sticky {
+                frame,
+                rotation,
+                text,
+                ..
+            }
+            | ElementKind::Shape {
+                frame,
+                rotation,
+                text,
+                ..
+            } => {
+                let Self::Map { before, after } = self else {
+                    let at = self.point(Point {
+                        x: frame.x,
+                        y: frame.y,
+                    })?;
+                    (frame.x, frame.y) = (at.x, at.y);
+                    return kind.is_valid().then_some(kind);
+                };
+                let centre = self.map(frame.centre(), true)?;
+                // Across only, so that what grows down to fit its text scales nothing on it.
+                let scale = after.scale() / before.scale();
+                let scale = if scale.is_finite() && scale > 0.0 {
+                    scale
+                } else {
+                    1.0
+                };
+                frame.width *= scale;
+                frame.height *= scale;
+                frame.x = centre.x - frame.width / 2.0;
+                frame.y = centre.y - frame.height / 2.0;
+                text.font_size *= scale;
+                *rotation = after.turned(before, *rotation);
+            }
+            ElementKind::Comment { at, .. } => *at = self.map(*at, true)?,
+            _ => return None,
+        }
+        kind.is_valid().then_some(kind)
+    }
 }
 
 #[derive(Debug, PartialEq)]
-struct Surface {
+pub(crate) struct Surface {
     frame: Rect,
     rotation: f64,
     picture: Option<Picture>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Picture {
     crop: Rect,
     flip_horizontal: bool,
@@ -94,7 +275,7 @@ impl Surface {
 
     /// A pixel of the picture, or a point of the frame, in parts of it from its top-left corner
     /// before it turned.
-    fn to_content(&self, point: Point) -> Option<Point> {
+    fn to_content(&self, point: Point, whole: bool) -> Option<Point> {
         let Self {
             frame,
             rotation,
@@ -103,7 +284,7 @@ impl Surface {
         let upright = point.turned(frame.centre(), -rotation);
         let parts = Point {
             x: part(upright.x - frame.x, frame.width),
-            y: part(upright.y - frame.y, frame.height),
+            y: part(upright.y - frame.y, self.down(whole)),
         };
         let content = picture
             .as_ref()
@@ -111,7 +292,43 @@ impl Surface {
         content.is_finite().then_some(content)
     }
 
-    fn to_board(&self, content: Point) -> Option<Point> {
+    /// What a point's height on it is measured in: a picture's pixels, its frame's height for an
+    /// end, and its width for what sticks whole.
+    fn down(&self, whole: bool) -> f64 {
+        if whole && self.picture.is_none() {
+            self.frame.width
+        } else {
+            self.frame.height
+        }
+    }
+
+    /// Board units per unit of what it draws, across.
+    fn scale(&self) -> f64 {
+        let content = self.picture.map_or(1.0, |picture| picture.crop.width.abs());
+        self.frame.width.abs() / content
+    }
+
+    /// An angle turned as `before` turned into this, and mirrored with each flip of its picture,
+    /// which keeps mirrored text the right way up.
+    fn turned(&self, before: &Surface, degrees: f64) -> f64 {
+        let mirrored = |surface: &Surface| {
+            let (horizontally, vertically) = surface.flips();
+            horizontally != vertically
+        };
+        if mirrored(before) == mirrored(self) {
+            angle(degrees + self.rotation - before.rotation)
+        } else {
+            angle(self.rotation + before.rotation - degrees)
+        }
+    }
+
+    fn flips(&self) -> (bool, bool) {
+        self.picture.map_or((false, false), |picture| {
+            (picture.flip_horizontal, picture.flip_vertical)
+        })
+    }
+
+    fn to_board(&self, content: Point, whole: bool) -> Option<Point> {
         let Self {
             frame,
             rotation,
@@ -122,7 +339,7 @@ impl Surface {
             .map_or(content, |picture| picture.parts(content));
         let upright = Point {
             x: frame.x + parts.x * frame.width,
-            y: frame.y + parts.y * frame.height,
+            y: frame.y + parts.y * self.down(whole),
         };
         let point = upright.turned(frame.centre(), *rotation);
         point.is_finite().then_some(point)
@@ -194,6 +411,7 @@ mod tests {
                 content: content.to_owned(),
                 font_size: 20.0,
             },
+            target: None,
         }
     }
 
@@ -231,6 +449,7 @@ mod tests {
         let comment = ElementKind::Comment {
             at: point(50.0, 50.0),
             text: "Here".to_owned(),
+            target: None,
         };
         let board = board([
             (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0)))),
@@ -360,10 +579,10 @@ mod tests {
         };
         // At the picture's (7.5, 2.5), which lands at the crop's (0.5, 0.75) once flipped:
         // (150, 150) upright, turned a quarter around (150, 100).
+        let followed = |before, after, point| Motion::of(before, after)?.point(point);
         let to = followed(&before, &after, point(75.0, 25.0)).unwrap();
         assert!(apart(to, point(100.0, 100.0)) < 1e-9, "{to:?}");
-        assert!(moves_ends(&before, &after));
-        assert!(!moves_ends(&before, &before));
+        assert!(Motion::of(&before, &before).is_none());
         // Flat, it keeps its points at its left side, which is all there is of it.
         let flat = image(area(0.0, 0.0, 0.0, 100.0));
         let to = followed(&flat, &before, point(0.0, 50.0)).unwrap();

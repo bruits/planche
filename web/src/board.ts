@@ -236,20 +236,20 @@ export function extent({ editor, board }: Opened): Rect | undefined {
 }
 
 /** Whether any of the elements is an image, or a group holding one. */
-export function holdsImage({ elements }: Board, ids: string[]): boolean {
+export function holdsImage(board: Board, ids: string[]): boolean {
   const chosen = new Set(ids);
-  return Object.entries(elements).some(([id, { kind }]) => {
-    if (kind.type !== "image") {
-      return false;
+  return Object.entries(board.elements).some(([id, { kind }]) => kind.type === "image" && among(board, id, chosen));
+}
+
+/** Whether the element is one of `chosen`, or within a group among them. */
+export function among({ elements }: Board, id: string, chosen: Set<string>): boolean {
+  // Up through its groups, which reading a board leaves without cycles.
+  for (let at: string | undefined = id; at !== undefined; at = elements[at]?.group) {
+    if (chosen.has(at)) {
+      return true;
     }
-    // Up through its groups, which reading a board leaves without cycles.
-    for (let at: string | undefined = id; at !== undefined; at = elements[at]?.group) {
-      if (chosen.has(at)) {
-        return true;
-      }
-    }
-    return false;
-  });
+  }
+  return false;
 }
 
 /** Each asset its images show, once. Throws when one is missing or does not match its digest. */

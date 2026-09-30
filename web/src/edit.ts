@@ -6,15 +6,17 @@
 // selection's corners scale it around the opposite one, the handle above it rotates it around
 // its centre, and the ends of a lone arrow or line move on their own. The ends of an arrow or a
 // line, as drawn or moved, stick to the image, note, sticky note, or shape they land on, onto its
-// outline when near it, and follow it from then on. While snapping, what moves, scales, or is
-// drawn lands on the grid's lines where near them otherwise. Holding ⌘, or Ctrl elsewhere than
-// macOS, keeps ends from sticking and the grid from pulling, but for a move only once under
-// way, as pressing an element with it toggles the element instead.
+// outline when near it, and follow it from then on. A note, a sticky note, a shape, or a comment
+// drawn, placed, moved, scaled, or turned whole onto an image, a note, a sticky note, or a shape
+// with text sticks to it and follows it too. While snapping, what moves, scales, or is drawn
+// lands on the grid's lines where near them otherwise. Holding ⌘, or Ctrl elsewhere than macOS,
+// keeps things from sticking and the grid from pulling, but for a move only once under way, as
+// pressing an element with it toggles the element instead.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
 import type { Background, Board, Editor, Kind, Point, Rect } from "./core.js";
-import { newId } from "./board.js";
+import { among, newId } from "./board.js";
 import { handles, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
 import { fitted, holdsText, LINE_HEIGHT, type Holder } from "./text.js";
@@ -170,6 +172,13 @@ export function edits(
     (sticks && sticking ? core.stick(editor, point, STICK / zoom) : undefined) ?? { at: pulled(point, zoom) };
   const showTargets = (editor: Editor, ids: (string | undefined)[]) =>
     overlay.targets(ids.flatMap((id) => (id === undefined ? [] : [editor.outline(id)])));
+  const setDown = (editor: Editor, ids: string[]) => (sticking ? editor.land(ids) : editor.unstick(ids));
+  const holders = ({ board }: Editing, ids: string[]) => {
+    const chosen = new Set(ids);
+    return Object.entries(board.elements).flatMap(([id, { kind }]) =>
+      "target" in kind && among(board, id, chosen) ? [kind.target] : [],
+    );
+  };
   /** As moving it would pull it. */
   const aligned = (kind: Kind, zoom: number): Kind => {
     if (!pulling || !("frame" in kind)) {
@@ -360,7 +369,8 @@ export function edits(
             ? [core.snapToGrid(edges(bounds.x + dx, bounds.width), zoom), core.snapToGrid(edges(bounds.y + dy, bounds.height), zoom)]
             : [];
         const snapped = nx !== undefined || ny !== undefined;
-        again(() => settled(editor.translate(ids, dx + (nx ?? 0), dy + (ny ?? 0)), snapped));
+        again(() => [...settled(editor.translate(ids, dx + (nx ?? 0), dy + (ny ?? 0)), snapped), ...setDown(editor, ids)]);
+        showTargets(editor, holders(editing, ids));
         return;
       }
       case "scale": {
@@ -375,13 +385,15 @@ export function edits(
         const factor = Math.max(along, SMALLEST_SCALE);
         const pulled = pulling && press.upright ? core.snapScaleToGrid(origin, corner, factor, zoom) : undefined;
         const snapped = pulled !== undefined && pulled >= SMALLEST_SCALE;
-        again(() => settled(editor.scale(ids, origin.x, origin.y, snapped ? pulled : factor), snapped));
+        again(() => [...settled(editor.scale(ids, origin.x, origin.y, snapped ? pulled : factor), snapped), ...setDown(editor, ids)]);
+        showTargets(editor, holders(editing, ids));
         return;
       }
       case "rotate": {
         const { pivot, from } = press;
         const turned = ((Math.atan2(at.y - pivot.y, at.x - pivot.x) - from) * 180) / Math.PI;
-        again(() => editor.rotate(ids, pivot.x, pivot.y, turned));
+        again(() => [...editor.rotate(ids, pivot.x, pivot.y, turned), ...setDown(editor, ids)]);
+        showTargets(editor, holders(editing, ids));
         return;
       }
       case "draw": {
@@ -403,10 +415,15 @@ export function edits(
         press.ends = [start.at, end.at];
         // A note shows nothing until written in.
         overlay.marquee(shape === "note" ? rect(start.at, end.at) : undefined);
-        showTargets(editor, [start.target, end.target]);
         const kind = shaped(shape, start.at, end.at, FONT_SIZE / zoom);
-        const stuck = sticks ? { ...kind, from_target: start.target, to_target: end.target } : kind;
-        again(() => editor.add(id, entered, JSON.stringify(stuck)));
+        if (sticks) {
+          const stuck = { ...kind, from_target: start.target, to_target: end.target };
+          again(() => editor.add(id, entered, JSON.stringify(stuck)));
+          showTargets(editor, [start.target, end.target]);
+        } else {
+          again(() => [...editor.add(id, entered, JSON.stringify(kind)), ...setDown(editor, [id])]);
+          showTargets(editor, holders(editing, [id]));
+        }
         return;
       }
       case "end": {
@@ -479,6 +496,7 @@ export function edits(
       if (placing) {
         editor.beginGesture();
         touched.push(...editor.add(id, entered, JSON.stringify(aligned(placed(shape, start, zoom), zoom))));
+        touched.push(...setDown(editor, [id]));
       }
       if (!writes) {
         editor.endGesture();

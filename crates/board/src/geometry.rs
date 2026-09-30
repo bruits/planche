@@ -2,7 +2,7 @@
 //! the outlines that show a selection.
 
 use std::collections::BTreeSet;
-use std::f64::consts::FRAC_1_SQRT_2;
+use std::f64::consts::{FRAC_1_SQRT_2, TAU};
 
 use crate::{Board, ElementId, ElementKind, Point, Rect, STROKE_WIDTH, Shape};
 
@@ -80,20 +80,55 @@ impl Board {
             .filter_map(|id| shape(&self.elements[&id].kind))
             .flatten()
             .collect();
-        let (first, rest) = points.split_first()?;
-        let (mut left, mut top, mut right, mut bottom) = (first.x, first.y, first.x, first.y);
-        for point in rest {
-            left = left.min(point.x);
-            top = top.min(point.y);
-            right = right.max(point.x);
-            bottom = bottom.max(point.y);
-        }
-        Some(Rect {
-            x: left,
-            y: top,
-            width: right - left,
-            height: bottom - top,
-        })
+        around(&points)
+    }
+}
+
+fn around(points: &[Point]) -> Option<Rect> {
+    let (first, rest) = points.split_first()?;
+    let (mut left, mut top, mut right, mut bottom) = (first.x, first.y, first.x, first.y);
+    for point in rest {
+        left = left.min(point.x);
+        top = top.min(point.y);
+        right = right.max(point.x);
+        bottom = bottom.max(point.y);
+    }
+    Some(Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    })
+}
+
+/// The upright rectangle around what an element can hold, a stroke wider so that float
+/// arithmetic never leaves out what [`holds`] keeps. `None` for what holds nothing.
+pub(crate) fn surface_bounds(kind: &ElementKind) -> Option<Rect> {
+    let bounds = around(&shape(kind).filter(|_| kind.is_target())?)?;
+    Some(Rect {
+        x: bounds.x - STROKE_WIDTH,
+        y: bounds.y - STROKE_WIDTH,
+        width: bounds.width + 2.0 * STROKE_WIDTH,
+        height: bounds.height + 2.0 * STROKE_WIDTH,
+    })
+}
+
+/// A point that any surface that [`holds`] `kind` covers, which is therefore within its
+/// [`surface_bounds`].
+pub(crate) fn anchor(kind: &ElementKind) -> Option<Point> {
+    match kind {
+        ElementKind::Note { frame, .. }
+        | ElementKind::Sticky { frame, .. }
+        | ElementKind::Shape { frame, .. } => Some(frame.centre()),
+        ElementKind::Comment { at, .. } => Some(*at),
+        _ => None,
+    }
+}
+
+impl Rect {
+    pub(crate) fn contains(&self, point: Point) -> bool {
+        (self.x..=self.x + self.width).contains(&point.x)
+            && (self.y..=self.y + self.height).contains(&point.y)
     }
 }
 
@@ -142,7 +177,7 @@ impl Rect {
 }
 
 /// Clockwise from the top-left, once turned clockwise by `degrees` around the centre.
-fn corners(rect: &Rect, degrees: f64) -> [Point; 4] {
+pub(crate) fn corners(rect: &Rect, degrees: f64) -> [Point; 4] {
     let (left, top) = (rect.x, rect.y);
     let (right, bottom) = (left + rect.width, top + rect.height);
     [(left, top), (right, top), (right, bottom), (left, bottom)]
@@ -232,6 +267,7 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
             rotation,
             shape: Shape::Ellipse,
             text,
+            ..
         } if frame.width != 0.0 && frame.height != 0.0 => {
             ellipse_touches(frame, *rotation, area, !text.is_blank())
         }
@@ -240,6 +276,7 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
             rotation,
             shape: Shape::Cross,
             text,
+            ..
         } => {
             let outline = corners(frame, *rotation);
             if text.is_blank() {
@@ -260,6 +297,70 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
         }
         _ => shape(kind).is_some_and(|shape| overlap(&shape, area)),
     }
+}
+
+/// Whether what `target` covers holds the whole of what `kind` draws: its frame, the curve of an
+/// ellipse, or the pin of a comment.
+pub(crate) fn holds(target: &ElementKind, kind: &ElementKind) -> bool {
+    match kind {
+        ElementKind::Shape {
+            frame,
+            rotation,
+            shape: Shape::Ellipse,
+            ..
+        } if frame.width != 0.0 && frame.height != 0.0 => {
+            covers(target, frame.centre())
+                && match target {
+                    // Close enough, as no cheap test tells whether one ellipse holds another.
+                    ElementKind::Shape {
+                        shape: Shape::Ellipse,
+                        ..
+                    } => (0..64).all(|step| {
+                        let turn = f64::from(step) / 64.0 * TAU;
+                        let centre = frame.centre();
+                        let upright = Point {
+                            x: centre.x + frame.width / 2.0 * turn.cos(),
+                            y: centre.y + frame.height / 2.0 * turn.sin(),
+                        };
+                        covers(target, upright.turned(centre, *rotation))
+                    }),
+                    _ => shape(target)
+                        .is_some_and(|polygon| ellipse_within(frame, *rotation, &polygon)),
+                }
+        }
+        ElementKind::Note {
+            frame, rotation, ..
+        }
+        | ElementKind::Sticky {
+            frame, rotation, ..
+        }
+        | ElementKind::Shape {
+            frame, rotation, ..
+        } => corners(frame, *rotation)
+            .iter()
+            .all(|point| covers(target, *point)),
+        ElementKind::Comment { at, .. } => covers(target, *at),
+        _ => false,
+    }
+}
+
+/// Where the ellipse is the unit circle, it lies within a convex polygon that holds its centre
+/// when every edge of the polygon is at least a radius away.
+fn ellipse_within(frame: &Rect, degrees: f64, polygon: &[Point]) -> bool {
+    let centre = frame.centre();
+    let (radius_x, radius_y) = ((frame.width / 2.0).abs(), (frame.height / 2.0).abs());
+    let unit: Vec<Point> = polygon
+        .iter()
+        .map(|corner| {
+            let upright = corner.turned(centre, -degrees);
+            Point {
+                x: (upright.x - centre.x) / radius_x,
+                y: (upright.y - centre.y) / radius_y,
+            }
+        })
+        .collect();
+    let origin = Point { x: 0.0, y: 0.0 };
+    edges(&unit).all(|(a, b)| distance(origin, a, b) >= 1.0)
 }
 
 /// Where the ellipse is the unit circle, the area meets its curve when the circle's centre is
@@ -546,6 +647,7 @@ mod tests {
                 content: content.to_owned(),
                 font_size: 20.0,
             },
+            target: None,
         }
     }
 
@@ -700,6 +802,7 @@ mod tests {
             frame: area(0.0, 0.0, 100.0, 100.0),
             rotation: 45.0,
             text,
+            target: None,
         };
         let board = board([(1, element(None, "a0", sticky))]);
         assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(1)));
@@ -942,6 +1045,7 @@ mod tests {
         let comment = ElementKind::Comment {
             at: point(10.0, 10.0),
             text: "Too dark".to_owned(),
+            target: None,
         };
         let board = board([(1, element(None, "a0", comment))]);
         assert_eq!(board.hit(point(10.0, 10.0), 3.0), None);

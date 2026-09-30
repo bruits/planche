@@ -35,8 +35,10 @@ pub enum Error {
     TakenId(ElementId),
     #[error("element {0} is not a group")]
     NotAGroup(ElementId),
-    #[error("element {0} cannot hold the end of an arrow or a line")]
+    #[error("nothing can stick to element {0}")]
     NotATarget(ElementId),
+    #[error("element {0} would stick to what sticks to it")]
+    StuckToItself(ElementId),
     #[error("element {0} cannot change kind")]
     KindChanged(ElementId),
     #[error("element {0} would hold a NaN, an infinity, or a font size that is not positive")]
@@ -82,9 +84,10 @@ impl Board {
     }
 
     /// Git merges two branches file by file, so it can leave an element in a group that
-    /// another branch deleted, or two groups inside each other, or an end stuck to an element
-    /// that another branch deleted. Such elements move to the top level, a cycle breaks at its
-    /// smallest id, so that every client repairs alike, and such ends come free where they are.
+    /// another branch deleted, or two groups inside each other, or something stuck to an element
+    /// that another branch deleted, or two elements stuck to each other. Such elements move to
+    /// the top level or come free where they are, and a cycle breaks at its smallest id, so that
+    /// every client repairs alike.
     pub fn repair(&mut self) {
         let misplaced: Vec<ElementId> = self
             .elements
@@ -107,18 +110,7 @@ impl Board {
             self.detach(id);
         }
 
-        let ids: Vec<ElementId> = self.elements.keys().copied().collect();
-        for start in ids {
-            let mut path = vec![start];
-            while let Some(group) = self.elements[path.last().expect("never empty")].group {
-                if let Some(at) = path.iter().position(|&id| id == group) {
-                    let smallest = *path[at..].iter().min().expect("never empty");
-                    self.detach(smallest);
-                    break;
-                }
-                path.push(group);
-            }
-        }
+        self.break_cycles(|element| element.group, |element| element.group = None);
 
         let targets: BTreeSet<ElementId> = self
             .elements
@@ -127,8 +119,39 @@ impl Board {
             .map(|(id, _)| *id)
             .collect();
         for element in self.elements.values_mut() {
-            for (_, target) in element.kind.ends_mut().into_iter().flatten() {
+            for target in element.kind.targets_mut() {
                 target.take_if(|target| !targets.contains(target));
+            }
+        }
+        self.break_cycles(
+            |element| element.kind.target(),
+            |element| {
+                if let Some(target) = element.kind.target_mut() {
+                    *target = None;
+                }
+            },
+        );
+    }
+
+    fn break_cycles(
+        &mut self,
+        next: impl Fn(&Element) -> Option<ElementId>,
+        cut: impl Fn(&mut Element),
+    ) {
+        let ids: Vec<ElementId> = self.elements.keys().copied().collect();
+        for start in ids {
+            let mut path = vec![start];
+            while let Some(following) = self
+                .elements
+                .get(path.last().expect("never empty"))
+                .and_then(&next)
+            {
+                if let Some(at) = path.iter().position(|&id| id == following) {
+                    let smallest = *path[at..].iter().min().expect("never empty");
+                    cut(self.elements.get_mut(&smallest).expect("on the path"));
+                    break;
+                }
+                path.push(following);
             }
         }
     }
@@ -191,6 +214,8 @@ pub enum ElementKind {
         #[serde(serialize_with = "without_negative_zero")]
         rotation: f64,
         text: Text,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<ElementId>,
     },
     /// A sticky note, in a colour of its own.
     Sticky {
@@ -198,6 +223,8 @@ pub enum ElementKind {
         #[serde(serialize_with = "without_negative_zero")]
         rotation: f64,
         text: Text,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<ElementId>,
     },
     Shape {
         frame: Rect,
@@ -205,6 +232,8 @@ pub enum ElementKind {
         rotation: f64,
         shape: Shape,
         text: Text,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<ElementId>,
     },
     /// Its head is at `to`.
     Arrow {
@@ -225,7 +254,12 @@ pub enum ElementKind {
     },
     /// Pinned at `at`, and shown at one size on screen, whatever the zoom, so it covers nothing
     /// on the board.
-    Comment { at: Point, text: String },
+    Comment {
+        at: Point,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<ElementId>,
+    },
     /// Draws nothing itself. Its elements are those whose `group` it is.
     Group,
 }
@@ -238,7 +272,8 @@ impl ElementKind {
         }
     }
 
-    /// Whether the end of an arrow or a line can stick to it, which takes a frame.
+    /// Whether the end of an arrow or a line can stick to it, or a note, a sticky note, a shape,
+    /// or a comment whole, which takes a frame.
     pub fn is_target(&self) -> bool {
         matches!(
             self,
@@ -261,6 +296,48 @@ impl ElementKind {
                 to_target,
             } => Some([(*from, *from_target), (*to, *to_target)]),
             _ => None,
+        }
+    }
+
+    /// The element a note, a sticky note, a shape, or a comment sticks to whole.
+    pub(crate) fn target(&self) -> Option<ElementId> {
+        match self {
+            Self::Note { target, .. }
+            | Self::Sticky { target, .. }
+            | Self::Shape { target, .. }
+            | Self::Comment { target, .. } => *target,
+            _ => None,
+        }
+    }
+
+    pub(crate) fn target_mut(&mut self) -> Option<&mut Option<ElementId>> {
+        match self {
+            Self::Note { target, .. }
+            | Self::Sticky { target, .. }
+            | Self::Shape { target, .. }
+            | Self::Comment { target, .. } => Some(target),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn targets(&self) -> impl Iterator<Item = ElementId> {
+        let ends = self.ends().into_iter().flatten().map(|(_, target)| target);
+        ends.chain([self.target()]).flatten()
+    }
+
+    pub(crate) fn targets_mut(&mut self) -> Vec<&mut Option<ElementId>> {
+        match self {
+            Self::Arrow {
+                from_target,
+                to_target,
+                ..
+            }
+            | Self::Line {
+                from_target,
+                to_target,
+                ..
+            } => vec![from_target, to_target],
+            _ => self.target_mut().into_iter().collect(),
         }
     }
 
@@ -297,17 +374,20 @@ impl ElementKind {
                 frame,
                 rotation,
                 text,
+                target: _,
             }
             | Self::Sticky {
                 frame,
                 rotation,
                 text,
+                target: _,
             }
             | Self::Shape {
                 frame,
                 rotation,
                 shape: _,
                 text,
+                target: _,
             } => frame.is_finite() && rotation.is_finite() && text.is_valid(),
             // Whether their targets are there is up to the board.
             Self::Arrow {
@@ -322,7 +402,11 @@ impl ElementKind {
                 from_target: _,
                 to_target: _,
             } => from.is_finite() && to.is_finite(),
-            Self::Comment { at, text: _ } => at.is_finite(),
+            Self::Comment {
+                at,
+                text: _,
+                target: _,
+            } => at.is_finite(),
             Self::Group => true,
         }
     }
@@ -372,6 +456,13 @@ impl Text {
         } = self;
         font_size.is_finite() && *font_size > 0.0
     }
+}
+
+/// An angle has a single spelling, so that equal boards write the same bytes. Rounding can
+/// bring a tiny negative angle up to 360.
+pub(crate) fn angle(degrees: f64) -> f64 {
+    let turned = degrees.rem_euclid(360.0);
+    if turned < 360.0 { turned } else { 0.0 }
 }
 
 /// How wide arrows, lines, and shapes draw, in board units, until elements hold a style.
@@ -611,17 +702,20 @@ mod tests {
             frame,
             rotation,
             text: text(20.0),
+            target: None,
         };
         let sticky = |frame, rotation, font_size| ElementKind::Sticky {
             frame,
             rotation,
             text: text(font_size),
+            target: None,
         };
         let shape = |frame, rotation, font_size| ElementKind::Shape {
             frame,
             rotation,
             shape: Shape::Rectangle,
             text: text(font_size),
+            target: None,
         };
         let arrow = |from, to| ElementKind::Arrow {
             from,
@@ -638,6 +732,7 @@ mod tests {
         let comment = |at| ElementKind::Comment {
             at,
             text: String::new(),
+            target: None,
         };
         let edits = ImageEdits::default();
 
@@ -811,6 +906,7 @@ mod tests {
                 content: String::new(),
                 font_size: 1.0,
             },
+            target: None,
         };
         let mut broken = board([
             (1, element(None, "a0", note)),
@@ -823,6 +919,35 @@ mod tests {
         let ends = |bits| broken.elements[&id(bits)].kind.ends().unwrap();
         assert_eq!(ends(3), [(point, Some(id(1))), (point, None)]);
         assert_eq!(ends(4), [(point, None), (point, None)]);
+    }
+
+    #[test]
+    fn what_sticks_whole_in_a_cycle_comes_free_at_its_smallest_id_on_repair() {
+        let note = |target: u128| ElementKind::Note {
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            rotation: 0.0,
+            text: Text {
+                content: String::new(),
+                font_size: 1.0,
+            },
+            target: Some(id(target)),
+        };
+        let mut broken = board([
+            (1, element(None, "a0", note(3))),
+            (2, element(None, "a1", note(1))),
+            (3, element(None, "a2", note(2))),
+            (4, element(None, "a3", note(9))),
+            (5, element(None, "a4", note(6))),
+            (6, element(None, "a5", ElementKind::Group)),
+        ]);
+        broken.repair();
+        let targets = [1, 2, 3, 4, 5].map(|bits| broken.elements[&id(bits)].kind.target());
+        assert_eq!(targets, [None, Some(id(1)), Some(id(2)), None, None]);
     }
 
     #[test]

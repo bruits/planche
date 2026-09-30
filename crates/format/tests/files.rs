@@ -39,6 +39,7 @@ fn note(group: Option<ElementId>, text: &str) -> Element {
                 content: text.to_owned(),
                 font_size: 20.0,
             },
+            target: None,
         },
     }
 }
@@ -90,6 +91,7 @@ fn sample() -> Board {
                         content: "Key light".to_owned(),
                         font_size: 16.0,
                     },
+                    target: None,
                 },
             },
         ),
@@ -122,6 +124,7 @@ fn sample() -> Board {
                         content: "Try a warmer grade\nfor the dusk shots".to_owned(),
                         font_size: 20.0,
                     },
+                    target: None,
                 },
             },
         ),
@@ -146,6 +149,7 @@ fn sample() -> Board {
                 kind: ElementKind::Comment {
                     at: Point { x: 12.5, y: -3.0 },
                     text: "Too dark\nfor the mood".to_owned(),
+                    target: Some(ELLIPSE),
                 },
             },
         ),
@@ -162,6 +166,7 @@ fn sample() -> Board {
                         content: String::new(),
                         font_size: 20.0,
                     },
+                    target: None,
                 },
             },
         ),
@@ -225,7 +230,7 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
     fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
-    let cases: [(Edit, &[u128]); 13] = [
+    let cases: [(Edit, &[u128]); 16] = [
         (
             |editor| editor.add(id(10), None, note(None, "New").kind),
             &[10],
@@ -252,8 +257,9 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
         ),
         (|editor| editor.ungroup(id(1)), &[1, 2, 3]),
         (|editor| editor.remove(&[ARROW]), &[5]),
-        // The arrow's ends stick to the ellipse and the sticky note.
-        (|editor| editor.translate(&[ELLIPSE], 8.0, -8.0), &[4, 5]),
+        // The arrow's ends stick to the ellipse and the sticky note, and the comment to the
+        // ellipse.
+        (|editor| editor.translate(&[ELLIPSE], 8.0, -8.0), &[4, 5, 9]),
         (
             |editor| {
                 let mut kind = editor.board().elements[&ELLIPSE].kind.clone();
@@ -265,6 +271,11 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
             &[4],
         ),
         (|editor| editor.remove(&[STICKY]), &[5, 6]),
+        (|editor| editor.remove(&[ELLIPSE]), &[4, 5, 9]),
+        (|editor| editor.unstick(&[id(9)]), &[9]),
+        // The cross lies whole on the note, and the comment off the ellipse it sticks to, on
+        // the sticky note.
+        (|editor| editor.land(&[id(8), id(9)]), &[8, 9]),
     ];
     for (edit, touched) in cases {
         let mut editor = Editor::new(sample());
@@ -456,6 +467,7 @@ fn equal_boards_write_the_same_bytes() {
             content: String::new(),
             font_size: 1.0,
         },
+        target: None,
     };
     for (bits, kind) in [(20, image), (21, shape)] {
         let element = Element {

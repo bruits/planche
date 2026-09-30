@@ -158,6 +158,14 @@ impl Editor {
         Ok(strings(self.0.settle_on_grid(&parse(ids)?)?))
     }
 
+    pub fn land(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.land(&parse(ids)?)?))
+    }
+
+    pub fn unstick(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.unstick(&parse(ids)?)?))
+    }
+
     pub fn flip(&mut self, ids: Vec<String>, horizontally: bool) -> Result<Vec<String>, JsError> {
         Ok(strings(self.0.flip(&parse(ids)?, horizontally)?))
     }
