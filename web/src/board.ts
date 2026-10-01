@@ -1,6 +1,7 @@
 // A board as the app opens it: its files through the platform, edited by the core, and its
 // images decoded by the browser.
 
+import type { Moving } from "./animation.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Editor, Files, Kind, Point, Rect, Size } from "./core.js";
 import { milliseconds, timed } from "./metrics.js";
@@ -27,6 +28,7 @@ export interface Added {
   bytes: Blob;
   natural: Size;
   decoded: Decoded;
+  moving?: Moving;
 }
 
 /** An asset that images show, still encoded. */
@@ -35,6 +37,7 @@ export interface Asset {
   blob: Blob;
   natural: Size;
   vector: boolean;
+  moving?: Moving;
 }
 
 /**
@@ -97,18 +100,28 @@ export async function prepare(bytes: Blob, cap: number): Promise<Added> {
   if (vector !== undefined) {
     return { asset, bytes, natural: vector, decoded: await picture(whole, vector) };
   }
+  // Its first frame, when it moves.
   const full = await createImageBitmap(bytes, { imageOrientation: "from-image" });
   const natural = { width: full.width, height: full.height };
+  const moving = moves(whole);
   const { width, height } = capped(natural, cap);
   if (width === natural.width && height === natural.height) {
-    return { asset, bytes, natural, decoded: full };
+    return { asset, bytes, natural, decoded: full, moving };
   }
   const bitmap = await createImageBitmap(full, {
     resizeWidth: width,
     resizeHeight: height,
     resizeQuality: "high",
   }).finally(() => full.close());
-  return { asset, bytes, natural, decoded: bitmap };
+  return { asset, bytes, natural, decoded: bitmap, moving };
+}
+
+/** Only a GIF, a PNG, or a WebP may move, and only their bytes are worth copying into the core. */
+function moves(bytes: Bytes): Moving | undefined {
+  const head = String.fromCharCode(...bytes.subarray(0, 12));
+  const may = head.startsWith("GIF8") || head.startsWith("\x89PNG") || (head.startsWith("RIFF") && head.endsWith("WEBP"));
+  const plays = may ? core.animationPlays(bytes) : undefined;
+  return plays === undefined ? undefined : { bytes, plays };
 }
 
 export function release(decoded: Decoded): void {
@@ -262,8 +275,16 @@ export function extent({ editor, board }: Opened): Rect | undefined {
 
 /** Whether any of the elements is an image, or a group holding one. */
 export function holdsImage(board: Board, ids: string[]): boolean {
+  return assetsOf(board, ids).length > 0;
+}
+
+/** Those of the images among the elements, or within groups among them, once each. */
+export function assetsOf(board: Board, ids: string[]): string[] {
   const chosen = new Set(ids);
-  return Object.entries(board.elements).some(([id, { kind }]) => kind.type === "image" && among(board, id, chosen));
+  const assets = Object.entries(board.elements).flatMap(([id, { kind }]) =>
+    kind.type === "image" && among(board, id, chosen) ? [kind.asset] : [],
+  );
+  return [...new Set(assets)];
 }
 
 /** Whether the element is one of `chosen`, or within a group among them. */
@@ -286,7 +307,8 @@ export async function readAssets({ folder, board }: Opened): Promise<Asset[]> {
       const bytes = await folder.read(core.assetPath(kind.asset));
       core.verifyAsset(kind.asset, bytes);
       const vector = checkedSvgSize(bytes) !== undefined;
-      assets.set(kind.asset, { asset: kind.asset, blob: new Blob([bytes]), natural: kind.natural_size, vector });
+      const natural = kind.natural_size;
+      assets.set(kind.asset, { asset: kind.asset, blob: new Blob([bytes]), natural, vector, moving: moves(bytes) });
     }
   }
   return [...assets.values()];

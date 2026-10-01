@@ -1,8 +1,8 @@
 // The renderer, on wgpu compiled to WebAssembly.
 
 import type { Camera } from "./camera.js";
-import { gridLevel, type Background, type Point, type Rect } from "./core.js";
-import start, { create as createWgpu } from "./wasm/renderer.js";
+import { gridLevel, type Background, type Bytes, type Point, type Rect } from "./core.js";
+import start, { Animation, create as createWgpu } from "./wasm/renderer.js";
 
 /**
  * A colour of the theme, as its host's style gives it: the ink is its text colour, which forced
@@ -30,6 +30,17 @@ export type Placed =
   | { kind: "rectangle" | "ellipse" | "cross"; frame: Rect; rotation: number; width: number }
   | { kind: "fill"; frame: Rect; rotation: number; paint: Paint };
 
+/** An animated image, whose frames it draws onto its asset's texture. */
+export interface Playing {
+  /**
+   * Draws the next frame. How long it asks to show, in milliseconds, `undefined` once none is
+   * left. Throws when it does not decode, or is not as large as the texture.
+   */
+  next(): number | undefined;
+  restart(): void;
+  free(): void;
+}
+
 export interface Renderer {
   /** What it runs on, such as the GPU's name. */
   readonly backend: string;
@@ -39,6 +50,8 @@ export interface Renderer {
   load(bitmaps: Map<string, ImageBitmap>): void;
   /** The asset as the canvas holds it, in place of any before. */
   setImage(asset: string, canvas: HTMLCanvasElement): void;
+  /** The frames the bytes of a loaded asset hold. Throws when they do not decode. */
+  animate(asset: string, bytes: Bytes): Playing;
   /** The text `id` as the canvas holds it, in place of any before. */
   setText(id: string, canvas: HTMLCanvasElement): void;
   dropText(id: string): void;
@@ -160,6 +173,17 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
     },
     setImage(asset, canvas) {
       replace(images, asset, canvas);
+    },
+    animate(asset, bytes) {
+      const animation = new Animation(bytes);
+      return {
+        next() {
+          const texture = images.get(asset);
+          return texture === undefined ? undefined : renderer.advance(texture, animation);
+        },
+        restart: () => animation.restart(),
+        free: () => animation.free(),
+      };
     },
     setText(id, canvas) {
       replace(texts, id, canvas);

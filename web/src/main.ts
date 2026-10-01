@@ -4,7 +4,9 @@
 import * as core from "./core.js";
 import type { Background, Point } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
+import { animations } from "./animation.js";
 import {
+  assetsOf,
   decode,
   extent,
   files,
@@ -56,6 +58,7 @@ const viewport = view(byId("viewport"), {
     editing.follow();
     if (opened && renderer) {
       drawings.update(opened.board, renderer, camera, size);
+      animated.update(opened.board, renderer, camera, size);
       if (lettering.update(opened.board, renderer, camera, size, editing.writing())) {
         renderer.place(placed(opened.board, lettering, editing.writing()));
       }
@@ -65,6 +68,7 @@ const viewport = view(byId("viewport"), {
 });
 const lettering = texts(() => viewport.redraw());
 const drawings = vectors(() => viewport.redraw());
+const animated = animations(() => viewport.redraw(), () => refreshBar());
 const editing = edits(viewport, shown, () => opened, {
   changed,
   selectionChanged() {
@@ -101,6 +105,7 @@ const loadingBoard = () => (loading ? "A board is opening" : undefined);
 const noBoard = () => (opened === undefined ? "No board is open yet" : undefined);
 const noneSelected = () => (editing.selection().length === 0 ? "Nothing is selected" : undefined);
 const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet" : undefined);
+const selectedAnimations = () => (opened ? assetsOf(opened.board, editing.selection()).filter(animated.holds) : []);
 const restack = (label: string, to: Restack, shortcut: Shortcut): Command => ({
   label,
   keys: [shortcut],
@@ -185,6 +190,16 @@ const commands = {
   back: restack("Send to back", "back", { code: "BracketLeft", command: true, alt: true }),
   flipHorizontally: flip("Flip horizontally", "h", true),
   flipVertically: flip("Flip vertically", "v", false),
+  play: {
+    label: () => (selectedAnimations().some(animated.playing) ? "Pause" : "Play"),
+    keys: [{ key: "p" }],
+    unavailable: () => noneSelected() ?? (selectedAnimations().length > 0 ? undefined : "Only animated images play"),
+    run: () => {
+      const assets = selectedAnimations();
+      animated.play(assets, !assets.some(animated.playing));
+      refreshBar();
+    },
+  },
   group: {
     label: "Group",
     keys: [{ key: "g", command: true }],
@@ -349,6 +364,12 @@ for (const query of ["(prefers-color-scheme: dark)", "(forced-colors: active)"])
     viewport.redraw();
   });
 }
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+animated.reduce(reducedMotion.matches);
+reducedMotion.addEventListener("change", () => {
+  animated.reduce(reducedMotion.matches);
+  refreshBar();
+});
 document.addEventListener("contextmenu", (event) => {
   // The field's own menu offers to paste.
   if (typing(event.target)) {
@@ -488,7 +509,9 @@ function hint(): string {
     return `Drag to move · drag an end to move it, holding ${freeKey} to keep it from sticking · right-click for more`;
   }
   if (editing.selection().length > 0) {
-    return "Drag to move · corners scale · the circle rotates · right-click for more";
+    const play = commands.play.unavailable() === undefined;
+    const playKey = `${describe(commands.play.keys[0]!)} to ${commands.play.label().toLowerCase()} · `;
+    return `Drag to move · corners scale · the circle rotates · ${play ? playKey : ""}right-click for more`;
   }
   return "Drop or paste images · scroll to move around · right-click for more";
 }
@@ -509,6 +532,7 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         "separator",
         commands.flipHorizontally,
         commands.flipVertically,
+        commands.play,
         "separator",
         commands.remove,
       ]
@@ -589,6 +613,7 @@ async function show(next: Opened): Promise<void> {
   snapping = next.board.background !== "plain";
   lettering.reset();
   drawings.reset();
+  animated.reset();
   comments.clear();
   showSaved();
   showTitle();
@@ -618,6 +643,7 @@ async function show(next: Opened): Promise<void> {
   details.set("decode", milliseconds(decoding));
   const [, uploading] = await timed(() => load(created, decoded));
   details.set("upload", milliseconds(uploading));
+  animated.keep(assets);
   created.place(placed(next.board, lettering));
   viewport.redraw();
   if (!empty) {
@@ -645,6 +671,7 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   await editing.idle();
   if (added.length > 0 && target !== undefined && target === opened && renderer !== undefined) {
     load(renderer, new Map(added.map(({ asset, decoded }) => [asset, decoded])));
+    animated.keep(added);
     const { editor } = target;
     const frames = row(
       added.map(({ natural }) => natural),

@@ -34,7 +34,7 @@ export function settling(again: () => void): Settling {
   let moved = 0;
   let waiting: ReturnType<typeof setTimeout> | undefined;
   return {
-    follow(camera, { width, height }) {
+    follow(camera, viewport) {
       const now = performance.now();
       if (camera.zoom !== seen?.zoom) {
         zoomed = now + SETTLE;
@@ -43,7 +43,7 @@ export function settling(again: () => void): Settling {
         moved = now + SETTLE;
       }
       seen = camera;
-      return { x: camera.x, y: camera.y, width: width / camera.zoom, height: height / camera.zoom };
+      return onScreen(camera, viewport);
     },
     settled(visible) {
       const now = performance.now();
@@ -63,6 +63,11 @@ export function settling(again: () => void): Settling {
       seen = undefined;
     },
   };
+}
+
+/** What of the board shows. */
+export function onScreen(camera: Camera, { width, height }: Viewport): Rect {
+  return { x: camera.x, y: camera.y, width: width / camera.zoom, height: height / camera.zoom };
 }
 
 /** Whether the frame, however it turns, may show in `area`. */

@@ -6,9 +6,11 @@ import init, {
   Snapshot,
   ZipIndex,
   ZipWriter,
+  animationPlays as plays,
   assetId,
   assetPath,
   fileDepth,
+  frameDelay,
   gridLevel as level,
   isAssetFile,
   isBoardFile,
@@ -31,6 +33,7 @@ export {
   assetId,
   assetPath,
   fileDepth,
+  frameDelay,
   isAssetFile,
   isBoardFile,
   locateZipDirectory,
@@ -153,6 +156,12 @@ export function gridLevel(zoom: number): GridLevel {
 export function svgSize(bytes: Bytes): Size | undefined {
   const size = vectorSize(bytes);
   return size && { width: size[0]!, height: size[1]! };
+}
+
+/** How many times an animated image plays through, `undefined` when the bytes do not move. */
+export function animationPlays(bytes: Bytes): number | undefined {
+  const times = plays(bytes);
+  return times === 0 ? Infinity : times;
 }
 
 /** The SVG with its root sized to `natural`, for every host to draw it at that size. */

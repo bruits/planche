@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use board::{
-    AssetId, Background, Board, Element, ElementId, ElementKind, GRID_STEP, GridLevel, Point, Rect,
-    Restack, Size,
+    Animation, AssetId, Background, Board, Element, ElementId, ElementKind, GRID_STEP, GridLevel,
+    Point, Rect, Restack, Size,
 };
 use format::zip;
 use js_sys::{Map, Uint8Array};
@@ -430,6 +430,22 @@ pub fn svg_size(bytes: &[u8]) -> Option<Vec<u32>> {
 #[wasm_bindgen(js_name = sizedSvg)]
 pub fn sized_svg(bytes: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
     board::sized_svg(bytes, Size { width, height })
+}
+
+/// How many times an animated image plays through, 0 for ever, `undefined` when `bytes` do not
+/// move.
+#[wasm_bindgen(js_name = animationPlays)]
+pub fn animation_plays(bytes: &[u8]) -> Option<u32> {
+    board::animation(bytes).map(|animation| match animation {
+        Animation::Forever => 0,
+        Animation::Plays(times) => times.get(),
+    })
+}
+
+/// How long a frame that asks for `milliseconds` shows.
+#[wasm_bindgen(js_name = frameDelay)]
+pub fn frame_delay(milliseconds: f64) -> f64 {
+    board::frame_delay(milliseconds)
 }
 
 /// Writes a board's ZIP file one entry at a time.

@@ -19,3 +19,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.11"
 thiserror = "2"
+
+[patch.crates-io]
+# 0.2.4 clears disposed frames under lossy ones with the wrong stride (image-rs/image-webp#178).
+# Dropped at its next release.
+image-webp = { git = "https://github.com/image-rs/image-webp", rev = "28bed2274df92d600a823004e2fedd498ead4619" }
