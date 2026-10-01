@@ -614,6 +614,9 @@ mod tests {
             },
             rotation,
             edits: ImageEdits::default(),
+            source: None,
+            filename: None,
+            caption: None,
         }
     }
 

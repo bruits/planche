@@ -35,6 +35,7 @@ export interface Added {
   moving?: Moving;
   /** Typed, to play from. */
   video?: Blob;
+  filename?: string;
 }
 
 /** An asset that images show, still encoded. */
@@ -188,9 +189,9 @@ function hex(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function imageKind(asset: string, natural: Size, frame: Rect): Kind {
+export function imageKind(asset: string, natural: Size, frame: Rect, filename?: string): Kind {
   const edits = { crop: null, flip_horizontal: false, flip_vertical: false, greyscale: false };
-  return { type: "image", asset, natural_size: natural, frame, rotation: 0, edits };
+  return { type: "image", asset, natural_size: natural, frame, rotation: 0, edits, filename };
 }
 
 export function row(sizes: Size[], at: Point): Rect[] {

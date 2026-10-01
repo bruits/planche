@@ -7,8 +7,11 @@ import type { Point } from "./core.js";
 import { platform } from "./platform.js";
 import type { View } from "./view.js";
 
-/** An image to add, still encoded, or why it cannot be. */
-export type Incoming = { name: string; bytes: Blob } | { name: string; failure: string };
+/**
+ * An image to add, still encoded, or why it cannot be. `name` tells the user which one failed,
+ * `filename` names the file it was picked or dropped as.
+ */
+export type Incoming = { name: string; filename?: string; bytes: Blob } | { name: string; failure: string };
 
 /**
  * Image and video files the user picks, none when they cancel. The macOS webview offers every file,
@@ -19,7 +22,7 @@ export async function pick(): Promise<Incoming[]> {
     input.accept = "image/*,video/*";
     input.multiple = true;
   });
-  return (files ?? []).map((file) => ({ name: file.name, bytes: file }));
+  return (files ?? []).map(fromFile);
 }
 
 /** Hands each drop or paste over with where it goes: under the pointer, or at the view's centre. */
@@ -31,7 +34,7 @@ export function receive(view: View, received: (incoming: Promise<Incoming[]>, at
   view.host.addEventListener("drop", (event) => {
     const at = view.at(event);
     if (at && event.dataTransfer) {
-      received(gather(event.dataTransfer), at);
+      received(gather(event.dataTransfer, true), at);
     }
   });
   platform.watchDrops((read, addresses, point) => {
@@ -52,21 +55,30 @@ export function receive(view: View, received: (incoming: Promise<Incoming[]>, at
     event.preventDefault();
     // WebKitGTK hands a paste nothing, though the clipboard may hold an image.
     const empty = event.clipboardData.types.length === 0;
-    received(empty ? readClipboard() : gather(event.clipboardData), at);
+    received(empty ? readClipboard() : gather(event.clipboardData, false), at);
   });
   // WebKit enables its Paste menu item, which Cmd+V goes through, only for editable content,
   // unless this is cancelled.
   document.addEventListener("beforepaste", (event) => typing(event.target) || event.preventDefault());
 }
 
-/** Reads what it needs before its first `await`, as the transfer empties once its event ends. */
-async function gather(transfer: DataTransfer): Promise<Incoming[]> {
+/**
+ * Reads what it needs before its first `await`, as the transfer empties once its event ends.
+ * Engines name images pasted or brought from a page themselves, `image.png` and the like, so
+ * only files dropped from the disk keep their name.
+ */
+async function gather(transfer: DataTransfer, dropped: boolean): Promise<Incoming[]> {
   const files = [...transfer.files];
-  if (files.length > 0) {
-    return files.map((file) => ({ name: file.name, bytes: file }));
-  }
   const address = source(transfer);
+  if (files.length > 0) {
+    const named = dropped && address === undefined;
+    return files.map((file) => (named ? fromFile(file) : { name: file.name, bytes: file }));
+  }
   return address === undefined ? [] : [await download(address)];
+}
+
+function fromFile(file: File): Incoming {
+  return { name: file.name, filename: file.name || undefined, bytes: file };
 }
 
 /** The `<img>` of a page's HTML, which keeps it when the image is a link, or else its URL. */

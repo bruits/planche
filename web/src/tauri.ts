@@ -90,10 +90,11 @@ export function tauri({ core, event }: TauriApi): Platform {
       type Dropped = [string[], string[], number, number];
       void event.listen<Dropped>("dropped", ({ payload: [paths, addresses, clientX, clientY] }) => {
         const readOne = async (path: string) => {
-          const name = basename(path);
+          // Linux paths, where a backslash may be part of a name.
+          const name = path.slice(path.lastIndexOf("/") + 1);
           try {
             const bytes = await core.invoke<ArrayBuffer>("read_dropped", { path });
-            return { name, bytes: new Blob([bytes]) };
+            return { name, filename: name, bytes: new Blob([bytes]) };
           } catch (error) {
             return { name, failure: String(error) };
           }

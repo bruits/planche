@@ -1220,6 +1220,9 @@ mod tests {
             },
             rotation: 0.0,
             edits: crate::ImageEdits::default(),
+            source: None,
+            filename: None,
+            caption: None,
         };
         let mut editor = Editor::new(board([
             (1, element(None, "a0", ElementKind::Group)),
@@ -1780,6 +1783,9 @@ mod tests {
                 flip_horizontal: flipped,
                 ..crate::ImageEdits::default()
             },
+            source: None,
+            filename: None,
+            caption: None,
         };
         let rect = |width, height| Rect {
             x: 0.0,
@@ -1853,6 +1859,9 @@ mod tests {
             },
             rotation: 0.0,
             edits: crate::ImageEdits::default(),
+            source: None,
+            filename: None,
+            caption: None,
         };
         let mut editor = Editor::new(board([
             (1, element(None, "a0", image)),
@@ -2078,6 +2087,9 @@ mod tests {
             },
             rotation: 0.0,
             edits: crate::ImageEdits::default(),
+            source: None,
+            filename: None,
+            caption: None,
         }
     }
 

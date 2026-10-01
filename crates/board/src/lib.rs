@@ -213,6 +213,15 @@ pub enum ElementKind {
         #[serde(serialize_with = "without_negative_zero")]
         rotation: f64,
         edits: ImageEdits,
+        /// Where the image came from, such as the address of a page, as whoever set it wrote it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+        /// The name of the file it was added from. Shells keep the name alone, as its path
+        /// would say too much about the disk of whoever added it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
     },
     /// Text alone.
     Note {
@@ -375,6 +384,9 @@ impl ElementKind {
                 frame,
                 rotation,
                 edits,
+                source: _,
+                filename: _,
+                caption: _,
             } => frame.is_finite() && rotation.is_finite() && edits.is_finite(),
             Self::Note {
                 frame,
@@ -718,6 +730,9 @@ mod tests {
             frame,
             rotation,
             edits,
+            source: None,
+            filename: None,
+            caption: None,
         };
         let text = |font_size| Text {
             content: String::new(),

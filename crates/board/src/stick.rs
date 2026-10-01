@@ -425,6 +425,9 @@ mod tests {
             frame,
             rotation: 0.0,
             edits: crate::ImageEdits::default(),
+            source: None,
+            filename: None,
+            caption: None,
         }
     }
 
@@ -576,6 +579,9 @@ mod tests {
                 flip_vertical: true,
                 ..crate::ImageEdits::default()
             },
+            source: None,
+            filename: None,
+            caption: None,
         };
         // At the picture's (7.5, 2.5), which lands at the crop's (0.5, 0.75) once flipped:
         // (150, 150) upright, turned a quarter around (150, 100).

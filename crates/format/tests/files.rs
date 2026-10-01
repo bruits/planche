@@ -74,6 +74,10 @@ fn sample() -> Board {
                         flip_vertical: false,
                         greyscale: true,
                     },
+                    source: Some("https://example.com/harbour".to_owned()),
+                    filename: Some("harbour.png".to_owned()),
+                    // Quotes, a line break and accents, which JSON escapes or keeps as they are.
+                    caption: Some("The \"old\" harbour\nlumière rasante".to_owned()),
                 },
             },
         ),
@@ -230,7 +234,7 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
     fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
-    let cases: [(Edit, &[u128]); 16] = [
+    let cases: [(Edit, &[u128]); 17] = [
         (
             |editor| editor.add(id(10), None, note(None, "New").kind),
             &[10],
@@ -269,6 +273,16 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
                 editor.update(ELLIPSE, kind)
             },
             &[4],
+        ),
+        (
+            |editor| {
+                let mut kind = editor.board().elements[&id(2)].kind.clone();
+                if let ElementKind::Image { caption, .. } = &mut kind {
+                    *caption = Some("The new harbour".to_owned());
+                }
+                editor.update(id(2), kind)
+            },
+            &[2],
         ),
         (|editor| editor.remove(&[STICKY]), &[5, 6]),
         (|editor| editor.remove(&[ELLIPSE]), &[4, 5, 9]),
@@ -424,6 +438,51 @@ fn an_arrow_names_what_its_ends_stick_to() {
 }
 
 #[test]
+fn an_image_says_where_it_came_from_and_what_it_shows() {
+    let image = ElementId::from_random(2);
+    let files = format::write(&sample()).unwrap();
+    let written = String::from_utf8(files[&format!("elements/{image}.json")].clone()).unwrap();
+    assert_eq!(
+        written,
+        r#"{
+  "group": "00000000000000000000000000000001",
+  "z": "a1",
+  "kind": {
+    "type": "image",
+    "asset": "ASSET",
+    "natural_size": {
+      "width": 1280,
+      "height": 960
+    },
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 640.0,
+      "height": 480.0
+    },
+    "rotation": 90.0,
+    "edits": {
+      "crop": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 320.0,
+        "height": 240.0
+      },
+      "flip_horizontal": true,
+      "flip_vertical": false,
+      "greyscale": true
+    },
+    "source": "https://example.com/harbour",
+    "filename": "harbour.png",
+    "caption": "The \"old\" harbour\nlumière rasante"
+  }
+}
+"#
+        .replace("ASSET", &AssetId::of(IMAGE).to_string())
+    );
+}
+
+#[test]
 fn line_endings_are_kept_out_of_git() {
     let (path, attributes) = format::git_attributes();
     assert_eq!(path, ".gitattributes");
@@ -458,6 +517,9 @@ fn equal_boards_write_the_same_bytes() {
             crop: Some(zero),
             ..ImageEdits::default()
         },
+        source: None,
+        filename: None,
+        caption: None,
     };
     let shape = ElementKind::Shape {
         frame: zero,

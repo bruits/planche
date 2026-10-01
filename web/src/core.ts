@@ -79,6 +79,9 @@ export type Kind =
       frame: Rect;
       rotation: number;
       edits: { crop: Rect | null; flip_horizontal: boolean; flip_vertical: boolean; greyscale: boolean };
+      source?: string;
+      filename?: string;
+      caption?: string;
     }
   | { type: "note"; frame: Rect; rotation: number; text: Text; target?: string }
   | { type: "sticky"; frame: Rect; rotation: number; text: Text; target?: string }

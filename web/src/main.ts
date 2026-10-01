@@ -728,7 +728,7 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
       continue;
     }
     try {
-      added.push(await prepare(image.bytes, LONGEST_SIDE));
+      added.push({ ...(await prepare(image.bytes, LONGEST_SIDE)), filename: image.filename });
     } catch (error) {
       const reason = error instanceof Error && error.message ? error.message : String(error);
       failures.push(`${image.name}: this app cannot open it here (${reason})`);
@@ -752,9 +752,9 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
     const group = editing.entered();
     editor.beginGesture();
     try {
-      added.forEach(({ asset, bytes, natural }, at) => {
+      added.forEach(({ asset, bytes, natural, filename }, at) => {
         target.added.set(core.assetPath(asset), bytes);
-        touched.push(...editor.add(ids[at]!, group, JSON.stringify(imageKind(asset, natural, frames[at]!))));
+        touched.push(...editor.add(ids[at]!, group, JSON.stringify(imageKind(asset, natural, frames[at]!, filename))));
       });
     } finally {
       editor.endGesture();
