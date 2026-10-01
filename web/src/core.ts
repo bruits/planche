@@ -241,6 +241,16 @@ export function bounds(editor: Editor, ids: string[]): Rect | undefined {
   return bounds && { x: bounds[0]!, y: bounds[1]!, width: bounds[2]!, height: bounds[3]! };
 }
 
+/** Mirrors `board::Order`. */
+export type Order =
+  | { by: "name" | "size" }
+  | { by: "hue"; colours: Record<string, [number, number, number]> }
+  | { by: "random"; seed: number };
+
+export function arrange(editor: Editor, ids: string[], order: Order): string[] {
+  return editor.arrange(ids, JSON.stringify(order));
+}
+
 /** Every file but the assets. */
 export function write(snapshot: Snapshot): Files {
   return snapshot.write() as Files;

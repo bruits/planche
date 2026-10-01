@@ -2,7 +2,7 @@
 // to it and edit it, and save it elsewhere or export it.
 
 import * as core from "./core.js";
-import type { Background, Point } from "./core.js";
+import type { Background, Order, Point } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
 import { animations } from "./animation.js";
@@ -27,11 +27,12 @@ import {
   type Opened,
 } from "./board.js";
 import { fit } from "./camera.js";
+import { meanColours } from "./colour.js";
 import { describe, listen, mac, typing, type Command, type Shortcut } from "./commands.js";
 import { edits, type Draw, type Restack } from "./edit.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
-import { menuOpen, openMenu, type Entry } from "./menu.js";
+import { menuOpen, openMenu, type Entry, type Item } from "./menu.js";
 import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./metrics.js";
 import { overlay } from "./overlay.js";
 import { pinned, pins } from "./pins.js";
@@ -125,10 +126,18 @@ let frameRate = 0;
 let hintsShown = recall(HINTS) !== "hidden";
 let agentsAllowed = false;
 let onTop = false;
+let arranging = false;
+
+type Ordering = (opened: Opened, ids: string[]) => Order | Promise<Order>;
 
 const loadingBoard = () => (loading ? "A board is opening" : undefined);
 const noBoard = () => (opened === undefined ? "No board is open yet" : undefined);
 const noneSelected = () => (editing.selection().length === 0 ? "Nothing is selected" : undefined);
+// Images within a selected group do not count, as arranging leaves groups where they are.
+const fewImages = () =>
+  editing.selection().filter((id) => opened?.board.elements[id]?.kind.type === "image").length < 2
+    ? "Select two images or more"
+    : undefined;
 const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet" : undefined);
 const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection()) : []);
 const selectedMoving = () => selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
@@ -145,6 +154,11 @@ const flip = (label: string, key: string, horizontally: boolean): Command => ({
   unavailable: () =>
     noneSelected() ?? (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images flip"),
   run: () => editing.flip(horizontally),
+});
+const arrangement = (label: string, order: Ordering): Command => ({
+  label,
+  unavailable: () => (arranging ? "Images are being arranged" : fewImages()),
+  run: () => report(arrange(label, order)),
 });
 const backdrop = (label: string, background: Background): Command => ({
   label,
@@ -216,6 +230,16 @@ const commands = {
   forward: restack("Bring forward", "forward", { key: "]", code: "BracketRight", command: true }),
   backward: restack("Send backward", "backward", { key: "[", code: "BracketLeft", command: true }),
   back: restack("Send to back", "back", { code: "BracketLeft", command: true, alt: true }),
+  arrangeByName: arrangement("By name", () => ({ by: "name" })),
+  arrangeBySize: arrangement("By size", () => ({ by: "size" })),
+  arrangeByColour: arrangement("By colour", async (target, ids) => ({
+    by: "hue",
+    colours: await meanColours(target, ids),
+  })),
+  arrangeRandomly: arrangement("At random", () => ({
+    by: "random",
+    seed: crypto.getRandomValues(new Uint32Array(1))[0]!,
+  })),
   flipHorizontally: flip("Flip horizontally", "h", true),
   flipVertically: flip("Flip vertically", "v", false),
   play: {
@@ -596,7 +620,7 @@ async function useCompact(on: boolean): Promise<void> {
 }
 
 /** One that only opens its options, so never runs. */
-function submenu(label: string, options: Entry[]): Entry {
+function submenu(label: string, options: Entry[]): Item {
   return { label, run() {}, options };
 }
 
@@ -622,6 +646,35 @@ function escape(): void {
     useTool("select");
   } else if (!editing.up()) {
     editing.select([]);
+  }
+}
+
+async function arrange(label: string, order: Ordering): Promise<void> {
+  const target = opened;
+  const ids = editing.selection();
+  if (target === undefined || arranging) {
+    return;
+  }
+  arranging = true;
+  try {
+    const working = order(target, ids);
+    const slow = working instanceof Promise;
+    if (slow) {
+      bar.say(`Arranging ${label.toLowerCase()}…`, true);
+    }
+    const chosen = await working;
+    await editing.idle();
+    const selection = new Set(editing.selection());
+    if (opened !== target || selection.size !== ids.length || ids.some((id) => !selection.has(id))) {
+      bar.say("Not arranged, as the selection changed");
+    } else {
+      editing.arrange(chosen);
+      if (slow) {
+        bar.say(`Arranged ${label.toLowerCase()}`);
+      }
+    }
+  } finally {
+    arranging = false;
   }
 }
 
@@ -707,6 +760,16 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.backward,
         commands.back,
         "separator",
+        {
+          ...submenu("Arrange", [
+            commands.arrangeByName,
+            commands.arrangeBySize,
+            commands.arrangeByColour,
+            commands.arrangeRandomly,
+          ]),
+          unavailable: fewImages,
+        },
+        "separator",
         commands.flipHorizontally,
         commands.flipVertically,
         commands.play,
@@ -722,11 +785,34 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         "separator",
         grids(),
       ];
+  const shown = onSelection ? relevant(entries) : entries;
   // First, as the menu may not fit a small window.
   if (compact) {
-    entries.unshift(leaveCompact, "separator");
+    shown.unshift(leaveCompact, "separator");
   }
-  openMenu(entries, { label: onSelection ? "Selection" : "Board", place });
+  openMenu(shown, { label: onSelection ? "Selection" : "Board", place });
+}
+
+/**
+ * Leaves out what does not apply to the selection, and the separators that would stand alone. Every
+ * reason its entries give is about what is selected. Others go on a submenu's options, which stay
+ * greyed.
+ */
+function relevant(entries: Entry[]): Entry[] {
+  const kept: Entry[] = [];
+  let parted = false;
+  for (const entry of entries) {
+    if (entry === "separator") {
+      parted = kept.length > 0;
+    } else if (entry.unavailable?.() === undefined) {
+      if (parted) {
+        kept.push("separator");
+      }
+      kept.push(entry);
+      parted = false;
+    }
+  }
+  return kept;
 }
 
 /** Over the selection's centre, or the viewport's, as the keys point nowhere. */

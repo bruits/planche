@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use board::{
     Animation, AssetId, Background, Board, Element, ElementId, ElementKind, GRID_STEP, GridLevel,
-    Point, Rect, Restack, Size,
+    Order, Point, Rect, Restack, Size,
 };
 use format::zip;
 use js_sys::{Map, Uint8Array};
@@ -181,6 +181,12 @@ impl Editor {
             _ => return Err(JsError::new(&format!("`{to}` is not a way to restack"))),
         };
         Ok(strings(self.0.restack(&parse(ids)?, to)?))
+    }
+
+    /// `order` is JSON, by `name`, `size`, `hue` with `colours` by id, or `random` with a `seed`.
+    pub fn arrange(&mut self, ids: Vec<String>, order: &str) -> Result<Vec<String>, JsError> {
+        let order: Order = serde_json::from_str(order)?;
+        Ok(strings(self.0.arrange(&parse(ids)?, &order)?))
     }
 
     /// Whether the board is as it was when read or last saved, however it got back there.

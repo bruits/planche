@@ -53,7 +53,7 @@ export function capture(source: CanvasImageSource, size: Size, background: strin
 }
 
 /** Halved until within twice `width`, as Chromium shrinks a canvas without averaging its pixels. */
-function halved(source: CanvasImageSource, size: Size, width: number): CanvasImageSource {
+export function halved(source: CanvasImageSource, size: Size, width: number): CanvasImageSource {
   let [current, at] = [source, size];
   while (at.width > 2 * width) {
     at = { width: Math.ceil(at.width / 2), height: Math.ceil(at.height / 2) };

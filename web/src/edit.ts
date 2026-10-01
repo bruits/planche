@@ -16,7 +16,7 @@
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
-import type { Background, Board, Editor, Kind, Point, Rect } from "./core.js";
+import type { Background, Board, Editor, Kind, Order, Point, Rect } from "./core.js";
 import { among, newId } from "./board.js";
 import { handles, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
@@ -117,6 +117,8 @@ export interface Edits {
   centre(): Point | undefined;
   remove(): void;
   flip(horizontally: boolean): void;
+  /** The images among the selection, which stays as it is. */
+  arrange(order: Order): void;
   background(to: Background): void;
   restack(to: Restack): void;
   /** Into a new group named `id`, which it selects. */
@@ -839,6 +841,7 @@ export function edits(
     },
     remove: () => run((editing, ids) => edit(editing, editing.editor.remove(ids))),
     flip: (horizontally) => run((editing, ids) => edit(editing, editing.editor.flip(ids, horizontally))),
+    arrange: (order) => run((editing, ids) => edit(editing, core.arrange(editing.editor, ids, order))),
     restack: (to) => run((editing, ids) => edit(editing, editing.editor.restack(ids, to))),
     background: (to) =>
       run((editing) => {

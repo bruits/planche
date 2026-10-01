@@ -135,7 +135,7 @@ impl Board {
     }
 }
 
-fn around(points: &[Point]) -> Option<Rect> {
+pub(crate) fn around(points: &[Point]) -> Option<Rect> {
     let (first, rest) = points.split_first()?;
     let (mut left, mut top, mut right, mut bottom) = (first.x, first.y, first.x, first.y);
     for point in rest {

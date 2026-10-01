@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
+use crate::arrange::{Order, arrangement};
 use crate::grid::settled;
 use crate::stick::{Landing, Motion, lands_on};
 use crate::{
@@ -179,26 +180,26 @@ impl Editor {
 
     /// With the elements of the moved groups.
     pub fn translate(&mut self, ids: &[ElementId], dx: f64, dy: f64) -> Result<Vec<ElementId>> {
-        self.reshape(ids, |kind| match kind {
-            ElementKind::Image { frame, .. }
-            | ElementKind::Note { frame, .. }
-            | ElementKind::Sticky { frame, .. }
-            | ElementKind::Shape { frame, .. } => {
-                frame.x += dx;
-                frame.y += dy;
-            }
-            ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
-                for point in [from, to] {
-                    point.x += dx;
-                    point.y += dy;
-                }
-            }
-            ElementKind::Comment { at, .. } => {
-                at.x += dx;
-                at.y += dy;
-            }
-            ElementKind::Group => {}
-        })
+        self.reshape(ids, |kind| shift(kind, dx, dy))
+    }
+
+    /// Packs the images among the elements into rows, each keeping its size and turn. The other
+    /// elements stay, but for what sticks to the images, which follows them.
+    pub fn arrange(&mut self, ids: &[ElementId], order: &Order) -> Result<Vec<ElementId>> {
+        for id in ids {
+            self.get(*id)?;
+        }
+        let mut step = Changes::new();
+        for (id, by) in arrangement(&self.board, ids, order) {
+            let change = self.change(id, |mut element| {
+                shift(&mut element.kind, by.x, by.y);
+                Some(element)
+            });
+            check_valid(id, &change.after.as_ref().expect("moved").kind)?;
+            step.insert(id, change);
+        }
+        self.follow(&mut step);
+        self.record(step)
     }
 
     /// With the elements of the scaled groups, around `origin`. The scale is the same both
@@ -886,6 +887,29 @@ fn place(
             (id, z)
         })
         .collect()
+}
+
+fn shift(kind: &mut ElementKind, dx: f64, dy: f64) {
+    match kind {
+        ElementKind::Image { frame, .. }
+        | ElementKind::Note { frame, .. }
+        | ElementKind::Sticky { frame, .. }
+        | ElementKind::Shape { frame, .. } => {
+            frame.x += dx;
+            frame.y += dy;
+        }
+        ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
+            for point in [from, to] {
+                point.x += dx;
+                point.y += dy;
+            }
+        }
+        ElementKind::Comment { at, .. } => {
+            at.x += dx;
+            at.y += dy;
+        }
+        ElementKind::Group => {}
+    }
 }
 
 fn check_valid(id: ElementId, kind: &ElementKind) -> Result<()> {

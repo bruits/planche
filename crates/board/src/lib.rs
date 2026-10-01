@@ -5,6 +5,7 @@
 //! rotation, and an element with a frame rotates clockwise, in degrees, around its centre.
 
 mod animation;
+mod arrange;
 mod edit;
 mod geometry;
 mod grid;
@@ -21,6 +22,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 pub use animation::{Animation, animation, frame_delay};
+pub use arrange::Order;
 pub use edit::{Editor, Restack};
 pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
 pub use svg::{sized_svg, svg_size};
