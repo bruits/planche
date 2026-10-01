@@ -1,11 +1,13 @@
 // A chip under the selection, which opens a card of its style in its place, as the keys do. Once
 // open, it follows the selection from one element to the next, until Esc or a press on nothing
-// closes it. Its buttons set what applies to every element selected, and that becomes the style of
+// closes it. While a gesture scales, stretches, or turns the selection, what it reads shows there
+// instead. Its buttons set what applies to every element selected, and that becomes the style of
 // what their tools draw next, unless ⌥ is held.
 
 import { among, type Opened } from "./board.js";
 import { ariaKeys, describe, type Command, type Shortcut } from "./commands.js";
 import type { Colour, Kind, Point } from "./core.js";
+import type { Reading } from "./edit.js";
 import { icon, type Icon } from "./icons.js";
 import { css, type Paint } from "./paint.js";
 import {
@@ -58,11 +60,10 @@ const ALIGNMENTS: Choice<"align">[] = [
   { value: "right", label: "Align right", look: () => icon("alignRight") },
 ];
 
-/** From the window's edges and from the selection, in CSS pixels. */
+/** From the window's edges, in CSS pixels. */
 const MARGIN = 8;
-const GAP = 12;
-/** Above the selection, past the handle that rotates it. */
-const ABOVE = 36;
+/** From the selection, past the zones outside its corners that turn it, in CSS pixels. */
+const GAP = 24;
 
 export interface CardHost {
   current(): Opened | undefined;
@@ -73,6 +74,8 @@ export interface CardHost {
   zoom(): number | undefined;
   /** Whether a gesture or some writing is under way, which it hides for. */
   busy(): boolean;
+  /** What a gesture reads, which shows in its place. */
+  reading(): Reading | undefined;
   /** As one edit that undoes in one step. Throws when one is under way. */
   apply(work: (editor: Opened["editor"], touched: string[]) => void): void;
   /** Starts picking a colour from the board, until a click. */
@@ -131,7 +134,10 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   panel.setAttribute("role", "dialog");
   panel.setAttribute("aria-label", "Style");
   panel.hidden = true;
-  document.body.append(chip, panel);
+  const readout = document.createElement("div");
+  readout.className = "readout";
+  readout.hidden = true;
+  document.body.append(chip, panel, readout);
   const opens = commands.open.keys?.[0];
   chip.setAttribute("aria-label", "Style");
   if (opens) {
@@ -429,6 +435,15 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   };
   const visible = () => targets().length > 0 && (common().length > 0 || images()) && !host.busy();
   const show = (focus = false) => {
+    const reading = host.reading();
+    readout.hidden = reading === undefined;
+    if (reading) {
+      readout.textContent = reading.text;
+      readout.classList.toggle("snapped", reading.snapped);
+      hide();
+      place(readout);
+      return;
+    }
     if (!visible()) {
       hide();
       return;
@@ -442,26 +457,25 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
         panel.querySelector("button")?.focus();
       }
     }
-    place();
+    place(open ? panel : chip);
   };
   /** Still open, so that it shows again once the selection has a style again. */
   const hide = () => {
     chip.hidden = true;
     panel.hidden = true;
   };
-  /** Under the selection, or above it, past its handle, where there is no room under it. */
-  const place = () => {
+  /** Under the selection, or above it where there is no room under it. */
+  const place = (shown: HTMLElement) => {
     const corners = host.box()?.map((corner) => host.client(corner));
     if (!corners || corners.some((corner) => corner === undefined)) {
       return;
     }
     const xs = corners.map((corner) => corner!.clientX);
     const ys = corners.map((corner) => corner!.clientY);
-    const shown = open ? panel : chip;
     const { width, height } = shown.getBoundingClientRect();
     const left = clamp((Math.min(...xs) + Math.max(...xs)) / 2 - width / 2, MARGIN, innerWidth - width - MARGIN);
     const below = Math.max(...ys) + GAP;
-    const top = below + height <= innerHeight - MARGIN ? below : Math.min(...ys) - ABOVE - height;
+    const top = below + height <= innerHeight - MARGIN ? below : Math.min(...ys) - GAP - height;
     shown.style.setProperty("left", `${left}px`);
     shown.style.setProperty("top", `${clamp(top, MARGIN, innerHeight - height - MARGIN)}px`);
   };
@@ -471,8 +485,9 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       if (!panel.hidden && host.zoom() !== filledAt) {
         fill();
       }
-      if (!chip.hidden || !panel.hidden) {
-        place();
+      const shown = [readout, chip, panel].find((element) => !element.hidden);
+      if (shown) {
+        place(shown);
       }
     },
     refresh() {

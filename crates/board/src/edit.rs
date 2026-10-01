@@ -161,6 +161,25 @@ impl Editor {
         self.record(step)
     }
 
+    /// Replaces an element's kind with another of the same kind, as moving a side of its frame
+    /// does. What sticks to it keeps to the same parts of its frame, and what sticks whole keeps
+    /// its size.
+    pub fn stretch(&mut self, id: ElementId, kind: ElementKind) -> Result<Vec<ElementId>> {
+        let before = &self.get(id)?.kind;
+        if mem::discriminant(before) != mem::discriminant(&kind) {
+            return Err(Error::KindChanged(id));
+        }
+        check_valid(id, &kind)?;
+        self.check_targets(id, &kind)?;
+        let moved = Motion::stretch(before, &kind).map(|motion| (id, motion));
+        let mut step = Changes::from([(
+            id,
+            self.change(id, |element| Some(Element { kind, ..element })),
+        )]);
+        self.carry(&mut step, moved.into_iter().collect());
+        self.record(step)
+    }
+
     /// Sticks each note, sticky note, shape, and comment among the elements, with those of the
     /// groups among them, to what it lies on whole, or frees it when it lies on nothing.
     pub fn land(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
@@ -713,8 +732,12 @@ impl Editor {
     /// Leaves out what the step changes itself, which moved alike, and follows what sticks to
     /// those that follow, and so on.
     fn follow(&self, step: &mut Changes) {
+        self.carry(step, motions(step).collect());
+    }
+
+    /// As `follow` does, with what the step changes moving as `moved` has it.
+    fn carry(&self, step: &mut Changes, mut moved: BTreeMap<ElementId, Motion>) {
         let unmoved = changed(step);
-        let mut moved: BTreeMap<ElementId, Motion> = motions(step).collect();
         let mut seen: BTreeSet<ElementId> = moved.keys().copied().collect();
         while !moved.is_empty() {
             let mut next = BTreeMap::new();
@@ -2840,6 +2863,68 @@ mod tests {
         assert_eq!(editor.remove(&ids([1])).unwrap(), ids([1, 2]));
         assert_eq!(placement(&editor, 2).3, None);
         assert_eq!(editor.board().elements[&id(3)].kind.target(), Some(id(2)));
+        editor.undo();
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn stretching_a_sticky_note_sideways_leaves_what_sticks_whole_its_size_and_on_it() {
+        let sticky = |width| ElementKind::Sticky {
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height: 200.0,
+            },
+            rotation: 0.0,
+            text: Text::new(String::new(), 20.0),
+            target: None,
+            paper: crate::Paper::default(),
+        };
+        let comment = ElementKind::Comment {
+            at: Point { x: 150.0, y: 190.0 },
+            text: "Here".to_owned(),
+            target: Some(id(1)),
+        };
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", sticky(200.0))),
+            (
+                2,
+                element(None, "a1", on(framed(50.0, 150.0, 100.0, 25.0), 1)),
+            ),
+            (3, element(None, "a2", comment)),
+            (
+                4,
+                element(
+                    None,
+                    "a3",
+                    stuck((300.0, 0.0), None, (200.0, 100.0), Some(1)),
+                ),
+            ),
+        ]));
+        let before = editor.board().clone();
+        // Its right side dragged out, its left one staying.
+        editor.stretch(id(1), sticky(400.0)).unwrap();
+        // The end on the middle of its right side stays there.
+        assert_at(ends(&editor, 4)[1].0, 400.0, 100.0);
+        let (frame, _, font_size, target) = placement(&editor, 2);
+        assert_eq!(target, Some(id(1)));
+        assert_eq!(
+            (frame, font_size),
+            (
+                Rect {
+                    x: 150.0,
+                    y: 150.0,
+                    width: 100.0,
+                    height: 25.0
+                },
+                2.0
+            )
+        );
+        let ElementKind::Comment { at, .. } = editor.board().elements[&id(3)].kind else {
+            unreachable!()
+        };
+        assert_at(at, 300.0, 190.0);
         editor.undo();
         assert_eq!(editor.board(), &before);
     }

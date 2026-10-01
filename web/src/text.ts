@@ -104,23 +104,26 @@ export function layout(kind: Holder): Layout {
  * fit its text exactly.
  */
 export function fitted(kind: Holder): Holder {
-  const size = kind.text.font_size;
-  const { lines } = layout(kind);
-  const text = lines.length * LINE_HEIGHT;
-  const needed =
+  const { frame, rotation } = kind;
+  const height = kind.type === "note" ? needed(kind) : Math.max(frame.height, needed(kind));
+  return { ...kind, frame: anchored(frame, rotation, { width: frame.width, height }, [0, 0]) };
+}
+
+/** How tall its frame must be for its text, which wraps to the frame's width. */
+export function needed(kind: Holder): number {
+  const text = layout(kind).lines.length * LINE_HEIGHT;
+  const ems =
     kind.type === "note"
       ? text
       : kind.type === "sticky"
         ? text + 2 * STICKY_PADDING
         : (text + 2 * SHAPE_PADDING) * (kind.shape === "ellipse" ? Math.SQRT2 : 1);
-  const { frame, rotation } = kind;
-  const height = kind.type === "note" ? needed * size : Math.max(frame.height, needed * size);
-  return { ...kind, frame: anchored(frame, rotation, { width: frame.width, height }) };
+  return ems * kind.text.font_size;
 }
 
-/** Resized to `size` around its top left corner, as turned. */
-function anchored(frame: Rect, rotation: number, { width, height }: Size): Rect {
-  const shift = turn({ x: (width - frame.width) / 2, y: (height - frame.height) / 2 }, rotation);
+/** Resized to `size`, as turned, around the point that lies `across` its width and `down` its height, in parts of them. */
+export function anchored(frame: Rect, rotation: number, { width, height }: Size, [across, down]: [number, number]): Rect {
+  const shift = turn({ x: (width - frame.width) * (0.5 - across), y: (height - frame.height) * (0.5 - down) }, rotation);
   const centre = { x: frame.x + frame.width / 2 + shift.x, y: frame.y + frame.height / 2 + shift.y };
   return { x: centre.x - width / 2, y: centre.y - height / 2, width, height };
 }

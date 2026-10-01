@@ -110,6 +110,8 @@ const editing = edits(viewport, shown, () => opened, {
   sampling: () => picker.sampling() !== undefined,
   drawn: () => useTool("select"),
   styled: (kind, zoom) => look.dressed(kind, zoom),
+  selecting: () => tool === "select" && !spaceHeld && picker.sampling() === undefined,
+  hovered: () => refreshBar(),
 });
 const comments = pins(byId("viewport"), { choose: (id) => editing.choose(id), write: (id) => editing.write(id) });
 const appearance = theme(restyle);
@@ -569,6 +571,7 @@ const styleCard = card(
     client: (point) => viewport.client(point),
     zoom: () => viewport.zoom(),
     busy,
+    reading: () => editing.reading(),
     apply: (work) => editing.apply(work),
     pick: () => picker.start(false),
     explain: (element, text) => bar.explain(element, text),
@@ -895,7 +898,7 @@ function refreshBar(): void {
 function hint(): string {
   // As the menus name them.
   const [escapeKey, insideKey] = [commands.escape, commands.goInside].map(({ keys }) => describe(keys[0]!));
-  const freeKey = mac ? "⌘" : "Ctrl";
+  const [freeKey, centreKey, stepKey] = mac ? ["⌘", "⌥", "⇧"] : ["Ctrl", "Alt", "Shift"];
   const picking = picker.sampling();
   if (picking !== undefined) {
     return `${picking === "holding" ? "Let go of S" : "Click"} to pick the colour under the pointer · ${escapeKey} to cancel`;
@@ -912,6 +915,15 @@ function hint(): string {
   }
   if (spaceHeld) {
     return "Drag to move around";
+  }
+  const offGrid = snapping ? ` · hold ${freeKey} to keep off the grid` : "";
+  switch (tool === "select" ? editing.grab() : undefined) {
+    case "corner":
+      return `Drag to scale · hold ${centreKey} while dragging to scale around the centre${offGrid}`;
+    case "side":
+      return `Drag to stretch${offGrid}`;
+    case "turn":
+      return `Drag to turn · hold ${stepKey} to turn by 15°${snapping ? ` · hold ${freeKey} to turn freely` : ""}`;
   }
   if (tool === "eraser") {
     return `Click or drag over what to erase · a drag spares the image or note it starts on · ${escapeKey} to select again`;
@@ -949,7 +961,7 @@ function hint(): string {
     const keys = [commands.play, commands.sound]
       .filter((command) => command.unavailable() === undefined)
       .map((command) => `${describe(command.keys[0]!)} to ${command.label().toLowerCase()} · `);
-    return `Drag to move · corners scale · the circle rotates · ${crops}${keys.join("")}${styles}right-click for more`;
+    return `Drag to move · corners scale · turn from outside a corner · ${crops}${keys.join("")}${styles}right-click for more`;
   }
   return "Drop or paste images · scroll to move around · right-click for more";
 }

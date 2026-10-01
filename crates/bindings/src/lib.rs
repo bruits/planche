@@ -125,6 +125,12 @@ impl Editor {
         Ok(strings(self.0.update(id.parse()?, kind)?))
     }
 
+    /// `kind` as JSON, of the kind the element has, as moving a side of its frame gives it.
+    pub fn stretch(&mut self, id: &str, kind: &str) -> Result<Vec<String>, JsError> {
+        let kind: ElementKind = serde_json::from_str(kind)?;
+        Ok(strings(self.0.stretch(id.parse()?, kind)?))
+    }
+
     pub fn scale(
         &mut self,
         ids: Vec<String>,

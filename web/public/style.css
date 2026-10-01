@@ -144,6 +144,11 @@ body {
   touch-action: none;
 }
 
+/* Before the tools', which take the press instead. */
+#viewport.over-handle {
+  cursor: var(--handle-cursor);
+}
+
 /* Before the hand's, which pans over a tool to draw. */
 #viewport.drawing {
   cursor: crosshair;
@@ -281,12 +286,20 @@ body {
 }
 
 .selection > *,
+.preview > *,
+.start,
+.pivot,
 .marquee,
 .entered {
   fill: none;
   stroke: var(--selected);
-  stroke-width: 2px;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
   vector-effect: non-scaling-stroke;
+}
+
+.preview > * {
+  stroke-width: 1px;
 }
 
 .marquee {
@@ -294,7 +307,8 @@ body {
   stroke-width: 1px;
 }
 
-.entered {
+.entered,
+.start {
   stroke-width: 1px;
   stroke-dasharray: 4 4;
 }
@@ -316,6 +330,21 @@ body {
   vector-effect: non-scaling-stroke;
 }
 
+.handles .grabbed {
+  fill: var(--selected);
+  stroke: Canvas;
+}
+
+.handles .side,
+.handles .turn {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.handles .side {
+  stroke-width: 3.5px;
+}
+
 .crop-shade {
   fill: rgb(0 0 0 / 0.5);
   fill-rule: evenodd;
@@ -333,10 +362,17 @@ body {
   stroke-width: 3px;
 }
 
+[data-contrast="high"] .preview > *,
+[data-contrast="high"] .start,
+[data-contrast="high"] .pivot,
 [data-contrast="high"] .marquee,
 [data-contrast="high"] .entered,
 [data-contrast="high"] .handles > * {
   stroke-width: 2px;
+}
+
+[data-contrast="high"] .handles .side {
+  stroke-width: 5px;
 }
 
 /* Over the board, where the renderer leaves out the text written in it. */
@@ -566,12 +602,32 @@ body {
 
 /* Under the selection. */
 .style-chip,
-.style-card {
+.style-card,
+.readout {
   position: fixed;
   z-index: 2;
   background: var(--surface);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
+}
+
+.readout {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: 11px;
+  font: 11px/1 ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Bold too, as the selection's colour may be faint. */
+.readout.snapped {
+  border-color: var(--selected);
+  font-weight: 600;
 }
 
 .style-chip {

@@ -123,6 +123,12 @@ pub(crate) enum Motion {
         before: Surface,
         after: Surface,
     },
+    /// As a side moves out or in, what sticks to it following in parts of its frame and keeping
+    /// its size.
+    Stretch {
+        before: Surface,
+        after: Surface,
+    },
 }
 
 impl Motion {
@@ -149,13 +155,19 @@ impl Motion {
         }
     }
 
+    /// `None` when what sticks to it stays.
+    pub(crate) fn stretch(before: &ElementKind, after: &ElementKind) -> Option<Self> {
+        let (before, after) = (Surface::of(before)?, Surface::of(after)?);
+        (before != after).then_some(Self::Stretch { before, after })
+    }
+
     /// Where an end at `point` goes. `None` when float arithmetic overflows.
     pub(crate) fn point(&self, point: Point) -> Option<Point> {
         self.map(point, false)
     }
 
     /// `whole` for what sticks whole, which a frame growing down to fit its text leaves where
-    /// it is on the text.
+    /// it is on the text, and which a stretch carries as it does ends.
     fn map(&self, point: Point, whole: bool) -> Option<Point> {
         match self {
             Self::Shift(by) => Some(Point {
@@ -163,6 +175,9 @@ impl Motion {
                 y: point.y + by.y,
             }),
             Self::Map { before, after } => after.to_board(before.to_content(point, whole)?, whole),
+            Self::Stretch { before, after } => {
+                after.to_board(before.to_content(point, false)?, false)
+            }
         }
     }
 
@@ -189,13 +204,22 @@ impl Motion {
                 text,
                 ..
             } => {
-                let Self::Map { before, after } = self else {
-                    let at = self.point(Point {
-                        x: frame.x,
-                        y: frame.y,
-                    })?;
-                    (frame.x, frame.y) = (at.x, at.y);
-                    return kind.is_valid().then_some(kind);
+                let (before, after) = match self {
+                    Self::Shift(_) => {
+                        let at = self.point(Point {
+                            x: frame.x,
+                            y: frame.y,
+                        })?;
+                        (frame.x, frame.y) = (at.x, at.y);
+                        return kind.is_valid().then_some(kind);
+                    }
+                    Self::Stretch { .. } => {
+                        let centre = self.map(frame.centre(), true)?;
+                        frame.x = centre.x - frame.width / 2.0;
+                        frame.y = centre.y - frame.height / 2.0;
+                        return kind.is_valid().then_some(kind);
+                    }
+                    Self::Map { before, after } => (before, after),
                 };
                 let centre = self.map(frame.centre(), true)?;
                 // Across only, so that what grows down to fit its text scales nothing on it.
