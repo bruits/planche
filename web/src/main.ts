@@ -286,7 +286,7 @@ const commands = {
     },
   },
   hints: {
-    label: () => (hintsShown ? "Hide hints" : "Show hints"),
+    label: "Hints",
     run: () => {
       hintsShown = !hintsShown;
       remember(HINTS, hintsShown ? undefined : "hidden");
@@ -316,7 +316,7 @@ const commands = {
   system: palette("System", "system"),
   highContrast: { label: "High contrast", run: () => appearance.toggleContrast() },
   measurements: {
-    label: () => (measurements.hidden ? "Show measurements" : "Hide measurements"),
+    label: "Measurements",
     run: () => {
       measurements.hidden = !measurements.hidden;
       showMetrics(frameRate);
@@ -372,9 +372,7 @@ const bar = toolbar(
     "separator",
     grids(),
     themes(),
-    "separator",
-    commands.hints,
-    commands.measurements,
+    views(),
   ],
 );
 refreshBar();
@@ -466,16 +464,23 @@ function grids(): Entry {
 
 function themes(): Entry {
   const current = appearance.scheme();
-  return {
-    label: "Theme",
-    // Never runs, as it opens its options.
-    run() {},
-    options: [
-      ...SCHEMES.map((scheme) => ({ ...commands[scheme], checked: scheme === current })),
-      "separator",
-      { ...commands.highContrast, checked: appearance.highContrast(), toggle: true },
-    ],
-  };
+  return submenu("Theme", [
+    ...SCHEMES.map((scheme) => ({ ...commands[scheme], checked: scheme === current })),
+    "separator",
+    { ...commands.highContrast, checked: appearance.highContrast(), toggle: true },
+  ]);
+}
+
+function views(): Entry {
+  return submenu("View", [
+    { ...commands.hints, checked: hintsShown, toggle: true },
+    { ...commands.measurements, checked: !measurements.hidden, toggle: true },
+  ]);
+}
+
+/** One that only opens its options, so never runs. */
+function submenu(label: string, options: Entry[]): Entry {
+  return { label, run() {}, options };
 }
 
 /** Strokes and text draw in the theme's colours. */

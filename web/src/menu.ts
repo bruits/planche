@@ -97,7 +97,7 @@ export function openMenu(entries: Entry[], { label, place, owner, fromEnd = fals
     }
     if (entering) {
       const items = [...submenu!.menu.querySelectorAll("button")];
-      (items.find((item) => item.getAttribute("aria-checked") === "true") ?? items[0])?.focus();
+      (items.find((item) => item.matches('[role="menuitemradio"][aria-checked="true"]')) ?? items[0])?.focus();
     }
   };
   const { menu, items, shown } = list(entries, label, activate);
