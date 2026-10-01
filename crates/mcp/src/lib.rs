@@ -1,10 +1,11 @@
-//! How agents read the board open in the desktop app, over MCP. An agent's client spawns the
+//! How agents read and edit the board open in the desktop app, over MCP. An agent's client spawns the
 //! app's binary as a [`gateway`], which passes bytes to the app over a port of this machine
 //! only, once each side proved itself with a secret. Both find each other, and the secrets,
 //! through a file that only the user can read. The app answers through a [`Relay`] to the web
 //! app, which holds the board. It needs no Tauri, so its tests run on every platform.
 
 mod bridge;
+mod changes;
 mod discovery;
 mod gateway;
 mod server;

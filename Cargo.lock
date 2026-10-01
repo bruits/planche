@@ -2068,6 +2068,7 @@ dependencies = [
 name = "mcp"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "dirs",
  "getrandom 0.3.4",
  "rmcp",

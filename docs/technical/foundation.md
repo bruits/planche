@@ -60,7 +60,7 @@ A Loro CRDT, whose movable tree maps well to groups. A Phoenix or Axum server, a
 
 rmcp, the official SDK. On desktop, a stdio gateway, which every client can spawn, passing bytes to the app over a local port protected by a token, so that no page in a browser can reach it. On the web, a remote MCP through the cloud.
 
-- **Limits:** WebMCP is only a draft, so nothing should depend on it. Image content is a prompt injection risk.
+- **Limits:** WebMCP is only a draft, so nothing should depend on it. Image content is a prompt injection risk, and an agent that reads it may edit the board, though never save it. An agent may also add, and so see, any image file the user can read, even from a sandboxed client. Each edit waits for the user to finish a drag or a text, as it would otherwise join it.
 
 ### Plugins
 

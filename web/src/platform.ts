@@ -47,9 +47,11 @@ export interface AgentCall {
   id: number;
   tool: string;
   args: unknown;
+  /** When the shell gives up on it, in milliseconds since 1970, as `Date.now()` counts. */
+  deadline: number;
 }
 
-/** Lets agents read the open board. */
+/** Lets agents read and edit the open board. */
 export interface Agent {
   /** Answers every call, for as long as the page lives. `answer` rejects with why it cannot. */
   serve(answer: (call: AgentCall) => Promise<unknown>): Promise<void>;

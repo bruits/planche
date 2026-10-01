@@ -522,7 +522,8 @@ impl Editor {
         });
     }
 
-    /// Edits between this and [`Editor::end_gesture`] undo as one, and cannot be undone halfway.
+    /// Edits between this and [`Editor::end_gesture`] undo as one, and cannot be undone halfway,
+    /// whoever makes them, so that others must wait for its end. Gestures do not nest.
     pub fn begin_gesture(&mut self) {
         self.gesture.get_or_insert_default();
     }

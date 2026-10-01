@@ -114,8 +114,13 @@ function decodeData(address: string): Blob {
   if (comma < 0 || !address.slice(0, comma).endsWith(";base64")) {
     throw new Error("not an image in base64");
   }
-  const text = atob(decodeURIComponent(address.slice(comma + 1)));
-  return new Blob([Uint8Array.from(text, (char) => char.charCodeAt(0))]);
+  return fromBase64(decodeURIComponent(address.slice(comma + 1)));
+}
+
+/** Throws when it is not base64. */
+export function fromBase64(text: string): Blob {
+  const bytes = atob(text);
+  return new Blob([Uint8Array.from(bytes, (char) => char.charCodeAt(0))]);
 }
 
 async function readClipboard(): Promise<Incoming[]> {

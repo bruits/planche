@@ -510,6 +510,20 @@ async function serveAgents(): Promise<void> {
       halfDrawn: () => halfDrawn,
       drawNow: () => viewport.drawNow(),
       background: () => getComputedStyle(document.body).backgroundColor,
+      loading: () => loading,
+      busy: () => editing.busy(),
+      idle: () => editing.idle(),
+      apply: (work) => editing.apply(work),
+      keep,
+      zoom: () => viewport.zoom(),
+      centre: () => viewport.centre(),
+      select: (ids) => editing.select(ids),
+      frame(ids) {
+        const area = opened && extent(opened, ids);
+        if (area) {
+          viewport.look(fit(area, viewport.size()));
+        }
+      },
     }),
   );
   await allowAgents(recall(AGENT) === "on");
@@ -794,30 +808,19 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   }
   await editing.idle();
   if (added.length > 0 && target !== undefined && target === opened && renderer !== undefined) {
-    load(renderer, new Map(added.map(({ asset, decoded }) => [asset, decoded])));
-    animated.keep(added);
-    films.keep(added);
-    const fresh = new Set(added.map(({ asset }) => asset));
-    unplayable = new Set([...unplayable].filter((asset) => !fresh.has(asset)));
-    const { editor } = target;
+    keep(target, added);
     const frames = row(
       added.map(({ natural }) => natural),
       at,
     );
     const ids = added.map(() => newId());
-    const touched: string[] = [];
     // Into the group gone into, where they stay selected.
     const group = editing.entered();
-    editor.beginGesture();
-    try {
-      added.forEach(({ asset, bytes, natural, filename }, at) => {
-        target.added.set(core.assetPath(asset), bytes);
-        touched.push(...editor.add(ids[at]!, group, JSON.stringify(imageKind(asset, natural, frames[at]!, filename))));
-      });
-    } finally {
-      editor.endGesture();
-    }
-    changed(touched);
+    editing.apply((editor, touched) =>
+      added.forEach(({ asset, natural, filename }, at) => {
+        touched.push(...editor.add(ids[at]!, group, JSON.stringify(imageKind(asset, natural, frames[at]!, { filename }))));
+      }),
+    );
     editing.select(ids);
   } else {
     added.forEach(({ decoded }) => release(decoded));
@@ -825,6 +828,17 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   if (failures.length > 0) {
     bar.say(`Not added, ${failures.join("; ")}`);
   }
+}
+
+function keep(target: Opened, added: Added[]): void {
+  if (renderer !== undefined) {
+    load(renderer, new Map(added.map(({ asset, decoded }) => [asset, decoded])));
+  }
+  animated.keep(added);
+  films.keep(added);
+  const fresh = new Set(added.map(({ asset }) => asset));
+  unplayable = new Set([...unplayable].filter((asset) => !fresh.has(asset)));
+  added.forEach(({ asset, bytes }) => target.added.set(core.assetPath(asset), bytes));
 }
 
 /** Bitmaps to the renderer, which takes them over, and SVGs to rasterise as they show. */

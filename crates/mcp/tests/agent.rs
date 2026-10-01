@@ -123,10 +123,40 @@ async fn an_agent_with_the_token_reads_through_the_tools() {
     let tools = client.list_all_tools().await.unwrap();
     let mut names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     names.sort_unstable();
-    assert_eq!(
-        names,
-        ["board", "elements", "image", "screenshot", "selection"]
-    );
+    let reads = ["board", "elements", "image", "screenshot", "selection"];
+    let writes = [
+        "add",
+        "add_images",
+        "group",
+        "remove",
+        "restack",
+        "select",
+        "transform",
+        "ungroup",
+        "update",
+    ];
+    let mut all = [&reads[..], &writes[..]].concat();
+    all.sort_unstable();
+    assert_eq!(names, all);
+    for tool in &tools {
+        let schema = serde_json::to_string(&tool.input_schema).unwrap();
+        // Some clients read no references in a tool's input.
+        assert!(
+            !schema.contains("$ref") && !schema.contains("$defs"),
+            "{}",
+            tool.name
+        );
+        let read_only = tool
+            .annotations
+            .as_ref()
+            .and_then(|hints| hints.read_only_hint);
+        assert_eq!(
+            read_only,
+            Some(reads.contains(&tool.name.as_ref())),
+            "{}",
+            tool.name
+        );
+    }
 
     let (failed, text) = call(address, &secrets, "elements", json!({ "ids": ["a"] })).await;
     assert!(!failed);
@@ -335,7 +365,7 @@ async fn turning_it_off_ends_every_connection() {
         answer: written.answer,
     };
     let client = ().serve(connected(address, &secrets).await).await.unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 5);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 14);
 
     drop(running);
     let ended = tokio::time::timeout(Duration::from_secs(5), client.waiting()).await;
@@ -468,4 +498,165 @@ fn a_process_on_the_port_of_an_app_that_died_is_not_planche() {
     assert!(matches!(error, GatewayError::Unreachable(port) if port == address.port()));
     assert!(output.is_empty());
     std::fs::remove_dir_all(&directory).unwrap();
+}
+
+async fn relayed(tool: &str, arguments: Value) -> Result<Value, String> {
+    let (address, secrets, task) = serving(Echo(None)).await;
+    let (failed, text) = call(address, &secrets, tool, arguments).await;
+    task.abort();
+    if failed {
+        Err(text)
+    } else {
+        Ok(serde_json::from_str::<Value>(&text).unwrap()["args"].clone())
+    }
+}
+
+#[tokio::test]
+async fn an_image_file_reaches_the_web_app_as_its_bytes_and_its_name_alone() {
+    let directory = scratch("image-file");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("harbour.png");
+    std::fs::write(&path, b"not even a PNG").unwrap();
+    let image = json!({ "path": path, "x": 10.0, "caption": "The harbour" });
+    let args = relayed("add_images", json!({ "images": [image] }))
+        .await
+        .unwrap();
+    assert_eq!(
+        args,
+        json!({ "images": [{
+            "data": "bm90IGV2ZW4gYSBQTkc=",
+            "filename": "harbour.png",
+            "x": 10.0,
+            "caption": "The harbour",
+        }] })
+    );
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_file_on_another_machine_is_never_asked_for() {
+    // Hosts that resolve nowhere, so that a failing check fails fast.
+    for path in [
+        r"\\host.invalid\share\harbour.png",
+        "//host.invalid/share/harbour.png",
+        r"\/host.invalid/share/harbour.png",
+        "//./UNC/host.invalid/share/harbour.png",
+        "//./pipe/harbour",
+    ] {
+        let image = json!({ "path": path });
+        let refused = relayed("add_images", json!({ "images": [image] }))
+            .await
+            .unwrap_err();
+        assert!(
+            refused.ends_with("a path must be absolute, on this machine"),
+            "{refused}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn only_a_file_of_this_machine_is_read() {
+    let directory = scratch("not-files");
+    std::fs::create_dir_all(&directory).unwrap();
+    let large = directory.join("large.png");
+    // Sparse, so that it costs nothing.
+    std::fs::File::create(&large)
+        .unwrap()
+        .set_len(26 << 20)
+        .unwrap();
+    for (image, refusal) in [
+        (json!({ "path": "harbour.png" }), "a path must be absolute"),
+        (json!({ "path": directory }), "not a file"),
+        (json!({ "path": large }), "over 25 MB"),
+        (
+            json!({ "path": large, "data": "AAAA" }),
+            "a path or data, not both",
+        ),
+        (json!({}), "a path or data, not both"),
+    ] {
+        let refused = relayed("add_images", json!({ "images": [image] }))
+            .await
+            .unwrap_err();
+        assert!(refused.contains(refusal), "{refused}");
+    }
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
+async fn more_than_50_mb_of_files_at_a_time_are_refused() {
+    let directory = scratch("too-many-files");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("large.png");
+    // Sparse, so that it costs nothing.
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(20 << 20)
+        .unwrap();
+    let image = json!({ "path": path });
+    let refused = relayed("add_images", json!({ "images": vec![image; 3] }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused, "50 MB of files at most at a time");
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
+async fn too_many_images_are_refused_before_any_is_read() {
+    // Never made, so that reading it would give another refusal.
+    let image = json!({ "path": scratch("never-read").join("harbour.png") });
+    let refused = relayed("add_images", json!({ "images": vec![image; 13] }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused, "At most 12 at a time");
+}
+
+#[tokio::test]
+async fn data_too_large_is_refused() {
+    let image = json!({ "data": "A".repeat(5_000_001) });
+    let refused = relayed("add_images", json!({ "images": [image] }))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused,
+        "data holds 5000000 characters at most: give a path for a larger file"
+    );
+}
+
+#[tokio::test]
+async fn a_name_given_with_the_bytes_keeps_its_last_part() {
+    let image = json!({ "data": "AAAA", "filename": "/Users/me/Desktop/harbour.png" });
+    let args = relayed("add_images", json!({ "images": [image] }))
+        .await
+        .unwrap();
+    assert_eq!(args["images"][0]["filename"], "harbour.png");
+}
+
+#[tokio::test]
+async fn what_the_agent_leaves_out_stays_absent() {
+    let note = json!({ "type": "note", "x": 0.0, "y": 0.0, "text": "Warm light" });
+    let args = relayed("add", json!({ "elements": [note] })).await.unwrap();
+    assert_eq!(args, json!({ "elements": [note] }));
+}
+
+#[tokio::test]
+async fn calls_too_large_are_refused() {
+    let note = json!({ "type": "note", "x": 0.0, "y": 0.0, "text": "Warm light" });
+    let refused = relayed("add", json!({ "elements": vec![note; 51] }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused, "At most 50 at a time");
+    let long = json!({ "id": "a", "caption": "a".repeat(2_001) });
+    let refused = relayed("update", json!({ "updates": [long] }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused, "A caption holds 2000 characters at most");
+}
+
+#[tokio::test]
+async fn an_unknown_field_is_refused_before_the_web_app_hears_of_it() {
+    let refused = relayed("transform", json!({ "ids": ["a"], "rotation": 90 }))
+        .await
+        .unwrap_err();
+    assert!(refused.contains("unknown field `rotation`"), "{refused}");
 }

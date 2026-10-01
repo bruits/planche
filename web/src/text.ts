@@ -4,7 +4,7 @@
 // same power reuses it.
 
 import type { Camera, Viewport } from "./camera.js";
-import type { Board, Kind, Point, Rect } from "./core.js";
+import type { Board, Kind, Point, Rect, Size } from "./core.js";
 import { LONGEST_SIDE, overlaps, rounded, settling } from "./raster.js";
 import type { Placed, Renderer } from "./renderer.js";
 
@@ -85,9 +85,14 @@ export function fitted(kind: Holder): Holder {
         : (text + 2 * SHAPE_PADDING) * (kind.shape === "ellipse" ? Math.SQRT2 : 1);
   const { frame, rotation } = kind;
   const height = kind.type === "note" ? needed * size : Math.max(frame.height, needed * size);
-  const shift = turn({ x: 0, y: (height - frame.height) / 2 }, rotation);
+  return { ...kind, frame: anchored(frame, rotation, { width: frame.width, height }) };
+}
+
+/** Resized to `size` around its top left corner, as turned. */
+export function anchored(frame: Rect, rotation: number, { width, height }: Size): Rect {
+  const shift = turn({ x: (width - frame.width) / 2, y: (height - frame.height) / 2 }, rotation);
   const centre = { x: frame.x + frame.width / 2 + shift.x, y: frame.y + frame.height / 2 + shift.y };
-  return { ...kind, frame: { x: centre.x - frame.width / 2, y: centre.y - height / 2, width: frame.width, height } };
+  return { x: centre.x - width / 2, y: centre.y - height / 2, width, height };
 }
 
 /**

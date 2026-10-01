@@ -35,13 +35,13 @@ const DRAG = 3;
 /** Scaling down further would turn the selection over. */
 const SMALLEST_SCALE = 0.01;
 /** A shape placed by a click, in CSS pixels. */
-const PLACED_SIZE = 100;
+export const PLACED_SIZE = 100;
 /** A sticky note placed by a click, in CSS pixels. */
-const STICKY_SIZE = 200;
+export const STICKY_SIZE = 200;
 /** How wide a note placed by a click wraps, in CSS pixels. */
-const NOTE_WIDTH = 240;
+export const NOTE_WIDTH = 240;
 /** Of the text drawn or placed, in CSS pixels. */
-const FONT_SIZE = 20;
+export const FONT_SIZE = 20;
 
 export interface Editing {
   editor: Editor;
@@ -80,6 +80,11 @@ export interface Edits {
   busy(): boolean;
   /** Once neither is under way. */
   idle(): Promise<void>;
+  /**
+   * Runs `work`, which pushes what it touches, as one edit that undoes in one step. Throws when a
+   * gesture or some writing is under way, or when `work` throws, after which none of it stays.
+   */
+  apply(work: (editor: Editor, touched: string[]) => void): string[];
   /** The element being written in, whose text the renderer leaves to the field. */
   writing(): string | undefined;
   /** Whether the selection is one element that holds text. */
@@ -722,6 +727,26 @@ export function edits(
   return {
     busy: () => press !== undefined || written !== undefined,
     idle: () => (press || written ? new Promise((resolve) => waiting.push(resolve)) : Promise.resolve()),
+    apply(work) {
+      const editing = current();
+      if (editing === undefined || press || written) {
+        throw new Error("Someone is editing in Planche");
+      }
+      const { editor } = editing;
+      const touched: string[] = [];
+      editor.beginGesture();
+      try {
+        work(editor, touched);
+      } catch (error) {
+        touched.push(...editor.rewindGesture());
+        throw error;
+      } finally {
+        editor.endGesture();
+        // Even halfway, so that the board the app keeps matches the core's.
+        edit(editing, [...new Set(touched)]);
+      }
+      return [...new Set(touched)];
+    },
     writing: () => written?.id,
     writable() {
       const editing = current();

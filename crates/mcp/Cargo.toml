@@ -6,6 +6,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Already in Tauri's tree, for the files agents add, which reach the web app as text.
+base64 = "0.22"
 # Already in Tauri's tree, which finds the app's folder with it too.
 dirs = "7"
 # Already in Tauri's tree. With std, its error is a std::error::Error.

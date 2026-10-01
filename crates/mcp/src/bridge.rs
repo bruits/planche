@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,6 +14,9 @@ pub struct Call {
     pub id: u64,
     pub tool: String,
     pub args: Value,
+    /// When the call is given up on, in milliseconds since 1970, which the web app's clock
+    /// shares, so that it changes nothing once the agent has heard that nothing answered.
+    pub deadline: u64,
 }
 
 /// The web app's answer to the call of the same id.
@@ -88,10 +91,13 @@ impl Relay for Bridge {
             let Some(push) = &waiting.push else {
                 return Err("Planche is not ready".to_owned());
             };
+            let deadline = SystemTime::now() + self.timeout;
+            let since = deadline.duration_since(UNIX_EPOCH).unwrap_or_default();
             let call = Call {
                 id,
                 tool: tool.to_owned(),
                 args,
+                deadline: since.as_millis() as u64,
             };
             push(call).map_err(|error| format!("Planche is not ready: {error}"))?;
             waiting.answers.insert(id, sender);

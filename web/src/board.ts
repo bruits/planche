@@ -189,9 +189,14 @@ function hex(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function imageKind(asset: string, natural: Size, frame: Rect, filename?: string): Kind {
+export function imageKind(
+  asset: string,
+  natural: Size,
+  frame: Rect,
+  about: { filename?: string; source?: string; caption?: string } = {},
+): Kind {
   const edits = { crop: null, flip_horizontal: false, flip_vertical: false, greyscale: false };
-  return { type: "image", asset, natural_size: natural, frame, rotation: 0, edits, filename };
+  return { type: "image", asset, natural_size: natural, frame, rotation: 0, edits, ...about };
 }
 
 export function row(sizes: Size[], at: Point): Rect[] {
@@ -298,12 +303,13 @@ function arrow(from: Point, to: Point, width: number): Placed[] {
   return [line, side(HEAD_ANGLE), side(-HEAD_ANGLE)];
 }
 
-/** What the board draws over, with the points its comments are pinned at, `undefined` when nothing. */
-export function extent({ editor, board }: Opened): Rect | undefined {
-  const drawn = core.bounds(editor, board.draw_order);
+/** What the elements draw over, with the points their comments are pinned at, `undefined` when nothing. */
+export function extent({ editor, board }: Opened, ids = board.draw_order): Rect | undefined {
+  const drawn = core.bounds(editor, ids);
+  const chosen = new Set(ids);
   const points = board.draw_order.flatMap((id) => {
     const { kind } = board.elements[id]!;
-    return kind.type === "comment" ? [kind.at] : [];
+    return kind.type === "comment" && among(board, id, chosen) ? [kind.at] : [];
   });
   if (drawn) {
     points.push({ x: drawn.x, y: drawn.y }, { x: drawn.x + drawn.width, y: drawn.y + drawn.height });

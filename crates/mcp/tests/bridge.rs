@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mcp::{Bridge, Call, Relay, Reply};
 use serde_json::{Value, json};
@@ -36,6 +36,8 @@ async fn a_call_gets_the_reply_of_its_id() {
     let asked = asking(&bridge, "elements");
     let call = calls.recv().await.unwrap();
     assert_eq!(call.tool, "elements");
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    assert!(call.deadline > now.as_millis() as u64, "{call:?}");
     assert!(bridge.reply(Reply {
         id: call.id,
         result: Some(json!([1])),

@@ -1,6 +1,7 @@
 // What agents read of the open board, as the desktop shell passes their tools' calls on. The
 // board is read as it stands, since a call is answered between two events, up to its first wait.
 
+import { write, type Writing } from "./author.js";
 import { decodeAsset, files, readAsset, release, type Opened } from "./board.js";
 import { MOST_SIDE, capture, type Capture } from "./capture.js";
 import * as core from "./core.js";
@@ -29,13 +30,18 @@ const MOST_TEXT = 280;
 const SMALLEST_VECTOR = 512;
 
 /** Rejects with what the agent reads when there is no answer. */
-export async function answer({ tool, args }: AgentCall, reading: Reading): Promise<unknown> {
+export async function answer({ tool, args, deadline }: AgentCall, page: Reading & Writing): Promise<unknown> {
+  const reading: Reading = page;
   const opened = reading.opened();
   if (opened === undefined) {
     throw new Error("No board is open in Planche yet");
   }
   const board = { name: opened.folder.name, unsaved: reading.unsaved() };
   const given = (args ?? {}) as Record<string, unknown>;
+  const written = await write(tool, given, page, deadline);
+  if (written !== undefined) {
+    return { board: { ...board, unsaved: reading.unsaved() }, ...written };
+  }
   switch (tool) {
     case "board":
       return { board, view: reading.shown() ?? null, ...outline(opened, given) };
