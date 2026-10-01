@@ -22,10 +22,10 @@ export function tauri({ core, event }: TauriApi): Platform {
       allow: (on) => core.invoke("agent_allow", { on }),
       async serve(answer) {
         const channel = new core.Channel<AgentCall>();
-        channel.onmessage = (call) => {
+        channel.onmessage = async (call) => {
           let reply;
           try {
-            reply = { id: call.id, result: answer(call) };
+            reply = { id: call.id, result: await answer(call) };
           } catch (error) {
             reply = { id: call.id, error: error instanceof Error ? error.message : String(error) };
           }

@@ -13,6 +13,11 @@ export interface View {
   clear(): void;
   /** On the next frame, however often it is called before. */
   redraw(): void;
+  /**
+   * Draws at once, without waiting for a frame, which a hidden window never gets. The canvas holds
+   * the drawing until this task ends. `undefined` when nothing is shown.
+   */
+  drawNow(): HTMLCanvasElement | undefined;
   /** Where on the board a point of the page is, `undefined` when nothing is shown. */
   at(point: { clientX: number; clientY: number }): Point | undefined;
   /** Where on the page a point of the board is, `undefined` when nothing is shown. */
@@ -58,13 +63,17 @@ export function view(host: HTMLElement, { frame, failed }: Drawing): View {
   /** Safari's pinch, as the scale it has reached, `undefined` when none is under way. */
   let pinching: number | undefined;
   const size = () => ({ width: host.clientWidth, height: host.clientHeight });
-  const draw = () => {
+  const paint = () => {
     if (!shown) {
-      return;
+      return undefined;
     }
+    frame(shown.camera, size());
+    shown.renderer.draw(shown.camera);
+    return shown.renderer.canvas;
+  };
+  const draw = () => {
     try {
-      frame(shown.camera, size());
-      shown.renderer.draw(shown.camera);
+      paint();
     } catch (error) {
       failed(error);
     }
@@ -193,6 +202,7 @@ export function view(host: HTMLElement, { frame, failed }: Drawing): View {
       shown = undefined;
     },
     redraw,
+    drawNow: paint,
     at({ clientX, clientY }) {
       if (!shown) {
         return undefined;

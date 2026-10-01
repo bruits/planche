@@ -28,7 +28,7 @@ struct Secrets {
     answer: String,
 }
 
-async fn serving(relay: Echo) -> (SocketAddr, Secrets, JoinHandle<()>) {
+async fn serving(relay: impl Relay + Clone) -> (SocketAddr, Secrets, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let secrets = Secrets {
@@ -123,7 +123,10 @@ async fn an_agent_with_the_token_reads_through_the_tools() {
     let tools = client.list_all_tools().await.unwrap();
     let mut names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     names.sort_unstable();
-    assert_eq!(names, ["board", "elements", "selection"]);
+    assert_eq!(
+        names,
+        ["board", "elements", "image", "screenshot", "selection"]
+    );
 
     let (failed, text) = call(address, &secrets, "elements", json!({ "ids": ["a"] })).await;
     assert!(!failed);
@@ -151,12 +154,95 @@ async fn pages_and_lists_of_ids_are_bounded() {
     task.abort();
 }
 
+#[derive(Clone)]
+struct Pictured(Value);
+
+impl Relay for Pictured {
+    async fn ask(&self, tool: &str, args: Value) -> Result<Value, String> {
+        Ok(json!({ "tool": tool, "args": args, "image": self.0 }))
+    }
+}
+
+fn picture(mime: &str, data: &str) -> Value {
+    json!({ "mime": mime, "data": data, "width": 3, "height": 2 })
+}
+
+#[tokio::test]
+async fn a_picture_comes_after_what_it_shows() {
+    let (address, secrets, task) = serving(Pictured(picture("image/jpeg", "AAAA"))).await;
+    let client = ().serve(connected(address, &secrets).await).await.unwrap();
+    let arguments = json!({ "id": "a" }).as_object().unwrap().clone();
+    let result = client
+        .call_tool(CallToolRequestParams::new("image").with_arguments(arguments))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(false));
+    assert!(result.structured_content.is_none());
+    let [text, picture] = &result.content[..] else {
+        panic!("{:?}", result.content);
+    };
+    let facts: Value = serde_json::from_str(&text.as_text().unwrap().text).unwrap();
+    let size = json!({ "width": 3, "height": 2 });
+    assert_eq!(
+        facts,
+        json!({ "tool": "image", "args": { "id": "a" }, "image": size })
+    );
+    let picture = picture.as_image().unwrap();
+    assert_eq!(
+        (picture.data.as_str(), picture.mime_type.as_str()),
+        ("AAAA", "image/jpeg")
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_picture_of_another_type_is_refused() {
+    let (address, secrets, task) = serving(Pictured(picture("image/svg+xml", "AAAA"))).await;
+    let (failed, text) = call(address, &secrets, "screenshot", Value::Null).await;
+    assert!(failed);
+    assert_eq!(text, "Planche gave no picture that agents can read");
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_picture_past_the_most_is_refused() {
+    for (length, refused) in [(5_000_000, false), (5_000_001, true)] {
+        let image = picture("image/png", &"A".repeat(length));
+        let (address, secrets, task) = serving(Pictured(image)).await;
+        let (failed, _) = call(address, &secrets, "screenshot", Value::Null).await;
+        assert_eq!(failed, refused, "{length}");
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn an_answer_without_a_picture_is_refused() {
+    for image in [Value::Null, json!("AAAA"), json!({ "mime": "image/png" })] {
+        let (address, secrets, task) = serving(Pictured(image)).await;
+        let (failed, text) = call(address, &secrets, "screenshot", Value::Null).await;
+        assert!(failed);
+        assert_eq!(text, "Planche gave no picture that agents can read");
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn an_empty_picture_is_refused() {
+    let (address, secrets, task) = serving(Pictured(picture("image/png", ""))).await;
+    let (failed, text) = call(address, &secrets, "screenshot", Value::Null).await;
+    assert!(failed);
+    assert_eq!(text, "Planche gave no picture that agents can read");
+    task.abort();
+}
+
 #[tokio::test]
 async fn the_agent_reads_why_there_is_no_answer() {
     let (address, secrets, task) = serving(Echo(Some("Planche is not ready"))).await;
-    let (failed, text) = call(address, &secrets, "selection", Value::Null).await;
-    assert!(failed);
-    assert_eq!(text, "Planche is not ready");
+    for tool in ["selection", "screenshot"] {
+        let (failed, text) = call(address, &secrets, tool, Value::Null).await;
+        assert!(failed);
+        assert_eq!(text, "Planche is not ready");
+    }
     task.abort();
 }
 
@@ -249,7 +335,7 @@ async fn turning_it_off_ends_every_connection() {
         answer: written.answer,
     };
     let client = ().serve(connected(address, &secrets).await).await.unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 3);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 5);
 
     drop(running);
     let ended = tokio::time::timeout(Duration::from_secs(5), client.waiting()).await;

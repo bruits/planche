@@ -347,20 +347,23 @@ export async function readAssets({ folder, board }: Opened): Promise<Asset[]> {
   for (const id of board.draw_order) {
     const { kind } = board.elements[id]!;
     if (kind.type === "image" && !assets.has(kind.asset)) {
-      const bytes = await folder.read(core.assetPath(kind.asset));
-      core.verifyAsset(kind.asset, bytes);
-      const natural = kind.natural_size;
-      const type = core.videoType(bytes);
-      if (type === undefined) {
-        const vector = checkedSvgSize(bytes) !== undefined;
-        assets.set(kind.asset, { asset: kind.asset, blob: new Blob([bytes]), natural, vector, moving: moves(bytes) });
-      } else {
-        const video = new Blob([bytes], { type });
-        assets.set(kind.asset, { asset: kind.asset, blob: video, natural, vector: false, video });
-      }
+      assets.set(kind.asset, await readAsset(folder, kind.asset, kind.natural_size));
     }
   }
   return [...assets.values()];
+}
+
+/** Throws when it is missing or does not match its digest. */
+export async function readAsset(folder: Folder, asset: string, natural: Size): Promise<Asset> {
+  const bytes = await folder.read(core.assetPath(asset));
+  core.verifyAsset(asset, bytes);
+  const type = core.videoType(bytes);
+  if (type === undefined) {
+    const vector = checkedSvgSize(bytes) !== undefined;
+    return { asset, blob: new Blob([bytes]), natural, vector, moving: moves(bytes) };
+  }
+  const video = new Blob([bytes], { type });
+  return { asset, blob: video, natural, vector: false, video };
 }
 
 /**
@@ -372,26 +375,14 @@ export async function decode(assets: Asset[], cap: number): Promise<Map<string, 
   const decoded = new Map<string, Decoded>();
   const pending = assets.values();
   const worker = async () => {
-    for (const { asset, blob, natural, vector, video } of pending) {
-      if (video) {
-        await firstFrame(video).then(
-          ({ bitmap }) => decoded.set(asset, bitmap),
-          () => undefined,
-        );
-        continue;
+    for (const asset of pending) {
+      try {
+        decoded.set(asset.asset, await decodeAsset(asset, cap));
+      } catch (error) {
+        if (!asset.video) {
+          throw error;
+        }
       }
-      if (vector) {
-        decoded.set(asset, await picture(new Uint8Array(await blob.arrayBuffer()), natural));
-        continue;
-      }
-      const { width, height } = capped(natural, cap);
-      const bitmap = await createImageBitmap(blob, {
-        imageOrientation: "from-image",
-        resizeWidth: width,
-        resizeHeight: height,
-        resizeQuality: "high",
-      });
-      decoded.set(asset, bitmap);
     }
   };
   const done = await Promise.allSettled(Array.from({ length: 4 }, worker));
@@ -403,7 +394,29 @@ export async function decode(assets: Asset[], cap: number): Promise<Map<string, 
   return decoded;
 }
 
-function capped(size: Size, cap: number): Size {
+/** Throws when a video does not play here. */
+export async function decodeAsset({ blob, natural, vector, video }: Asset, cap: number): Promise<Decoded> {
+  if (video) {
+    return (await firstFrame(video)).bitmap;
+  }
+  if (vector) {
+    return picture(new Uint8Array(await blob.arrayBuffer()), natural);
+  }
+  const { width, height } = capped(natural, cap);
+  return createImageBitmap(blob, {
+    imageOrientation: "from-image",
+    resizeWidth: width,
+    resizeHeight: height,
+    resizeQuality: "high",
+  });
+}
+
+export function capped(size: Size, cap: number): Size {
   const scale = Math.min(1, cap / Math.max(size.width, size.height));
-  return { width: Math.round(size.width * scale), height: Math.round(size.height * scale) };
+  return scaled(size, scale);
+}
+
+/** A pixel a side at least, as a thin image would round to none. */
+export function scaled({ width, height }: Size, scale: number): Size {
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }

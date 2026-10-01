@@ -46,6 +46,8 @@ export interface Renderer {
   readonly backend: string;
   /** What its textures take on the GPU. */
   readonly textureBytes: number;
+  /** What it draws on, in device pixels. */
+  readonly canvas: HTMLCanvasElement;
   /** Takes each asset's bitmap over, and closes them all even when it fails. Loaded ones stay. */
   load(bitmaps: Map<string, ImageBitmap>): void;
   /** The asset as the canvas holds it, in place of any before. */
@@ -164,6 +166,7 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
   };
   return {
     backend: renderer.backend,
+    canvas: output,
     get textureBytes() {
       return renderer.textureBytes;
     },

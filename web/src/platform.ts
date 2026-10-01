@@ -51,8 +51,8 @@ export interface AgentCall {
 
 /** Lets agents read the open board. */
 export interface Agent {
-  /** Answers every call, for as long as the page lives. `answer` throws why it cannot. */
-  serve(answer: (call: AgentCall) => unknown): Promise<void>;
+  /** Answers every call, for as long as the page lives. `answer` rejects with why it cannot. */
+  serve(answer: (call: AgentCall) => Promise<unknown>): Promise<void>;
   /** Throws why it cannot, such as another Planche having it on. */
   allow(on: boolean): Promise<void>;
 }

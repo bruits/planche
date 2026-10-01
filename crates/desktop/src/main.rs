@@ -192,7 +192,8 @@ struct Agent {
 impl Default for Agent {
     fn default() -> Self {
         Self {
-            bridge: Arc::new(mcp::Bridge::new(Duration::from_secs(10))),
+            // Long enough to read a large asset again, and to decode a video's first frame.
+            bridge: Arc::new(mcp::Bridge::new(Duration::from_secs(30))),
             running: Mutex::default(),
             turning: tauri::async_runtime::Mutex::default(),
         }

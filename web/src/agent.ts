@@ -1,7 +1,8 @@
 // What agents read of the open board, as the desktop shell passes their tools' calls on. The
-// board is read as it stands, since a call is answered between two events.
+// board is read as it stands, since a call is answered between two events, up to its first wait.
 
-import type { Opened } from "./board.js";
+import { decodeAsset, files, readAsset, release, type Opened } from "./board.js";
+import { MOST_SIDE, capture, type Capture } from "./capture.js";
 import * as core from "./core.js";
 import type { Element, Kind, Rect } from "./core.js";
 import type { AgentCall } from "./platform.js";
@@ -15,13 +16,20 @@ export interface Reading {
   writing(): string | undefined;
   /** The part of the board the window shows, `undefined` when nothing is shown. */
   shown(): Rect | undefined;
+  /** While a board shows half drawn, its images still being read and decoded. */
+  halfDrawn(): boolean;
+  drawNow(): HTMLCanvasElement | undefined;
+  /** The colour behind the board. */
+  background(): string;
 }
 
 /** Longer texts are cut in the outline, and read whole by id. */
 const MOST_TEXT = 280;
+/** Pixels along the longest side, at least, of an SVG, which draws sharp at any size. */
+const SMALLEST_VECTOR = 512;
 
-/** Throws what the agent reads when there is no answer. */
-export function answer({ tool, args }: AgentCall, reading: Reading): unknown {
+/** Rejects with what the agent reads when there is no answer. */
+export async function answer({ tool, args }: AgentCall, reading: Reading): Promise<unknown> {
   const opened = reading.opened();
   if (opened === undefined) {
     throw new Error("No board is open in Planche yet");
@@ -40,6 +48,10 @@ export function answer({ tool, args }: AgentCall, reading: Reading): unknown {
         entered: reading.entered() ?? null,
         writing: reading.writing() ?? null,
       };
+    case "image":
+      return { board, ...(await image(opened, given.id, reading.background())) };
+    case "screenshot":
+      return { board, ...screenshot(reading) };
     default:
       throw new Error(`Planche has no tool called ${tool}`);
   }
@@ -109,6 +121,59 @@ function targets(kind: Kind): string[] | undefined {
     "to_target" in kind ? kind.to_target : undefined,
   ].filter((id) => id !== undefined);
   return found.length > 0 ? found : undefined;
+}
+
+/** Read again, as the renderer keeps only its textures. */
+async function image(opened: Opened, id: unknown, background: string) {
+  if (typeof id !== "string" || !Object.hasOwn(opened.board.elements, id)) {
+    throw new Error(`${opened.folder.name} has no element ${String(id)}`);
+  }
+  const { kind } = opened.board.elements[id]!;
+  if (kind.type !== "image") {
+    throw new Error(`${id} has type ${kind.type}, not image`);
+  }
+  const { natural_size: natural, frame, rotation, edits, filename, source, caption } = kind;
+  const unreadable = (error: unknown) => {
+    const reason = error instanceof Error ? error.message : String(error);
+    return new Error(`Planche cannot read the picture of ${id} (${reason})`);
+  };
+  const asset = await readAsset(files(opened), kind.asset, natural).catch((error: unknown) => {
+    throw unreadable(error);
+  });
+  // Engines load no video for a hidden page, until it shows.
+  if (asset.video && document.hidden) {
+    throw new Error("Planche shows a video's first frame only while its window shows");
+  }
+  const decoded = await decodeAsset(asset, MOST_SIDE).catch((error: unknown) => {
+    throw unreadable(error);
+  });
+  let image: Capture;
+  try {
+    if (decoded instanceof ImageBitmap) {
+      image = capture(decoded, { width: decoded.width, height: decoded.height }, background);
+    } else {
+      const scale = Math.max(1, SMALLEST_VECTOR / Math.max(natural.width, natural.height));
+      image = capture(decoded.image, { width: natural.width * scale, height: natural.height * scale }, background);
+    }
+  } finally {
+    release(decoded);
+  }
+  const still = asset.video ? "the video's first frame" : asset.moving ? "the first frame" : undefined;
+  return { id, filename, source, caption, natural_size: natural, frame, rotation, edits, still, image };
+}
+
+/** Drawn and read in this task, as a canvas holds its drawing no longer. */
+function screenshot(reading: Reading) {
+  if (reading.halfDrawn()) {
+    throw new Error("A board is opening in Planche");
+  }
+  const canvas = reading.drawNow();
+  const view = reading.shown();
+  if (canvas === undefined || view === undefined || canvas.width === 0 || canvas.height === 0) {
+    throw new Error("Planche shows no board yet");
+  }
+  const image = capture(canvas, { width: canvas.width, height: canvas.height }, reading.background());
+  return { view, pixels_per_unit: image.width / view.width, image };
 }
 
 function elements(opened: Opened, ids: unknown): Record<string, Element> {

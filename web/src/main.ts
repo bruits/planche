@@ -106,6 +106,7 @@ let unsaved = false;
  * starts, which nothing may use before.
  */
 let loading = true;
+let halfDrawn = false;
 /** On the desktop, a second export to the same file would take over the first one's draft. */
 let exporting = false;
 let tool: "select" | "hand" | "eraser" | Draw = "select";
@@ -506,6 +507,9 @@ async function serveAgents(): Promise<void> {
         const camera = viewport.camera();
         return camera && onScreen(camera, viewport.size());
       },
+      halfDrawn: () => halfDrawn,
+      drawNow: () => viewport.drawNow(),
+      background: () => getComputedStyle(document.body).backgroundColor,
     }),
   );
   await allowAgents(recall(AGENT) === "on");
@@ -711,6 +715,15 @@ async function openBoard(pick: () => Promise<Folder | null>): Promise<void> {
 }
 
 async function show(next: Opened): Promise<void> {
+  halfDrawn = true;
+  try {
+    await present(next);
+  } finally {
+    halfDrawn = false;
+  }
+}
+
+async function present(next: Opened): Promise<void> {
   // The core's memory holds it until freed.
   opened?.editor.free();
   opened = next;
