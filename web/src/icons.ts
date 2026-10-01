@@ -80,6 +80,7 @@ const paths = {
   contrast: ["M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0", "M12 17a5 5 0 0 0 0 -10v10"],
   flipHorizontally: ["M12 3l0 18", "M16 7l0 10l5 0l-5 -10", "M8 7l0 10l-5 0l5 -10"],
   flipVertically: ["M3 12l18 0", "M7 16l10 0l-10 5l0 -5", "M7 8l10 0l-10 -5l0 5"],
+  crop: ["M8 5v10a1 1 0 0 0 1 1h10", "M5 8h10a1 1 0 0 1 1 1v10"],
 };
 
 export type Icon = keyof typeof paths;

@@ -272,6 +272,8 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "is_default")]
         weight: Weight,
         #[serde(default, skip_serializing_if = "is_default")]
+        dash: Dash,
+        #[serde(default, skip_serializing_if = "is_default")]
         fill: Fill,
     },
     /// Its head is at `to`, unless `heads` says otherwise.
@@ -463,6 +465,7 @@ impl ElementKind {
                 target: _,
                 colour: _,
                 weight: _,
+                dash: _,
                 fill: _,
             } => frame.is_finite() && rotation.is_finite() && text.is_valid(),
             // Whether their targets are there is up to the board.
@@ -993,6 +996,7 @@ mod tests {
             colour: Colour::Ink,
             weight: Weight::Medium,
             fill: Fill::Hollow,
+            dash: Dash::Solid,
         };
         let arrow = |from, to| ElementKind::Arrow {
             from,

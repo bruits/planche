@@ -8,8 +8,8 @@ import * as core from "./core.js";
 import type { Editor, Kind, Point, Rect, Size } from "./core.js";
 import { FONT_SIZE, NOTE_WIDTH, PLACED_SIZE, STICKY_SIZE, type Restack } from "./edit.js";
 import { LONGEST_SIDE } from "./raster.js";
-import { isColour, restyled, settings, type Style } from "./style.js";
-import { fitted, holdsText } from "./text.js";
+import { isColour, restyled, settings, TEXT, type Style } from "./style.js";
+import { fitted, holdsText, isBlank } from "./text.js";
 
 /** The page's state that agents change. */
 export interface Writing {
@@ -214,7 +214,7 @@ type Styling = Omit<Style, "size" | "colour"> & { colour?: string };
 const SETTABLE = ["colour", "paper", "weight", "dash", "heads", "fill", "bold", "italic", "strike", "align"] as const;
 
 /** In what `given` sets of its style, each where the style card would offer it, or `refuse` throws. */
-function styled(kind: Kind, given: Styling, refuse: (field: string) => Error): Kind {
+function styled(kind: Kind, given: Styling, refuse: (field: string, blank: boolean) => Error): Kind {
   const style: Style = {};
   for (const field of SETTABLE) {
     const value = given[field];
@@ -222,7 +222,7 @@ function styled(kind: Kind, given: Styling, refuse: (field: string) => Error): K
       continue;
     }
     if (!settings(kind).includes(field)) {
-      throw refuse(field);
+      throw refuse(field, holdsText(kind) && isBlank(kind) && TEXT.includes(field));
     }
     if (field === "colour") {
       const colour = String(value).toLowerCase();
@@ -301,7 +301,11 @@ function kindOf(editor: Editor, element: New, zoom: number, stick: boolean): Kin
         element.type === "shape"
           ? { type: "shape", frame, rotation: 0, shape: element.shape ?? "rectangle", text: content }
           : { type: element.type, frame, rotation: 0, text: content };
-      const dressed = styled(kind, element, (field) => new Error(`A new ${named(kind)} takes no ${field}`));
+      const dressed = styled(
+        kind,
+        element,
+        (field, blank) => new Error(`A new ${named(kind)} ${blank ? `needs some text before its ${field}` : `takes no ${field}`}`),
+      );
       return holdsText(dressed) ? fitted(dressed) : dressed;
     }
     case "arrow":
@@ -356,8 +360,14 @@ async function update(page: Writing, target: Opened, clock: Clock, changes: Chan
 function patched(editor: Editor, change: Change): Kind {
   const { id, text, font_size, shape, caption, source, greyscale, crop } = change;
   const kind = core.element(editor, id)!.kind;
-  const refuse = (field: string) =>
-    new Error(named(kind) === "cross" ? `${id} is a cross, which takes no ${field}` : `${id} has type ${kind.type}, which takes no ${field}`);
+  const refuse = (field: string, blank = false) =>
+    new Error(
+      blank
+        ? `${id} needs some text before its ${field}`
+        : named(kind) === "cross"
+          ? `${id} is a cross, which takes no ${field}`
+          : `${id} has type ${kind.type}, which takes no ${field}`,
+    );
   if (text !== undefined) {
     if (kind.type === "comment") {
       kind.text = text;

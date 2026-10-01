@@ -814,6 +814,7 @@ mod tests {
             colour: Colour::Ink,
             weight: Weight::Medium,
             fill: Fill::Hollow,
+            dash: Dash::Solid,
         }
     }
 

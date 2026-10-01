@@ -95,6 +95,7 @@ fn sample() -> Board {
                     colour: Colour::Ink,
                     weight: Weight::Medium,
                     fill: Fill::Hollow,
+                    dash: Dash::Solid,
                 },
             },
         ),
@@ -175,6 +176,7 @@ fn sample() -> Board {
                     colour: Colour::Ink,
                     weight: Weight::Medium,
                     fill: Fill::Hollow,
+                    dash: Dash::Solid,
                 },
             },
         ),
@@ -365,6 +367,7 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
         target: None,
         colour: Colour::Red,
         weight: Weight::Thick,
+        dash: Dash::Dashed,
         fill: Fill::Tint,
     };
     let arrow = ElementKind::Arrow {
@@ -399,6 +402,7 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
     let shape = written(NOTE);
     assert_eq!(shape["colour"], "red");
     assert_eq!(shape["weight"], "thick");
+    assert_eq!(shape["dash"], "dashed");
     assert_eq!(shape["fill"], "tint");
     assert_eq!(
         shape["text"],
@@ -623,6 +627,7 @@ fn equal_boards_write_the_same_bytes() {
         colour: Colour::Ink,
         weight: Weight::Medium,
         fill: Fill::Hollow,
+        dash: Dash::Solid,
     };
     for (bits, kind) in [(20, image), (21, shape)] {
         let element = Element {

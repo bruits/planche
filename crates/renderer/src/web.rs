@@ -83,6 +83,9 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f, @locati
 /// Each stroke covers a quad a pixel wider than itself, and its fragments measure in device
 /// pixels how far they are from the line, which smooths its edge over one pixel.
 const STROKES: &str = r#"
+/// A dash and the gap after it, in widths of the stroke.
+const DASH: f32 = 7.0;
+
 struct Out {
     @builtin(position) position: vec4f,
     @location(0) local: vec2f,
@@ -94,11 +97,10 @@ struct Out {
     @location(6) opacity: f32,
 };
 
-/// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, dashed every `degrees` board
-/// units unless 0, 1 or 2 for the outline of a rectangle or an ellipse in the frame `geometry`,
-/// turned by `degrees`, 3 or 5 fills that rectangle or that ellipse, then `width` being its
-/// opacity, and 4 draws its diagonals. `width` is otherwise in board units, but never under a
-/// device pixel.
+/// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, 1 or 2 for the outline of a
+/// rectangle or an ellipse in the frame `geometry`, turned by `degrees`, 3 or 5 fills that
+/// rectangle or that ellipse, then `width` being its opacity, and 4 draws its diagonals. `width`
+/// is otherwise in board units, but never under a device pixel, and dashes the stroke when negative.
 @vertex fn vs(
     @builtin(vertex_index) index: u32,
     @location(0) shape: f32,
@@ -109,17 +111,18 @@ struct Out {
 ) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
     let fills = (shape > 2.5 && shape < 3.5) || shape > 4.5;
-    let radius = max(select(width, 0.0, fills) * camera.zoom, 1.0) * 0.5;
+    let dashed = width < 0.0 && !fills;
+    let thickness = abs(width);
+    let radius = max(select(thickness, 0.0, fills) * camera.zoom, 1.0) * 0.5;
     let margin = radius + 1.0;
     var out: Out;
     out.radius = radius;
     out.shape = shape;
     out.colour = colour;
     out.opacity = select(1.0, width, fills);
-    out.dash = 0.0;
+    // Never so short that the caps close the gaps.
+    out.dash = select(0.0, max(DASH * thickness * camera.zoom, radius * 6.0), dashed);
     if shape < 0.5 {
-        // Never so short that the caps close the gaps.
-        out.dash = select(0.0, max(degrees * camera.zoom, radius * 6.0), degrees > 0.0);
         let start = (geometry.xy - camera.origin) * camera.zoom;
         let end = (geometry.zw - camera.origin) * camera.zoom;
         let span = distance(start, end);
@@ -158,22 +161,88 @@ fn ellipse(local: vec2f, half: vec2f) -> f32 {
     return select(max(estimate, frame), -min(estimate, min(straight.x, straight.y)), scaled < 1.0);
 }
 
+/// The nearest point of [0, `span`] that a dash covers, dashes being half of each `period` and
+/// centred on its multiples, so that half of one starts and ends the stretch.
+fn nearest_dash(at: f32, period: f32, span: f32) -> f32 {
+    let x = at + period * 0.25;
+    let start = floor(x / period) * period;
+    let within = clamp(x, start, start + period * 0.5);
+    let next = start + period;
+    return clamp(select(within, next, next - x < abs(x - within)) - period * 0.25, 0.0, span);
+}
+
+/// What a stretch of `span` is cut into, nearest `base` long, so that dashes end it as they start it.
+fn whole_period(span: f32, base: f32) -> f32 {
+    return max(span / max(round(span / base), 1.0), 1e-3);
+}
+
+/// Of a dashed rectangle, whose sides each have a whole number of periods, and so the same
+/// pattern from either end, which is why the point folds into one quarter.
+fn dashed_box(local: vec2f, half: vec2f, base: f32) -> f32 {
+    let point = abs(local);
+    let sides = half * 2.0;
+    let along = half + point;
+    let period = vec2f(whole_period(sides.x, base), whole_period(sides.y, base));
+    let x = along.x - nearest_dash(along.x, period.x, sides.x);
+    let y = along.y - nearest_dash(along.y, period.y, sides.y);
+    return min(length(vec2f(x, point.y - half.y)), length(vec2f(point.x - half.x, y)));
+}
+
+/// How fast a point goes round the ellipse at parameter `t`, in pixels per radian.
+fn speed(t: f32, axes: vec2f) -> f32 {
+    return length(vec2f(axes.x * sin(t), axes.y * cos(t)));
+}
+
+/// How far along a quarter of the ellipse, from the end of its horizontal axis, the point at
+/// parameter `angle` lies, by Gauss-Legendre quadrature of four points, which holds to a
+/// thousandth of that length for ellipses up to ten times as wide as they are tall.
+fn arc(angle: f32, axes: vec2f) -> f32 {
+    let h = angle * 0.5;
+    return h * (
+        0.3478548 * speed(h * (1.0 - 0.8611363), axes) +
+        0.6521452 * speed(h * (1.0 - 0.3399810), axes) +
+        0.6521452 * speed(h * (1.0 + 0.3399810), axes) +
+        0.3478548 * speed(h * (1.0 + 0.8611363), axes)
+    );
+}
+
+/// Dashes of the same length all round, `away` being the point's distance from the whole outline.
+fn dashed_ellipse(local: vec2f, half: vec2f, base: f32, away: f32) -> f32 {
+    let axes = max(half, vec2f(0.5));
+    let point = abs(local);
+    // Back onto the outline along the normal, where it first meets it, as scaling the point onto
+    // it would slant the dashes of a long ellipse.
+    let normal = point / (axes * axes);
+    let direction = normal / max(length(normal), 1e-20);
+    let unit = point / axes;
+    let slope = direction / axes;
+    let outside = dot(unit, unit) - 1.0;
+    let middle = dot(unit, slope);
+    let spread = sqrt(max(middle * middle - dot(slope, slope) * outside, 0.0));
+    let outline = max(point - direction * outside / max(middle + spread, 1e-20), vec2f(0.0));
+    let quarter = arc(1.5707964, axes);
+    let along = arc(atan2(outline.y * axes.x, outline.x * axes.y), axes);
+    return length(vec2f(along - nearest_dash(along, whole_period(quarter, base), quarter), away));
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
     var away: f32;
     if in.shape < 0.5 {
         var nearest = clamp(in.local.x, 0.0, in.size.x);
         if in.dash > 0.0 {
-            // Half of each period draws, and its round caps reach into the other half.
-            let start = floor(in.local.x / in.dash) * in.dash;
-            let within = clamp(in.local.x, start, start + in.dash * 0.5);
-            let next = start + in.dash;
-            nearest = clamp(select(within, next, next - in.local.x < abs(in.local.x - within)), 0.0, in.size.x);
+            nearest = nearest_dash(in.local.x, whole_period(in.size.x, in.dash), in.size.x);
         }
         away = length(vec2f(in.local.x - nearest, in.local.y));
     } else if in.shape < 1.5 {
         away = abs(box(in.local, in.size));
+        if in.dash > 0.0 && away < in.radius + 1.0 {
+            away = dashed_box(in.local, in.size, in.dash);
+        }
     } else if in.shape < 2.5 {
         away = abs(ellipse(in.local, in.size));
+        if in.dash > 0.0 && away < in.radius + 1.0 {
+            away = dashed_ellipse(in.local, in.size, in.dash, away);
+        }
     } else if in.shape < 3.5 {
         return vec4f(in.colour, clamp(0.5 - box(in.local, in.size), 0.0, 1.0) * in.opacity);
     } else if in.shape < 4.5 {
@@ -181,6 +250,14 @@ fn ellipse(local: vec2f, half: vec2f) -> f32 {
         let point = abs(in.local);
         let along = clamp(dot(point, in.size) / max(dot(in.size, in.size), 1e-6), 0.0, 1.0);
         away = length(point - in.size * along);
+        if in.dash > 0.0 && away < in.radius + 1.0 {
+            // From the centre out along each half of a diagonal, in whole periods.
+            let arm = max(length(in.size), 1e-3);
+            let direction = in.size / arm;
+            let reach = dot(point, direction);
+            let off = reach - nearest_dash(reach, whole_period(arm, in.dash), arm);
+            away = length(vec2f(off, length(point - direction * reach)));
+        }
     } else {
         return vec4f(in.colour, clamp(0.5 - ellipse(in.local, in.size), 0.0, 1.0) * in.opacity);
     }

@@ -676,10 +676,12 @@ body {
   gap: 2px;
 }
 
-/* The palette, the colours picked lately under it, then the pipette over a colour of one's own. */
+/* The palette, the colours picked lately under it, then the pipette over a colour of one's own,
+   spread over a wider card so that the pipette ends the row. */
 .style-card .colours {
   display: grid;
   grid-template-columns: repeat(6, var(--button)) auto var(--button);
+  justify-content: space-between;
   align-items: center;
   gap: 2px;
 }

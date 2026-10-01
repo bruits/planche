@@ -44,7 +44,7 @@ The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web 
 
 ### renderer
 
-The renderer, on wgpu: images as textured quads, the frames of animated ones, which it decodes itself, and of videos, which the host plays, SVGs and text from textures the web app rasterises, the strokes of arrows and lines, dashed or not, the outlines of shapes, and the fills of shapes and sticky notes, in their own colours, in one list back to front over the grid, if any, on WebGPU or WebGL2, for the web only so far. It also draws, for agents, a part of the board onto a texture of its own, which it reads back, with the window's canvas, camera, and textures left as they are. See the [foundation](./docs/technical/foundation.md#rendering).
+The renderer, on wgpu: images as textured quads, the frames of animated ones, which it decodes itself, and of videos, which the host plays, SVGs and text from textures the web app rasterises, the strokes of arrows, lines, and the outlines of shapes, dashed or not, and the fills of shapes and sticky notes, in their own colours, in one list back to front over the grid, if any, on WebGPU or WebGL2, for the web only so far. It also draws, for agents, a part of the board onto a texture of its own, which it reads back, with the window's canvas, camera, and textures left as they are. See the [foundation](./docs/technical/foundation.md#rendering).
 
 ### folder
 

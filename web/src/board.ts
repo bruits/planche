@@ -227,8 +227,6 @@ const HEAD_WIDTHS = 3;
 const HEAD_SHARE = 1 / 3;
 /** Between each side of an arrow's head and its line, in radians. */
 const HEAD_ANGLE = Math.PI / 6;
-/** A dash and the gap after it, in widths of its stroke. */
-const DASH = 7;
 const TINT = 0.18;
 
 /**
@@ -294,8 +292,8 @@ function image(kind: Extract<Kind, { type: "image" }>): Placed {
 
 function line(kind: Extract<Kind, { type: "arrow" | "line" }>): Extract<Placed, { kind: "line" }> {
   const width = core.strokeWidth(kind.weight);
-  const dash = kind.dash === "dashed" ? DASH * width : 0;
-  return { kind: "line", from: kind.from, to: kind.to, width, paint: kind.colour ?? "ink", dash };
+  const { from, to } = kind;
+  return { kind: "line", from, to, width, paint: kind.colour ?? "ink", dashed: kind.dash === "dashed" };
 }
 
 /** Its line, and the two solid strokes of an open head at each end that draws one. */
@@ -314,7 +312,7 @@ function arrow(kind: Extract<Kind, { type: "arrow" }>): Placed[] {
       ...drawn,
       from: tip,
       to: { x: tip.x + Math.cos(back + angle) * length, y: tip.y + Math.sin(back + angle) * length },
-      dash: 0,
+      dashed: false,
     });
     return [side(HEAD_ANGLE), side(-HEAD_ANGLE)];
   };
@@ -324,7 +322,8 @@ function arrow(kind: Extract<Kind, { type: "arrow" }>): Placed[] {
 function shape(kind: Extract<Kind, { type: "shape" }>): Placed[] {
   const { frame, rotation } = kind;
   const paint = kind.colour ?? "ink";
-  const outline: Placed = { kind: kind.shape, frame, rotation, width: core.strokeWidth(kind.weight), paint };
+  const width = core.strokeWidth(kind.weight);
+  const outline: Placed = { kind: kind.shape, frame, rotation, width, paint, dashed: kind.dash === "dashed" };
   const fill = kind.fill ?? "hollow";
   if (kind.shape === "cross" || fill === "hollow") {
     return [outline];

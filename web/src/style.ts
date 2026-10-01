@@ -5,7 +5,7 @@
 import type { Align, Colour, Dash, Fill, Heads, Kind, Paper, Weight } from "./core.js";
 import type { Draw } from "./edit.js";
 import { recall, remember } from "./preferences.js";
-import { alignment, fitted, holdsText, isBlank } from "./text.js";
+import { alignment, defaultAlignment, fitted, holdsText, isBlank, type Holder } from "./text.js";
 
 /** Where the browser remembers each tool's style, and the colours picked lately. */
 const STYLES = "planche.styles";
@@ -57,7 +57,7 @@ export interface Style {
 
 export type Setting = keyof Style;
 
-const TEXT: Setting[] = ["size", "bold", "italic", "strike", "align"];
+export const TEXT: Setting[] = ["size", "bold", "italic", "strike", "align"];
 
 export function settings(kind: Kind): Setting[] {
   switch (kind.type) {
@@ -65,11 +65,11 @@ export function settings(kind: Kind): Setting[] {
       return ["colour", ...TEXT];
     case "sticky":
       return ["paper", ...TEXT];
-    case "shape":
-      if (kind.shape === "cross") {
-        return ["colour", "weight"];
-      }
-      return isBlank(kind) ? ["colour", "weight", "fill"] : ["colour", "weight", "fill", "size"];
+    case "shape": {
+      // Fitting a blank shape to its text would grow it.
+      const text = isBlank(kind) ? [] : TEXT;
+      return kind.shape === "cross" ? ["colour", "weight", "dash", ...text] : ["colour", "weight", "dash", "fill", ...text];
+    }
     case "arrow":
       return ["colour", "weight", "dash", "heads"];
     case "line":
@@ -91,7 +91,7 @@ export function valueOf(kind: Kind, setting: Setting, zoom: number): Style[Setti
     case "weight":
       return stroked(kind) ? (kind.weight ?? "medium") : undefined;
     case "dash":
-      return kind.type === "arrow" || kind.type === "line" ? (kind.dash ?? "solid") : undefined;
+      return stroked(kind) ? (kind.dash ?? "solid") : undefined;
     case "heads":
       return kind.type === "arrow" ? (kind.heads ?? "end") : undefined;
     case "fill":
@@ -128,15 +128,20 @@ export function restyled(kind: Kind, style: Style, zoom: number): Kind {
   if (!holdsText(next) || !TEXT.some((setting) => setting in set)) {
     return next;
   }
-  const text = { ...next.text, ...defined({ bold, italic, strike, align }) };
+  return fitted(textStyled(next, set, zoom));
+}
+
+/** With the text part of `style` set, at `zoom` CSS pixels per board unit for its size. */
+function textStyled<T extends Holder>(kind: T, { size, bold, italic, strike, align }: Style, zoom: number): T {
+  const text = { ...kind.text, ...defined({ bold, italic, strike, align }) };
   // Left out where it is as what holds it would choose, so that choosing it writes nothing.
-  if (text.align === alignment({ ...next, text: { ...text, align: undefined } })) {
+  if (text.align === defaultAlignment(kind)) {
     delete text.align;
   }
   if (size !== undefined) {
     text.font_size = size / zoom;
   }
-  return fitted({ ...next, text });
+  return { ...kind, text };
 }
 
 /** The style `kind` has, of what applies to it, as copying it takes it. */
@@ -189,9 +194,9 @@ export function styles(): Styles {
         return kind;
       }
       const dressed = restyled(kind, style, zoom);
-      // A shape is drawn blank, which takes no size yet, though what is written in it then will.
-      if (dressed.type === "shape" && style.size !== undefined && !settings(dressed).includes("size")) {
-        return { ...dressed, text: { ...dressed.text, font_size: style.size / zoom } };
+      // A shape is drawn blank, which takes no text style yet, though what is written in it then will.
+      if (dressed.type === "shape" && isBlank(dressed)) {
+        return textStyled(dressed, style, zoom);
       }
       return dressed;
     },

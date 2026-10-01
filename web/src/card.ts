@@ -10,6 +10,7 @@ import type { Colour, Kind, Point } from "./core.js";
 import type { Reading } from "./edit.js";
 import { icon, type Icon } from "./icons.js";
 import { css, type Paint } from "./paint.js";
+import { defaultAlignment, holdsText } from "./text.js";
 import {
   PALETTE,
   PAPERS,
@@ -95,6 +96,7 @@ export interface CardCommands {
   strike: Command;
   flipHorizontally: Command;
   flipVertically: Command;
+  crop: Command;
   open: Command;
 }
 
@@ -156,7 +158,8 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   /** What the card shows, so that it only builds again once that changed, and at which zoom, as sizes go by it. */
   let shown = "";
   let filledAt: number | undefined;
-  let copied: Style | undefined;
+  /** With whether the alignment it holds is only the one its holder takes by default. */
+  let copied: { style: Style; natural: boolean } | undefined;
 
   /** The elements selected, and those of the groups selected, but the groups themselves. */
   const targets = (): { id: string; kind: Kind }[] => {
@@ -197,28 +200,33 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       host.say(String(error instanceof Error ? error.message : error));
     }
   };
-  const set = (style: Style, only = false) => {
+  /** Each element selected in `style`, or the style `each` gives it, as one edit. */
+  const restyle = (style: Style, each: (kind: Kind) => Style = () => style) => {
     const zoom = host.zoom();
     const all = targets();
     if (zoom === undefined || all.length === 0) {
-      return;
+      return [];
     }
     edit((editor, touched) => {
       for (const { id, kind } of all) {
-        const next = restyled(kind, style, zoom);
+        const next = restyled(kind, each(kind), zoom);
         if (next !== kind) {
           touched.push(...editor.update(id, JSON.stringify(next)));
         }
       }
     });
-    if (!only) {
+    if (style.colour !== undefined) {
+      store.pick(style.colour);
+    }
+    return all;
+  };
+  const set = (style: Style, only = false) => {
+    const all = restyle(style);
+    if (all.length > 0 && !only) {
       store.learn(
         all.map(({ kind }) => kind),
         style,
       );
-    }
-    if (style.colour !== undefined) {
-      store.pick(style.colour);
     }
   };
 
@@ -341,6 +349,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     }
     if (images()) {
       const grey = targets().every(({ kind }) => kind.type === "image" && kind.edits.greyscale);
+      const crops = commands.crop.unavailable?.() === undefined;
       rows.push(
         row("Image", [
           button("Greyscale", icon("contrast"), () => greyscale(), { pressed: grey }),
@@ -350,6 +359,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
           button("Flip vertically", icon("flipVertically"), () => commands.flipVertically.run(), {
             shortcut: commands.flipVertically.keys?.[0],
           }),
+          ...(crops ? [button("Crop", icon("crop"), () => commands.crop.run(), { shortcut: commands.crop.keys?.[0] })] : []),
         ]),
       );
     }
@@ -542,12 +552,16 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       const [first] = styled();
       const zoom = host.zoom();
       if (first && zoom !== undefined && settings(first.kind).length > 0) {
-        copied = styleOf(first.kind, zoom);
+        const { kind } = first;
+        const style = styleOf(kind, zoom);
+        copied = { style, natural: style.align !== undefined && holdsText(kind) && kind.text.align === undefined };
       }
     },
     paste() {
       if (copied) {
-        set(copied, true);
+        const { style, natural } = copied;
+        // Each takes the alignment its own holder chooses, as a note's is not a shape's.
+        restyle(style, (kind) => (natural && holdsText(kind) ? { ...style, align: defaultAlignment(kind) } : style));
       }
     },
     canPaste: () => copied !== undefined,

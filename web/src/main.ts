@@ -586,6 +586,7 @@ const styleCard = card(
     strike: commands.strike,
     flipHorizontally: commands.flipHorizontally,
     flipVertically: commands.flipVertically,
+    crop: commands.crop,
     open: commands.style,
   },
 );

@@ -146,8 +146,16 @@ pub enum NewElement {
         group: Option<String>,
         colour: Option<Colour>,
         weight: Option<Weight>,
+        /// Of its outline.
+        dash: Option<Dash>,
         /// Hollow by default. Not for a cross.
         fill: Option<Fill>,
+        /// Of its text, which it needs.
+        bold: Option<bool>,
+        italic: Option<bool>,
+        strike: Option<bool>,
+        /// Centred by default.
+        align: Option<Align>,
     },
     /// Its head is at `to`, unless `heads` says both ends.
     Arrow {
@@ -299,19 +307,19 @@ pub struct Update {
     pub paper: Option<Paper>,
     /// For a shape, an arrow, or a line.
     pub weight: Option<Weight>,
-    /// For an arrow or a line.
+    /// For a shape, an arrow, or a line.
     pub dash: Option<Dash>,
     /// For an arrow.
     pub heads: Option<Heads>,
     /// For a rectangle or an ellipse.
     pub fill: Option<Fill>,
-    /// For a note or a sticky note.
+    /// For a note, a sticky note, or a shape holding text.
     pub bold: Option<bool>,
-    /// For a note or a sticky note.
+    /// For a note, a sticky note, or a shape holding text.
     pub italic: Option<bool>,
-    /// For a note or a sticky note, struck through.
+    /// For a note, a sticky note, or a shape holding text, struck through.
     pub strike: Option<bool>,
-    /// For a note or a sticky note.
+    /// For a note, a sticky note, or a shape holding text.
     pub align: Option<Align>,
 }
 

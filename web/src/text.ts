@@ -71,7 +71,11 @@ export function face({ text }: Holder): Face {
 }
 
 export function alignment(kind: Holder): Align {
-  return kind.text.align ?? (kind.type === "shape" ? "centre" : "left");
+  return kind.text.align ?? defaultAlignment(kind);
+}
+
+export function defaultAlignment(kind: Holder): Align {
+  return kind.type === "shape" ? "centre" : "left";
 }
 
 export function paint(kind: Holder): Paint {

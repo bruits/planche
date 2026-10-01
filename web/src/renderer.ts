@@ -8,7 +8,7 @@ import start, { Animation, create as createWgpu, type Readback } from "./wasm/re
 /**
  * An image, as it shows its asset, a text from its texture, a stroke, or a filled rectangle or
  * ellipse, with `opacity` from 0 to 1. Rotations are clockwise, in degrees, around the frame's
- * centre, and stroke widths and a line's `dash`, a dash and its gap, in board units.
+ * centre, and stroke widths in board units.
  */
 export type Placed =
   | {
@@ -21,8 +21,8 @@ export type Placed =
       greyscale: boolean;
     }
   | { kind: "text"; id: string; frame: Rect; rotation: number; paint: Paint }
-  | { kind: "line"; from: Point; to: Point; width: number; paint: Paint; dash?: number }
-  | { kind: "rectangle" | "ellipse" | "cross"; frame: Rect; rotation: number; width: number; paint: Paint }
+  | { kind: "line"; from: Point; to: Point; width: number; paint: Paint; dashed?: boolean }
+  | { kind: "rectangle" | "ellipse" | "cross"; frame: Rect; rotation: number; width: number; paint: Paint; dashed?: boolean }
   | { kind: "fill"; shape: "rectangle" | "ellipse"; frame: Rect; rotation: number; paint: Paint; opacity: number };
 
 /** An animated image, whose frames it draws onto its asset's texture. */
@@ -305,7 +305,7 @@ function floats(item: Placed, texture: number, paints: Paints): number[] {
     }
     case "line": {
       const { from, to } = item;
-      const line = [from.x, from.y, to.x, to.y, item.dash ?? 0, item.width];
+      const line = [from.x, from.y, to.x, to.y, 0, stroke(item)];
       return [KINDS.stroke, -1, SHAPES.line, ...line, ...paints(item.paint)];
     }
     case "fill": {
@@ -315,10 +315,15 @@ function floats(item: Placed, texture: number, paints: Paints): number[] {
     }
     default: {
       const { frame } = item;
-      const outline = [frame.x, frame.y, frame.width, frame.height, item.rotation, item.width];
+      const outline = [frame.x, frame.y, frame.width, frame.height, item.rotation, stroke(item)];
       return [KINDS.stroke, -1, SHAPES[item.kind], ...outline, ...paints(item.paint)];
     }
   }
+}
+
+/** Its width, negative when dashed, as the renderer reads it. */
+function stroke({ width, dashed }: { width: number; dashed?: boolean }): number {
+  return dashed ? -width : width;
 }
 
 /** As the renderer lays out its grid, none when plain. `density` is the device pixels per CSS pixel. */

@@ -713,7 +713,7 @@ async fn a_style_reaches_the_web_app_as_the_agent_gave_it() {
     let elements = json!([
         { "type": "note", "x": 0.0, "y": 0.0, "text": "Warm light", "colour": "#EC8353", "bold": true, "italic": false, "align": "centre" },
         { "type": "sticky", "x": 0.0, "y": 0.0, "paper": "lilac", "strike": true },
-        { "type": "shape", "x": 0.0, "y": 0.0, "colour": "blue", "weight": "thick", "fill": "tint" },
+        { "type": "shape", "x": 0.0, "y": 0.0, "text": "Key light", "colour": "blue", "weight": "thick", "dash": "dashed", "fill": "tint", "bold": true, "align": "left" },
         { "type": "arrow", "from": { "x": 0.0, "y": 0.0 }, "to": { "x": 1.0, "y": 0.0 }, "dash": "dashed", "heads": "both" },
         { "type": "line", "from": { "x": 0.0, "y": 0.0 }, "to": { "x": 1.0, "y": 0.0 }, "weight": "thin" },
     ]);
@@ -778,7 +778,7 @@ async fn a_style_that_an_element_cannot_take_is_refused_before_the_web_app_hears
             "unknown variant `red`",
         ),
         (
-            json!({ "type": "shape", "x": 0.0, "y": 0.0, "bold": true }),
+            json!({ "type": "arrow", "from": point, "to": point, "bold": true }),
             "unknown field `bold`",
         ),
         (

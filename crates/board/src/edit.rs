@@ -2643,6 +2643,7 @@ mod tests {
             colour: Colour::Ink,
             weight: Weight::Medium,
             fill: Fill::Hollow,
+            dash: Dash::Solid,
         };
         let comment = |x, y| ElementKind::Comment {
             at: Point { x, y },
@@ -2698,6 +2699,7 @@ mod tests {
             colour: Colour::Ink,
             weight: Weight::Medium,
             fill: Fill::Hollow,
+            dash: Dash::Solid,
         };
         let mut aslant = picture(400.0, 0.0);
         if let ElementKind::Image { rotation, .. } = &mut aslant {
@@ -2746,6 +2748,7 @@ mod tests {
             colour: Colour::Ink,
             weight: Weight::Medium,
             fill,
+            dash: Dash::Solid,
         };
         let comment = ElementKind::Comment {
             at: Point { x: 50.0, y: 50.0 },

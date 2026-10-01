@@ -107,6 +107,7 @@ export type Kind =
       target?: string;
       colour?: Colour;
       weight?: Weight;
+      dash?: Dash;
       fill?: Fill;
     }
   | {
