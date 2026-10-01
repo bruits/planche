@@ -59,12 +59,21 @@ export interface Agent {
   allow(on: boolean): Promise<void>;
 }
 
+export interface TitleBar {
+  /** Throws why it cannot, such as in full screen. */
+  show(shown: boolean): Promise<void>;
+  /** From a press of the main button, which must still be down. */
+  drag(): void;
+}
+
 export interface Platform {
   name: string;
   /** Missing where agents cannot reach the app. */
   agent?: Agent;
   /** Missing where the app has no window of its own. Throws why it cannot, such as on Wayland. */
   keepOnTop?(on: boolean): Promise<void>;
+  /** Missing where the app has no window of its own. */
+  titleBar?: TitleBar;
   /** Why saving is impossible here, if it is. */
   cannotSave?: string;
   /** `null` when the user cancels. */

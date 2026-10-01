@@ -92,6 +92,8 @@ fn main() {
             confirm,
             mark_unsaved,
             keep_on_top,
+            show_title_bar,
+            drag_window,
             read_dropped,
             pick_folder,
             pick_target,
@@ -264,6 +266,22 @@ fn keep_on_top(window: Window, on: bool) -> Result<(), String> {
 fn on_wayland() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some()
         && !std::env::var("GDK_BACKEND").is_ok_and(|backend| backend.starts_with("x11"))
+}
+
+/// With its borders too. Refused in full screen, which would bring them back on leaving.
+#[tauri::command]
+fn show_title_bar(window: Window, shown: bool) -> Result<(), String> {
+    if !shown && window.is_fullscreen().map_err(|error| error.to_string())? {
+        return Err("A window in full screen keeps its title bar".to_owned());
+    }
+    window
+        .set_decorations(shown)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn drag_window(window: Window) -> Result<(), String> {
+    window.start_dragging().map_err(|error| error.to_string())
 }
 
 #[tauri::command(async)]

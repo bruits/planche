@@ -29,6 +29,7 @@ import {
 import { fit } from "./camera.js";
 import { describe, listen, mac, typing, type Command, type Shortcut } from "./commands.js";
 import { edits, type Draw, type Restack } from "./edit.js";
+import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
 import { menuOpen, openMenu, type Entry } from "./menu.js";
 import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./metrics.js";
@@ -116,6 +117,8 @@ let tool: "select" | "hand" | "eraser" | Draw = "select";
 let snapping = false;
 let unplayable: ReadonlySet<string> = new Set();
 let spaceHeld = false;
+/** Left out of the preferences, as a window without its title bar would open at full size. */
+let compact = false;
 /** Kept while the measurements are hidden, so that they show at once when opened. */
 let frameRate = 0;
 let hintsShown = recall(HINTS) !== "hidden";
@@ -302,6 +305,12 @@ const commands = {
       refreshBar();
     },
   },
+  compact: {
+    label: "Compact mode",
+    keys: [{ key: "\\", code: "Backslash", command: true }],
+    unavailable: () => (platform.titleBar ? undefined : "Only the desktop app has a window of its own"),
+    run: () => report(useCompact(!compact)),
+  },
   plain: backdrop("No grid", "plain"),
   grid: backdrop("Lines", "grid"),
   dots: backdrop("Dots", "dots"),
@@ -340,6 +349,7 @@ const commands = {
     run: contextMenuFromKeys,
   },
 } satisfies Record<string, Command>;
+const leaveCompact: Command = { ...commands.compact, label: "Leave compact mode" };
 
 const bar = toolbar(
   byId("toolbar"),
@@ -387,6 +397,9 @@ const bar = toolbar(
   ],
 );
 refreshBar();
+if (platform.titleBar) {
+  handle(byId("handle"), viewport.host, platform.titleBar.drag, leaveCompact);
+}
 listen(Object.values(commands), () => !menuOpen() && !busy());
 addEventListener("keydown", (event) => {
   // A focused button takes Space to press itself.
@@ -421,9 +434,13 @@ document.addEventListener("contextmenu", (event) => {
   contextMenu(editing.aim(at, pinned(event.target)), at, { x: event.clientX, y: event.clientY });
 });
 
-// The shell follows even when the browser forgot, as the window outlives a reload of the page.
+// The window outlives a reload of the page, so it follows how the page starts, even when the
+// browser forgot.
 if (platform.keepOnTop) {
   report(keepOnTop(recall(ON_TOP) === "on"));
+}
+if (platform.titleBar) {
+  report(platform.titleBar.show(true));
 }
 await Promise.all([core.start(), loadFont()]);
 receive(viewport, (incoming, at) => report(addImages(incoming, at)));
@@ -492,6 +509,7 @@ function views(): Entry {
     { ...commands.hints, checked: hintsShown, toggle: true },
     { ...commands.measurements, checked: !measurements.hidden, toggle: true },
     ...(platform.keepOnTop ? [{ ...commands.alwaysOnTop, checked: onTop, toggle: true }] : []),
+    ...(platform.titleBar ? [{ ...commands.compact, checked: compact, toggle: true }] : []),
     ...(platform.agent ? [{ ...commands.agentAccess, checked: agentsAllowed, toggle: true }] : []),
   ]);
 }
@@ -557,6 +575,15 @@ async function keepOnTop(on: boolean): Promise<void> {
     onTop = on;
   } finally {
     remember(ON_TOP, onTop ? "on" : undefined);
+  }
+}
+
+async function useCompact(on: boolean): Promise<void> {
+  await platform.titleBar?.show(!on);
+  compact = on;
+  document.documentElement.toggleAttribute("data-compact", on);
+  if (on) {
+    bar.say(`Compact mode: drag the top edge to move, ${describe(commands.compact.keys[0]!)} or right-click to leave`);
   }
 }
 
@@ -687,6 +714,10 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         "separator",
         grids(),
       ];
+  // First, as the menu may not fit a small window.
+  if (compact) {
+    entries.unshift(leaveCompact, "separator");
+  }
   openMenu(entries, { label: onSelection ? "Selection" : "Board", place });
 }
 

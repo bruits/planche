@@ -97,7 +97,13 @@ function keyName({ key, code }: Shortcut): string {
     return names[key] ?? (key.length === 1 ? key.toUpperCase() : capitalise(key));
   }
   const digit = /^Digit(\d)$/.exec(code ?? "");
-  const glyphs: Record<string, string> = { BracketLeft: "[", BracketRight: "]", Equal: "=", Minus: "-" };
+  const glyphs: Record<string, string> = {
+    BracketLeft: "[",
+    BracketRight: "]",
+    Backslash: "\\",
+    Equal: "=",
+    Minus: "-",
+  };
   return digit?.[1] ?? glyphs[code ?? ""] ?? code ?? "";
 }
 

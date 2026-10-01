@@ -274,12 +274,12 @@ function mark(button: HTMLButtonElement, states: Record<string, string | false |
   }
 }
 
-function explanation(command: Command): string {
+export function explanation(command: Command): string {
   const shortcut = command.keys?.[0];
   return shortcut ? `${named(command)} · ${describe(shortcut)}` : named(command);
 }
 
-function dress(button: HTMLButtonElement, { command, icon: name }: Button): void {
+export function dress(button: HTMLButtonElement, { command, icon: name }: Button): void {
   button.setAttribute("aria-label", named(command));
   button.replaceChildren(icon(name));
   const shortcut = command.keys?.[0];

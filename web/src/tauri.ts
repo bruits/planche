@@ -108,6 +108,11 @@ export function tauri({ core, event }: TauriApi): Platform {
 
     keepOnTop: (on) => core.invoke("keep_on_top", { on }),
 
+    titleBar: {
+      show: (shown) => core.invoke("show_title_bar", { shown }),
+      drag: () => void core.invoke("drag_window"),
+    },
+
     // Only on Linux, where the shell takes drops itself.
     watchDrops(dropped) {
       type Dropped = [string[], string[], number, number];
