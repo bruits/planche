@@ -5,7 +5,7 @@
 
 import type { Camera, Viewport } from "./camera.js";
 import * as core from "./core.js";
-import type { Board, Bytes, Size } from "./core.js";
+import type { Board, Bytes, Kind, Size } from "./core.js";
 import { LONGEST_SIDE, overlaps, rounded, settling } from "./raster.js";
 import type { Renderer } from "./renderer.js";
 
@@ -38,11 +38,22 @@ function dataUrl(blob: Blob): Promise<string> {
   });
 }
 
+/** Board units across a pixel of an image's asset, as its frame lays it out. */
+export function unitsPerPixel(kind: Extract<Kind, { type: "image" }>): number {
+  const { width, height } = kind.edits.crop ?? kind.natural_size;
+  return Math.max(kind.frame.width / width, kind.frame.height / height);
+}
+
 export interface Vectors {
   /** Rasterises `asset` from now on, unless it already does. */
   keep(asset: string, picture: Picture): void;
   /** Rasterises the assets that show at a zoom they were not rasterised for. */
   update(board: Board, renderer: Renderer, camera: Camera, viewport: Viewport): void;
+  /**
+   * `asset` on a canvas of its own, at `density` pixels per pixel of its natural size, fewer where
+   * it would not fit a texture. Nothing is kept. `undefined` for an asset not rasterised.
+   */
+  drawn(asset: string, density: number): HTMLCanvasElement | undefined;
   /** Forgets them all, as their renderer is gone. */
   reset(): void;
 }
@@ -70,9 +81,7 @@ export function vectors(again: () => void): Vectors {
         if (kind.type !== "image" || !pictures.has(kind.asset)) {
           continue;
         }
-        const { width, height } = kind.edits.crop ?? kind.natural_size;
-        const scale = Math.max(kind.frame.width / width, kind.frame.height / height);
-        const here = scale * camera.zoom * devicePixelRatio;
+        const here = unitsPerPixel(kind) * camera.zoom * devicePixelRatio;
         wanted.set(kind.asset, Math.max(wanted.get(kind.asset) ?? 0, here));
         if (overlaps(shown, kind.frame)) {
           visible.add(kind.asset);
@@ -85,7 +94,7 @@ export function vectors(again: () => void): Vectors {
         }
       }
       for (const [asset, here] of wanted) {
-        const { image, natural } = pictures.get(asset)!;
+        const { natural } = pictures.get(asset)!;
         const longest = Math.max(natural.width, natural.height);
         const inView = visible.has(asset);
         // Out of view, an asset drops to a density that costs little, so that memory follows what shows.
@@ -98,12 +107,20 @@ export function vectors(again: () => void): Vectors {
         if (!(density > 0)) {
           continue;
         }
-        canvas.width = Math.max(Math.round(natural.width * density), 1);
-        canvas.height = Math.max(Math.round(natural.height * density), 1);
-        canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height);
+        rasterise(canvas, pictures.get(asset)!, density);
         renderer.setImage(asset, canvas);
         rasterised.set(asset, density);
       }
+    },
+    drawn(asset, density) {
+      const picture = pictures.get(asset);
+      if (picture === undefined) {
+        return undefined;
+      }
+      const own = document.createElement("canvas");
+      const longest = Math.max(picture.natural.width, picture.natural.height);
+      rasterise(own, picture, Math.min(density, LONGEST_SIDE / longest));
+      return own;
     },
     reset() {
       pictures.clear();
@@ -111,4 +128,10 @@ export function vectors(again: () => void): Vectors {
       settle.reset();
     },
   };
+}
+
+function rasterise(canvas: HTMLCanvasElement, { image, natural }: Picture, density: number): void {
+  canvas.width = Math.max(Math.round(natural.width * density), 1);
+  canvas.height = Math.max(Math.round(natural.height * density), 1);
+  canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height);
 }

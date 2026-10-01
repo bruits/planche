@@ -233,7 +233,7 @@ const HEAD_ANGLE = Math.PI / 6;
  */
 export function placed(
   board: Board,
-  texts: Texts,
+  texts: Pick<Texts, "placed">,
   hidden?: string,
   unplayable: ReadonlySet<string> = new Set(),
 ): Placed[] {

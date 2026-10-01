@@ -38,6 +38,7 @@ import { pinned, pins } from "./pins.js";
 import { platform, type Folder } from "./platform.js";
 import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE, onScreen } from "./raster.js";
+import { render } from "./render.js";
 import { create, type Renderer } from "./renderer.js";
 import { loadFont, texts } from "./text.js";
 import { theme, type Scheme } from "./theme.js";
@@ -536,6 +537,13 @@ async function serveAgents(): Promise<void> {
       },
       halfDrawn: () => halfDrawn,
       drawNow: () => viewport.drawNow(),
+      async render(request) {
+        if (opened === undefined || renderer === undefined) {
+          throw new Error("Planche shows no board yet");
+        }
+        const background = getComputedStyle(document.body).backgroundColor;
+        return render({ opened, renderer, drawings, unplayable, background }, request);
+      },
       background: () => getComputedStyle(document.body).backgroundColor,
       loading: () => loading,
       busy: () => editing.busy(),

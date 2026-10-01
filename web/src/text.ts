@@ -169,20 +169,7 @@ export function texts(again: () => void): Texts {
   return {
     placed(id, kind) {
       const done = rasterised.get(id);
-      if (!done || !sameLayout(done.kind, kind) || isBlank(kind)) {
-        return undefined;
-      }
-      const size = kind.text.font_size;
-      const { frame, rotation } = kind;
-      const { x, y, width, height } = done.covers;
-      const covers = { x: frame.x + x * size, y: frame.y + y * size, width: width * size, height: height * size };
-      // Turned around the frame's centre, where the renderer turns it around its own.
-      const own = { x: covers.x + covers.width / 2, y: covers.y + covers.height / 2 };
-      const centre = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 };
-      const turned = turn({ x: own.x - centre.x, y: own.y - centre.y }, rotation);
-      covers.x += centre.x + turned.x - own.x;
-      covers.y += centre.y + turned.y - own.y;
-      return { kind: "text", id, frame: covers, rotation, paint: kind.type === "sticky" ? "sticky-ink" : "ink" };
+      return done && sameLayout(done.kind, kind) && !isBlank(kind) ? framed(id, kind, done.covers) : undefined;
     },
     update(board, renderer, camera, viewport, hidden) {
       const shown = settle.follow(camera, viewport);
@@ -208,21 +195,11 @@ export function texts(again: () => void): Texts {
         if (done && sameLayout(done.kind, kind) && (done.density === density || !settle.settled(visible))) {
           continue;
         }
-        const laid = layout(kind);
-        const covers = {
-          x: laid.area.x - MARGIN,
-          y: laid.top - MARGIN,
-          width: laid.area.width + 2 * MARGIN,
-          height: laid.lines.length * LINE_HEIGHT + 2 * MARGIN,
-        };
-        const capped = Math.min(density, LONGEST_SIDE / Math.max(covers.width, covers.height));
+        const covers = rasterise(canvas, kind, density);
         // A size so small that its frame spans no end of font sizes has nothing to show.
-        if (!(capped > 0)) {
+        if (covers === undefined) {
           continue;
         }
-        draw(canvas, laid, covers, capped);
-        covers.width = canvas.width / capped;
-        covers.height = canvas.height / capped;
         renderer.setText(id, canvas);
         rasterised.set(id, { kind, density, covers });
         changed = true;
@@ -235,6 +212,54 @@ export function texts(again: () => void): Texts {
     },
     count: () => rasterised.size,
   };
+}
+
+/** What draws a text of `kind` whose texture covers `covers`, in font sizes from its frame's top-left. */
+function framed(id: string, kind: Holder, covers: Rect): Placed {
+  const size = kind.text.font_size;
+  const { frame, rotation } = kind;
+  const { x, y, width, height } = covers;
+  const placed = { x: frame.x + x * size, y: frame.y + y * size, width: width * size, height: height * size };
+  // Turned around the frame's centre, where the renderer turns it around its own.
+  const own = { x: placed.x + placed.width / 2, y: placed.y + placed.height / 2 };
+  const centre = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 };
+  const turned = turn({ x: own.x - centre.x, y: own.y - centre.y }, rotation);
+  placed.x += centre.x + turned.x - own.x;
+  placed.y += centre.y + turned.y - own.y;
+  return { kind: "text", id, frame: placed, rotation, paint: kind.type === "sticky" ? "sticky-ink" : "ink" };
+}
+
+/**
+ * Draws `kind` onto `canvas` at `density` pixels per font size, fewer where it would not fit a
+ * texture. What it covers, in font sizes from the frame's top-left, `undefined` when nothing.
+ */
+function rasterise(canvas: HTMLCanvasElement, kind: Holder, density: number): Rect | undefined {
+  const laid = layout(kind);
+  const covers = {
+    x: laid.area.x - MARGIN,
+    y: laid.top - MARGIN,
+    width: laid.area.width + 2 * MARGIN,
+    height: laid.lines.length * LINE_HEIGHT + 2 * MARGIN,
+  };
+  const capped = Math.min(density, LONGEST_SIDE / Math.max(covers.width, covers.height));
+  if (!(capped > 0)) {
+    return undefined;
+  }
+  draw(canvas, laid, covers, capped);
+  return { ...covers, width: canvas.width / capped, height: canvas.height / capped };
+}
+
+/**
+ * A text on a canvas of its own, at `density` pixels per font size, with what draws it. Nothing is
+ * kept. `undefined` when there is nothing to show.
+ */
+export function lettered(id: string, kind: Holder, density: number): { canvas: HTMLCanvasElement; placed: Placed } | undefined {
+  if (isBlank(kind)) {
+    return undefined;
+  }
+  const canvas = document.createElement("canvas");
+  const covers = rasterise(canvas, kind, density);
+  return covers && { canvas, placed: framed(id, kind, covers) };
 }
 
 /** White, as only its coverage counts. */

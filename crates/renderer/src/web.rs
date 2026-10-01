@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use wasm_bindgen::Clamped;
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, HtmlMediaElement, HtmlVideoElement, ImageBitmap};
 
@@ -237,6 +238,10 @@ const CAMERA_SIZE: u64 = 32;
 /// Floats of the grid, as [`GRID`] lays them out. Its offset, spacing, fade, colour's red,
 /// green, blue, and alpha from 0 to 1, width, 1 for dots or 0 for lines, step, and padding.
 const GRID_FLOATS: usize = 12;
+/// Floats of a view in [`Renderer::render`]. The x and y of the board's point at the top-left,
+/// the zoom, the width and height in pixels, and the colour behind the board's red, green, and
+/// blue from 0 to 1.
+const VIEW_FLOATS: usize = 8;
 
 #[wasm_bindgen]
 pub struct Renderer {
@@ -548,89 +553,186 @@ impl Renderer {
         items: &[f32],
         grid: &[f32],
     ) -> Result<(), JsError> {
-        if !(grid.is_empty() || grid.len() == GRID_FLOATS) {
-            return Err(JsError::new(&format!(
-                "a grid takes {GRID_FLOATS} floats, not {}",
-                grid.len()
-            )));
-        }
+        check_grid(grid)?;
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             other => return Err(JsError::new(&format!("no frame to draw: {other:?}"))),
         };
-        let viewport = [self.config.width as f32, self.config.height as f32];
-        let camera: Vec<u8> = [x, y, zoom, 0.0, viewport[0], viewport[1], 0.0, 0.0]
-            .iter()
-            .flat_map(|value| value.to_le_bytes())
-            .collect();
-        self.queue.write_buffer(&self.camera, 0, &camera);
-        if !grid.is_empty() {
-            let grid: Vec<u8> = grid.iter().flat_map(|value| value.to_le_bytes()).collect();
-            self.queue.write_buffer(&self.grid_uniform, 0, &grid);
-        }
-        if self.instances.size() < (items.len() / STRIDE) as u64 * INSTANCE {
-            self.instances = instance_buffer(&self.device, items.len() / STRIDE);
-        }
-        let (items, _) = items.as_chunks::<STRIDE>();
-        let instances: Vec<u8> = items
-            .iter()
-            .flat_map(|item| &item[2..])
-            .flat_map(|value| value.to_le_bytes())
-            .collect();
-        self.queue.write_buffer(&self.instances, 0, &instances);
-
         let view = frame.texture.create_view(&Default::default());
+        let viewport = [self.config.width as f32, self.config.height as f32];
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        {
-            let mut pass = begin(
-                &mut encoder,
-                &view,
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            );
-            pass.set_bind_group(0, &self.camera_group, &[]);
-            if !grid.is_empty() {
-                pass.set_pipeline(&self.grid);
-                pass.set_bind_group(1, &self.grid_group, &[]);
-                pass.draw(0..3, 0..1);
-            }
-            pass.set_vertex_buffer(0, self.instances.slice(..));
-            // Strokes one after the other draw at once, as each draw rebinds the instances on
-            // WebGL2.
-            let mut drawing = None;
-            let mut at = 0;
-            while at < items.len() {
-                let [kind, texture, ..] = items[at];
-                let (pipeline, run) = if kind == STROKE {
-                    let run = items[at..]
-                        .iter()
-                        .take_while(|item| item[0] == STROKE)
-                        .count();
-                    (&self.strokes, run)
-                } else if let Some(Some(texture)) = self.textures.get(texture as usize) {
-                    pass.set_bind_group(1, &texture.group, &[]);
-                    (
-                        if kind == IMAGE {
-                            &self.quads
-                        } else {
-                            &self.texts
-                        },
-                        1,
-                    )
-                } else {
-                    at += 1;
-                    continue;
-                };
-                if drawing != Some(kind) {
-                    pass.set_pipeline(pipeline);
-                    drawing = Some(kind);
-                }
-                pass.draw(0..4, at as u32..(at + run) as u32);
-                at += run;
-            }
-        }
+        self.record(
+            &mut encoder,
+            &view,
+            wgpu::Color::TRANSPARENT,
+            [x, y, zoom, viewport[0], viewport[1]],
+            items,
+            grid,
+        );
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
         self.check()
+    }
+
+    /// Draws as [`Renderer::draw`] does, but onto a texture of its own, which the surface and
+    /// the camera of the window never see. Read back with [`Readback::poll`] until it says so,
+    /// then [`Readback::pixels`].
+    pub fn render(
+        &mut self,
+        view: &[f32],
+        items: &[f32],
+        grid: &[f32],
+    ) -> Result<Readback, JsError> {
+        check_grid(grid)?;
+        let Ok([x, y, zoom, width, height, red, green, blue]) =
+            <[f32; VIEW_FLOATS]>::try_from(view)
+        else {
+            return Err(JsError::new(&format!(
+                "a view takes {VIEW_FLOATS} floats, not {}",
+                view.len()
+            )));
+        };
+        let (width, height) = (width as u32, height as u32);
+        let most = self.device.limits().max_texture_dimension_2d;
+        if width == 0 || height == 0 || width > most || height > most {
+            return Err(JsError::new(&format!(
+                "a render of {width} by {height} pixels is not within 1 to {most}"
+            )));
+        }
+        let swap = match self.config.format {
+            wgpu::TextureFormat::Rgba8Unorm => false,
+            wgpu::TextureFormat::Bgra8Unorm => true,
+            other => return Err(JsError::new(&format!("{other:?} cannot be read back"))),
+        };
+        // The pipelines were made for the surface's format.
+        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(stride) * u64::from(height),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let clear = wgpu::Color {
+            r: f64::from(red),
+            g: f64::from(green),
+            b: f64::from(blue),
+            a: 1.0,
+        };
+        self.record(
+            &mut encoder,
+            &target.create_view(&Default::default()),
+            clear,
+            [x, y, zoom, width as f32, height as f32],
+            items,
+            grid,
+        );
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(height),
+                },
+            },
+            target.size(),
+        );
+        self.queue.submit([encoder.finish()]);
+        // Submitted work outlives its textures' destruction.
+        target.destroy();
+        let mapped = Arc::new(Mutex::new(None));
+        let slot = Arc::clone(&mapped);
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                *slot.lock().expect("never poisoned") = Some(result);
+            });
+        // Before checking, so that dropping it destroys the buffer.
+        let readback = Readback {
+            device: self.device.clone(),
+            buffer,
+            mapped,
+            width,
+            height,
+            stride,
+            swap,
+        };
+        self.check()?;
+        Ok(readback)
+    }
+}
+
+#[wasm_bindgen]
+pub struct Readback {
+    device: wgpu::Device,
+    buffer: wgpu::Buffer,
+    mapped: Arc<Mutex<Option<Result<(), wgpu::BufferAsyncError>>>>,
+    width: u32,
+    height: u32,
+    /// Bytes per row of the buffer, which the copy pads.
+    stride: u32,
+    /// Whether the surface's format has blue first.
+    swap: bool,
+}
+
+#[wasm_bindgen]
+impl Readback {
+    /// Whether the pixels are ready, which WebGL2 learns only as it is asked again, in turns of
+    /// the event loop.
+    pub fn poll(&self) -> Result<bool, JsError> {
+        self.device.poll(wgpu::PollType::Poll)?;
+        match &*self.mapped.lock().expect("never poisoned") {
+            Some(Ok(())) => Ok(true),
+            Some(Err(error)) => Err(JsError::new(&format!(
+                "the render was not read back: {error}"
+            ))),
+            None => Ok(false),
+        }
+    }
+
+    /// Red, green, blue, and alpha, as straight as the clear colour left them, which is opaque,
+    /// row by row from the top. Only once [`Readback::poll`] says so, and once.
+    pub fn pixels(&self) -> Result<Clamped<Vec<u8>>, JsError> {
+        if !matches!(&*self.mapped.lock().expect("never poisoned"), Some(Ok(()))) {
+            return Err(JsError::new("the render is not read back yet"));
+        }
+        let row = self.width as usize * 4;
+        let view = self.buffer.slice(..).get_mapped_range()?;
+        let mut pixels = Vec::with_capacity(row * self.height as usize);
+        for line in view.chunks(self.stride as usize) {
+            pixels.extend_from_slice(&line[..row]);
+        }
+        drop(view);
+        self.buffer.unmap();
+        if self.swap {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+        }
+        Ok(Clamped(pixels))
+    }
+}
+
+/// Dropping a buffer frees nothing on WebGPU.
+impl Drop for Readback {
+    fn drop(&mut self) {
+        self.buffer.destroy();
     }
 }
 
@@ -691,6 +793,8 @@ impl Renderer {
             texture,
             bytes,
         };
+        // Before it takes a slot, which nobody would know to release.
+        self.check().inspect_err(|_| uploaded.texture.destroy())?;
         let index = match self.textures.iter().position(Option::is_none) {
             Some(free) => {
                 self.textures[free] = Some(uploaded);
@@ -701,8 +805,79 @@ impl Renderer {
                 self.textures.len() - 1
             }
         };
-        self.check()?;
         Ok(u32::try_from(index).expect("fewer than 2³² textures"))
+    }
+
+    fn record(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        clear: wgpu::Color,
+        [x, y, zoom, width, height]: [f32; 5],
+        items: &[f32],
+        grid: &[f32],
+    ) {
+        let camera: Vec<u8> = [x, y, zoom, 0.0, width, height, 0.0, 0.0]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        self.queue.write_buffer(&self.camera, 0, &camera);
+        if !grid.is_empty() {
+            let grid: Vec<u8> = grid.iter().flat_map(|value| value.to_le_bytes()).collect();
+            self.queue.write_buffer(&self.grid_uniform, 0, &grid);
+        }
+        if self.instances.size() < (items.len() / STRIDE) as u64 * INSTANCE {
+            self.instances = instance_buffer(&self.device, items.len() / STRIDE);
+        }
+        let (items, _) = items.as_chunks::<STRIDE>();
+        let instances: Vec<u8> = items
+            .iter()
+            .flat_map(|item| &item[2..])
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        self.queue.write_buffer(&self.instances, 0, &instances);
+
+        let mut pass = begin(encoder, target, wgpu::LoadOp::Clear(clear));
+        pass.set_bind_group(0, &self.camera_group, &[]);
+        if !grid.is_empty() {
+            pass.set_pipeline(&self.grid);
+            pass.set_bind_group(1, &self.grid_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        pass.set_vertex_buffer(0, self.instances.slice(..));
+        // Strokes one after the other draw at once, as each draw rebinds the instances on
+        // WebGL2.
+        let mut drawing = None;
+        let mut at = 0;
+        while at < items.len() {
+            let [kind, texture, ..] = items[at];
+            let (pipeline, run) = if kind == STROKE {
+                let run = items[at..]
+                    .iter()
+                    .take_while(|item| item[0] == STROKE)
+                    .count();
+                (&self.strokes, run)
+            } else if let Some(Some(texture)) = self.textures.get(texture as usize) {
+                pass.set_bind_group(1, &texture.group, &[]);
+                (
+                    if kind == IMAGE {
+                        &self.quads
+                    } else {
+                        &self.texts
+                    },
+                    1,
+                )
+            } else {
+                at += 1;
+                continue;
+            };
+            if drawing != Some(kind) {
+                pass.set_pipeline(pipeline);
+                drawing = Some(kind);
+            }
+            pass.draw(0..4, at as u32..(at + run) as u32);
+            at += run;
+        }
     }
 
     fn copy_external(&self, source: wgpu::ExternalImageSource, texture: &wgpu::Texture) {
@@ -793,6 +968,17 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         self.queue.submit([encoder.finish()]);
+    }
+}
+
+fn check_grid(grid: &[f32]) -> Result<(), JsError> {
+    if grid.is_empty() || grid.len() == GRID_FLOATS {
+        Ok(())
+    } else {
+        Err(JsError::new(&format!(
+            "a grid takes {GRID_FLOATS} floats, not {}",
+            grid.len()
+        )))
     }
 }
 

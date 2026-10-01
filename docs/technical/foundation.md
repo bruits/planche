@@ -24,6 +24,7 @@ wgpu, compiled to WASM (`crates/renderer`) and driven by the web app, on WebGPU 
 - Request the adapter's limits (`Limits::using_resolution`), since WebGL2's defaults cap textures at 2048 px.
 - Uniform buffers are multiples of 16 bytes on WebGL2.
 - Catch validation errors (`Device::on_uncaptured_error`) and hand them to the app: by default wgpu panics, which kills the WASM module.
+- Read a render back through a buffer, as a surface cannot be copied from. WebGL2 maps it only when the device is polled, between turns of the event loop, so the app polls at each turn, which a hidden window still takes, where it would never get a frame.
 - Vello stays out for now: its GPU renderer is being rewritten, and its image atlas cannot hold many photos. It may come back if text or strokes outgrow the above.
 
 ### Image pipeline

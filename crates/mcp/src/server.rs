@@ -29,6 +29,9 @@ const MOST_PER_PAGE: usize = 500;
 const MOST_PICTURE_BASE64: usize = 5_000_000;
 /// The types every client shows.
 const PICTURE_TYPES: [&str; 2] = ["image/jpeg", "image/png"];
+/// Pixels along the longest side of a picture, which no Claude model scales down.
+const MOST_SIDE: u32 = 1568;
+const SMALLEST_SIDE: u32 = 16;
 
 /// Where the answers come from, the web app or a stand-in in tests.
 pub trait Relay: Send + Sync + 'static {
@@ -74,6 +77,22 @@ pub struct ElementsArguments {
 pub struct ImageArguments {
     /// The id of an image element.
     pub id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RenderArguments {
+    /// The part of the board to draw, in board units: everything in it, whatever the window shows.
+    /// Give this or `ids`.
+    pub area: Option<Area>,
+    /// Elements to draw alone, with their groups' elements, framed to what they cover. Give this
+    /// or `area`.
+    #[schemars(length(min = 1, max = MOST_IDS))]
+    pub ids: Option<Vec<String>>,
+    /// Pixels along the longest side, at most 1568, which is also the default, and within about
+    /// 1.15 megapixels, so that a square draws at about 1072.
+    #[schemars(range(min = SMALLEST_SIDE, max = MOST_SIDE))]
+    pub size: Option<u32>,
 }
 
 struct Server<R: Relay> {
@@ -297,6 +316,39 @@ impl<R: Relay> Server<R> {
         Parameters(arguments): Parameters<ImageArguments>,
     ) -> Result<CallToolResult, ErrorData> {
         Ok(self.picture("image", json!(arguments)).await)
+    }
+
+    /// An area of the board, or some elements alone, drawn at the size asked, at most 1568 pixels
+    /// a side and about 1.15 megapixels, with the part of the board it covers and its pixels per
+    /// board unit. It leaves the window's view as it is, and works while the window is hidden.
+    /// Texts and SVGs are drawn sharp at that size. Comments' pins and the selection's handles are
+    /// left out.
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
+    async fn render(
+        &self,
+        Parameters(arguments): Parameters<RenderArguments>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let refusal = match (&arguments.area, &arguments.ids) {
+            (Some(_), Some(_)) | (None, None) => {
+                Some("Give either area or ids, not both or neither".to_owned())
+            }
+            (_, Some(ids)) if ids.is_empty() || ids.len() > MOST_IDS => {
+                Some(format!("Between 1 and {MOST_IDS} ids"))
+            }
+            _ if arguments
+                .size
+                .is_some_and(|size| !(SMALLEST_SIDE..=MOST_SIDE).contains(&size)) =>
+            {
+                Some(format!(
+                    "size is between {SMALLEST_SIDE} and {MOST_SIDE} pixels"
+                ))
+            }
+            _ => None,
+        };
+        if let Some(message) = refusal {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(message)]));
+        }
+        Ok(self.picture("render", json!(arguments)).await)
     }
 
     /// The board as Planche's window shows it, at most 1568 pixels a side and about 1.15

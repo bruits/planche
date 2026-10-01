@@ -7,6 +7,7 @@ import { MOST_SIDE, capture, type Capture } from "./capture.js";
 import * as core from "./core.js";
 import type { Element, Kind, Rect } from "./core.js";
 import type { AgentCall } from "./platform.js";
+import type { Rendered, Request } from "./render.js";
 
 /** The page's state that agents read. */
 export interface Reading {
@@ -20,6 +21,8 @@ export interface Reading {
   /** While a board shows half drawn, its images still being read and decoded. */
   halfDrawn(): boolean;
   drawNow(): HTMLCanvasElement | undefined;
+  /** Draws part of the board off the window, which it leaves as it is. */
+  render(request: Request): Promise<Rendered>;
   /** The colour behind the board. */
   background(): string;
 }
@@ -58,6 +61,8 @@ export async function answer({ tool, args, deadline }: AgentCall, page: Reading 
       return { board, ...(await image(opened, given.id, reading.background())) };
     case "screenshot":
       return { board, ...screenshot(reading) };
+    case "render":
+      return { board, ...(await render(reading, opened, given)) };
     default:
       throw new Error(`Planche has no tool called ${tool}`);
   }
@@ -180,6 +185,33 @@ function screenshot(reading: Reading) {
   }
   const image = capture(canvas, { width: canvas.width, height: canvas.height }, reading.background());
   return { view, pixels_per_unit: image.width / view.width, image };
+}
+
+/** Drawn at the size asked, so that `capture` has nothing to scale. */
+async function render(reading: Reading, opened: Opened, { area, ids, size }: Record<string, unknown>) {
+  if (reading.halfDrawn()) {
+    throw new Error("A board is opening in Planche");
+  }
+  if ((area == null) === (ids == null)) {
+    throw new Error("Give either an area or ids, not both or neither");
+  }
+  if (size != null && !(typeof size === "number" && Number.isFinite(size) && size >= 1)) {
+    throw new Error("size must be a number of pixels");
+  }
+  const request: Request = { size: size == null ? undefined : (size as number) };
+  if (area != null) {
+    const { x, y, width, height } = area as Rect;
+    if (![x, y, width, height].every(Number.isFinite) || !(width > 0 && height > 0)) {
+      throw new Error("area needs a position and a size above zero");
+    }
+    request.area = { x, y, width, height };
+  } else {
+    elements(opened, ids);
+    request.ids = ids as string[];
+  }
+  const { area: covered, canvas } = await reading.render(request);
+  const image = capture(canvas, { width: canvas.width, height: canvas.height }, reading.background());
+  return { area: covered, pixels_per_unit: image.width / covered.width, image };
 }
 
 function elements(opened: Opened, ids: unknown): Record<string, Element> {

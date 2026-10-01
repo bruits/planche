@@ -18,6 +18,15 @@ export interface Capture {
   height: number;
 }
 
+/**
+ * Pixels per unit that draw `area` within what agents read, its longest side at `side` pixels at
+ * most. Rounded down to whole pixels, a picture of it needs no scaling by `capture`.
+ */
+export function density(area: Size, side = MOST_SIDE): number {
+  const longest = Math.max(area.width, area.height);
+  return Math.min(Math.min(side, MOST_SIDE) / longest, Math.sqrt(MOST_AREA / (area.width * area.height)));
+}
+
 export function capture(source: CanvasImageSource, size: Size, background: string): Capture {
   const longest = Math.max(size.width, size.height);
   const scale = Math.min(1, MOST_SIDE / longest, Math.sqrt(MOST_AREA / (size.width * size.height)));

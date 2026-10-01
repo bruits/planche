@@ -123,7 +123,14 @@ async fn an_agent_with_the_token_reads_through_the_tools() {
     let tools = client.list_all_tools().await.unwrap();
     let mut names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     names.sort_unstable();
-    let reads = ["board", "elements", "image", "screenshot", "selection"];
+    let reads = [
+        "board",
+        "elements",
+        "image",
+        "render",
+        "screenshot",
+        "selection",
+    ];
     let writes = [
         "add",
         "add_images",
@@ -222,6 +229,46 @@ async fn a_picture_comes_after_what_it_shows() {
         (picture.data.as_str(), picture.mime_type.as_str()),
         ("AAAA", "image/jpeg")
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_render_asks_for_an_area_or_for_elements() {
+    let (address, secrets, task) = serving(Pictured(picture("image/png", "AAAA"))).await;
+    let area = json!({ "x": 0.5, "y": 0.5, "width": 10.5, "height": 5.5 });
+    for arguments in [
+        json!({}),
+        json!({ "area": area, "ids": ["a"] }),
+        json!({ "ids": [] }),
+        json!({ "ids": (0..101).map(|id| id.to_string()).collect::<Vec<_>>() }),
+        json!({ "ids": ["a"], "size": 8 }),
+        json!({ "ids": ["a"], "size": 1569 }),
+        json!({ "ids": ["a"], "zoom": 2 }),
+    ] {
+        let (failed, _) = call(address, &secrets, "render", arguments).await;
+        assert!(failed);
+    }
+    let client = ().serve(connected(address, &secrets).await).await.unwrap();
+    for arguments in [
+        json!({ "area": area, "size": 800 }),
+        json!({ "ids": ["a"] }),
+    ] {
+        let arguments = arguments.as_object().unwrap().clone();
+        let result = client
+            .call_tool(CallToolRequestParams::new("render").with_arguments(arguments.clone()))
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(false));
+        let [text, picture] = &result.content[..] else {
+            panic!("{:?}", result.content);
+        };
+        let facts: Value = serde_json::from_str(&text.as_text().unwrap().text).unwrap();
+        assert_eq!(facts["tool"], "render");
+        for (name, value) in &arguments {
+            assert_eq!(facts["args"][name], *value);
+        }
+        assert_eq!(picture.as_image().unwrap().mime_type, "image/png");
+    }
     task.abort();
 }
 
@@ -365,7 +412,7 @@ async fn turning_it_off_ends_every_connection() {
         answer: written.answer,
     };
     let client = ().serve(connected(address, &secrets).await).await.unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 14);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 15);
 
     drop(running);
     let ended = tokio::time::timeout(Duration::from_secs(5), client.waiting()).await;

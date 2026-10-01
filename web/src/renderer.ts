@@ -1,8 +1,8 @@
 // The renderer, on wgpu compiled to WebAssembly.
 
 import type { Camera } from "./camera.js";
-import { gridLevel, type Background, type Bytes, type Point, type Rect } from "./core.js";
-import start, { Animation, create as createWgpu } from "./wasm/renderer.js";
+import { gridLevel, type Background, type Bytes, type Point, type Rect, type Size } from "./core.js";
+import start, { Animation, create as createWgpu, type Readback } from "./wasm/renderer.js";
 
 /**
  * A colour of the theme, as its host's style gives it: the ink is its text colour, which forced
@@ -41,6 +41,20 @@ export interface Playing {
   free(): void;
 }
 
+export interface Shot {
+  /** In board units. */
+  area: Rect;
+  /** In pixels, within what the GPU's textures hold. */
+  size: Size;
+  /** Back to front. */
+  items: Placed[];
+  /** The colour behind the board, as CSS gives it. */
+  background: string;
+  /** Canvases that stand in, for this render only, for the textures of assets and texts. */
+  images: Map<string, HTMLCanvasElement>;
+  texts: Map<string, HTMLCanvasElement>;
+}
+
 export interface Renderer {
   /** What it runs on, such as the GPU's name. */
   readonly backend: string;
@@ -69,11 +83,15 @@ export interface Renderer {
   /** Reads the paints again, once the theme changed. */
   restyle(): void;
   draw(camera: Camera): void;
+  /** The picture, opaque. Without a frame to wait for, so it works in a hidden window. */
+  render(shot: Shot): Promise<ImageData>;
   /** In CSS pixels. */
   resize(width: number, height: number): void;
   destroy(): void;
 }
 
+/** How long a render may wait for the GPU to hand its pixels over, in milliseconds. */
+const READBACK_TIME = 15_000;
 /** Floats per item, as `draw` reads them. */
 const STRIDE = 12;
 /** As the renderer tells its items apart. */
@@ -93,19 +111,23 @@ type Paints = Record<Paint, number[]>;
  * may be in any colour space.
  */
 function paints(host: HTMLElement): Paints {
-  const canvas = Object.assign(document.createElement("canvas"), { width: 1, height: 1 });
-  const context = canvas.getContext("2d", { willReadFrequently: true })!;
+  const read = reader();
   const style = getComputedStyle(host);
-  const read = (colour: string) => {
-    context.clearRect(0, 0, 1, 1);
-    context.fillStyle = colour;
-    context.fillRect(0, 0, 1, 1);
-    return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)].map((channel) => channel / 255);
-  };
   return {
     ink: read(style.color),
     sticky: read(style.getPropertyValue("--sticky")),
     "sticky-ink": read(style.getPropertyValue("--sticky-ink")),
+  };
+}
+
+function reader(): (colour: string) => number[] {
+  const canvas = Object.assign(document.createElement("canvas"), { width: 1, height: 1 });
+  const context = canvas.getContext("2d", { willReadFrequently: true })!;
+  return (colour) => {
+    context.clearRect(0, 0, 1, 1);
+    context.fillStyle = colour;
+    context.fillRect(0, 0, 1, 1);
+    return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)].map((channel) => channel / 255);
   };
 }
 
@@ -147,15 +169,7 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
   let background: Background = "plain";
   /** Packed at the next draw, as uploads and releases move the textures that items name. */
   let items: Float32Array | undefined;
-  const pack = () => {
-    const shown = placed.flatMap((item) => {
-      const texture = item.kind === "image" ? images.get(item.asset) : item.kind === "text" ? texts.get(item.id) : -1;
-      return texture === undefined ? [] : [floats(item, texture, painted)];
-    });
-    items = new Float32Array(shown.length * STRIDE);
-    shown.forEach((item, at) => items!.set(item, at * STRIDE));
-    return items;
-  };
+  const pack = () => (items = packed(placed, images, texts, painted));
   const replace = (textures: Map<string, number>, key: string, canvas: HTMLCanvasElement) => {
     const before = textures.get(key);
     textures.set(key, renderer.uploadCanvas(canvas));
@@ -227,7 +241,38 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
     },
     draw(camera) {
       const { x, y, zoom } = camera;
-      renderer.draw(x, y, zoom * devicePixelRatio, items ?? pack(), grid(background, camera, painted.ink, strength));
+      renderer.draw(x, y, zoom * devicePixelRatio, items ?? pack(), grid(background, camera, painted.ink, strength, devicePixelRatio));
+    },
+    async render({ area, size: picture, items: shown, background: behind, images: own, texts: ownTexts }) {
+      const staged = new Map<string, number>();
+      const stagedTexts = new Map<string, number>();
+      let readback: Readback;
+      try {
+        // Uploaded first, as the items name the textures by index, and released as soon as the
+        // GPU has what it needs, which the readback does not wait for.
+        own.forEach((canvas, asset) => staged.set(asset, renderer.uploadCanvas(canvas)));
+        ownTexts.forEach((canvas, id) => stagedTexts.set(id, renderer.uploadCanvas(canvas)));
+        const zoom = picture.width / area.width;
+        const view = Float32Array.of(area.x, area.y, zoom, picture.width, picture.height, ...reader()(behind));
+        const camera = { x: area.x, y: area.y, zoom };
+        const lookup = [new Map([...images, ...staged]), new Map([...texts, ...stagedTexts])] as const;
+        readback = renderer.render(view, packed(shown, lookup[0], lookup[1], painted), grid(background, camera, painted.ink, strength, 1));
+      } finally {
+        [...staged.values(), ...stagedTexts.values()].forEach((texture) => renderer.release(texture));
+      }
+      try {
+        const until = performance.now() + READBACK_TIME;
+        while (!readback.poll()) {
+          if (performance.now() > until) {
+            throw new Error("The GPU did not hand the render back in time");
+          }
+          await turn();
+        }
+        // Copied out of the module's memory, so never a shared buffer.
+        return new ImageData(readback.pixels() as Uint8ClampedArray<ArrayBuffer>, picture.width, picture.height);
+      } finally {
+        readback.free();
+      }
     },
     resize(width, height) {
       size(output, width, height);
@@ -242,6 +287,37 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
       output.remove();
     },
   };
+}
+
+/** Without the items whose texture is not uploaded, as drawing one would panic and kill the module. */
+function packed(
+  placed: Placed[],
+  images: Map<string, number>,
+  texts: Map<string, number>,
+  painted: Paints,
+): Float32Array {
+  const shown = placed.flatMap((item) => {
+    const texture = item.kind === "image" ? images.get(item.asset) : item.kind === "text" ? texts.get(item.id) : -1;
+    return texture === undefined ? [] : [floats(item, texture, painted)];
+  });
+  const items = new Float32Array(shown.length * STRIDE);
+  shown.forEach((item, at) => items.set(item, at * STRIDE));
+  return items;
+}
+
+/**
+ * Lets the event loop turn, which a hidden window still does for messages, though not for frames,
+ * and for timers only about once a second. WebGL2 tells the GPU is done only between turns.
+ */
+const turns = new MessageChannel();
+const waiting: (() => void)[] = [];
+turns.port1.onmessage = () => waiting.splice(0).forEach((resolve) => resolve());
+
+function turn(): Promise<void> {
+  return new Promise((resolve) => {
+    waiting.push(resolve);
+    turns.port2.postMessage(null);
+  });
 }
 
 /** As the renderer lays out its items: its kind, its texture, then its instance. */
@@ -276,8 +352,14 @@ function floats(item: Placed, texture: number, paints: Paints): number[] {
   }
 }
 
-/** As the renderer lays out its grid, none when plain. */
-function grid(background: Background, { x, y, zoom }: Camera, ink: number[], strength: number): Float32Array {
+/** As the renderer lays out its grid, none when plain. `density` is the device pixels per CSS pixel. */
+function grid(
+  background: Background,
+  { x, y, zoom }: Camera,
+  ink: number[],
+  strength: number,
+  density: number,
+): Float32Array {
   if (background === "plain") {
     return new Float32Array();
   }
@@ -287,7 +369,7 @@ function grid(background: Background, { x, y, zoom }: Camera, ink: number[], str
   const { width, alpha } = GRID[background];
   const opacity = Math.min(alpha * strength, 1);
   const dots = background === "dots" ? 1 : 0;
-  return Float32Array.of(offset(x), offset(y), spacing, fade, ...ink, opacity, width * devicePixelRatio, dots, coarse / spacing, 0);
+  return Float32Array.of(offset(x), offset(y), spacing, fade, ...ink, opacity, width * density, dots, coarse / spacing, 0);
 }
 
 function canvas(host: HTMLElement, width: number, height: number): HTMLCanvasElement {
