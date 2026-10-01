@@ -236,6 +236,10 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       made.setAttribute("aria-keyshortcuts", ariaKeys(shortcut));
     }
     made.append(content);
+    // Chosen, a colour shows in itself, which its button takes from its swatch.
+    if (content instanceof HTMLElement && content.classList.contains("swatch")) {
+      made.style.setProperty("--swatch", content.style.getPropertyValue("--swatch"));
+    }
     if (pressed !== undefined) {
       made.setAttribute("aria-pressed", String(pressed));
     }

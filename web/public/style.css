@@ -739,10 +739,15 @@ body {
   margin: 2px;
 }
 
+/* In its own colour, as the accent would read as one more to choose. */
+.style-card button[aria-pressed="true"]:has(> .swatch) {
+  background: color-mix(in srgb, var(--swatch) 24%, transparent);
+}
+
+/* Towards the text, as pale ones alone would not show around their swatch. */
 .style-card button[aria-pressed="true"] .swatch {
-  box-shadow:
-    0 0 0 2px var(--accent-soft),
-    0 0 0 3.5px var(--accent);
+  outline: 1.5px solid color-mix(in srgb, var(--swatch) 55%, var(--text));
+  outline-offset: 2px;
 }
 
 #viewport.sampling {
