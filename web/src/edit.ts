@@ -8,17 +8,19 @@
 // note, sticky note, or shape stretch it, its text keeping its size, and a drag from just outside
 // a corner turns the selection around its centre, by steps of 15° while ⇧ is held, and onto an
 // upright or a quarter turn near it while snapping. Hovering shows what a press would take, and
-// the ends of a lone arrow or line move on their own. The ends of an arrow or a
-// line, as drawn or moved, stick to the image, note, sticky note, or shape they land on, onto its
-// outline when near it, and follow it from then on. A note, a sticky note, a shape, or a comment
-// drawn, placed, moved, scaled, or turned whole onto an image, a note, a sticky note, or a shape
-// filled or holding text sticks to it and follows it too. While snapping, what moves, scales, or
-// is drawn lands on the grid's lines where near them otherwise. Holding ⌘, or Ctrl elsewhere than
-// macOS, keeps things from sticking and the grid from pulling, but for a move only once under way,
-// as pressing an element with it toggles the element instead. The eraser removes what a click would
-// select, or all that a drag passes over but what it starts within, in one edit. Cropping shows an
-// image whole, what its crop leaves out dimmed, and its edges and corners drag the crop, or its
-// inside moves it, until Enter or a press elsewhere crops it, or Escape leaves it as it was.
+// the ends of a lone arrow or line move on their own. The ends of an arrow or a line, as drawn or
+// moved, stick to the image, note, sticky note, or shape they land on, onto its outline when near
+// it, and follow it from then on. While ⇧ is held, the end being drawn or moved keeps to a
+// multiple of 45° around the other one, the grid pulling it along its way, and it sticks only to
+// what it lies on. A note, a sticky note, a shape, or a comment drawn, placed, moved, scaled, or
+// turned whole onto an image, a note, a sticky note, or a shape filled or holding text sticks to
+// it and follows it too. While snapping, what moves, scales, or is drawn lands on the grid's lines
+// where near them otherwise. Holding ⌘, or Ctrl elsewhere than macOS, keeps things from sticking
+// and the grid from pulling, but for a move only once under way, as pressing an element with it
+// toggles the element instead. The eraser removes what a click would select, or all that a drag
+// passes over but what it starts within, in one edit. Cropping shows an image whole, what its crop
+// leaves out dimmed, and its edges and corners drag the crop, or its inside moves it, until Enter
+// or a press elsewhere crops it, or Escape leaves it as it was.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
@@ -117,6 +119,17 @@ const GRIPS: [number, number][] = [
   [0, 0.5],
 ];
 const CORNERS = GRIPS.filter(([x, y]) => x !== 0.5 && y !== 0.5);
+/** Across, then by 45° each, clockwise as the board's y runs down, with no hair off an axis. */
+const DIRECTIONS: [number, number][] = [
+  [1, 0],
+  [Math.SQRT1_2, Math.SQRT1_2],
+  [0, 1],
+  [-Math.SQRT1_2, Math.SQRT1_2],
+  [-1, 0],
+  [-Math.SQRT1_2, -Math.SQRT1_2],
+  [0, -1],
+  [Math.SQRT1_2, -Math.SQRT1_2],
+];
 
 export interface Edits {
   /** Whether a gesture, some writing, or a crop is under way, which edits from elsewhere would break. */
@@ -294,8 +307,20 @@ export function edits(
     pulling
       ? { x: point.x + (core.snapToGrid([point.x], zoom) ?? 0), y: point.y + (core.snapToGrid([point.y], zoom) ?? 0) }
       : point;
-  const landed = (editor: Editor, point: Point, zoom: number, sticks = true): { at: Point; target?: string } =>
-    (sticks && sticking ? core.stick(editor, point, STICK / zoom) : undefined) ?? { at: pulled(point, zoom) };
+  const landed = (editor: Editor, point: Point, zoom: number, sticks = true, around?: Point): { at: Point; target?: string } => {
+    if (around === undefined) {
+      return (sticks && sticking ? core.stick(editor, point, STICK / zoom) : undefined) ?? { at: pulled(point, zoom) };
+    }
+    // Onto what it lies on, as moving it onto an outline would turn it off its angle.
+    const lying = (at: Point) => (sticks && sticking ? core.stick(editor, at, 0)?.target : undefined);
+    const at = angled(point, around);
+    const target = lying(at);
+    if (target !== undefined || !pulling) {
+      return { at, target };
+    }
+    const pulledTo = pulledAlong(at, around, zoom);
+    return { at: pulledTo, target: lying(pulledTo) };
+  };
   const showTargets = (editor: Editor, ids: (string | undefined)[]) =>
     overlay.targets(ids.flatMap((id) => (id === undefined ? [] : [editor.outline(id)])));
   const setDown = (editor: Editor, ids: string[]) => (sticking ? editor.land(ids) : editor.unstick(ids));
@@ -690,7 +715,12 @@ export function edits(
       const editing = current();
       const zoom = view.zoom();
       const modifier = !event.repeat && ["Shift", "Alt", "Meta", "Control"].includes(event.key);
-      const held = press?.kind === "scale" || press?.kind === "stretch" || press?.kind === "rotate";
+      const held =
+        press?.kind === "scale" ||
+        press?.kind === "stretch" ||
+        press?.kind === "rotate" ||
+        press?.kind === "end" ||
+        (press?.kind === "draw" && SEGMENTS.has(press.shape));
       if (held && modifier && editing && last && zoom) {
         drag(editing, last, zoom, event);
       } else if (!press) {
@@ -815,7 +845,8 @@ export function edits(
         }
         const { id, shape } = press;
         const sticks = SEGMENTS.has(shape);
-        const [start, end] = [landed(editor, press.start, zoom, sticks), landed(editor, at, zoom, sticks)];
+        const start = landed(editor, press.start, zoom, sticks);
+        const end = landed(editor, at, zoom, sticks, sticks && keys.shiftKey ? start.at : undefined);
         press.ends = [start.at, end.at];
         // A note shows nothing until written in.
         overlay.marquee(shape === "note" ? rect(start.at, end.at) : undefined);
@@ -837,7 +868,8 @@ export function edits(
           return;
         }
         press.dragging = true;
-        const moved = landed(editor, { x: segment[end].x + at.x - start.x, y: segment[end].y + at.y - start.y }, zoom);
+        const point = { x: segment[end].x + at.x - start.x, y: segment[end].y + at.y - start.y };
+        const moved = landed(editor, point, zoom, true, keys.shiftKey ? segment[end === "from" ? "to" : "from"] : undefined);
         showTargets(editor, [moved.target]);
         again(() => editor.update(id, JSON.stringify({ ...segment, [end]: moved.at, [`${end}_target`]: moved.target })));
         return;
@@ -1420,6 +1452,43 @@ function turning(from: number, by: number, steps: boolean, pulled: boolean): [nu
   }
   const quarter = Math.round(to / 90) * 90;
   return pulled && Math.abs(to - quarter) <= MAGNET ? [quarter - from, true] : [by, false];
+}
+
+/** `point` turned around `around` onto the nearest multiple of 45°, as far from it. */
+function angled(point: Point, around: Point): Point {
+  const [dx, dy] = [point.x - around.x, point.y - around.y];
+  const length = Math.hypot(dx, dy);
+  if (length === 0) {
+    return point;
+  }
+  const [x, y] = DIRECTIONS[(Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) + 8) % 8]!;
+  return { x: around.x + x * length, y: around.y + y * length };
+}
+
+/**
+ * `at`, at a multiple of 45° around `around`, moved along its way exactly onto the nearest line of
+ * the grid that pulls, short of `around`'s own, and kept exactly at its angle.
+ */
+function pulledAlong(at: Point, around: Point, zoom: number): Point {
+  const [sx, sy] = [Math.sign(at.x - around.x), Math.sign(at.y - around.y)];
+  const [nx, ny] = (
+    [
+      [at.x, around.x, sx],
+      [at.y, around.y, sy],
+    ] as const
+  ).map(([value, from, sign]) => {
+    const nudge = sign === 0 ? undefined : core.snapToGrid([value], zoom);
+    return nudge !== undefined && (value + nudge - from) * sign > 0 ? nudge : undefined;
+  });
+  if (nx !== undefined && (ny === undefined || Math.abs(nx) <= Math.abs(ny))) {
+    const x = at.x + nx;
+    return { x, y: sy === 0 ? at.y : around.y + sy * Math.abs(x - around.x) };
+  }
+  if (ny !== undefined) {
+    const y = at.y + ny;
+    return { x: sx === 0 ? at.x : around.x + sx * Math.abs(y - around.y), y };
+  }
+  return at;
 }
 
 /** Within half a turn either way, to the degree, with a minus sign. */

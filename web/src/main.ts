@@ -932,10 +932,10 @@ function hint(): string {
     return `Click or drag over what to erase · a drag spares the image or note it starts on · ${escapeKey} to select again`;
   }
   if (tool === "arrow") {
-    return `Drag from where the arrow starts to where it points · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;
+    return `Drag from where the arrow starts to where it points · hold ${stepKey} to keep to steps of 45° · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;
   }
   if (tool === "line") {
-    return `Drag from one end to the other · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;
+    return `Drag from one end to the other · hold ${stepKey} to keep to steps of 45° · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;
   }
   if (tool === "rectangle" || tool === "ellipse" || tool === "cross" || tool === "sticky") {
     return `Drag to draw, or click to place · ${escapeKey} to select again`;
@@ -957,7 +957,7 @@ function hint(): string {
     return `Drag to move · double-click or ${insideKey} to edit the text · ${styles}right-click for more`;
   }
   if (editing.loneSegment()) {
-    return `Drag to move · drag an end to move it, holding ${freeKey} to keep it from sticking · ${styles}right-click for more`;
+    return `Drag to move · drag an end to move it, holding ${stepKey} to keep to steps of 45° or ${freeKey} to keep it from sticking · ${styles}right-click for more`;
   }
   if (editing.selection().length > 0) {
     const crops = commands.crop.unavailable() === undefined ? `double-click or ${insideKey} to crop · ` : "";
