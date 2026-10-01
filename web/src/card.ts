@@ -76,6 +76,8 @@ export interface CardHost {
   busy(): boolean;
   /** What a gesture reads, which shows in its place. */
   reading(): Reading | undefined;
+  /** How far down the window it may show, above the toolbar, in CSS pixels. */
+  floor(): number;
   /** As one edit that undoes in one step. Throws when one is under way. */
   apply(work: (editor: Opened["editor"], touched: string[]) => void): void;
   /** Starts picking a colour from the board, until a click. */
@@ -468,7 +470,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     chip.hidden = true;
     panel.hidden = true;
   };
-  /** Under the selection, or above it where there is no room under it. */
+  /** Under the selection, or above it where the toolbar leaves no room under it. */
   const place = (shown: HTMLElement) => {
     const corners = host.box()?.map((corner) => host.client(corner));
     if (!corners || corners.some((corner) => corner === undefined)) {
@@ -477,11 +479,12 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     const xs = corners.map((corner) => corner!.clientX);
     const ys = corners.map((corner) => corner!.clientY);
     const { width, height } = shown.getBoundingClientRect();
+    const floor = Math.min(innerHeight, host.floor());
     const left = clamp((Math.min(...xs) + Math.max(...xs)) / 2 - width / 2, MARGIN, innerWidth - width - MARGIN);
     const below = Math.max(...ys) + GAP;
-    const top = below + height <= innerHeight - MARGIN ? below : Math.min(...ys) - GAP - height;
+    const top = below + height <= floor - MARGIN ? below : Math.min(...ys) - GAP - height;
     shown.style.setProperty("left", `${left}px`);
-    shown.style.setProperty("top", `${clamp(top, MARGIN, innerHeight - height - MARGIN)}px`);
+    shown.style.setProperty("top", `${clamp(top, MARGIN, floor - height - MARGIN)}px`);
   };
 
   return {

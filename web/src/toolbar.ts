@@ -28,6 +28,8 @@ export interface Toolbar {
   unsaved(unsaved: boolean): void;
   /** Shows `shown` as the hint while `element`, outside the bar, is hovered or focused. */
   explain(element: HTMLElement, shown: () => string): void;
+  /** Its top edge, with the hint and the message, in CSS pixels from the window's. */
+  top(): number;
 }
 
 /** How long a message shows, in milliseconds, plus a little per character to read. */
@@ -193,6 +195,7 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
       menuButton.setAttribute("aria-label", unsaved ? "Menu, with unsaved changes" : "Menu");
     },
     explain,
+    top: () => host.getBoundingClientRect().top,
   };
 }
 

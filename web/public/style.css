@@ -44,7 +44,8 @@
   --accent: #c0173e;
   --accent-soft: #fde7ec;
   --shadow: 0 1px 2px rgb(0 0 0 / 8%), 0 4px 16px rgb(0 0 0 / 10%);
-  --selected: Highlight;
+  /* Of its own, as engines draw the system's highlight pale and see-through. */
+  --selected: #0b5fff;
   /* The palette elements are drawn in, besides the ink. */
   --red: #d42f2f;
   --orange: #c45a00;
@@ -76,6 +77,7 @@
   --accent: #ff8fa8;
   --accent-soft: rgb(255 143 168 / 18%);
   --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 16px rgb(0 0 0 / 40%);
+  --selected: #5aa9ff;
   --red: #ff8a85;
   --orange: #ffad66;
   --green: #7bd88f;
@@ -94,7 +96,6 @@
   --accent: #a30027;
   --accent-soft: #f5ccd6;
   --shadow: none;
-  /* The system's is often too pale for it. */
   --selected: var(--accent);
   /* How many times stronger than the renderer's own the grid shows. */
   --grid-strength: 3;
@@ -624,7 +625,7 @@ body {
   pointer-events: none;
 }
 
-/* Bold too, as the selection's colour may be faint. */
+/* Bold too, so that colour is not all that tells it. */
 .readout.snapped {
   border-color: var(--selected);
   font-weight: 600;
@@ -940,15 +941,12 @@ body {
 
 /* Forced colours drop backgrounds unless in system colours. */
 @media (forced-colors: active) {
-  :root[data-contrast="high"] {
-    --selected: Highlight;
-  }
-
-  /* One colour for everything drawn, as forced colours would have it, whatever the theme. */
+  /* Theirs for the selection and one colour for everything drawn, as forced colours would have it, whatever the theme. */
   :root,
   :root[data-theme="dark"],
   :root[data-contrast="high"],
   :root[data-theme="dark"][data-contrast="high"] {
+    --selected: Highlight;
     --ink: CanvasText;
     --red: CanvasText;
     --orange: CanvasText;

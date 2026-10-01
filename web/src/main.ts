@@ -572,6 +572,7 @@ const styleCard = card(
     zoom: () => viewport.zoom(),
     busy,
     reading: () => editing.reading(),
+    floor: () => bar.top(),
     apply: (work) => editing.apply(work),
     pick: () => picker.start(false),
     explain: (element, text) => bar.explain(element, text),
@@ -588,6 +589,8 @@ const styleCard = card(
     open: commands.style,
   },
 );
+// As a message or a hint showing in the toolbar raises it, which the card stays above.
+new ResizeObserver(() => styleCard.frame()).observe(byId("toolbar"));
 const picker = sampler(
   {
     read: readBoard,
