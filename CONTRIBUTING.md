@@ -36,7 +36,7 @@ The board as a folder of files, keyed by path, and back: a `board.json` manifest
 
 ### bindings
 
-The core for the web app, through [wasm-bindgen](https://github.com/wasm-bindgen/wasm-bindgen): an `Editor` holds the board being edited, elements cross as JSON, ids as strings, and files as paths and bytes. Its CLI must match the crate's version in `Cargo.lock`, which `just setup` installs.
+The core for the web app, through [wasm-bindgen](https://github.com/wasm-bindgen/wasm-bindgen): an `Editor` holds the board being edited, elements cross as JSON, ids as strings, and files as paths and bytes, in slices when named as an asset or checksummed for a ZIP file, as the core's memory never shrinks. Its CLI must match the crate's version in `Cargo.lock`, which `just setup` installs.
 
 ### desktop
 

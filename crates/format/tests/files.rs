@@ -4,8 +4,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use board::{
-    AssetId, Background, Board, Editor, Element, ElementId, ElementKind, ImageEdits, Point, Rect,
-    Restack, Shape, Size, Text, ZIndex,
+    AssetHasher, AssetId, Background, Board, Editor, Element, ElementId, ElementKind, ImageEdits,
+    Point, Rect, Restack, Shape, Size, Text, ZIndex,
 };
 use format::{Error, Files, zip};
 
@@ -595,10 +595,10 @@ fn a_broken_structure_reads_back_repaired() {
 fn an_asset_cloned_without_git_lfs_is_refused() {
     let asset = AssetId::of(IMAGE);
     assert_eq!(format::asset_path(asset), format!("assets/{asset}"),);
-    assert!(format::verify_asset(asset, IMAGE).is_ok());
+    assert!(format::verify_asset(asset, AssetId::of(IMAGE)).is_ok());
     let pointer = b"version https://git-lfs.github.com/spec/v1\n";
     assert!(matches!(
-        format::verify_asset(asset, pointer),
+        format::verify_asset(asset, AssetId::of(pointer)),
         Err(Error::CorruptAsset(corrupt)) if corrupt == asset
     ));
 }
@@ -655,7 +655,7 @@ fn the_demo_board_reads_back_as_written() {
             continue;
         };
         let bytes = &assets[&format::asset_path(*asset)];
-        assert!(format::verify_asset(*asset, bytes).is_ok());
+        assert!(format::verify_asset(*asset, AssetId::of(bytes)).is_ok());
         // Only PNG sizes are checked, since they sit at a fixed offset.
         if let Some(header) = bytes.strip_prefix(b"\x89PNG\r\n\x1a\n") {
             let width = u32::from_be_bytes(header[8..12].try_into().unwrap());
@@ -674,18 +674,30 @@ fn zip_of(files: &Files) -> format::Result<Vec<u8>> {
     let mut out = Vec::new();
     for path in zip::paths(&board)? {
         let bytes = written.get(&path).unwrap_or_else(|| &files[&path]);
-        out.extend(writer.entry(&path, bytes)?);
+        out.extend(header(&mut writer, &path, bytes)?);
         out.extend_from_slice(bytes);
     }
     out.extend(writer.finish()?);
     Ok(out)
 }
 
+/// Takes the checksums in pieces, as a shell does.
+fn header(writer: &mut zip::Writer, path: &str, bytes: &[u8]) -> format::Result<Vec<u8>> {
+    let mut crc = zip::Crc32::new();
+    let mut hasher = AssetHasher::new();
+    for piece in bytes.chunks(7) {
+        crc.update(piece);
+        hasher.update(piece);
+    }
+    let asset = format::is_asset_file(path).then(|| hasher.finish());
+    writer.entry(path, bytes.len() as u64, crc.finish(), asset)
+}
+
 fn zip_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut writer = zip::Writer::new();
     let mut out = Vec::new();
     for (path, bytes) in entries {
-        out.extend(writer.entry(path, bytes).unwrap());
+        out.extend(header(&mut writer, path, bytes).unwrap());
         out.extend_from_slice(bytes);
     }
     out.extend(writer.finish().unwrap());
@@ -702,7 +714,7 @@ fn unzip(file: &[u8]) -> format::Result<Files> {
     for path in index.paths() {
         let entry = index.entry(path).unwrap();
         let bytes = &file[at(entry.data(&file[at(entry.header())])?)];
-        entry.check(bytes)?;
+        entry.check(bytes.len() as u64, zip::Crc32::of(bytes))?;
         files.insert(path.to_owned(), bytes.to_vec());
     }
     Ok(files)
@@ -760,11 +772,35 @@ fn a_zip_holds_only_the_board_and_the_assets_it_draws() {
 }
 
 #[test]
+fn a_checksum_is_the_same_in_whatever_pieces_it_comes() {
+    assert_eq!(zip::Crc32::of(b""), 0);
+    assert_eq!(zip::Crc32::of(b"123456789"), 0xcbf4_3926);
+    let fox = b"The quick brown fox jumps over the lazy dog";
+    assert_eq!(zip::Crc32::of(fox), 0x414f_a339);
+    let bytes: Vec<u8> = (0..300_u32).map(|at| (at * 7 % 251) as u8).collect();
+    for length in [0, 1, 15, 16, 17, 31, 32, 33, 64, 299, 300] {
+        let whole = zip::Crc32::of(&bytes[..length]);
+        for piece in [1, 3, 16, 17, 100] {
+            let mut crc = zip::Crc32::new();
+            for chunk in bytes[..length].chunks(piece) {
+                crc.update(chunk);
+            }
+            assert_eq!(crc.finish(), whole, "{length} bytes by {piece}");
+        }
+    }
+}
+
+#[test]
 fn a_corrupt_asset_is_not_zipped() {
     let asset = AssetId::of(IMAGE);
     let mut writer = zip::Writer::new();
     assert!(matches!(
-        writer.entry(&format::asset_path(asset), b"version https://git-lfs.github.com/spec/v1\n"),
+        header(&mut writer, &format::asset_path(asset), b"version https://git-lfs.github.com/spec/v1\n"),
+        Err(Error::CorruptAsset(corrupt)) if corrupt == asset
+    ));
+    let named = format::asset_path(asset);
+    assert!(matches!(
+        zip::Writer::new().entry(&named, 1, 0, None),
         Err(Error::CorruptAsset(corrupt)) if corrupt == asset
     ));
 }
@@ -772,9 +808,11 @@ fn a_corrupt_asset_is_not_zipped() {
 #[test]
 fn zip_entries_come_in_path_order_once() {
     let mut writer = zip::Writer::new();
-    writer.entry("elements/b", b"").unwrap();
+    header(&mut writer, "elements/b", b"").unwrap();
     for path in ["elements/a", "elements/b"] {
-        assert!(matches!(writer.entry(path, b""), Err(Error::OutOfOrder(named)) if named == path));
+        assert!(
+            matches!(header(&mut writer, path, b""), Err(Error::OutOfOrder(named)) if named == path)
+        );
     }
 }
 
@@ -789,7 +827,9 @@ fn a_path_out_of_the_board_is_neither_zipped_nor_unzipped() {
         ".gitattributes",
         "a~b",
     ] {
-        assert!(matches!(writer.entry(path, b""), Err(Error::UnsafePath(named)) if named == path));
+        assert!(
+            matches!(header(&mut writer, path, b""), Err(Error::UnsafePath(named)) if named == path)
+        );
     }
 
     let mut file = zip_entries(&[("inside/a", b"")]);
@@ -960,15 +1000,73 @@ fn a_damaged_zip_is_refused() {
 fn a_zip_never_needs_zip64() {
     let mut writer = zip::Writer::new();
     for at in 0..65_534 {
-        writer.entry(&format!("{at:05}"), b"").unwrap();
+        header(&mut writer, &format!("{at:05}"), b"").unwrap();
     }
-    assert!(matches!(writer.entry("65534", b""), Err(Error::TooLarge)));
+    assert!(matches!(
+        header(&mut writer, "65534", b""),
+        Err(Error::TooLarge)
+    ));
     assert!(writer.finish().is_ok());
+
+    for size in [u64::from(u32::MAX), 1 << 32, u64::MAX] {
+        let mut writer = zip::Writer::new();
+        assert!(matches!(
+            writer.entry("big", size, 0, None),
+            Err(Error::TooLarge)
+        ));
+    }
 
     let file = zip_entries(&[("board.json", b"{}")]);
     for (record, at) in [(END, 8), (CENTRAL, 20), (CENTRAL, 24), (CENTRAL, 42)] {
         let mut marked = file.clone();
         patch(&mut marked, record, at, &[0xff; 4]);
         assert!(matches!(unzip(&marked), Err(Error::UnsupportedZip)), "{at}");
+    }
+}
+
+#[test]
+fn the_largest_zip_that_needs_no_zip64_is_written() {
+    // Offsets and sizes stop one short of 0xFFFFFFFF, which ZIP64 takes as its marker.
+    let last = u64::from(u32::MAX) - 1;
+    // A header is 30 bytes and its path, a directory record 46 and its path, its end 22.
+    let largest = last - (30 + 3) - (46 + 3) - 22;
+    let mut writer = zip::Writer::new();
+    let header = writer.entry("big", largest, 0, None).unwrap();
+    assert_eq!(get32(&header, 18), largest as u32);
+    assert_eq!(get32(&header, 22), largest as u32);
+    let end = writer.finish().unwrap();
+    assert_eq!(get32(&end, end.len() - 6), (33 + largest) as u32);
+    assert_eq!(33 + largest + end.len() as u64, last);
+
+    let mut writer = zip::Writer::new();
+    writer.entry("big", largest + 1, 0, None).unwrap();
+    assert!(matches!(writer.finish(), Err(Error::TooLarge)));
+
+    let mut writer = zip::Writer::new();
+    writer.entry("big", last - 33, 0, None).unwrap();
+    assert!(matches!(
+        writer.entry("bigger", 0, 0, None),
+        Err(Error::TooLarge)
+    ));
+    assert!(matches!(
+        zip::Writer::new().entry("big", last - 32, 0, None),
+        Err(Error::TooLarge)
+    ));
+}
+
+#[test]
+fn bytes_of_another_size_are_refused_even_with_their_checksum() {
+    let file = zip_entries(&[("board.json", b"{}")]);
+    let directory = zip::locate(file.len() as u64, &file).unwrap();
+    let index = zip::Index::read(directory.start, &file[at(directory)]).unwrap();
+    let entry = index.entry("board.json").unwrap();
+    let crc = zip::Crc32::of(b"{}");
+    assert!(entry.check(2, crc).is_ok());
+    for size in [0, 1, 3, (1 << 32) + 2] {
+        let checked = entry.check(size, crc);
+        assert!(
+            matches!(checked, Err(Error::DamagedZip(reason)) if reason.contains("board.json")),
+            "{size}"
+        );
     }
 }

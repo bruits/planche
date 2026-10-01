@@ -24,3 +24,8 @@ thiserror = "2"
 # 0.2.4 clears disposed frames under lossy ones with the wrong stride (image-rs/image-webp#178).
 # Dropped at its next release.
 image-webp = { git = "https://github.com/image-rs/image-webp", rev = "28bed2274df92d600a823004e2fedd498ead4619" }
+
+# The bindings are a dev build (`just web`), where sha2 hashes at 40 to 50 MB/s, and an asset of
+# a gigabyte takes half a minute. Its hot loop is its own, so it alone needs the optimiser.
+[profile.dev.package.sha2]
+opt-level = 3

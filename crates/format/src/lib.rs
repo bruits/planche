@@ -162,8 +162,8 @@ pub fn asset_path(asset: AssetId) -> String {
     format!("{ASSETS}{asset}")
 }
 
-pub fn verify_asset(asset: AssetId, bytes: &[u8]) -> Result<()> {
-    if AssetId::of(bytes) == asset {
+pub fn verify_asset(asset: AssetId, found: AssetId) -> Result<()> {
+    if found == asset {
         Ok(())
     } else {
         Err(Error::CorruptAsset(asset))

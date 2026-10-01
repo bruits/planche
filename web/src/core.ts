@@ -2,12 +2,13 @@
 // move bytes.
 
 import init, {
+  AssetHasher,
+  Crc32,
   Editor,
   Snapshot,
   ZipIndex,
   ZipWriter,
   animationPlays as plays,
-  assetId,
   assetPath,
   fileDepth,
   frameDelay,
@@ -21,7 +22,7 @@ import init, {
   sizedSvg as sized,
   strokeWidth,
   svgSize as vectorSize,
-  verifyAsset,
+  verifyAsset as verify,
   zipTailLength,
 } from "./wasm/bindings.js";
 
@@ -30,7 +31,6 @@ export {
   Snapshot,
   ZipIndex,
   ZipWriter,
-  assetId,
   assetPath,
   fileDepth,
   frameDelay,
@@ -38,7 +38,6 @@ export {
   isBoardFile,
   locateZipDirectory,
   strokeWidth,
-  verifyAsset,
   zipTailLength,
 };
 
@@ -122,6 +121,32 @@ export async function start(): Promise<void> {
 /** The core's memory, which grows with the boards it reads and never shrinks. */
 export function coreMemory(): number {
   return memory?.buffer.byteLength ?? 0;
+}
+
+/** The most bytes the core takes in one call to name or checksum a file, so that its memory does not grow with it. */
+const SLICE = 8 * 2 ** 20;
+
+function feed(sink: { update(slice: Bytes): void }, bytes: Bytes): void {
+  for (let at = 0; at < bytes.length; at += SLICE) {
+    sink.update(bytes.subarray(at, at + SLICE));
+  }
+}
+
+export function assetId(bytes: Bytes): string {
+  const hasher = new AssetHasher();
+  feed(hasher, bytes);
+  return hasher.finish();
+}
+
+/** Throws the core's error when these are not the bytes of `asset`. */
+export function verifyAsset(asset: string, bytes: Bytes): void {
+  verify(asset, assetId(bytes));
+}
+
+export function crc32(bytes: Bytes): number {
+  const crc = new Crc32();
+  feed(crc, bytes);
+  return crc.finish();
 }
 
 /** Throws the core's error when the files are not a board. */

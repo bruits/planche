@@ -3,7 +3,8 @@
 //! and write one entry at a time, and never hold it whole. Writing then reading:
 //!
 //! 1. [`paths`] lists the entries, and [`Writer::entry`] gives the header to write before
-//!    each, then [`Writer::finish`] what ends the file.
+//!    each from its size and checksums, taken in slices with [`Crc32`] and
+//!    [`board::AssetHasher`], then [`Writer::finish`] what ends the file.
 //! 2. [`locate`] finds the central directory in the file's last [`tail_length`] bytes, and
 //!    [`Index::read`] parses it. Each [`Entry`] then leads to its bytes in two reads: its
 //!    [`header`](Entry::header), then its [`data`](Entry::data), checked by [`Entry::check`].
@@ -16,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-use board::Board;
+use board::{AssetId, Board};
 
 use crate::{ASSETS, Error, Result, asset_path, verify_asset};
 
@@ -73,9 +74,15 @@ impl Writer {
         Self::default()
     }
 
-    /// The header to write right before `bytes`, which go in as they are. Paths come in
-    /// increasing order, as [`paths`] gives them, and an asset must match its digest.
-    pub fn entry(&mut self, path: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+    /// The header to write right before the entry's bytes, which go in as they are. Paths come
+    /// in increasing order, as [`paths`] gives them, and an asset's `digest` must be its name.
+    pub fn entry(
+        &mut self,
+        path: &str,
+        size: u64,
+        crc: u32,
+        digest: Option<AssetId>,
+    ) -> Result<Vec<u8>> {
         if !is_board_path(path)? {
             return Err(Error::UnsafePath(path.to_owned()));
         }
@@ -86,17 +93,17 @@ impl Writer {
             let asset = name
                 .parse()
                 .map_err(|_| Error::InvalidName(path.to_owned()))?;
-            verify_asset(asset, bytes)?;
+            verify_asset(asset, digest.ok_or(Error::CorruptAsset(asset))?)?;
         }
         let name_len = u16::try_from(path.len()).map_err(|_| Error::UnsafePath(path.to_owned()))?;
-        let end = self.written + (LOCAL_LEN + path.len() + bytes.len()) as u64;
+        let end = (self.written + (LOCAL_LEN + path.len()) as u64).saturating_add(size);
         if self.entries == MAX_ENTRIES || end > MAX_OFFSET {
             return Err(Error::TooLarge);
         }
         let fields = Fields {
             flags: if path.is_ascii() { 0 } else { UTF8_NAME },
-            crc: crc32(bytes),
-            size: bytes.len() as u32,
+            crc,
+            size: size as u32,
             name_len,
         };
 
@@ -316,9 +323,9 @@ impl Entry {
         Ok(data)
     }
 
-    /// Checks the bytes read at [`Entry::data`] against the checksum they were stored with.
-    pub fn check(&self, bytes: &[u8]) -> Result<()> {
-        if bytes.len() as u64 == self.size && crc32(bytes) == self.crc {
+    /// Checks the bytes read at [`Entry::data`] against the size and checksum stored.
+    pub fn check(&self, size: u64, crc: u32) -> Result<()> {
+        if size == self.size && crc == self.crc {
             Ok(())
         } else {
             Err(damaged(format!(
@@ -370,27 +377,23 @@ fn get32(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
 }
 
-fn crc32(bytes: &[u8]) -> u32 {
-    const TABLE: [u32; 256] = {
-        let mut table = [0; 256];
-        let mut byte = 0;
-        while byte < 256 {
-            let mut crc = byte as u32;
-            let mut bit = 0;
-            while bit < 8 {
-                crc = if crc & 1 == 0 {
-                    crc >> 1
-                } else {
-                    0xedb8_8320 ^ (crc >> 1)
-                };
-                bit += 1;
-            }
-            table[byte] = crc;
-            byte += 1;
-        }
-        table
-    };
-    !bytes.iter().fold(!0, |crc, &byte| {
-        TABLE[((crc ^ u32::from(byte)) & 0xff) as usize] ^ (crc >> 8)
-    })
+#[derive(Debug, Clone, Default)]
+pub struct Crc32(crc32fast::Hasher);
+
+impl Crc32 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn of(bytes: &[u8]) -> u32 {
+        crc32fast::hash(bytes)
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    pub fn finish(self) -> u32 {
+        self.0.finalize()
+    }
 }

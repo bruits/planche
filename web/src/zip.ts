@@ -18,7 +18,7 @@ export async function zipFolder(file: Slices): Promise<Folder> {
     read: async (path) => {
       const header = await read(span(index.header(path)));
       const bytes = await read(span(index.data(path, header)));
-      index.check(path, bytes);
+      index.check(path, bytes.length, core.crc32(bytes));
       return bytes;
     },
   };
@@ -36,8 +36,9 @@ export async function writeZip(snapshot: Snapshot, folder: Folder, sink: Sink): 
     const writer = new core.ZipWriter();
     for (const path of paths) {
       const bytes = files.get(path) ?? (await folder.read(path));
+      const digest = core.isAssetFile(path) ? core.assetId(bytes) : undefined;
       // wasm-bindgen types the bytes it copies out loosely.
-      await sink.append(writer.entry(path, bytes) as Bytes);
+      await sink.append(writer.entry(path, bytes.length, core.crc32(bytes), digest) as Bytes);
       await sink.append(bytes);
     }
     await sink.append(writer.finish() as Bytes);

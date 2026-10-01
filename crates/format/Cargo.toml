@@ -7,6 +7,8 @@ publish.workspace = true
 
 [dependencies]
 board.workspace = true
+# Already in the tree, through `image` and Tauri, and fast in the web app's dev build.
+crc32fast = "1.5"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

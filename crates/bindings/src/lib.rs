@@ -1,6 +1,7 @@
 //! The core for the web app, which every shell runs, from the browser to the desktop
 //! webview. Elements cross as JSON, ids as strings, and files as paths and bytes, since the
-//! shells do the I/O.
+//! shells do the I/O. Bytes named as an asset or checksummed for a ZIP file cross in slices, as
+//! the core's memory never shrinks.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -408,14 +409,50 @@ pub fn asset_path(asset: &str) -> Result<String, JsError> {
     Ok(format::asset_path(asset.parse::<AssetId>()?))
 }
 
-#[wasm_bindgen(js_name = assetId)]
-pub fn asset_id(bytes: &[u8]) -> String {
-    AssetId::of(bytes).to_string()
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct AssetHasher(board::AssetHasher);
+
+#[wasm_bindgen]
+impl AssetHasher {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    pub fn finish(self) -> String {
+        self.0.finish().to_string()
+    }
 }
 
+/// `found` is the id [`AssetHasher::finish`] gave for the bytes read.
 #[wasm_bindgen(js_name = verifyAsset)]
-pub fn verify_asset(asset: &str, bytes: &[u8]) -> Result<(), JsError> {
-    Ok(format::verify_asset(asset.parse()?, bytes)?)
+pub fn verify_asset(asset: &str, found: &str) -> Result<(), JsError> {
+    Ok(format::verify_asset(asset.parse()?, found.parse()?)?)
+}
+
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct Crc32(zip::Crc32);
+
+#[wasm_bindgen]
+impl Crc32 {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    pub fn finish(self) -> u32 {
+        self.0.finish()
+    }
 }
 
 /// An SVG's natural size in CSS pixels, width then height, `undefined` when `bytes` are not
@@ -460,9 +497,16 @@ impl ZipWriter {
         Self::default()
     }
 
-    /// The header to write right before `bytes`.
-    pub fn entry(&mut self, path: &str, bytes: &[u8]) -> Result<Vec<u8>, JsError> {
-        Ok(self.0.entry(path, bytes)?)
+    /// The header to write right before the entry's bytes. Only an asset has a `digest`.
+    pub fn entry(
+        &mut self,
+        path: &str,
+        size: f64,
+        crc: u32,
+        digest: Option<String>,
+    ) -> Result<Vec<u8>, JsError> {
+        let digest = digest.map(|digest| digest.parse()).transpose()?;
+        Ok(self.0.entry(path, offset(size)?, crc, digest)?)
     }
 
     /// What ends the file, after the last entry.
@@ -508,9 +552,9 @@ impl ZipIndex {
         Ok(span(self.entry(path)?.data(header)?))
     }
 
-    /// Checks the bytes read at `data` against their checksum.
-    pub fn check(&self, path: &str, bytes: &[u8]) -> Result<(), JsError> {
-        Ok(self.entry(path)?.check(bytes)?)
+    /// Checks the size and the checksum of the bytes read at `data`.
+    pub fn check(&self, path: &str, size: f64, crc: u32) -> Result<(), JsError> {
+        Ok(self.entry(path)?.check(offset(size)?, crc)?)
     }
 
     fn entry(&self, path: &str) -> Result<&zip::Entry, JsError> {

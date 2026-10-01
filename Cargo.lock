@@ -994,6 +994,7 @@ name = "format"
 version = "0.0.0"
 dependencies = [
  "board",
+ "crc32fast",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

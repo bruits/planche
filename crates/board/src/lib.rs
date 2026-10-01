@@ -573,7 +573,26 @@ pub struct AssetId(Hex<32>);
 
 impl AssetId {
     pub fn of(bytes: &[u8]) -> Self {
-        Self(Hex(Sha256::digest(bytes).into()))
+        let mut hasher = AssetHasher::new();
+        hasher.update(bytes);
+        hasher.finish()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AssetHasher(Sha256);
+
+impl AssetHasher {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    pub fn finish(self) -> AssetId {
+        AssetId(Hex(self.0.finalize().into()))
     }
 }
 
@@ -1055,5 +1074,24 @@ mod tests {
             AssetId::of(b"").to_string(),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn an_asset_has_one_name_in_whatever_pieces_it_comes() {
+        assert_eq!(
+            AssetId::of(b"abc").to_string(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let bytes: Vec<u8> = (0..1000_u32).map(|at| (at * 7 % 251) as u8).collect();
+        for length in [0, 1, 55, 56, 63, 64, 65, 119, 120, 128, 1000] {
+            let whole = AssetId::of(&bytes[..length]);
+            for piece in [1, 3, 64, 100, 1000] {
+                let mut hasher = AssetHasher::new();
+                for chunk in bytes[..length].chunks(piece) {
+                    hasher.update(chunk);
+                }
+                assert_eq!(hasher.finish(), whole, "{length} bytes by {piece}");
+            }
+        }
     }
 }
