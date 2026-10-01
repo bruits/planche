@@ -5,6 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Planche</title>
     <link rel="stylesheet" href="style.css" />
+    <script>
+      // As theme.ts sets them, before the first paint.
+      {
+        const recall = (key) => {
+          try {
+            return localStorage.getItem(key);
+          } catch {
+            return null;
+          }
+        };
+        const system = (query) => matchMedia(query).matches;
+        const [scheme, contrast] = [recall("planche.theme"), recall("planche.contrast")];
+        const root = document.documentElement;
+        root.dataset.theme =
+          scheme === "light" || scheme === "dark" ? scheme : system("(prefers-color-scheme: dark)") ? "dark" : "light";
+        if (contrast === "high" || (contrast !== "normal" && system("(prefers-contrast: more)"))) {
+          root.dataset.contrast = "high";
+        }
+      }
+    </script>
     <script type="module" src="js/main.js"></script>
   </head>
   <body>

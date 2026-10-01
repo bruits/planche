@@ -8,7 +8,7 @@
 }
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   font: 14px/1.4 system-ui, sans-serif;
   --board: #f1f1f3;
   --surface: #ffffff;
@@ -20,6 +20,7 @@
   --accent: #c0173e;
   --accent-soft: #fde7ec;
   --shadow: 0 1px 2px rgb(0 0 0 / 8%), 0 4px 16px rgb(0 0 0 / 10%);
+  --selected: Highlight;
   /* Sticky notes keep their colours in either theme. */
   --sticky: #fde68a;
   --sticky-ink: #1d1d22;
@@ -28,19 +29,48 @@
   --bubble: 240px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --board: #121215;
-    --surface: #232329;
-    --text: #ececf1;
-    --ink: #ececf1;
-    --muted: #9d9da8;
-    --line: rgb(255 255 255 / 10%);
-    --hover: rgb(255 255 255 / 6%);
-    --accent: #ff8fa8;
-    --accent-soft: rgb(255 143 168 / 18%);
-    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 16px rgb(0 0 0 / 40%);
-  }
+/* As theme.ts sets it, which follows the system unless told otherwise. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --board: #121215;
+  --surface: #232329;
+  --text: #ececf1;
+  --ink: #ececf1;
+  --muted: #9d9da8;
+  --line: rgb(255 255 255 / 10%);
+  --hover: rgb(255 255 255 / 6%);
+  --accent: #ff8fa8;
+  --accent-soft: rgb(255 143 168 / 18%);
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 16px rgb(0 0 0 / 40%);
+}
+
+:root[data-contrast="high"] {
+  --board: #ffffff;
+  --surface: #ffffff;
+  --text: #000000;
+  --ink: #000000;
+  --muted: #45454d;
+  --line: #000000;
+  --hover: rgb(0 0 0 / 12%);
+  --accent: #a30027;
+  --accent-soft: #f5ccd6;
+  --shadow: none;
+  /* The system's is often too pale for it. */
+  --selected: var(--accent);
+  /* How many times stronger than the renderer's own the grid shows. */
+  --grid-strength: 3;
+}
+
+:root[data-theme="dark"][data-contrast="high"] {
+  --board: #000000;
+  --surface: #000000;
+  --text: #ffffff;
+  --ink: #ffffff;
+  --muted: #d0d0d8;
+  --line: #ffffff;
+  --hover: rgb(255 255 255 / 16%);
+  --accent: #ffc2d0;
+  --accent-soft: #5c2f3a;
 }
 
 [hidden] {
@@ -172,7 +202,7 @@ body {
 }
 
 .comment.selected .pin {
-  outline: 2px solid Highlight;
+  outline: 2px solid var(--selected);
   outline-offset: 1px;
 }
 
@@ -180,6 +210,11 @@ body {
 .comment .pin:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Where the selection takes the accent too. */
+[data-contrast="high"] .comment .pin:focus-visible {
+  outline-color: var(--text);
 }
 
 /* As the bubble grows, so that its text wraps alike. */
@@ -200,13 +235,13 @@ body {
 .marquee,
 .entered {
   fill: none;
-  stroke: Highlight;
+  stroke: var(--selected);
   stroke-width: 2px;
   vector-effect: non-scaling-stroke;
 }
 
 .marquee {
-  fill: color-mix(in srgb, Highlight 15%, transparent);
+  fill: color-mix(in srgb, var(--selected) 15%, transparent);
   stroke-width: 1px;
 }
 
@@ -218,7 +253,7 @@ body {
 /* Wide and faint, so that it does not read as selected. */
 .targets > * {
   fill: none;
-  stroke: Highlight;
+  stroke: var(--selected);
   stroke-opacity: 0.5;
   stroke-width: 6px;
   stroke-linejoin: round;
@@ -227,9 +262,19 @@ body {
 
 .handles > * {
   fill: Canvas;
-  stroke: Highlight;
+  stroke: var(--selected);
   stroke-width: 1.5px;
   vector-effect: non-scaling-stroke;
+}
+
+[data-contrast="high"] .selection > * {
+  stroke-width: 3px;
+}
+
+[data-contrast="high"] .marquee,
+[data-contrast="high"] .entered,
+[data-contrast="high"] .handles > * {
+  stroke-width: 2px;
 }
 
 /* Over the board, where the renderer leaves out the text written in it. */
@@ -591,6 +636,10 @@ body {
 
 /* Forced colours drop backgrounds unless in system colours. */
 @media (forced-colors: active) {
+  :root[data-contrast="high"] {
+    --selected: Highlight;
+  }
+
   .bar button[aria-pressed="true"] {
     outline: 2px solid Highlight;
     outline-offset: -2px;

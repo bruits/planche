@@ -34,9 +34,11 @@ import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./met
 import { overlay } from "./overlay.js";
 import { pinned, pins } from "./pins.js";
 import { platform, type Folder } from "./platform.js";
+import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE } from "./raster.js";
 import { create, type Renderer } from "./renderer.js";
 import { loadFont, texts } from "./text.js";
+import { theme, type Scheme } from "./theme.js";
 import { toolbar, type Button } from "./toolbar.js";
 import { vectors } from "./vector.js";
 import { videos } from "./video.js";
@@ -48,6 +50,7 @@ const HINTS = "planche.hints";
 const ZOOM_STEP = 1.25;
 /** In the order the key goes through them. */
 const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
+const SCHEMES: Scheme[] = ["light", "dark", "system"];
 
 const measurements = byId("measurements");
 const details = new Map<string, string>();
@@ -89,6 +92,7 @@ const editing = edits(viewport, shown, () => opened, {
   drawn: () => useTool("select"),
 });
 const comments = pins(byId("viewport"), { choose: (id) => editing.choose(id), write: (id) => editing.write(id) });
+const appearance = theme(restyle);
 
 let opened: Opened | undefined;
 let renderer: Renderer | undefined;
@@ -134,6 +138,7 @@ const backdrop = (label: string, background: Background): Command => ({
   unavailable: noBoard,
   run: () => useBackground(background),
 });
+const palette = (label: string, to: Scheme): Command => ({ label, run: () => appearance.choose(to) });
 const backspace: Shortcut = { key: "backspace" };
 const deleteKey: Shortcut = { key: "delete" };
 const shiftZ: Shortcut = { key: "z", command: true, shift: true };
@@ -301,11 +306,15 @@ const commands = {
     },
   },
   snap: {
-    label: () => (snapping ? "Stop snapping to grid" : "Snap to grid"),
+    label: "Snap to grid",
     run: () => {
       snapping = !snapping;
     },
   },
+  light: palette("Light", "light"),
+  dark: palette("Dark", "dark"),
+  system: palette("System", "system"),
+  highContrast: { label: "High contrast", run: () => appearance.toggleContrast() },
   measurements: {
     label: () => (measurements.hidden ? "Show measurements" : "Hide measurements"),
     run: () => {
@@ -362,7 +371,7 @@ const bar = toolbar(
     commands.actualSize,
     "separator",
     grids(),
-    commands.snap,
+    themes(),
     "separator",
     commands.hints,
     commands.measurements,
@@ -380,13 +389,6 @@ addEventListener("keydown", (event) => {
 });
 addEventListener("keyup", (event) => event.key === " " && holdSpace(false));
 addEventListener("blur", () => holdSpace(false));
-// Strokes and text draw in the theme's colours.
-for (const query of ["(prefers-color-scheme: dark)", "(forced-colors: active)"]) {
-  matchMedia(query).addEventListener("change", () => {
-    renderer?.restyle();
-    viewport.redraw();
-  });
-}
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 animated.reduce(reducedMotion.matches);
 films.reduce(reducedMotion.matches);
@@ -452,7 +454,34 @@ function holdSpace(held: boolean): void {
 
 function grids(): Entry {
   const current = opened?.board.background;
-  return { ...commands.nextBackground, options: BACKGROUNDS.map((background) => ({ ...commands[background], checked: background === current })) };
+  return {
+    ...commands.nextBackground,
+    options: [
+      ...BACKGROUNDS.map((background) => ({ ...commands[background], checked: background === current })),
+      "separator",
+      { ...commands.snap, checked: snapping, toggle: true },
+    ],
+  };
+}
+
+function themes(): Entry {
+  const current = appearance.scheme();
+  return {
+    label: "Theme",
+    // Never runs, as it opens its options.
+    run() {},
+    options: [
+      ...SCHEMES.map((scheme) => ({ ...commands[scheme], checked: scheme === current })),
+      "separator",
+      { ...commands.highContrast, checked: appearance.highContrast(), toggle: true },
+    ],
+  };
+}
+
+/** Strokes and text draw in the theme's colours. */
+function restyle(): void {
+  renderer?.restyle();
+  viewport.redraw();
 }
 
 function useBackground(background: Background): void {
@@ -570,7 +599,6 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.fit,
         "separator",
         grids(),
-        commands.snap,
       ];
   openMenu(entries, { label: onSelection ? "Selection" : "Board", place });
 }
@@ -866,27 +894,6 @@ function showMetrics(fps: number): void {
   byId("metrics").replaceChildren(
     ...[...lines].flatMap(([name, value]) => [text("dt", name), text("dd", value)]),
   );
-}
-
-/** Storage may be blocked, or throw. */
-function recall(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function remember(key: string, value: string | undefined): void {
-  try {
-    if (value === undefined) {
-      localStorage.removeItem(key);
-    } else {
-      localStorage.setItem(key, value);
-    }
-  } catch {
-    // Remembered for this session only.
-  }
 }
 
 function report(work: Promise<void>): void {

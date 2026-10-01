@@ -107,6 +107,10 @@ function paints(host: HTMLElement): Paints {
   };
 }
 
+function gridStrength(host: HTMLElement): number {
+  return Number(getComputedStyle(host).getPropertyValue("--grid-strength")) || 1;
+}
+
 /** Appends its canvas to `host`, sized in CSS pixels. */
 export async function create(host: HTMLElement, width: number, height: number): Promise<Renderer> {
   await start();
@@ -124,6 +128,7 @@ export async function create(host: HTMLElement, width: number, height: number): 
 async function on(webgpu: boolean, host: HTMLElement, width: number, height: number): Promise<Renderer> {
   // Before the renderer exists, which nothing would free if this threw.
   let painted = paints(host);
+  let strength = gridStrength(host);
   const output = canvas(host, width, height);
   // A canvas keeps the first kind of context it gives, so a failed one is no use to the other backend.
   const renderer = await createWgpu(output, webgpu).catch((error: unknown) => {
@@ -214,11 +219,12 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
     },
     restyle() {
       painted = paints(host);
+      strength = gridStrength(host);
       items = undefined;
     },
     draw(camera) {
       const { x, y, zoom } = camera;
-      renderer.draw(x, y, zoom * devicePixelRatio, items ?? pack(), grid(background, camera, painted.ink));
+      renderer.draw(x, y, zoom * devicePixelRatio, items ?? pack(), grid(background, camera, painted.ink, strength));
     },
     resize(width, height) {
       size(output, width, height);
@@ -268,7 +274,7 @@ function floats(item: Placed, texture: number, paints: Paints): number[] {
 }
 
 /** As the renderer lays out its grid, none when plain. */
-function grid(background: Background, { x, y, zoom }: Camera, ink: number[]): Float32Array {
+function grid(background: Background, { x, y, zoom }: Camera, ink: number[], strength: number): Float32Array {
   if (background === "plain") {
     return new Float32Array();
   }
@@ -276,8 +282,9 @@ function grid(background: Background, { x, y, zoom }: Camera, ink: number[]): Fl
   // Here, where numbers are doubles, as the renderer's floats would lose the lines far out.
   const offset = (value: number) => value - Math.floor(value / coarse) * coarse;
   const { width, alpha } = GRID[background];
+  const opacity = Math.min(alpha * strength, 1);
   const dots = background === "dots" ? 1 : 0;
-  return Float32Array.of(offset(x), offset(y), spacing, fade, ...ink, alpha, width * devicePixelRatio, dots, coarse / spacing, 0);
+  return Float32Array.of(offset(x), offset(y), spacing, fade, ...ink, opacity, width * devicePixelRatio, dots, coarse / spacing, 0);
 }
 
 function canvas(host: HTMLElement, width: number, height: number): HTMLCanvasElement {

@@ -7,12 +7,12 @@ import { icon, type Icon } from "./icons.js";
 
 /**
  * `checked` ticks, among entries that exclude each other, such as tools that share a button or
- * a submenu's options, the one in use. With `options`, it opens a submenu of them and does not
- * run, and theirs open none.
+ * a submenu's options, the one in use, or with `toggle`, one that turns on and off on its own.
+ * With `options`, it opens a submenu of them and does not run, and theirs open none.
  */
 export type Entry = Item | "separator";
 
-export type Item = Command & { icon?: Icon; checked?: boolean; options?: Entry[] };
+export type Item = Command & { icon?: Icon; checked?: boolean; toggle?: boolean; options?: Entry[] };
 
 /** Its top-left corner at a point, or above an element, lined up with its right end or `left`. */
 export type Place = { x: number; y: number } | { above: HTMLElement; left?: boolean };
@@ -104,7 +104,18 @@ export function openMenu(entries: Entry[], { label, place, owner, fromEnd = fals
   shown.forEach((entry, at) => {
     const item = items[at]!;
     if (entry.options) {
-      item.addEventListener("pointerenter", () => entry.unavailable?.() === undefined && openSubmenu(entry, item, false));
+      item.addEventListener("pointerenter", () => {
+        if (entry.unavailable?.() !== undefined) {
+          return;
+        }
+        if (submenu === undefined || submenu.owner === item) {
+          openSubmenu(entry, item, false);
+          return;
+        }
+        // The open one lingers here too, as the pointer may be crossing on its way to it.
+        stay();
+        leaving = setTimeout(() => (document.activeElement === item ? openSubmenu(entry, item, false) : closeSubmenu()), LINGER);
+      });
     }
   });
   menu.addEventListener("pointermove", () => (pointing = true));
@@ -225,7 +236,7 @@ function menuItem(command: Item, activate: (item: HTMLButtonElement) => void): H
   const item = document.createElement("button");
   item.type = "button";
   item.tabIndex = -1;
-  item.setAttribute("role", command.checked === undefined ? "menuitem" : "menuitemradio");
+  item.setAttribute("role", command.checked === undefined ? "menuitem" : command.toggle ? "menuitemcheckbox" : "menuitemradio");
   if (command.checked !== undefined) {
     item.setAttribute("aria-checked", String(command.checked));
   }
