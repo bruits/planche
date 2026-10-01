@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::geometry::{anchor, apart, covers, hits, holds, nearest_on_outline, surface_bounds};
-use crate::{Board, ElementId, ElementKind, Point, Rect, STROKE_WIDTH, angle};
+use crate::{Board, ElementId, ElementKind, Point, Rect, angle};
 
 impl Board {
     /// Where an arrow's or a line's end let go at `point` sticks: to the topmost element it can
@@ -20,7 +20,7 @@ impl Board {
             kind.is_target() && hits(kind, point, tolerance)
         })?;
         let kind = &self.elements[&id].kind;
-        let reach = tolerance + STROKE_WIDTH / 2.0;
+        let reach = tolerance + kind.stroke_width() / 2.0;
         let outline = nearest_on_outline(kind, point)
             .filter(|on| apart(*on, point) <= reach || !covers(kind, point));
         Some((id, outline.unwrap_or(point)))
@@ -113,7 +113,7 @@ fn stuck_to(holding: &Holding, id: ElementId) -> BTreeSet<ElementId> {
 /// Within half a stroke, as float arithmetic leaves an end a hair off the outline it snapped
 /// onto.
 pub(crate) fn lands_on(target: &ElementKind, point: Point) -> bool {
-    hits(target, point, STROKE_WIDTH / 2.0)
+    hits(target, point, target.stroke_width() / 2.0)
 }
 
 pub(crate) enum Motion {
@@ -391,7 +391,7 @@ impl Picture {
 mod tests {
     use super::*;
     use crate::tests::{board, element, id};
-    use crate::{Shape, Text};
+    use crate::{Colour, Dash, Fill, Heads, Shape, Text, Weight};
 
     fn area(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect {
@@ -407,11 +407,11 @@ mod tests {
             frame,
             rotation,
             shape,
-            text: Text {
-                content: content.to_owned(),
-                font_size: 20.0,
-            },
+            text: Text::new(content.to_owned(), 20.0),
             target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            fill: Fill::Hollow,
         }
     }
 
@@ -448,6 +448,10 @@ mod tests {
             to: point(100.0, 50.0),
             from_target: None,
             to_target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
+            heads: Heads::End,
         };
         let comment = ElementKind::Comment {
             at: point(50.0, 50.0),
@@ -493,6 +497,53 @@ mod tests {
         ]);
         assert_at(board.stick(point(50.0, 50.0), 3.0), 1, 50.0, 50.0);
         assert_at(board.stick(point(250.0, 50.0), 3.0), 3, 250.0, 50.0);
+    }
+
+    #[test]
+    fn an_end_stays_where_let_go_within_a_filled_shape_but_not_a_filled_cross() {
+        let filled = |kind, frame, fill| {
+            let mut kind = shape(kind, frame, 0.0, "");
+            if let ElementKind::Shape { fill: drawn, .. } = &mut kind {
+                *drawn = fill;
+            }
+            kind
+        };
+        let board = board([
+            (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0)))),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    filled(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), Fill::Tint),
+                ),
+            ),
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    filled(Shape::Ellipse, area(200.0, 0.0, 200.0, 100.0), Fill::Solid),
+                ),
+            ),
+            (
+                4,
+                element(None, "a3", image(area(600.0, 0.0, 100.0, 100.0))),
+            ),
+            (
+                5,
+                element(
+                    None,
+                    "a4",
+                    filled(Shape::Cross, area(600.0, 0.0, 100.0, 100.0), Fill::Solid),
+                ),
+            ),
+        ]);
+        assert_at(board.stick(point(50.0, 50.0), 3.0), 2, 50.0, 50.0);
+        assert_at(board.stick(point(50.0, 98.0), 3.0), 2, 50.0, 100.0);
+        assert_at(board.stick(point(300.0, 50.0), 3.0), 3, 300.0, 50.0);
+        // Between the cross's strokes, onto the image below it.
+        assert_at(board.stick(point(620.0, 50.0), 3.0), 4, 620.0, 50.0);
     }
 
     #[test]

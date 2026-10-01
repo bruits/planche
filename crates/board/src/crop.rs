@@ -76,7 +76,7 @@ pub(crate) fn cropped(kind: &ElementKind, area: Option<Rect>) -> Option<ElementK
 mod tests {
     use super::*;
     use crate::tests::{board, element, id};
-    use crate::{AssetId, Editor, Error, ImageEdits, Size, Text};
+    use crate::{AssetId, Colour, Editor, Error, ImageEdits, Size, Text};
 
     fn area(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect {
@@ -215,11 +215,9 @@ mod tests {
         let note = ElementKind::Note {
             frame: area(0.0, 0.0, 10.0, 10.0),
             rotation: 0.0,
-            text: Text {
-                content: "Note".to_owned(),
-                font_size: 20.0,
-            },
+            text: Text::new("Note".to_owned(), 20.0),
             target: None,
+            colour: Colour::Ink,
         };
         let editor = editor([note]);
         let point = Point { x: 5.0, y: 5.0 };
@@ -270,11 +268,9 @@ mod tests {
         let note = ElementKind::Note {
             frame: area(0.0, 0.0, 10.0, 10.0),
             rotation: 0.0,
-            text: Text {
-                content: "Note".to_owned(),
-                font_size: 20.0,
-            },
+            text: Text::new("Note".to_owned(), 20.0),
             target: None,
+            colour: Colour::Ink,
         };
         let mut editor = editor([image(0.0, false, false), note]);
         let before = editor.board().clone();
@@ -306,11 +302,9 @@ mod tests {
         let note = ElementKind::Note {
             frame: area(150.0, 80.0, 40.0, 20.0),
             rotation: 0.0,
-            text: Text {
-                content: "Note".to_owned(),
-                font_size: 20.0,
-            },
+            text: Text::new("Note".to_owned(), 20.0),
             target: Some(id(1)),
+            colour: Colour::Ink,
         };
         let mut editor = editor([image(30.0, true, false), note]);
         let centre = |editor: &Editor| match &editor.board().elements[&id(2)].kind {

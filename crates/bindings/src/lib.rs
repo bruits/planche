@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use board::{
     Animation, AssetId, Background, Board, Element, ElementId, ElementKind, GRID_STEP, GridLevel,
-    Order, Point, Rect, Restack, Side, Size,
+    Order, Point, Rect, Restack, Side, Size, Weight,
 };
 use format::zip;
 use js_sys::{Map, Uint8Array};
@@ -416,10 +416,15 @@ pub fn file_depth() -> usize {
     format::DEPTH
 }
 
-/// How wide arrows, lines, and shapes draw, in board units, as the core hits them.
+/// How wide an arrow, a line, or a shape of `weight` draws, in board units, as the core hits it.
+/// A medium one when `undefined`, as a weight left as it comes is.
 #[wasm_bindgen(js_name = strokeWidth)]
-pub fn stroke_width() -> f64 {
-    board::STROKE_WIDTH
+pub fn stroke_width(weight: Option<String>) -> Result<f64, JsError> {
+    let weight: Weight = weight
+        .map(|weight| serde_json::from_value(weight.into()))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(weight.width())
 }
 
 /// The grid's finest lines that show at `zoom`, CSS pixels per board unit. How far apart they

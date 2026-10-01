@@ -4,7 +4,8 @@
 // same power reuses it.
 
 import type { Camera, Viewport } from "./camera.js";
-import type { Board, Kind, Point, Rect, Size } from "./core.js";
+import type { Align, Board, Kind, Point, Rect, Size } from "./core.js";
+import type { Paint } from "./paint.js";
 import { LONGEST_SIDE, overlaps, rounded, settling } from "./raster.js";
 import type { Placed, Renderer } from "./renderer.js";
 
@@ -21,6 +22,8 @@ const MARGIN = 0.25;
 const FAR = 8;
 /** Font sizes are measured at this one, in pixels, and scaled. */
 const REFERENCE = 100;
+/** How thick the stroke through struck text is, in font sizes. */
+const STRIKE = 0.06;
 /**
  * Up to where a line may break: past spaces and tabs, a hyphen, en dash, or zero-width space
  * before more, and before and after em dashes, but not between two.
@@ -41,15 +44,42 @@ export function isBlank(kind: Holder): boolean {
 export interface Layout {
   /** What it wraps to, and aligns within. */
   area: Rect;
-  centred: boolean;
+  align: Align;
   lines: string[];
   /** Of the first line. */
   top: number;
 }
 
-/** Nothing may measure text before it resolves, or it would measure another font. */
+export interface Face {
+  bold: boolean;
+  italic: boolean;
+}
+
+/** Nothing may measure text before they resolve, or it would measure another font. */
 export async function loadFont(): Promise<void> {
-  await document.fonts.load(`${REFERENCE}px ${FONT}`).catch(() => []);
+  const faces = [false, true].flatMap((bold) => [false, true].map((italic) => font({ bold, italic }, REFERENCE)));
+  await Promise.all(faces.map((face) => document.fonts.load(face).catch(() => [])));
+}
+
+/** As CSS and the canvas write a font. */
+function font({ bold, italic }: Face, pixels: number): string {
+  return `${italic ? "italic " : ""}${bold ? 700 : 400} ${pixels}px ${FONT}`;
+}
+
+export function face({ text }: Holder): Face {
+  return { bold: text.bold ?? false, italic: text.italic ?? false };
+}
+
+export function alignment(kind: Holder): Align {
+  return kind.text.align ?? (kind.type === "shape" ? "centre" : "left");
+}
+
+export function paint(kind: Holder): Paint {
+  if (kind.type === "sticky") {
+    return "sticky-ink";
+  }
+  const colour = kind.colour ?? "ink";
+  return kind.type === "shape" && kind.shape !== "cross" && kind.fill === "solid" ? { on: colour } : colour;
 }
 
 export function layout(kind: Holder): Layout {
@@ -63,10 +93,10 @@ export function layout(kind: Holder): Layout {
     width: Math.max(width * share - 2 * padding, 0),
     height: Math.max(height * share - 2 * padding, 0),
   };
-  const lines = wrap(kind.text.content, area.width, (text) => metrics().width(text));
-  const centred = kind.type === "shape";
-  const top = centred ? area.y + (area.height - lines.length * LINE_HEIGHT) / 2 : area.y;
-  return { area, centred, lines, top };
+  const measured = metrics(face(kind));
+  const lines = wrap(kind.text.content, area.width, (text) => measured.width(text));
+  const top = kind.type === "shape" ? area.y + (area.height - lines.length * LINE_HEIGHT) / 2 : area.y;
+  return { area, align: alignment(kind), lines, top };
 }
 
 /**
@@ -226,7 +256,7 @@ function framed(id: string, kind: Holder, covers: Rect): Placed {
   const turned = turn({ x: own.x - centre.x, y: own.y - centre.y }, rotation);
   placed.x += centre.x + turned.x - own.x;
   placed.y += centre.y + turned.y - own.y;
-  return { kind: "text", id, frame: placed, rotation, paint: kind.type === "sticky" ? "sticky-ink" : "ink" };
+  return { kind: "text", id, frame: placed, rotation, paint: paint(kind) };
 }
 
 /**
@@ -245,7 +275,7 @@ function rasterise(canvas: HTMLCanvasElement, kind: Holder, density: number): Re
   if (!(capped > 0)) {
     return undefined;
   }
-  draw(canvas, laid, covers, capped);
+  draw(canvas, laid, face(kind), kind.text.strike ?? false, covers, capped);
   return { ...covers, width: canvas.width / capped, height: canvas.height / capped };
 }
 
@@ -263,20 +293,27 @@ export function lettered(id: string, kind: Holder, density: number): { canvas: H
 }
 
 /** White, as only its coverage counts. */
-function draw(canvas: HTMLCanvasElement, laid: Layout, covers: Rect, density: number): void {
+function draw(canvas: HTMLCanvasElement, laid: Layout, look: Face, strike: boolean, covers: Rect, density: number): void {
   canvas.width = Math.max(Math.ceil(covers.width * density), 1);
   canvas.height = Math.max(Math.ceil(covers.height * density), 1);
   const context = canvas.getContext("2d")!;
-  context.font = `${density}px ${FONT}`;
+  context.font = font(look, density);
   context.fillStyle = "#fff";
-  const { ascent, descent } = metrics();
+  const measured = metrics(look);
+  const { ascent, descent, middle } = measured;
   // As CSS lays a line out, with half the leading above it.
   const baseline = (LINE_HEIGHT - ascent - descent) / 2 + ascent;
+  const share = { left: 0, centre: 0.5, right: 1 }[laid.align];
   laid.lines.forEach((line, at) => {
     const shown = hang(line);
-    const x = laid.centred ? laid.area.x + (laid.area.width - metrics().width(shown)) / 2 : laid.area.x;
+    const width = measured.width(shown);
+    const x = laid.area.x + (laid.area.width - width) * share;
     const y = laid.top + at * LINE_HEIGHT + baseline;
     context.fillText(shown, (x - covers.x) * density, (y - covers.y) * density);
+    if (strike && shown !== "") {
+      const through = y - middle - STRIKE / 2;
+      context.fillRect((x - covers.x) * density, (through - covers.y) * density, width * density, Math.max(STRIKE * density, 1));
+    }
   });
 }
 
@@ -287,10 +324,16 @@ function sameLayout(a: Holder, b: Holder): boolean {
   }
   const [one, other] = [inEms(a), inEms(b)];
   const close = (x: number, y: number) => Math.abs(x - y) <= 1e-9 * Math.max(Math.abs(x), Math.abs(y), 1);
+  const [lookA, lookB] = [face(a), face(b)];
   return (
     a.type === b.type &&
     (a.type !== "shape" || b.type !== "shape" || a.shape === b.shape) &&
     a.text.content === b.text.content &&
+    lookA.bold === lookB.bold &&
+    lookA.italic === lookB.italic &&
+    // The texture holds it too.
+    (a.text.strike ?? false) === (b.text.strike ?? false) &&
+    alignment(a) === alignment(b) &&
     close(one.width, other.width) &&
     close(one.height, other.height)
   );
@@ -313,19 +356,24 @@ interface Metrics {
   width(text: string): number;
   ascent: number;
   descent: number;
+  /** Half the height of an x above the baseline, where a stroke strikes text through. */
+  middle: number;
 }
 
-let measured: Metrics | undefined;
+/** By face, as each lays text out its own way. */
+const measured = new Map<string, Metrics>();
 
-function metrics(): Metrics {
-  if (measured) {
-    return measured;
+function metrics(look: Face): Metrics {
+  const key = font(look, REFERENCE);
+  const known = measured.get(key);
+  if (known) {
+    return known;
   }
   const context = document.createElement("canvas").getContext("2d")!;
-  context.font = `${REFERENCE}px ${FONT}`;
+  context.font = key;
   const widths = new Map<string, number>();
-  const { fontBoundingBoxAscent, fontBoundingBoxDescent } = context.measureText("x");
-  measured = {
+  const { fontBoundingBoxAscent, fontBoundingBoxDescent, actualBoundingBoxAscent } = context.measureText("x");
+  const made: Metrics = {
     width(text) {
       let width = widths.get(text);
       if (width === undefined) {
@@ -340,6 +388,8 @@ function metrics(): Metrics {
     },
     ascent: fontBoundingBoxAscent / REFERENCE,
     descent: fontBoundingBoxDescent / REFERENCE,
+    middle: actualBoundingBoxAscent / 2 / REFERENCE,
   };
-  return measured;
+  measured.set(key, made);
+  return made;
 }

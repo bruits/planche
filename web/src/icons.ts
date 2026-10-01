@@ -1,5 +1,5 @@
-// The icons of the toolbar and its menus, from Tabler Icons (https://tabler.io/icons), outline,
-// on a 24 grid.
+// The icons of the toolbar, its menus, and the style card, from Tabler Icons
+// (https://tabler.io/icons), outline, on a 24 grid.
 //
 // Tabler Icons, MIT License. Copyright (c) 2020-2026 Paweł Kuna. Permission is hereby granted,
 // free of charge, to any person obtaining a copy of this software and associated documentation
@@ -57,18 +57,42 @@ const paths = {
     "M11 19a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
     "M11 5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
   ],
+  dots: [
+    "M4 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
+    "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
+    "M18 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
+  ],
+  pipette: ["M11 7l6 6", "M4 16l11.7 -11.7a1 1 0 0 1 1.4 0l2.6 2.6a1 1 0 0 1 0 1.4l-11.7 11.7h-4v-4z"],
+  plus: ["M12 5l0 14", "M5 12l14 0"],
+  stroke: ["M5 12l14 0"],
+  arrows: ["M7 8l-4 4l4 4", "M17 8l4 4l-4 4", "M3 12l18 0"],
+  dashed: ["M5 12h2", "M11 12h2", "M17 12h2"],
+  disc: ["M4.5 12a7.5 7.5 0 1 0 15 0a7.5 7.5 0 1 0 -15 0"],
+  bold: ["M7 5h6a3.5 3.5 0 0 1 0 7h-6z", "M13 12h1a3.5 3.5 0 0 1 0 7h-7v-7"],
+  italic: ["M11 5l6 0", "M7 19l6 0", "M14 5l-4 14"],
+  strikethrough: [
+    "M5 12l14 0",
+    "M16 6.5a4 2 0 0 0 -4 -1.5h-1a3.5 3.5 0 0 0 0 7h2a3.5 3.5 0 0 1 0 7h-1.5a4 2 0 0 1 -4 -1.5",
+  ],
+  alignLeft: ["M4 6l16 0", "M4 12l10 0", "M4 18l14 0"],
+  alignCentre: ["M4 6l16 0", "M8 12l8 0", "M6 18l12 0"],
+  alignRight: ["M4 6l16 0", "M10 12l10 0", "M6 18l14 0"],
+  contrast: ["M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0", "M12 17a5 5 0 0 0 0 -10v10"],
+  flipHorizontally: ["M12 3l0 18", "M16 7l0 10l5 0l-5 -10", "M8 7l0 10l-5 0l5 -10"],
+  flipVertically: ["M3 12l18 0", "M7 16l10 0l-10 5l0 -5", "M7 8l10 0l-10 -5l0 5"],
 };
 
 export type Icon = keyof typeof paths;
 
-/** Hidden from assistive technologies, which read its button's label. */
-export function icon(name: Icon): SVGSVGElement {
+/** Hidden from assistive technologies, which read its button's label. `fill` is from 0 to 1. */
+export function icon(name: Icon, { stroke = 1.75, fill = 0 }: { stroke?: number; fill?: number } = {}): SVGSVGElement {
   const svg = document.createElementNS(SVG, "svg");
   const attributes = {
     viewBox: "0 0 24 24",
-    fill: "none",
+    fill: fill > 0 ? "currentColor" : "none",
+    "fill-opacity": String(fill),
     stroke: "currentColor",
-    "stroke-width": "1.75",
+    "stroke-width": String(stroke),
     "stroke-linecap": "round",
     "stroke-linejoin": "round",
     "aria-hidden": "true",

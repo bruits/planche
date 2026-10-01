@@ -4,15 +4,15 @@
 use std::collections::BTreeSet;
 use std::f64::consts::{FRAC_1_SQRT_2, TAU};
 
-use crate::{Board, ElementId, ElementKind, Point, Rect, STROKE_WIDTH, Shape};
+use crate::{Board, ElementId, ElementKind, Fill, Point, Rect, Shape, Text, Weight};
 
 /// The most points [`Board::hit_along`] tries, so that however long the way, it stays quick.
 const MOST_TRIES: f64 = 4096.0;
 
 impl Board {
     /// The topmost element that draws at `point`, or within `tolerance` of it. A group or a
-    /// comment covers nothing on the board, so it is never the one hit, and a shape without text
-    /// only draws its outline, so what it surrounds stays within reach.
+    /// comment covers nothing on the board, so it is never the one hit, and a shape neither
+    /// filled nor holding text only draws its outline, so what it surrounds stays within reach.
     pub fn hit(&self, point: Point, tolerance: f64) -> Option<ElementId> {
         self.draw_order()
             .into_iter()
@@ -42,7 +42,7 @@ impl Board {
             .collect();
         // What `hits` finds lies within reach of the frame or the segment, and a whole stroke
         // keeps rounding at the edge from dropping it.
-        let reach = tolerance + STROKE_WIDTH;
+        let reach = tolerance + Weight::WIDEST;
         let around = Rect {
             x: from.x.min(to.x) - reach,
             y: from.y.min(to.y) - reach,
@@ -156,11 +156,12 @@ pub(crate) fn around(points: &[Point]) -> Option<Rect> {
 /// arithmetic never leaves out what [`holds`] keeps. `None` for what holds nothing.
 pub(crate) fn surface_bounds(kind: &ElementKind) -> Option<Rect> {
     let bounds = around(&shape(kind).filter(|_| kind.is_target())?)?;
+    let margin = kind.stroke_width();
     Some(Rect {
-        x: bounds.x - STROKE_WIDTH,
-        y: bounds.y - STROKE_WIDTH,
-        width: bounds.width + 2.0 * STROKE_WIDTH,
-        height: bounds.height + 2.0 * STROKE_WIDTH,
+        x: bounds.x - margin,
+        y: bounds.y - margin,
+        width: bounds.width + 2.0 * margin,
+        height: bounds.height + 2.0 * margin,
     })
 }
 
@@ -235,9 +236,10 @@ pub(crate) fn corners(rect: &Rect, degrees: f64) -> [Point; 4] {
         .map(|(x, y)| Point { x, y }.turned(rect.centre(), degrees))
 }
 
-/// Strokes reach half their width beyond the line they follow, and a shape's text fills it.
+/// Strokes reach half their width beyond the line they follow, and a shape's fill or text fills
+/// it.
 pub(crate) fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
-    let reach = tolerance + STROKE_WIDTH / 2.0;
+    let reach = tolerance + kind.stroke_width() / 2.0;
     match kind {
         ElementKind::Shape {
             frame,
@@ -265,10 +267,12 @@ pub(crate) fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
 }
 
 /// Whether `point` is within the area an element fills, besides its outline: an image's, a
-/// note's, a sticky note's, or a shape's once it holds text.
+/// note's, a sticky note's, or a shape's once filled or holding text.
 pub(crate) fn covers(kind: &ElementKind, point: Point) -> bool {
     match kind {
-        ElementKind::Shape { text, .. } if text.is_blank() => false,
+        ElementKind::Shape {
+            shape, fill, text, ..
+        } if !filled(*shape, *fill, text) => false,
         ElementKind::Shape {
             frame,
             rotation,
@@ -309,42 +313,51 @@ fn nearest_on_segments(
         .min_by(|a, b| apart(*a, point).total_cmp(&apart(*b, point)))
 }
 
-/// As [`hits`], a shape without text only draws its strokes, so an area between them touches
-/// none of it.
+fn filled(shape: Shape, fill: Fill, text: &Text) -> bool {
+    (shape != Shape::Cross && fill != Fill::Hollow) || !text.is_blank()
+}
+
+/// As [`hits`], a shape neither filled nor holding text only draws its strokes, so an area
+/// between them touches none of it.
 fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
     match kind {
         ElementKind::Shape {
             frame,
             rotation,
-            shape: Shape::Ellipse,
+            shape: shape @ Shape::Ellipse,
+            fill,
             text,
             ..
         } if frame.width != 0.0 && frame.height != 0.0 => {
-            ellipse_touches(frame, *rotation, area, !text.is_blank())
+            ellipse_touches(frame, *rotation, area, filled(*shape, *fill, text))
         }
         ElementKind::Shape {
             frame,
             rotation,
-            shape: Shape::Cross,
+            shape: shape @ Shape::Cross,
+            fill,
             text,
             ..
         } => {
             let outline = corners(frame, *rotation);
-            if text.is_blank() {
-                diagonals(&outline).any(|(a, b)| overlap(&[a, b], area))
-            } else {
+            if filled(*shape, *fill, text) {
                 overlap(&outline, area)
+            } else {
+                diagonals(&outline).any(|(a, b)| overlap(&[a, b], area))
             }
         }
         ElementKind::Shape {
             frame,
             rotation,
+            shape,
+            fill,
             text,
             ..
         } => {
             let outline = corners(frame, *rotation);
             overlap(&outline, area)
-                && (!text.is_blank() || !area.iter().all(|corner| inside(&outline, *corner)))
+                && (filled(*shape, *fill, text)
+                    || !area.iter().all(|corner| inside(&outline, *corner)))
         }
         _ => shape(kind).is_some_and(|shape| overlap(&shape, area)),
     }
@@ -597,7 +610,7 @@ fn edges(shape: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
 mod tests {
     use super::*;
     use crate::tests::{board, element, id};
-    use crate::{AssetId, ImageEdits, Size, Text};
+    use crate::{AssetId, Colour, Dash, Fill, Heads, ImageEdits, Paper, Size, Text};
 
     fn image(x: f64, y: f64, width: f64, height: f64, rotation: f64) -> ElementKind {
         ElementKind::Image {
@@ -626,6 +639,10 @@ mod tests {
             to: point(to.0, to.1),
             from_target: None,
             to_target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
+            heads: Heads::End,
         }
     }
 
@@ -792,11 +809,11 @@ mod tests {
             frame,
             rotation,
             shape,
-            text: Text {
-                content: content.to_owned(),
-                font_size: 20.0,
-            },
+            text: Text::new(content.to_owned(), 20.0),
             target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            fill: Fill::Hollow,
         }
     }
 
@@ -943,15 +960,13 @@ mod tests {
 
     #[test]
     fn a_sticky_note_is_hit_and_touched_over_its_area() {
-        let text = Text {
-            content: String::new(),
-            font_size: 20.0,
-        };
+        let text = Text::new(String::new(), 20.0);
         let sticky = ElementKind::Sticky {
             frame: area(0.0, 0.0, 100.0, 100.0),
             rotation: 45.0,
             text,
             target: None,
+            paper: Paper::Yellow,
         };
         let board = board([(1, element(None, "a0", sticky))]);
         assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(1)));
@@ -1058,10 +1073,70 @@ mod tests {
             (2, element(None, "a1", arrow((200.0, 0.0), (300.0, 0.0)))),
             (3, element(None, "a2", image(400.0, 0.0, 100.0, 100.0, 0.0))),
         ]);
-        let half = STROKE_WIDTH / 2.0;
+        let half = Weight::Medium.width() / 2.0;
         assert_eq!(board.hit(point(-half + 0.1, 50.0), 0.0), Some(id(1)));
         assert_eq!(board.hit(point(250.0, half - 0.1), 0.0), Some(id(2)));
         assert_eq!(board.hit(point(400.0 - half + 0.1, 50.0), 0.0), None);
+    }
+
+    #[test]
+    fn a_thick_stroke_is_hit_further_than_a_thin_one() {
+        let weighed = |weight| {
+            let mut kind = arrow((0.0, 0.0), (100.0, 0.0));
+            if let ElementKind::Arrow { weight: drawn, .. } = &mut kind {
+                *drawn = weight;
+            }
+            kind
+        };
+        let (thin, thick) = (weighed(Weight::Thin), weighed(Weight::Thick));
+        let between = point(50.0, 1.5);
+        assert!(!hits(&thin, between, 0.0));
+        assert!(hits(&thick, between, 0.0));
+    }
+
+    #[test]
+    fn a_filled_shape_covers_what_it_surrounds_but_a_filled_cross_does_not() {
+        let filled = |shape, frame, fill| {
+            let mut kind = framed(shape, frame, 0.0);
+            if let ElementKind::Shape { fill: drawn, .. } = &mut kind {
+                *drawn = fill;
+            }
+            kind
+        };
+        let board = board([
+            (1, element(None, "a0", image(40.0, 40.0, 20.0, 20.0, 0.0))),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    filled(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), Fill::Tint),
+                ),
+            ),
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    filled(Shape::Ellipse, area(200.0, 0.0, 100.0, 50.0), Fill::Solid),
+                ),
+            ),
+            (
+                4,
+                element(
+                    None,
+                    "a3",
+                    filled(Shape::Cross, area(400.0, 0.0, 100.0, 100.0), Fill::Solid),
+                ),
+            ),
+        ]);
+        assert_eq!(board.hit(point(50.0, 50.0), 3.0), Some(id(2)));
+        assert_eq!(board.covering(point(50.0, 50.0)), [id(1), id(2)]);
+        assert_eq!(board.hit(point(250.0, 25.0), 3.0), Some(id(3)));
+        assert_eq!(board.hit(point(205.0, 5.0), 3.0), None);
+        assert_eq!(board.hit(point(450.0, 20.0), 3.0), None);
+        assert_eq!(board.touching(area(20.0, 20.0, 10.0, 10.0)), [id(2)]);
+        assert!(board.touching(area(440.0, 10.0, 8.0, 8.0)).is_empty());
     }
 
     #[test]
@@ -1073,12 +1148,19 @@ mod tests {
                 to,
                 from_target: None,
                 to_target: None,
+                colour: Colour::Ink,
+                weight: Weight::Medium,
+                dash: Dash::Solid,
+                heads: Heads::End,
             },
             ElementKind::Line {
                 from,
                 to,
                 from_target: None,
                 to_target: None,
+                colour: Colour::Ink,
+                weight: Weight::Medium,
+                dash: Dash::Solid,
             },
         ] {
             let board = board([(1, element(None, "a0", kind))]);

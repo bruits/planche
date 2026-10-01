@@ -1028,7 +1028,7 @@ mod tests {
     use super::*;
     use crate::stick::Surface;
     use crate::tests::{arrow, board, element, id};
-    use crate::{Rect, Text};
+    use crate::{Colour, Dash, Fill, Heads, Rect, Text, Weight};
 
     fn note(x: f64) -> ElementKind {
         ElementKind::Note {
@@ -1039,11 +1039,9 @@ mod tests {
                 height: 10.0,
             },
             rotation: 0.0,
-            text: Text {
-                content: String::new(),
-                font_size: 2.0,
-            },
+            text: Text::new(String::new(), 2.0),
             target: None,
+            colour: Colour::Ink,
         }
     }
 
@@ -1762,12 +1760,19 @@ mod tests {
                 to,
                 from_target: None,
                 to_target: None,
+                colour: Colour::Ink,
+                weight: Weight::Medium,
+                dash: Dash::Solid,
+                heads: Heads::End,
             },
             ElementKind::Line {
                 from,
                 to,
                 from_target: None,
                 to_target: None,
+                colour: Colour::Ink,
+                weight: Weight::Medium,
+                dash: Dash::Solid,
             },
         ] {
             let mut editor = Editor::new(board([(1, element(None, "a0", kind))]));
@@ -1834,11 +1839,9 @@ mod tests {
                 height: 10.0,
             },
             rotation: 0.0,
-            text: Text {
-                content: "a".to_owned(),
-                font_size,
-            },
+            text: Text::new("a".to_owned(), font_size),
             target: None,
+            colour: Colour::Ink,
         };
         for font_size in [0.0, -0.0, -2.0] {
             let mut editor = editor();
@@ -1873,6 +1876,10 @@ mod tests {
             to: Point { x: to.0, y: to.1 },
             from_target: on.map(id),
             to_target: at.map(id),
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
+            heads: Heads::End,
         }
     }
 
@@ -1885,11 +1892,9 @@ mod tests {
                 height,
             },
             rotation: 0.0,
-            text: Text {
-                content: String::new(),
-                font_size: 2.0,
-            },
+            text: Text::new(String::new(), 2.0),
             target: None,
+            colour: Colour::Ink,
         }
     }
 
@@ -2144,11 +2149,9 @@ mod tests {
         let written = ElementKind::Note {
             frame,
             rotation,
-            text: Text {
-                content: "Warm".to_owned(),
-                font_size: 2.0,
-            },
+            text: Text::new("Warm".to_owned(), 2.0),
             target: None,
+            colour: Colour::Ink,
         };
         assert_eq!(editor.update(id(1), written).unwrap(), ids([1]));
         assert_eq!(
@@ -2283,6 +2286,7 @@ mod tests {
             rotation: degrees,
             text,
             target,
+            colour: Colour::Ink,
         }
     }
 
@@ -2292,6 +2296,7 @@ mod tests {
             rotation,
             text,
             target,
+            ..
         } = &editor.board().elements[&id(bits)].kind
         else {
             unreachable!()
@@ -2610,11 +2615,11 @@ mod tests {
             },
             rotation: 0.0,
             shape: crate::Shape::Rectangle,
-            text: Text {
-                content: String::new(),
-                font_size: 2.0,
-            },
+            text: Text::new(String::new(), 2.0),
             target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            fill: Fill::Hollow,
         };
         let comment = |x, y| ElementKind::Comment {
             at: Point { x, y },
@@ -2665,11 +2670,11 @@ mod tests {
             },
             rotation,
             shape: crate::Shape::Ellipse,
-            text: Text {
-                content: String::new(),
-                font_size: 2.0,
-            },
+            text: Text::new(String::new(), 2.0),
             target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            fill: Fill::Hollow,
         };
         let mut aslant = picture(400.0, 0.0);
         if let ElementKind::Image { rotation, .. } = &mut aslant {
@@ -2699,6 +2704,75 @@ mod tests {
         assert_eq!(
             [2, 3, 5].map(target),
             [Some(1), None, Some(4)].map(|bits| bits.map(id))
+        );
+    }
+
+    #[test]
+    fn landing_sticks_to_a_filled_shape_but_through_a_filled_cross() {
+        let shape = |shape, x, y, width, height, fill| ElementKind::Shape {
+            frame: Rect {
+                x,
+                y,
+                width,
+                height,
+            },
+            rotation: 0.0,
+            shape,
+            text: Text::new(String::new(), 2.0),
+            target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            fill,
+        };
+        let comment = ElementKind::Comment {
+            at: Point { x: 50.0, y: 50.0 },
+            text: "Here".to_owned(),
+            target: None,
+        };
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    shape(crate::Shape::Rectangle, 10.0, 10.0, 80.0, 80.0, Fill::Tint),
+                ),
+            ),
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    shape(crate::Shape::Cross, 110.0, 110.0, 80.0, 80.0, Fill::Solid),
+                ),
+            ),
+            (
+                4,
+                element(
+                    None,
+                    "a3",
+                    shape(crate::Shape::Ellipse, 300.0, 0.0, 200.0, 100.0, Fill::Solid),
+                ),
+            ),
+            (5, element(None, "a4", framed(20.0, 20.0, 10.0, 10.0))),
+            // Between the cross's strokes.
+            (6, element(None, "a5", framed(120.0, 140.0, 10.0, 10.0))),
+            (
+                7,
+                element(
+                    None,
+                    "a6",
+                    shape(crate::Shape::Ellipse, 380.0, 40.0, 40.0, 20.0, Fill::Hollow),
+                ),
+            ),
+            (8, element(None, "a7", comment)),
+        ]));
+        editor.land(&ids([5, 6, 7, 8])).unwrap();
+        let target = |bits| editor.board().elements[&id(bits)].kind.target();
+        assert_eq!(
+            [5, 6, 7, 8].map(target),
+            [Some(2), Some(1), Some(4), Some(2)].map(|bits| bits.map(id))
         );
     }
 

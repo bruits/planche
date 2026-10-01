@@ -64,6 +64,8 @@ pub enum Error {
         width: u32,
         height: u32,
     },
+    #[error("`{0}` is not a colour")]
+    InvalidColour(String),
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -242,8 +244,10 @@ pub enum ElementKind {
         text: Text,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<ElementId>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        colour: Colour,
     },
-    /// A sticky note, in a colour of its own.
+    /// A sticky note, on its paper, whose colour stays whatever the theme.
     Sticky {
         frame: Rect,
         #[serde(serialize_with = "without_negative_zero")]
@@ -251,7 +255,10 @@ pub enum ElementKind {
         text: Text,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<ElementId>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        paper: Paper,
     },
+    /// Its outline, its fill, and its text in its `colour`. A cross fills nothing.
     Shape {
         frame: Rect,
         #[serde(serialize_with = "without_negative_zero")]
@@ -260,8 +267,14 @@ pub enum ElementKind {
         text: Text,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<ElementId>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        colour: Colour,
+        #[serde(default, skip_serializing_if = "is_default")]
+        weight: Weight,
+        #[serde(default, skip_serializing_if = "is_default")]
+        fill: Fill,
     },
-    /// Its head is at `to`.
+    /// Its head is at `to`, unless `heads` says otherwise.
     Arrow {
         from: Point,
         to: Point,
@@ -269,6 +282,14 @@ pub enum ElementKind {
         from_target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to_target: Option<ElementId>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        colour: Colour,
+        #[serde(default, skip_serializing_if = "is_default")]
+        weight: Weight,
+        #[serde(default, skip_serializing_if = "is_default")]
+        dash: Dash,
+        #[serde(default, skip_serializing_if = "is_default")]
+        heads: Heads,
     },
     Line {
         from: Point,
@@ -277,6 +298,12 @@ pub enum ElementKind {
         from_target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to_target: Option<ElementId>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        colour: Colour,
+        #[serde(default, skip_serializing_if = "is_default")]
+        weight: Weight,
+        #[serde(default, skip_serializing_if = "is_default")]
+        dash: Dash,
     },
     /// Pinned at `at`, and shown at one size on screen, whatever the zoom, so it covers nothing
     /// on the board.
@@ -314,14 +341,27 @@ impl ElementKind {
                 to,
                 from_target,
                 to_target,
+                ..
             }
             | Self::Line {
                 from,
                 to,
                 from_target,
                 to_target,
+                ..
             } => Some([(*from, *from_target), (*to, *to_target)]),
             _ => None,
+        }
+    }
+
+    /// How wide an arrow, a line, or a shape draws its strokes, in board units. What draws none
+    /// is reached as a medium stroke would be.
+    pub(crate) fn stroke_width(&self) -> f64 {
+        match self {
+            Self::Shape { weight, .. } | Self::Arrow { weight, .. } | Self::Line { weight, .. } => {
+                weight.width()
+            }
+            _ => Weight::Medium.width(),
         }
     }
 
@@ -374,12 +414,14 @@ impl ElementKind {
                 to,
                 from_target,
                 to_target,
+                ..
             }
             | Self::Line {
                 from,
                 to,
                 from_target,
                 to_target,
+                ..
             } => Some([(from, from_target), (to, to_target)]),
             _ => None,
         }
@@ -404,12 +446,14 @@ impl ElementKind {
                 rotation,
                 text,
                 target: _,
+                colour: _,
             }
             | Self::Sticky {
                 frame,
                 rotation,
                 text,
                 target: _,
+                paper: _,
             }
             | Self::Shape {
                 frame,
@@ -417,6 +461,9 @@ impl ElementKind {
                 shape: _,
                 text,
                 target: _,
+                colour: _,
+                weight: _,
+                fill: _,
             } => frame.is_finite() && rotation.is_finite() && text.is_valid(),
             // Whether their targets are there is up to the board.
             Self::Arrow {
@@ -424,12 +471,19 @@ impl ElementKind {
                 to,
                 from_target: _,
                 to_target: _,
+                colour: _,
+                weight: _,
+                dash: _,
+                heads: _,
             }
             | Self::Line {
                 from,
                 to,
                 from_target: _,
                 to_target: _,
+                colour: _,
+                weight: _,
+                dash: _,
             } => from.is_finite() && to.is_finite(),
             Self::Comment {
                 at,
@@ -470,9 +524,30 @@ pub struct Text {
     /// In board units, which scaling what holds it scales too.
     #[serde(serialize_with = "without_negative_zero")]
     pub font_size: f64,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub italic: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub strike: bool,
+    /// `None` for what holds it to choose, centred in a shape and to the left elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<Align>,
 }
 
 impl Text {
+    /// Plain, and aligned as what holds it chooses.
+    pub fn new(content: impl Into<String>, font_size: f64) -> Self {
+        Self {
+            content: content.into(),
+            font_size,
+            bold: false,
+            italic: false,
+            strike: false,
+            align: None,
+        }
+    }
+
     /// Draws nothing.
     pub fn is_blank(&self) -> bool {
         self.content.trim().is_empty()
@@ -482,9 +557,161 @@ impl Text {
         let Self {
             content: _,
             font_size,
+            bold: _,
+            italic: _,
+            strike: _,
+            align: _,
         } = self;
         font_size.is_finite() && *font_size > 0.0
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Align {
+    Left,
+    Centre,
+    Right,
+}
+
+/// A colour of the palette, which each theme draws its own way, or one of its own, which draws
+/// alike in every theme. Written as the palette's name, or as `#rrggbb` in lowercase.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Colour {
+    /// The colour of text.
+    #[default]
+    Ink,
+    Red,
+    Orange,
+    Green,
+    Blue,
+    Violet,
+    Rgb([u8; 3]),
+}
+
+impl Colour {
+    const PALETTE: [(Self, &str); 6] = [
+        (Self::Ink, "ink"),
+        (Self::Red, "red"),
+        (Self::Orange, "orange"),
+        (Self::Green, "green"),
+        (Self::Blue, "blue"),
+        (Self::Violet, "violet"),
+    ];
+}
+
+impl fmt::Display for Colour {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rgb(rgb) => write!(formatter, "#{}", Hex(*rgb)),
+            named => {
+                let (_, name) = Self::PALETTE
+                    .iter()
+                    .find(|(colour, _)| colour == named)
+                    .expect("every other colour is named");
+                formatter.write_str(name)
+            }
+        }
+    }
+}
+
+impl FromStr for Colour {
+    type Err = Error;
+
+    fn from_str(text: &str) -> Result<Self> {
+        if let Some(hex) = text.strip_prefix('#') {
+            let Hex(rgb) = hex
+                .parse()
+                .map_err(|_| Error::InvalidColour(text.to_owned()))?;
+            return Ok(Self::Rgb(rgb));
+        }
+        Self::PALETTE
+            .iter()
+            .find(|(_, name)| *name == text)
+            .map(|(colour, _)| *colour)
+            .ok_or_else(|| Error::InvalidColour(text.to_owned()))
+    }
+}
+
+impl Serialize for Colour {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Colour {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Paper {
+    #[default]
+    Yellow,
+    Pink,
+    Blue,
+    Green,
+    Lilac,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Weight {
+    Thin,
+    #[default]
+    Medium,
+    Thick,
+}
+
+impl Weight {
+    pub(crate) const WIDEST: f64 = Self::Thick.width();
+
+    /// In board units, which scaling leaves alone.
+    pub const fn width(self) -> f64 {
+        match self {
+            Self::Thin => 1.0,
+            Self::Medium => 2.0,
+            Self::Thick => 4.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Dash {
+    #[default]
+    Solid,
+    Dashed,
+}
+
+/// Which ends of an arrow draw a head, at least one, as one without is a line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Heads {
+    /// At `to`.
+    #[default]
+    End,
+    Both,
+}
+
+/// What a rectangle or an ellipse draws within its outline, in its colour.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fill {
+    #[default]
+    Hollow,
+    /// See-through.
+    Tint,
+    Solid,
+}
+
+/// So that a style left as it comes writes nothing.
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 /// An angle has a single spelling, so that equal boards write the same bytes. Rounding can
@@ -493,9 +720,6 @@ pub(crate) fn angle(degrees: f64) -> f64 {
     let turned = degrees.rem_euclid(360.0);
     if turned < 360.0 { turned } else { 0.0 }
 }
-
-/// How wide arrows, lines, and shapes draw, in board units, until elements hold a style.
-pub const STROKE_WIDTH: f64 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -745,21 +969,20 @@ mod tests {
             filename: None,
             caption: None,
         };
-        let text = |font_size| Text {
-            content: String::new(),
-            font_size,
-        };
+        let text = |font_size| Text::new(String::new(), font_size);
         let note = |frame, rotation| ElementKind::Note {
             frame,
             rotation,
             text: text(20.0),
             target: None,
+            colour: Colour::Ink,
         };
         let sticky = |frame, rotation, font_size| ElementKind::Sticky {
             frame,
             rotation,
             text: text(font_size),
             target: None,
+            paper: Paper::Yellow,
         };
         let shape = |frame, rotation, font_size| ElementKind::Shape {
             frame,
@@ -767,18 +990,28 @@ mod tests {
             shape: Shape::Rectangle,
             text: text(font_size),
             target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            fill: Fill::Hollow,
         };
         let arrow = |from, to| ElementKind::Arrow {
             from,
             to,
             from_target: None,
             to_target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
+            heads: Heads::End,
         };
         let line = |from, to| ElementKind::Line {
             from,
             to,
             from_target: None,
             to_target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
         };
         let comment = |at| ElementKind::Comment {
             at,
@@ -877,6 +1110,10 @@ mod tests {
             to: point,
             from_target: None,
             to_target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
+            heads: Heads::End,
         }
     }
 
@@ -944,6 +1181,9 @@ mod tests {
             to: point,
             from_target: Some(id(from_target)),
             to_target: Some(id(to_target)),
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
         };
         let note = ElementKind::Note {
             frame: Rect {
@@ -953,11 +1193,9 @@ mod tests {
                 height: 1.0,
             },
             rotation: 0.0,
-            text: Text {
-                content: String::new(),
-                font_size: 1.0,
-            },
+            text: Text::new(String::new(), 1.0),
             target: None,
+            colour: Colour::Ink,
         };
         let mut broken = board([
             (1, element(None, "a0", note)),
@@ -982,11 +1220,9 @@ mod tests {
                 height: 1.0,
             },
             rotation: 0.0,
-            text: Text {
-                content: String::new(),
-                font_size: 1.0,
-            },
+            text: Text::new(String::new(), 1.0),
             target: Some(id(target)),
+            colour: Colour::Ink,
         };
         let mut broken = board([
             (1, element(None, "a0", note(3))),

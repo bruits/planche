@@ -12,7 +12,8 @@ import { icon, type Icon } from "./icons.js";
  */
 export type Entry = Item | "separator";
 
-export type Item = Command & { icon?: Icon; checked?: boolean; toggle?: boolean; options?: Entry[] };
+/** `swatch` shows a colour, as CSS gives it, where an icon would. */
+export type Item = Command & { icon?: Icon; swatch?: string; checked?: boolean; toggle?: boolean; options?: Entry[] };
 
 /** Its top-left corner at a point, or above an element, lined up with its right end or `left`. */
 export type Place = { x: number; y: number } | { above: HTMLElement; left?: boolean };
@@ -244,6 +245,12 @@ function menuItem(command: Item, activate: (item: HTMLButtonElement) => void): H
   label.className = "name";
   if (command.icon) {
     label.append(icon(command.icon));
+  }
+  if (command.swatch) {
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.setProperty("--swatch", command.swatch);
+    label.append(swatch);
   }
   label.append(named(command));
   const end = document.createElement("span");

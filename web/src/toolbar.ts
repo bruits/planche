@@ -26,6 +26,8 @@ export interface Toolbar {
   say(message: string, busy?: boolean): void;
   /** Marks the menu's button while the board has changes to lose. */
   unsaved(unsaved: boolean): void;
+  /** Shows `shown` as the hint while `element`, outside the bar, is hovered or focused. */
+  explain(element: HTMLElement, shown: () => string): void;
 }
 
 /** How long a message shows, in milliseconds, plus a little per character to read. */
@@ -142,7 +144,7 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
     stops[(to + stops.length) % stops.length]!.focus();
   });
 
-  function explain(button: HTMLButtonElement, shown: () => string): void {
+  function explain(button: HTMLElement, shown: () => string): void {
     const listen = (type: string, change: () => void) =>
       button.addEventListener(type, () => {
         change();
@@ -190,6 +192,7 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
       menuButton.classList.toggle("unsaved", unsaved);
       menuButton.setAttribute("aria-label", unsaved ? "Menu, with unsaved changes" : "Menu");
     },
+    explain,
   };
 }
 

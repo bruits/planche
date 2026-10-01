@@ -20,7 +20,7 @@ import init, {
   snapScaleToGrid as snapScale,
   snapToGrid as snap,
   sizedSvg as sized,
-  strokeWidth,
+  strokeWidth as width,
   svgSize as vectorSize,
   verifyAsset as verify,
   videoType as containerType,
@@ -38,7 +38,6 @@ export {
   isAssetFile,
   isBoardFile,
   locateZipDirectory,
-  strokeWidth,
   zipTailLength,
 };
 
@@ -68,7 +67,21 @@ export interface Text {
   content: string;
   /** In board units. */
   font_size: number;
+  bold?: boolean;
+  italic?: boolean;
+  strike?: boolean;
+  /** Left out for what holds it to choose. */
+  align?: Align;
 }
+
+/** Mirrors `board::Colour`, whose own colours are `#rrggbb` in lowercase. */
+export type Colour = "ink" | "red" | "orange" | "green" | "blue" | "violet" | `#${string}`;
+export type Paper = "yellow" | "pink" | "blue" | "green" | "lilac";
+export type Weight = "thin" | "medium" | "thick";
+export type Dash = "solid" | "dashed";
+export type Heads = "end" | "both";
+export type Fill = "hollow" | "tint" | "solid";
+export type Align = "left" | "centre" | "right";
 
 /** Mirrors `board::ElementKind`, as far as the shells read it. */
 export type Kind =
@@ -83,11 +96,40 @@ export type Kind =
       filename?: string;
       caption?: string;
     }
-  | { type: "note"; frame: Rect; rotation: number; text: Text; target?: string }
-  | { type: "sticky"; frame: Rect; rotation: number; text: Text; target?: string }
-  | { type: "shape"; frame: Rect; rotation: number; shape: "rectangle" | "ellipse" | "cross"; text: Text; target?: string }
-  | { type: "arrow"; from: Point; to: Point; from_target?: string; to_target?: string }
-  | { type: "line"; from: Point; to: Point; from_target?: string; to_target?: string }
+  | { type: "note"; frame: Rect; rotation: number; text: Text; target?: string; colour?: Colour }
+  | { type: "sticky"; frame: Rect; rotation: number; text: Text; target?: string; paper?: Paper }
+  | {
+      type: "shape";
+      frame: Rect;
+      rotation: number;
+      shape: "rectangle" | "ellipse" | "cross";
+      text: Text;
+      target?: string;
+      colour?: Colour;
+      weight?: Weight;
+      fill?: Fill;
+    }
+  | {
+      type: "arrow";
+      from: Point;
+      to: Point;
+      from_target?: string;
+      to_target?: string;
+      colour?: Colour;
+      weight?: Weight;
+      dash?: Dash;
+      heads?: Heads;
+    }
+  | {
+      type: "line";
+      from: Point;
+      to: Point;
+      from_target?: string;
+      to_target?: string;
+      colour?: Colour;
+      weight?: Weight;
+      dash?: Dash;
+    }
   | { type: "comment"; at: Point; text: string; target?: string }
   | { type: "group" };
 
@@ -175,6 +217,18 @@ export function background(editor: Editor): Background {
 
 export function setBackground(editor: Editor, background: Background): void {
   editor.setBackground(JSON.stringify(background));
+}
+
+const widths = new Map<Weight, number>();
+
+/** How wide a stroke of `weight` draws, in board units, as the core hits it. */
+export function strokeWidth(weight: Weight = "medium"): number {
+  let found = widths.get(weight);
+  if (found === undefined) {
+    found = width(weight);
+    widths.set(weight, found);
+  }
+  return found;
 }
 
 /** At `zoom` CSS pixels per board unit. */

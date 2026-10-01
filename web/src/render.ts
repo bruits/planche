@@ -88,6 +88,7 @@ function framed({ board, editor }: Opened, ids: string[], chosen: string[]): Rec
   const ys = [bounds.y, bounds.y + bounds.height, ...reached.map(({ y }) => y)];
   const [x, y] = [Math.min(...xs), Math.min(...ys)];
   const [width, height] = [Math.max(...xs) - x, Math.max(...ys) - y];
-  const margin = Math.max(core.strokeWidth(), 0.02 * Math.max(width, height));
+  // Past the widest stroke.
+  const margin = Math.max(core.strokeWidth("thick"), 0.02 * Math.max(width, height));
   return { x: x - margin, y: y - margin, width: width + 2 * margin, height: height + 2 * margin };
 }

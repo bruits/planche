@@ -2,7 +2,8 @@
 // own undo, laid over the element as the renderer draws its text, so that nothing moves once it
 // is written. Pressing anywhere else, Esc, or ⌘ or Ctrl with Enter finishes it.
 
-import { FONT, LINE_HEIGHT, layout, type Holder } from "./text.js";
+import { css } from "./paint.js";
+import { FONT, LINE_HEIGHT, face, layout, paint, type Holder } from "./text.js";
 
 export interface Writer {
   /** Calls `input` with each change, and `done` once it closes. */
@@ -14,7 +15,8 @@ export interface Writer {
   close(): void;
 }
 
-export function writer(): Writer {
+/** Over `board`, whose style resolves the colours of what it draws, as the renderer's does. */
+export function writer(board: HTMLElement): Writer {
   const field = document.createElement("textarea");
   field.className = "writer";
   field.setAttribute("aria-label", "Text");
@@ -65,7 +67,8 @@ export function writer(): Writer {
     follow(kind, { clientX, clientY }, zoom) {
       const { frame, rotation, text } = kind;
       const size = text.font_size * zoom;
-      const { area, centred, top } = layout(kind);
+      const { area, align, top } = layout(kind);
+      const { bold, italic } = face(kind);
       style({
         // As the renderer lays its text out.
         "font-family": FONT,
@@ -78,17 +81,19 @@ export function writer(): Writer {
         "padding-right": `${(frame.width / text.font_size - area.x - area.width) * size}px`,
         "padding-top": `${Math.max(top, 0) * size}px`,
         "font-size": `${size}px`,
-        "text-align": centred ? "center" : "left",
+        "font-weight": bold ? "700" : "400",
+        "font-style": italic ? "italic" : "normal",
+        "text-decoration": text.strike ? "line-through" : "none",
+        "text-align": { left: "left", centre: "center", right: "right" }[align],
+        color: css(paint(kind), board),
         transform: `rotate(${rotation}deg)`,
       });
-      field.classList.toggle("sticky", kind.type === "sticky");
       field.classList.remove("bubble");
       field.setAttribute("aria-label", "Text");
       // Grown to fit, it may still be scrolled to where the caret was.
       field.scrollTop = 0;
     },
     bubble({ clientX, clientY }) {
-      field.classList.remove("sticky");
       field.classList.add("bubble");
       field.setAttribute("aria-label", "Comment");
       style({ left: `${clientX}px`, top: `${clientY}px`, height: "0" });

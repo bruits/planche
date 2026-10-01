@@ -1,10 +1,34 @@
-/* Bundled, so that text wraps alike everywhere. */
+/* Bundled, so that text wraps alike everywhere, each face of its own, as made-up ones would not. */
 @font-face {
   font-family: Inter;
   font-style: normal;
   font-weight: 400;
   font-display: block;
   src: url("fonts/Inter-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("fonts/Inter-Bold.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Inter;
+  font-style: italic;
+  font-weight: 400;
+  font-display: block;
+  src: url("fonts/Inter-Italic.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Inter;
+  font-style: italic;
+  font-weight: 700;
+  font-display: block;
+  src: url("fonts/Inter-BoldItalic.woff2") format("woff2");
 }
 
 :root {
@@ -21,8 +45,18 @@
   --accent-soft: #fde7ec;
   --shadow: 0 1px 2px rgb(0 0 0 / 8%), 0 4px 16px rgb(0 0 0 / 10%);
   --selected: Highlight;
-  /* Sticky notes keep their colours in either theme. */
-  --sticky: #fde68a;
+  /* The palette elements are drawn in, besides the ink. */
+  --red: #d42f2f;
+  --orange: #c45a00;
+  --green: #2b8a3e;
+  --blue: #1c6ed6;
+  --violet: #6f42dc;
+  /* Sticky notes keep their papers and their ink in either theme. */
+  --paper-yellow: #fde68a;
+  --paper-pink: #fbcfe8;
+  --paper-blue: #bfdbfe;
+  --paper-green: #bbf7d0;
+  --paper-lilac: #ddd6fe;
   --sticky-ink: #1d1d22;
   /* A comment's pin, and how wide it grows to show its text. */
   --pin: 28px;
@@ -42,6 +76,11 @@
   --accent: #ff8fa8;
   --accent-soft: rgb(255 143 168 / 18%);
   --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 16px rgb(0 0 0 / 40%);
+  --red: #ff8a85;
+  --orange: #ffad66;
+  --green: #7bd88f;
+  --blue: #7fb5ff;
+  --violet: #b49bff;
 }
 
 :root[data-contrast="high"] {
@@ -59,6 +98,11 @@
   --selected: var(--accent);
   /* How many times stronger than the renderer's own the grid shows. */
   --grid-strength: 3;
+  --red: #b00020;
+  --orange: #a34800;
+  --green: #1b6e2d;
+  --blue: #0b4fb3;
+  --violet: #5523c0;
 }
 
 :root[data-theme="dark"][data-contrast="high"] {
@@ -71,6 +115,11 @@
   --hover: rgb(255 255 255 / 16%);
   --accent: #ffc2d0;
   --accent-soft: #5c2f3a;
+  --red: #ffa8a3;
+  --orange: #ffc285;
+  --green: #9be8ad;
+  --blue: #a6ccff;
+  --violet: #cbb8ff;
 }
 
 [hidden] {
@@ -309,10 +358,6 @@ body {
   transform-origin: center;
 }
 
-.writer.sticky {
-  color: var(--sticky-ink);
-}
-
 /* Only the bar and the message take the pointer, so the board stays reachable around them. */
 #toolbar {
   position: fixed;
@@ -440,12 +485,14 @@ body {
   }
 }
 
-.bar button {
+.bar button,
+.style-card button,
+.style-card .custom {
   position: relative;
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: var(--button, 36px);
+  height: var(--button, 36px);
   padding: 0;
   border: 0;
   border-radius: 8px;
@@ -454,11 +501,14 @@ body {
   cursor: pointer;
 }
 
-.bar button:hover {
+.bar button:hover,
+.style-card button:hover,
+.style-card .custom:hover {
   background: var(--hover);
 }
 
-.bar button[aria-pressed="true"] {
+.bar button[aria-pressed="true"],
+.style-card button[aria-pressed="true"] {
   color: var(--accent);
   background: var(--accent-soft);
 }
@@ -468,14 +518,17 @@ body {
   cursor: default;
 }
 
-.bar button:focus-visible {
+.bar button:focus-visible,
+.style-card button:focus-visible,
+.style-card .custom:focus-within {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
-.bar svg {
-  width: 20px;
-  height: 20px;
+.bar svg,
+.style-card svg {
+  width: var(--icon, 20px);
+  height: var(--icon, 20px);
 }
 
 /* Close to the button whose tools it lists, and still as wide as a pointer needs. */
@@ -503,11 +556,188 @@ body {
   color: var(--muted);
 }
 
-.bar .separator {
+.bar .separator,
+.style-card .separator {
   width: 1px;
   height: 20px;
   margin: 0 4px;
   background: var(--line);
+}
+
+/* Under the selection. */
+.style-chip,
+.style-card {
+  position: fixed;
+  z-index: 2;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.style-chip {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 22px;
+  padding: 0;
+  border-radius: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.style-chip:hover {
+  color: var(--text);
+}
+
+.style-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.style-chip svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Out of the way in compact mode, where the context menu still opens the card. */
+:root[data-compact] .style-chip {
+  display: none;
+}
+
+.style-card {
+  --button: 32px;
+  --icon: 18px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.style-card .row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The palette, the colours picked lately under it, then the pipette over a colour of one's own. */
+.style-card .colours {
+  display: grid;
+  grid-template-columns: repeat(6, var(--button)) auto var(--button);
+  align-items: center;
+  gap: 2px;
+}
+
+.style-card .separator {
+  margin: 0 2px;
+}
+
+.style-card .colours .separator {
+  height: 14px;
+}
+
+.style-card .rule {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--line);
+}
+
+.style-card .letters {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.style-card .custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.swatch {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px var(--line);
+  /* A colour to choose, which forced colours would hide. */
+  forced-color-adjust: none;
+}
+
+/* Square ones are no theme's, picked or a sticky note's paper. */
+.swatch.own {
+  border-radius: 5px;
+}
+
+.swatch.paper {
+  border-radius: 4px;
+}
+
+.menu .swatch {
+  width: 14px;
+  height: 14px;
+  margin: 2px;
+}
+
+.style-card button[aria-pressed="true"] .swatch {
+  box-shadow:
+    0 0 0 2px var(--accent-soft),
+    0 0 0 3.5px var(--accent);
+}
+
+#viewport.sampling {
+  cursor: crosshair;
+}
+
+.loupe {
+  position: fixed;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.loupe .lens {
+  position: relative;
+  overflow: hidden;
+  border: 3px solid var(--surface);
+  border-radius: 50%;
+  box-shadow: var(--shadow);
+}
+
+.loupe canvas {
+  display: block;
+  image-rendering: pixelated;
+}
+
+.loupe .lens::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  translate: -50% -50%;
+  outline: 1px solid var(--surface);
+  box-shadow: 0 0 0 2px var(--text);
+}
+
+.loupe span {
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: 11px/1.4 ui-monospace, monospace;
+  background: var(--surface);
+}
+
+.loupe span:empty {
+  display: none;
 }
 
 .menu-button.unsaved::after {
@@ -653,6 +883,19 @@ body {
     --selected: Highlight;
   }
 
+  /* One colour for everything drawn, as forced colours would have it, whatever the theme. */
+  :root,
+  :root[data-theme="dark"],
+  :root[data-contrast="high"],
+  :root[data-theme="dark"][data-contrast="high"] {
+    --ink: CanvasText;
+    --red: CanvasText;
+    --orange: CanvasText;
+    --green: CanvasText;
+    --blue: CanvasText;
+    --violet: CanvasText;
+  }
+
   .bar button[aria-pressed="true"] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
@@ -683,10 +926,6 @@ body {
     forced-color-adjust: none;
     color: CanvasText;
     background: none;
-  }
-
-  .writer.sticky {
-    color: var(--sticky-ink);
   }
 
   .writer.bubble {

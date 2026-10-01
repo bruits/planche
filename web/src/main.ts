@@ -28,20 +28,24 @@ import {
   type Opened,
 } from "./board.js";
 import { fit } from "./camera.js";
+import { card } from "./card.js";
 import { meanColours } from "./colour.js";
-import { describe, listen, mac, typing, type Command, type Shortcut } from "./commands.js";
+import { describe, listen, mac, typed, typing, type Command, type Shortcut } from "./commands.js";
 import { edits, type Draw, type Restack } from "./edit.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
 import { menuOpen, openMenu, type Entry, type Item } from "./menu.js";
 import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./metrics.js";
 import { overlay } from "./overlay.js";
+import { css, type Paint } from "./paint.js";
 import { pinned, pins } from "./pins.js";
 import { platform, type Folder } from "./platform.js";
 import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE, onScreen } from "./raster.js";
 import { render } from "./render.js";
 import { create, type Renderer } from "./renderer.js";
+import { ACROSS, sampler } from "./sampler.js";
+import { PALETTE, PAPERS, styles } from "./style.js";
 import { loadFont, texts } from "./text.js";
 import { theme, type Scheme } from "./theme.js";
 import { toolbar, type Button } from "./toolbar.js";
@@ -69,6 +73,7 @@ const viewport = view(byId("viewport"), {
     shown.frame(camera, size);
     comments.frame(camera);
     editing.follow();
+    styleCard.frame();
     if (opened && renderer) {
       drawings.update(opened.board, renderer, camera, size);
       animated.update(opened.board, renderer, camera, size);
@@ -93,12 +98,18 @@ const editing = edits(viewport, shown, () => opened, {
   selectionChanged() {
     refreshBar();
     showComments();
+    styleCard.refresh();
   },
-  settled: refreshBar,
+  settled() {
+    refreshBar();
+    styleCard.refresh();
+  },
   snapping: () => snapping,
   drawing: () => drawTool(),
   erasing: () => tool === "eraser",
+  sampling: () => picker.sampling() !== undefined,
   drawn: () => useTool("select"),
+  styled: (kind, zoom) => look.dressed(kind, zoom),
 });
 const comments = pins(byId("viewport"), { choose: (id) => editing.choose(id), write: (id) => editing.write(id) });
 const appearance = theme(restyle);
@@ -184,6 +195,32 @@ const backdrop = (label: string, background: Background): Command => ({
   run: () => useBackground(background),
 });
 const palette = (label: string, to: Scheme): Command => ({ label, run: () => appearance.choose(to) });
+/** The palette's colour, or a sticky note's paper, at `at`. */
+const colour = (at: number): Command => ({
+  label: () => (styleCard.common().includes("paper") ? PAPERS[at]?.label : undefined) ?? PALETTE[at]!.label,
+  keys: [{ key: String(at + 1), code: `Digit${at + 1}` }],
+  unavailable() {
+    const can = styleCard.common();
+    if (can.includes("paper")) {
+      return PAPERS[at] ? undefined : `Sticky notes come in ${PAPERS.length} papers`;
+    }
+    return noneSelected() ?? (can.includes("colour") ? undefined : "Not everything selected takes a colour");
+  },
+  run: () =>
+    styleCard.set(styleCard.common().includes("paper") ? { paper: PAPERS[at]!.paper } : { colour: PALETTE[at]!.colour }),
+});
+const textStyle = (label: string, setting: "bold" | "italic" | "strike", shortcut: Shortcut): Command => ({
+  label,
+  keys: [shortcut],
+  unavailable: () => noneSelected() ?? (styleCard.common().includes(setting) ? undefined : "Not everything selected is text"),
+  run: () => styleCard.set({ [setting]: styleCard.value(setting) !== true }),
+});
+const resize = (label: string, larger: boolean, keys: Shortcut[]): Command => ({
+  label,
+  keys,
+  unavailable: () => noneSelected() ?? (styleCard.common().includes("size") ? undefined : "Not everything selected is text"),
+  run: () => styleCard.resize(larger),
+});
 const backspace: Shortcut = { key: "backspace" };
 const deleteKey: Shortcut = { key: "delete" };
 const shiftZ: Shortcut = { key: "z", command: true, shift: true };
@@ -421,6 +458,46 @@ const commands = {
       showMetrics(frameRate);
     },
   },
+  style: {
+    label: () => (styleCard.isOpen() ? "Hide style" : "Show style"),
+    keys: [{ key: "s", shift: true }],
+    unavailable: () =>
+      noneSelected() ?? (styleCard.common().length > 0 || styleCard.images() ? undefined : "Comments and groups have no style"),
+    run: () => (styleCard.isOpen() ? styleCard.close() : styleCard.open(true)),
+  },
+  colour1: colour(0),
+  colour2: colour(1),
+  colour3: colour(2),
+  colour4: colour(3),
+  colour5: colour(4),
+  colour6: colour(5),
+  bold: textStyle("Bold", "bold", { key: "b", command: true }),
+  italic: textStyle("Italic", "italic", { key: "i", command: true }),
+  strike: textStyle("Strikethrough", "strike", { key: "x", command: true, shift: true }),
+  // Where < and > sit apart from comma and period, on a key of their own, as on AZERTY.
+  larger: resize("Larger text", true, [
+    { key: ">", command: true, shift: true },
+    { key: ">", command: true },
+    { code: "Period", command: true, shift: true },
+  ]),
+  smaller: resize("Smaller text", false, [
+    { key: "<", command: true, shift: true },
+    { key: "<", command: true },
+    { code: "Comma", command: true, shift: true },
+  ]),
+  copyStyle: {
+    label: "Copy style",
+    keys: [{ key: "c", code: "KeyC", command: true, alt: true }],
+    unavailable: () =>
+      noneSelected() ?? (styleCard.common().length > 0 ? undefined : "Only arrows, lines, shapes, and text have a style"),
+    run: () => styleCard.copy(),
+  },
+  pasteStyle: {
+    label: "Paste style",
+    keys: [{ key: "v", code: "KeyV", command: true, alt: true }],
+    unavailable: () => noneSelected() ?? (styleCard.canPaste() ? undefined : "Copy a style first"),
+    run: () => styleCard.paste(),
+  },
   contextMenu: {
     label: "Show the context menu",
     keys: [{ key: "contextmenu" }, { key: "f10", shift: true }],
@@ -429,6 +506,14 @@ const commands = {
   },
 } satisfies Record<string, Command>;
 const leaveCompact: Command = { ...commands.compact, label: "Leave compact mode" };
+const colourCommands = [
+  commands.colour1,
+  commands.colour2,
+  commands.colour3,
+  commands.colour4,
+  commands.colour5,
+  commands.colour6,
+];
 
 const bar = toolbar(
   byId("toolbar"),
@@ -475,6 +560,47 @@ const bar = toolbar(
     views(),
   ],
 );
+const look = styles();
+const styleCard = card(
+  {
+    current: () => opened,
+    selection: () => editing.selection(),
+    box: () => editing.box(),
+    client: (point) => viewport.client(point),
+    zoom: () => viewport.zoom(),
+    busy,
+    apply: (work) => editing.apply(work),
+    pick: () => picker.start(false),
+    explain: (element, text) => bar.explain(element, text),
+    say: (message) => bar.say(message),
+  },
+  look,
+  {
+    colours: colourCommands,
+    bold: commands.bold,
+    italic: commands.italic,
+    strike: commands.strike,
+    flipHorizontally: commands.flipHorizontally,
+    flipVertically: commands.flipVertically,
+    open: commands.style,
+  },
+);
+const picker = sampler(
+  {
+    read: readBoard,
+    picked(colour) {
+      if (styleCard.common().includes("colour")) {
+        styleCard.set({ colour });
+      } else {
+        look.pick(colour);
+        bar.say(`Picked ${colour}, which the style card keeps`);
+      }
+      styleCard.refresh();
+    },
+    changed: refreshBar,
+  },
+  viewport.host,
+);
 refreshBar();
 if (platform.titleBar) {
   handle(byId("handle"), viewport.host, platform.titleBar.drag, leaveCompact);
@@ -489,6 +615,15 @@ addEventListener("keydown", (event) => {
   holdSpace(true);
 });
 addEventListener("keyup", (event) => event.key === " " && holdSpace(false));
+addEventListener("keydown", (event) => {
+  const plain = !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey;
+  if (typed(event) !== "s" || !plain || event.repeat || menuOpen() || busy() || typing(event.target) || noneShown()) {
+    return;
+  }
+  event.preventDefault();
+  picker.start(true);
+});
+addEventListener("keyup", (event) => typed(event) === "s" && picker.sampling() === "holding" && picker.end());
 addEventListener("blur", () => holdSpace(false));
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 animated.reduce(reducedMotion.matches);
@@ -697,11 +832,16 @@ function useBackground(background: Background): void {
 }
 
 /**
- * Esc lets go of the tool in use first, which leaves the selection to act on, then of the group
- * gone into, one level at a time, then of the selection.
+ * Esc lets go of a colour being picked first, then of the style card, then of the tool in use,
+ * which leaves the selection to act on, then of the group gone into, one level at a time, then
+ * of the selection.
  */
 function escape(): void {
-  if (tool !== "select") {
+  if (picker.sampling()) {
+    picker.end(true);
+  } else if (styleCard.isOpen()) {
+    styleCard.close();
+  } else if (tool !== "select") {
     useTool("select");
   } else if (!editing.up()) {
     editing.select([]);
@@ -756,12 +896,17 @@ function hint(): string {
   // As the menus name them.
   const [escapeKey, insideKey] = [commands.escape, commands.goInside].map(({ keys }) => describe(keys[0]!));
   const freeKey = mac ? "⌘" : "Ctrl";
+  const picking = picker.sampling();
+  if (picking !== undefined) {
+    return `${picking === "holding" ? "Let go of S" : "Click"} to pick the colour under the pointer · ${escapeKey} to cancel`;
+  }
   if (editing.writing() !== undefined) {
     return `${escapeKey} or click away to finish`;
   }
   if (editing.cropping() !== undefined) {
     return `Drag an edge or a corner to crop, or the inside to move the crop · ${insideKey} or click away to crop · ${escapeKey} to leave it as it was`;
   }
+  const styles = commands.style.unavailable() === undefined ? `${describe(commands.style.keys[0]!)} to style · ` : "";
   if (tool === "hand") {
     return `Drag to move around · ${escapeKey} to select again`;
   }
@@ -794,17 +939,17 @@ function hint(): string {
     return `Drag to move · double-click or ${insideKey} to go inside · right-click for more`;
   }
   if (editing.writable()) {
-    return `Drag to move · double-click or ${insideKey} to edit the text · right-click for more`;
+    return `Drag to move · double-click or ${insideKey} to edit the text · ${styles}right-click for more`;
   }
   if (editing.loneSegment()) {
-    return `Drag to move · drag an end to move it, holding ${freeKey} to keep it from sticking · right-click for more`;
+    return `Drag to move · drag an end to move it, holding ${freeKey} to keep it from sticking · ${styles}right-click for more`;
   }
   if (editing.selection().length > 0) {
     const crops = commands.crop.unavailable() === undefined ? `double-click or ${insideKey} to crop · ` : "";
     const keys = [commands.play, commands.sound]
       .filter((command) => command.unavailable() === undefined)
       .map((command) => `${describe(command.keys[0]!)} to ${command.label().toLowerCase()} · `);
-    return `Drag to move · corners scale · the circle rotates · ${crops}${keys.join("")}right-click for more`;
+    return `Drag to move · corners scale · the circle rotates · ${crops}${keys.join("")}${styles}right-click for more`;
   }
   return "Drop or paste images · scroll to move around · right-click for more";
 }
@@ -817,6 +962,7 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.ungroup,
         commands.goInside,
         commands.write,
+        styleMenu(),
         "separator",
         relevantSubmenu("Order", [commands.front, commands.forward, commands.backward, commands.back]),
         {
@@ -886,6 +1032,60 @@ function relevant(entries: Entry[]): Entry[] {
     }
   }
   return kept;
+}
+
+/** What sets the selection's style, as the card and the keys do, for when the card is out of reach. */
+function styleMenu(): Entry {
+  const can = new Set(styleCard.common());
+  const papers = can.has("paper");
+  const current = papers ? styleCard.value("paper") : styleCard.value("colour");
+  const choices: { value: string; paint: Paint }[] = papers
+    ? PAPERS.map(({ paper }) => ({ value: paper, paint: `paper-${paper}` }))
+    : PALETTE.map(({ colour }) => ({ value: colour, paint: colour }));
+  const colours: Entry[] =
+    papers || can.has("colour")
+      ? choices.map(({ value, paint }, at) => ({
+          ...colourCommands[at]!,
+          swatch: css(paint, viewport.host),
+          checked: current === value,
+        }))
+      : [];
+  const text: Entry[] = can.has("bold")
+    ? ([commands.bold, commands.italic, commands.strike] as const).map((command, at) => ({
+        ...command,
+        checked: styleCard.value((["bold", "italic", "strike"] as const)[at]!) === true,
+        toggle: true,
+      }))
+    : [];
+  const sizes: Entry[] = can.has("size") ? [commands.larger, commands.smaller] : [];
+  const sections = [[commands.style], colours, text, sizes, [commands.copyStyle, commands.pasteStyle]];
+  return submenu(
+    "Style",
+    sections.filter((section) => section.length > 0).flatMap((section, at) => (at > 0 ? ["separator", ...section] : section)),
+  );
+}
+
+/**
+ * The pixels around the device pixel under `at` as the board shows them, from the textures the
+ * window already holds.
+ */
+async function readBoard(at: { clientX: number; clientY: number }): Promise<ImageData | undefined> {
+  const camera = viewport.camera();
+  if (opened === undefined || renderer === undefined || camera === undefined) {
+    return undefined;
+  }
+  const origin = viewport.host.getBoundingClientRect();
+  const scale = camera.zoom * devicePixelRatio;
+  const half = Math.floor(ACROSS / 2);
+  const [x, y] = [at.clientX - origin.left, at.clientY - origin.top].map((offset) => Math.floor(offset * devicePixelRatio) - half);
+  return renderer.render({
+    area: { x: camera.x + x! / scale, y: camera.y + y! / scale, width: ACROSS / scale, height: ACROSS / scale },
+    size: { width: ACROSS, height: ACROSS },
+    items: placed(opened.board, lettering, editing.writing(), unplayable),
+    background: getComputedStyle(document.body).backgroundColor,
+    images: new Map(),
+    texts: new Map(),
+  });
 }
 
 /** Over the selection's centre, or the viewport's, as the keys point nowhere. */

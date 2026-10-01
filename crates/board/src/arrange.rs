@@ -282,7 +282,7 @@ fn shuffle<T>(items: &mut [T], seed: u32) {
 mod tests {
     use super::*;
     use crate::tests::{board, element, id};
-    use crate::{AssetId, Editor, Error, ImageEdits, Size, Text};
+    use crate::{AssetId, Colour, Editor, Error, ImageEdits, Size, Text};
 
     fn image(x: f64, y: f64, width: f64, height: f64) -> ElementKind {
         ElementKind::Image {
@@ -322,11 +322,9 @@ mod tests {
                 height: 20.0,
             },
             rotation: 0.0,
-            text: Text {
-                content: "Note".to_owned(),
-                font_size: 20.0,
-            },
+            text: Text::new("Note".to_owned(), 20.0),
             target: target.map(id),
+            colour: Colour::Ink,
         }
     }
 

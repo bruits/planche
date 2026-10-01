@@ -8,10 +8,10 @@
 // line, as drawn or moved, stick to the image, note, sticky note, or shape they land on, onto its
 // outline when near it, and follow it from then on. A note, a sticky note, a shape, or a comment
 // drawn, placed, moved, scaled, or turned whole onto an image, a note, a sticky note, or a shape
-// with text sticks to it and follows it too. While snapping, what moves, scales, or is drawn
-// lands on the grid's lines where near them otherwise. Holding ⌘, or Ctrl elsewhere than macOS,
-// keeps things from sticking and the grid from pulling, but for a move only once under way, as
-// pressing an element with it toggles the element instead. The eraser removes what a click would
+// filled or holding text sticks to it and follows it too. While snapping, what moves, scales, or
+// is drawn lands on the grid's lines where near them otherwise. Holding ⌘, or Ctrl elsewhere than
+// macOS, keeps things from sticking and the grid from pulling, but for a move only once under way,
+// as pressing an element with it toggles the element instead. The eraser removes what a click would
 // select, or all that a drag passes over but what it starts within, in one edit. Cropping shows an
 // image whole, what its crop leaves out dimmed, and its edges and corners drag the crop, or its
 // inside moves it, until Enter or a press elsewhere crops it, or Escape leaves it as it was.
@@ -69,8 +69,12 @@ export interface Hooks {
   drawing(): Draw | undefined;
   /** Whether a press erases, before it draws or selects. */
   erasing(): boolean;
+  /** Whether a press picks a colour, which leaves the board alone. */
+  sampling(): boolean;
   /** Once a press drew something, which it selects, or writes in. */
   drawn(): void;
+  /** What a press draws, in the style its tool draws in, at `zoom` CSS pixels per board unit. */
+  styled(kind: Kind, zoom: number): Kind;
 }
 
 type Segment = Extract<Kind, { type: "arrow" | "line" }>;
@@ -129,6 +133,8 @@ export interface Edits {
   aim(at: Point, on?: string): boolean;
   /** The selection's centre, `undefined` when nothing is selected. */
   centre(): Point | undefined;
+  /** Clockwise from its top-left, the box around the selection, `undefined` when it draws nothing. */
+  box(): Point[] | undefined;
   remove(): void;
   flip(horizontally: boolean): void;
   /** Clockwise around the selection's centre, as its handle turns it. */
@@ -189,7 +195,7 @@ export function edits(
   view: View,
   overlay: Overlay,
   current: () => Editing | undefined,
-  { changed, selectionChanged, settled, snapping, drawing, erasing, drawn }: Hooks,
+  { changed, selectionChanged, settled, snapping, drawing, erasing, sampling, drawn, styled }: Hooks,
 ): Edits {
   let selected = new Set<string>();
   let entered: string | undefined;
@@ -223,7 +229,7 @@ export function edits(
     press = undefined;
     resolve();
   };
-  const field = writer();
+  const field = writer(view.host);
   const pulled = (point: Point, zoom: number): Point =>
     pulling
       ? { x: point.x + (core.snapToGrid([point.x], zoom) ?? 0), y: point.y + (core.snapToGrid([point.y], zoom) ?? 0) }
@@ -367,7 +373,7 @@ export function edits(
     const editing = current();
     const at = view.at(event);
     const zoom = view.zoom();
-    if (press || !editing || !at || !zoom || event.button !== 0 || view.pans(event) || opensMenu(event)) {
+    if (press || !editing || !at || !zoom || event.button !== 0 || view.pans(event) || opensMenu(event) || sampling()) {
       return;
     }
     const { editor } = editing;
@@ -572,7 +578,7 @@ export function edits(
         press.ends = [start.at, end.at];
         // A note shows nothing until written in.
         overlay.marquee(shape === "note" ? rect(start.at, end.at) : undefined);
-        const kind = shaped(shape, start.at, end.at, FONT_SIZE / zoom);
+        const kind = styled(shaped(shape, start.at, end.at, FONT_SIZE / zoom), zoom);
         if (sticks) {
           const stuck = { ...kind, from_target: start.target, to_target: end.target };
           again(() => editor.add(id, entered, JSON.stringify(stuck)));
@@ -665,7 +671,7 @@ export function edits(
       const placing = !SEGMENTS.has(shape) && completed && zoom !== undefined;
       if (placing) {
         editor.beginGesture();
-        touched.push(...editor.add(id, entered, JSON.stringify(aligned(placed(shape, start, zoom), zoom))));
+        touched.push(...editor.add(id, entered, JSON.stringify(aligned(styled(placed(shape, start, zoom), zoom), zoom))));
         touched.push(...setDown(editor, [id]));
       }
       if (!writes) {
@@ -984,6 +990,10 @@ export function edits(
       }
       const corners = editing && selected.size > 0 ? box(editing.editor, [...selected]) : undefined;
       return corners && middle(corners);
+    },
+    box() {
+      const editing = current();
+      return editing && selected.size > 0 ? box(editing.editor, [...selected]) : undefined;
     },
     remove: () => run((editing, ids) => edit(editing, editing.editor.remove(ids))),
     flip: (horizontally) => run((editing, ids) => edit(editing, editing.editor.flip(ids, horizontally))),

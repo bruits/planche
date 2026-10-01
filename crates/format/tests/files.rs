@@ -4,8 +4,9 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use board::{
-    AssetHasher, AssetId, Background, Board, Editor, Element, ElementId, ElementKind, ImageEdits,
-    Point, Rect, Restack, Shape, Size, Text, ZIndex,
+    Align, AssetHasher, AssetId, Background, Board, Colour, Dash, Editor, Element, ElementId,
+    ElementKind, Fill, Heads, ImageEdits, Paper, Point, Rect, Restack, Shape, Size, Text, Weight,
+    ZIndex,
 };
 use format::{Error, Files, zip};
 
@@ -35,11 +36,9 @@ fn note(group: Option<ElementId>, text: &str) -> Element {
         kind: ElementKind::Note {
             frame: frame(200.0, 80.0),
             rotation: 0.0,
-            text: Text {
-                content: text.to_owned(),
-                font_size: 20.0,
-            },
+            text: Text::new(text.to_owned(), 20.0),
             target: None,
+            colour: Colour::Ink,
         },
     }
 }
@@ -91,11 +90,11 @@ fn sample() -> Board {
                     frame: frame(100.0, 100.0),
                     rotation: -12.5,
                     shape: Shape::Ellipse,
-                    text: Text {
-                        content: "Key light".to_owned(),
-                        font_size: 16.0,
-                    },
+                    text: Text::new("Key light".to_owned(), 16.0),
                     target: None,
+                    colour: Colour::Ink,
+                    weight: Weight::Medium,
+                    fill: Fill::Hollow,
                 },
             },
         ),
@@ -113,6 +112,10 @@ fn sample() -> Board {
                     },
                     from_target: Some(ELLIPSE),
                     to_target: Some(STICKY),
+                    colour: Colour::Ink,
+                    weight: Weight::Medium,
+                    dash: Dash::Solid,
+                    heads: Heads::End,
                 },
             },
         ),
@@ -124,11 +127,9 @@ fn sample() -> Board {
                 kind: ElementKind::Sticky {
                     frame: frame(160.0, 160.0),
                     rotation: 5.0,
-                    text: Text {
-                        content: "Try a warmer grade\nfor the dusk shots".to_owned(),
-                        font_size: 20.0,
-                    },
+                    text: Text::new("Try a warmer grade\nfor the dusk shots".to_owned(), 20.0),
                     target: None,
+                    paper: Paper::Yellow,
                 },
             },
         ),
@@ -142,6 +143,9 @@ fn sample() -> Board {
                     to: Point { x: 30.0, y: 5.0 },
                     from_target: None,
                     to_target: None,
+                    colour: Colour::Ink,
+                    weight: Weight::Medium,
+                    dash: Dash::Solid,
                 },
             },
         ),
@@ -166,11 +170,11 @@ fn sample() -> Board {
                     frame: frame(40.0, 40.0),
                     rotation: 0.0,
                     shape: Shape::Cross,
-                    text: Text {
-                        content: String::new(),
-                        font_size: 20.0,
-                    },
+                    text: Text::new(String::new(), 20.0),
                     target: None,
+                    colour: Colour::Ink,
+                    weight: Weight::Medium,
+                    fill: Fill::Hollow,
                 },
             },
         ),
@@ -341,6 +345,95 @@ fn an_unknown_background_is_refused() {
         format::read(&files),
         Err(Error::Json { path, .. }) if path == "board.json"
     ));
+}
+
+#[test]
+fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
+    let styled = |kind| Element {
+        group: None,
+        z: z("a0"),
+        kind,
+    };
+    let mut text = Text::new("Key light", 20.0);
+    text.bold = true;
+    text.align = Some(Align::Right);
+    let shape = ElementKind::Shape {
+        frame: frame(100.0, 50.0),
+        rotation: 0.0,
+        shape: Shape::Ellipse,
+        text,
+        target: None,
+        colour: Colour::Red,
+        weight: Weight::Thick,
+        fill: Fill::Tint,
+    };
+    let arrow = ElementKind::Arrow {
+        from: Point { x: 0.0, y: 0.0 },
+        to: Point { x: 10.0, y: 0.0 },
+        from_target: None,
+        to_target: None,
+        colour: Colour::Rgb([0xec, 0x83, 0x53]),
+        weight: Weight::Medium,
+        dash: Dash::Dashed,
+        heads: Heads::Both,
+    };
+    let sticky = ElementKind::Sticky {
+        frame: frame(160.0, 150.0),
+        rotation: 0.0,
+        text: Text::new("Try a warmer grade", 20.0),
+        target: None,
+        paper: Paper::Pink,
+    };
+    let board = Board {
+        elements: [(NOTE, shape), (ARROW, arrow), (STICKY, sticky)]
+            .into_iter()
+            .map(|(id, kind)| (id, styled(kind)))
+            .collect(),
+        ..Board::default()
+    };
+    let files = format::write(&board).unwrap();
+    let written = |id: ElementId| {
+        let bytes = &files[&format!("elements/{id}.json")];
+        serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["kind"].clone()
+    };
+    let shape = written(NOTE);
+    assert_eq!(shape["colour"], "red");
+    assert_eq!(shape["weight"], "thick");
+    assert_eq!(shape["fill"], "tint");
+    assert_eq!(
+        shape["text"],
+        serde_json::json!({
+            "content": "Key light",
+            "font_size": 20.0,
+            "bold": true,
+            "align": "right"
+        })
+    );
+    let arrow = written(ARROW);
+    assert_eq!(arrow["colour"], "#ec8353");
+    assert_eq!(arrow["dash"], "dashed");
+    assert_eq!(arrow["heads"], "both");
+    assert!(arrow.get("weight").is_none());
+    assert_eq!(written(STICKY)["paper"], "pink");
+    assert_eq!(format::read(&files).unwrap(), board);
+}
+
+#[test]
+fn a_colour_has_one_spelling() {
+    for colour in ["\"crimson\"", "\"#EC8353\"", "\"#ec835\"", "\"Red\""] {
+        let mut files = format::write(&sample()).unwrap();
+        let path = format!("elements/{NOTE}.json");
+        let note = String::from_utf8(files[&path].clone()).unwrap();
+        let note = note.replace(
+            "\"rotation\": 0.0,",
+            &format!("\"rotation\": 0.0,\n    \"colour\": {colour},"),
+        );
+        files.insert(path.clone(), note.into_bytes());
+        assert!(
+            matches!(format::read(&files), Err(Error::Json { path: at, .. }) if at == path),
+            "{colour}"
+        );
+    }
 }
 
 #[test]
@@ -525,11 +618,11 @@ fn equal_boards_write_the_same_bytes() {
         frame: zero,
         rotation: 0.0,
         shape: Shape::Rectangle,
-        text: Text {
-            content: String::new(),
-            font_size: 1.0,
-        },
+        text: Text::new(String::new(), 1.0),
         target: None,
+        colour: Colour::Ink,
+        weight: Weight::Medium,
+        fill: Fill::Hollow,
     };
     for (bits, kind) in [(20, image), (21, shape)] {
         let element = Element {

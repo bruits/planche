@@ -221,11 +221,15 @@ export function refresh({ editor, board }: Opened, touched: string[]): void {
   board.background = core.background(editor);
 }
 
-/** The longest an arrow's head is, in board units, and the most of its arrow it takes. */
-const HEAD_LENGTH = 16;
+/** The longest an arrow's head is, in board units, then in widths of its stroke, and the most of its arrow it takes. */
+const HEAD_LENGTH = 10;
+const HEAD_WIDTHS = 3;
 const HEAD_SHARE = 1 / 3;
 /** Between each side of an arrow's head and its line, in radians. */
 const HEAD_ANGLE = Math.PI / 6;
+/** A dash and the gap after it, in widths of its stroke. */
+const DASH = 7;
+const TINT = 0.18;
 
 /**
  * What draws, back to front, but the text of `hidden`, which is being written. Images of the
@@ -247,21 +251,23 @@ export function placed(
         const { frame, rotation } = kind;
         return unplayable.has(kind.asset)
           ? [
-              { kind: "rectangle", frame, rotation, width },
-              { kind: "cross", frame, rotation, width },
+              { kind: "rectangle", frame, rotation, width, paint: "ink" },
+              { kind: "cross", frame, rotation, width, paint: "ink" },
             ]
           : [image(kind)];
       }
       case "arrow":
-        return arrow(kind.from, kind.to, width);
+        return arrow(kind);
       case "line":
-        return [{ kind: "line", from: kind.from, to: kind.to, width }];
+        return [line(kind)];
       case "note":
         return written;
-      case "sticky":
-        return [{ kind: "fill", frame: kind.frame, rotation: kind.rotation, paint: "sticky" }, ...written];
+      case "sticky": {
+        const paper = { kind: "fill", shape: "rectangle", frame: kind.frame, rotation: kind.rotation, opacity: 1 } as const;
+        return [{ ...paper, paint: `paper-${kind.paper ?? "yellow"}` }, ...written];
+      }
       case "shape":
-        return [{ kind: kind.shape, frame: kind.frame, rotation: kind.rotation, width }, ...written];
+        return [...shape(kind), ...written];
       case "comment":
       case "group":
         return [];
@@ -286,21 +292,45 @@ function image(kind: Extract<Kind, { type: "image" }>): Placed {
   return { kind: "image", asset: kind.asset, frame: kind.frame, rotation: kind.rotation, texture, greyscale };
 }
 
-/** Its line, and the two strokes of an open head at `to`. */
-function arrow(from: Point, to: Point, width: number): Placed[] {
-  const line = { kind: "line" as const, from, to, width };
+function line(kind: Extract<Kind, { type: "arrow" | "line" }>): Extract<Placed, { kind: "line" }> {
+  const width = core.strokeWidth(kind.weight);
+  const dash = kind.dash === "dashed" ? DASH * width : 0;
+  return { kind: "line", from: kind.from, to: kind.to, width, paint: kind.colour ?? "ink", dash };
+}
+
+/** Its line, and the two solid strokes of an open head at each end that draws one. */
+function arrow(kind: Extract<Kind, { type: "arrow" }>): Placed[] {
+  const drawn = line(kind);
+  const { from, to, width } = drawn;
   const span = Math.hypot(to.x - from.x, to.y - from.y);
+  const heads = kind.heads ?? "end";
   if (span === 0) {
-    return [line];
+    return [drawn];
   }
-  const head = Math.min(HEAD_LENGTH, span * HEAD_SHARE);
-  const back = Math.atan2(from.y - to.y, from.x - to.x);
-  const side = (angle: number) => ({
-    ...line,
-    from: to,
-    to: { x: to.x + Math.cos(back + angle) * head, y: to.y + Math.sin(back + angle) * head },
-  });
-  return [line, side(HEAD_ANGLE), side(-HEAD_ANGLE)];
+  const length = Math.min(HEAD_LENGTH + HEAD_WIDTHS * width, span * HEAD_SHARE);
+  const head = (tip: Point, tail: Point): Placed[] => {
+    const back = Math.atan2(tail.y - tip.y, tail.x - tip.x);
+    const side = (angle: number) => ({
+      ...drawn,
+      from: tip,
+      to: { x: tip.x + Math.cos(back + angle) * length, y: tip.y + Math.sin(back + angle) * length },
+      dash: 0,
+    });
+    return [side(HEAD_ANGLE), side(-HEAD_ANGLE)];
+  };
+  return [drawn, ...head(to, from), ...(heads === "both" ? head(from, to) : [])];
+}
+
+function shape(kind: Extract<Kind, { type: "shape" }>): Placed[] {
+  const { frame, rotation } = kind;
+  const paint = kind.colour ?? "ink";
+  const outline: Placed = { kind: kind.shape, frame, rotation, width: core.strokeWidth(kind.weight), paint };
+  const fill = kind.fill ?? "hollow";
+  if (kind.shape === "cross" || fill === "hollow") {
+    return [outline];
+  }
+  const opacity = fill === "tint" ? TINT : 1;
+  return [{ kind: "fill", shape: kind.shape, frame, rotation, paint, opacity }, outline];
 }
 
 /** What the elements draw over, with the points their comments are pinned at, `undefined` when nothing. */

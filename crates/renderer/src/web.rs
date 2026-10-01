@@ -90,12 +90,15 @@ struct Out {
     @location(2) radius: f32,
     @location(3) shape: f32,
     @location(4) colour: vec3f,
+    @location(5) dash: f32,
+    @location(6) opacity: f32,
 };
 
-/// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, 1 or 2 for the outline of a
-/// rectangle or an ellipse in the frame `geometry`, turned by `degrees`, 3 fills that
-/// rectangle, and 4 draws its diagonals. `width` is in board units, but never under a device
-/// pixel.
+/// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, dashed every `degrees` board
+/// units unless 0, 1 or 2 for the outline of a rectangle or an ellipse in the frame `geometry`,
+/// turned by `degrees`, 3 or 5 fills that rectangle or that ellipse, then `width` being its
+/// opacity, and 4 draws its diagonals. `width` is otherwise in board units, but never under a
+/// device pixel.
 @vertex fn vs(
     @builtin(vertex_index) index: u32,
     @location(0) shape: f32,
@@ -105,13 +108,18 @@ struct Out {
     @location(4) colour: vec3f,
 ) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
-    let radius = max(width * camera.zoom, 1.0) * 0.5;
+    let fills = (shape > 2.5 && shape < 3.5) || shape > 4.5;
+    let radius = max(select(width, 0.0, fills) * camera.zoom, 1.0) * 0.5;
     let margin = radius + 1.0;
     var out: Out;
     out.radius = radius;
     out.shape = shape;
     out.colour = colour;
+    out.opacity = select(1.0, width, fills);
+    out.dash = 0.0;
     if shape < 0.5 {
+        // Never so short that the caps close the gaps.
+        out.dash = select(0.0, max(degrees * camera.zoom, radius * 6.0), degrees > 0.0);
         let start = (geometry.xy - camera.origin) * camera.zoom;
         let end = (geometry.zw - camera.origin) * camera.zoom;
         let span = distance(start, end);
@@ -136,31 +144,45 @@ fn box(local: vec2f, half: vec2f) -> f32 {
     return length(max(outside, vec2f(0.0))) + min(max(outside.x, outside.y), 0.0);
 }
 
+/// Negative within the ellipse, as the core measures it, bounded where a thin ellipse would
+/// otherwise show a gap or fat tips.
+fn ellipse(local: vec2f, half: vec2f) -> f32 {
+    let axes = max(half, vec2f(0.5));
+    let point = abs(local);
+    let scaled = length(point / axes);
+    let gradient = length(point / (axes * axes));
+    let estimate = select(1e30, abs(scaled * (scaled - 1.0) / gradient), gradient > 0.0);
+    let unit = point / axes;
+    let straight = axes * sqrt(max(1.0 - unit.yx * unit.yx, vec2f(0.0))) - point;
+    let frame = length(max(point - axes, vec2f(0.0)));
+    return select(max(estimate, frame), -min(estimate, min(straight.x, straight.y)), scaled < 1.0);
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
     var away: f32;
     if in.shape < 0.5 {
-        away = length(vec2f(in.local.x - clamp(in.local.x, 0.0, in.size.x), in.local.y));
+        var nearest = clamp(in.local.x, 0.0, in.size.x);
+        if in.dash > 0.0 {
+            // Half of each period draws, and its round caps reach into the other half.
+            let start = floor(in.local.x / in.dash) * in.dash;
+            let within = clamp(in.local.x, start, start + in.dash * 0.5);
+            let next = start + in.dash;
+            nearest = clamp(select(within, next, next - in.local.x < abs(in.local.x - within)), 0.0, in.size.x);
+        }
+        away = length(vec2f(in.local.x - nearest, in.local.y));
     } else if in.shape < 1.5 {
         away = abs(box(in.local, in.size));
-    } else if in.shape > 3.5 {
+    } else if in.shape < 2.5 {
+        away = abs(ellipse(in.local, in.size));
+    } else if in.shape < 3.5 {
+        return vec4f(in.colour, clamp(0.5 - box(in.local, in.size), 0.0, 1.0) * in.opacity);
+    } else if in.shape < 4.5 {
         // Folded into one quarter, both diagonals run from the centre to the corner.
         let point = abs(in.local);
         let along = clamp(dot(point, in.size) / max(dot(in.size, in.size), 1e-6), 0.0, 1.0);
         away = length(point - in.size * along);
-    } else if in.shape > 2.5 {
-        return vec4f(in.colour, clamp(0.5 - box(in.local, in.size), 0.0, 1.0));
     } else {
-        // As the core measures it, bounded where a thin ellipse would otherwise show a gap or
-        // fat tips.
-        let axes = max(in.size, vec2f(0.5));
-        let point = abs(in.local);
-        let scaled = length(point / axes);
-        let gradient = length(point / (axes * axes));
-        let estimate = select(1e30, abs(scaled * (scaled - 1.0) / gradient), gradient > 0.0);
-        let unit = point / axes;
-        let straight = axes * sqrt(max(1.0 - unit.yx * unit.yx, vec2f(0.0))) - point;
-        let frame = length(max(point - axes, vec2f(0.0)));
-        away = select(max(estimate, frame), min(estimate, min(straight.x, straight.y)), scaled < 1.0);
+        return vec4f(in.colour, clamp(0.5 - ellipse(in.local, in.size), 0.0, 1.0) * in.opacity);
     }
     return vec4f(in.colour, clamp(in.radius - away + 0.5, 0.0, 1.0));
 }

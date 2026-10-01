@@ -2,18 +2,13 @@
 
 import type { Camera } from "./camera.js";
 import { gridLevel, type Background, type Bytes, type Point, type Rect, type Size } from "./core.js";
+import { paints, reader, type Paint, type Paints } from "./paint.js";
 import start, { Animation, create as createWgpu, type Readback } from "./wasm/renderer.js";
 
 /**
- * A colour of the theme, as its host's style gives it: the ink is its text colour, which forced
- * colours override too, and the others are its `--sticky` and `--sticky-ink` properties.
- */
-export type Paint = "ink" | "sticky" | "sticky-ink";
-
-/**
- * An image, as it shows its asset, a text from its texture, a stroke in the ink, or a filled
- * rectangle. Rotations are clockwise, in degrees, around the frame's centre, and stroke widths in
- * board units.
+ * An image, as it shows its asset, a text from its texture, a stroke, or a filled rectangle or
+ * ellipse, with `opacity` from 0 to 1. Rotations are clockwise, in degrees, around the frame's
+ * centre, and stroke widths and a line's `dash`, a dash and its gap, in board units.
  */
 export type Placed =
   | {
@@ -26,9 +21,9 @@ export type Placed =
       greyscale: boolean;
     }
   | { kind: "text"; id: string; frame: Rect; rotation: number; paint: Paint }
-  | { kind: "line"; from: Point; to: Point; width: number }
-  | { kind: "rectangle" | "ellipse" | "cross"; frame: Rect; rotation: number; width: number }
-  | { kind: "fill"; frame: Rect; rotation: number; paint: Paint };
+  | { kind: "line"; from: Point; to: Point; width: number; paint: Paint; dash?: number }
+  | { kind: "rectangle" | "ellipse" | "cross"; frame: Rect; rotation: number; width: number; paint: Paint }
+  | { kind: "fill"; shape: "rectangle" | "ellipse"; frame: Rect; rotation: number; paint: Paint; opacity: number };
 
 /** An animated image, whose frames it draws onto its asset's texture. */
 export interface Playing {
@@ -97,39 +92,12 @@ const STRIDE = 12;
 /** As the renderer tells its items apart. */
 const KINDS = { image: 0, stroke: 1, text: 2 };
 /** As the renderer tells its strokes apart. */
-const SHAPES = { line: 0, rectangle: 1, ellipse: 2, fill: 3, cross: 4 };
+const SHAPES = { line: 0, rectangle: 1, ellipse: 2, fill: 3, cross: 4, ellipseFill: 5 };
 /** How wide a line of the grid is, or a dot across, in CSS pixels, and how much of the ink it takes. */
 const GRID = {
   grid: { width: 1, alpha: 0.1 },
   dots: { width: 2, alpha: 0.25 },
 };
-
-type Paints = Record<Paint, number[]>;
-
-/**
- * Straight red, green, and blue from 0 to 1. Drawn to a pixel and read back, as a computed colour
- * may be in any colour space.
- */
-function paints(host: HTMLElement): Paints {
-  const read = reader();
-  const style = getComputedStyle(host);
-  return {
-    ink: read(style.color),
-    sticky: read(style.getPropertyValue("--sticky")),
-    "sticky-ink": read(style.getPropertyValue("--sticky-ink")),
-  };
-}
-
-function reader(): (colour: string) => number[] {
-  const canvas = Object.assign(document.createElement("canvas"), { width: 1, height: 1 });
-  const context = canvas.getContext("2d", { willReadFrequently: true })!;
-  return (colour) => {
-    context.clearRect(0, 0, 1, 1);
-    context.fillStyle = colour;
-    context.fillRect(0, 0, 1, 1);
-    return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)].map((channel) => channel / 255);
-  };
-}
 
 function gridStrength(host: HTMLElement): number {
   return Number(getComputedStyle(host).getPropertyValue("--grid-strength")) || 1;
@@ -241,7 +209,7 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
     },
     draw(camera) {
       const { x, y, zoom } = camera;
-      renderer.draw(x, y, zoom * devicePixelRatio, items ?? pack(), grid(background, camera, painted.ink, strength, devicePixelRatio));
+      renderer.draw(x, y, zoom * devicePixelRatio, items ?? pack(), grid(background, camera, painted("ink"), strength, devicePixelRatio));
     },
     async render({ area, size: picture, items: shown, background: behind, images: own, texts: ownTexts }) {
       const staged = new Map<string, number>();
@@ -256,7 +224,7 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
         const view = Float32Array.of(area.x, area.y, zoom, picture.width, picture.height, ...reader()(behind));
         const camera = { x: area.x, y: area.y, zoom };
         const lookup = [new Map([...images, ...staged]), new Map([...texts, ...stagedTexts])] as const;
-        readback = renderer.render(view, packed(shown, lookup[0], lookup[1], painted), grid(background, camera, painted.ink, strength, 1));
+        readback = renderer.render(view, packed(shown, lookup[0], lookup[1], painted), grid(background, camera, painted("ink"), strength, 1));
       } finally {
         [...staged.values(), ...stagedTexts.values()].forEach((texture) => renderer.release(texture));
       }
@@ -333,21 +301,22 @@ function floats(item: Placed, texture: number, paints: Paints): number[] {
     case "text": {
       const { frame } = item;
       const quad = [frame.x, frame.y, frame.width, frame.height, item.rotation];
-      return [KINDS.text, texture, ...quad, ...paints[item.paint], 0, 0];
+      return [KINDS.text, texture, ...quad, ...paints(item.paint), 0, 0];
     }
     case "line": {
       const { from, to } = item;
-      return [KINDS.stroke, -1, SHAPES.line, from.x, from.y, to.x, to.y, 0, item.width, ...paints.ink];
+      const line = [from.x, from.y, to.x, to.y, item.dash ?? 0, item.width];
+      return [KINDS.stroke, -1, SHAPES.line, ...line, ...paints(item.paint)];
     }
     case "fill": {
       const { frame } = item;
-      const fill = [frame.x, frame.y, frame.width, frame.height, item.rotation, 0];
-      return [KINDS.stroke, -1, SHAPES.fill, ...fill, ...paints[item.paint]];
+      const fill = [frame.x, frame.y, frame.width, frame.height, item.rotation, item.opacity];
+      return [KINDS.stroke, -1, item.shape === "ellipse" ? SHAPES.ellipseFill : SHAPES.fill, ...fill, ...paints(item.paint)];
     }
     default: {
       const { frame } = item;
       const outline = [frame.x, frame.y, frame.width, frame.height, item.rotation, item.width];
-      return [KINDS.stroke, -1, SHAPES[item.kind], ...outline, ...paints.ink];
+      return [KINDS.stroke, -1, SHAPES[item.kind], ...outline, ...paints(item.paint)];
     }
   }
 }
