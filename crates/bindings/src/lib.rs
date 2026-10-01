@@ -239,6 +239,32 @@ impl Editor {
         hit.as_ref().map(ElementId::to_string)
     }
 
+    /// Every element that draws within `tolerance` of the way from one point to another, under
+    /// others too, from back to front.
+    #[wasm_bindgen(js_name = hitAlong)]
+    pub fn hit_along(
+        &self,
+        from_x: f64,
+        from_y: f64,
+        to_x: f64,
+        to_y: f64,
+        tolerance: f64,
+    ) -> Vec<String> {
+        let (from, to) = (
+            Point {
+                x: from_x,
+                y: from_y,
+            },
+            Point { x: to_x, y: to_y },
+        );
+        strings(self.0.board().hit_along(from, to, tolerance))
+    }
+
+    /// Every element whose area holds a point, besides its outline, from back to front.
+    pub fn covering(&self, x: f64, y: f64) -> Vec<String> {
+        strings(self.0.board().covering(Point { x, y }))
+    }
+
     /// Where an arrow's or a line's end let go at a point sticks, as JSON: the element it
     /// sticks to, and where, onto its outline when within `tolerance` of it. `undefined` when
     /// nothing there takes ends.

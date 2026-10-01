@@ -1418,6 +1418,34 @@ mod tests {
     }
 
     #[test]
+    fn removals_in_one_gesture_undo_as_one_or_rewind_to_nothing() {
+        let mut editor = editor();
+        editor
+            .update(id(5), stuck((5.0, 5.0), Some(3), (25.0, 5.0), Some(4)))
+            .unwrap();
+        let before = editor.board().clone();
+        let remove_one_by_one = |editor: &mut Editor| {
+            editor.begin_gesture();
+            for element in [2, 3, 4] {
+                editor.remove(&[id(element)]).unwrap();
+            }
+        };
+
+        remove_one_by_one(&mut editor);
+        editor.end_gesture();
+        assert_eq!(order(&editor), ids([5]));
+        assert_sound(&editor);
+        assert_eq!(editor.undo(), ids([1, 2, 3, 4, 5]));
+        assert_eq!(editor.board(), &before);
+
+        remove_one_by_one(&mut editor);
+        assert_eq!(editor.rewind_gesture(), ids([1, 2, 3, 4, 5]));
+        editor.end_gesture();
+        assert_eq!(editor.board(), &before);
+        assert_eq!(editor.redo(), ids([1, 2, 3, 4, 5]));
+    }
+
+    #[test]
     fn a_gesture_cannot_be_undone_halfway() {
         let mut editor = editor();
         editor.translate(&[id(5)], 1.0, 0.0).unwrap();

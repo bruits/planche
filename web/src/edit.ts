@@ -11,7 +11,8 @@
 // with text sticks to it and follows it too. While snapping, what moves, scales, or is drawn
 // lands on the grid's lines where near them otherwise. Holding ⌘, or Ctrl elsewhere than macOS,
 // keeps things from sticking and the grid from pulling, but for a move only once under way, as
-// pressing an element with it toggles the element instead.
+// pressing an element with it toggles the element instead. The eraser removes what a click would
+// select, or all that a drag passes over but what it starts within, in one edit.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
@@ -64,6 +65,8 @@ export interface Hooks {
   snapping(): boolean;
   /** What a press draws, `undefined` when it selects. */
   drawing(): Draw | undefined;
+  /** Whether a press erases, before it draws or selects. */
+  erasing(): boolean;
   /** Once a press drew something, which it selects, or writes in. */
   drawn(): void;
 }
@@ -132,13 +135,28 @@ type Press =
   | { kind: "rotate"; pointer: number; pivot: Point; from: number }
   /** `ends` where it was last drawn from and to, once dragging. */
   | { kind: "draw"; pointer: number; start: Point; ends?: [Point, Point]; shape: Draw; id: string; dragging: boolean }
-  | { kind: "end"; pointer: number; start: Point; dragging: boolean; id: string; segment: Segment; end: "from" | "to" };
+  | { kind: "end"; pointer: number; start: Point; dragging: boolean; id: string; segment: Segment; end: "from" | "to" }
+  /**
+   * `within` what a drag starts within, which it leaves with the groups holding it, whatever the
+   * level. `selection` and `entered` as they were, which a lost press gets back with what it erased.
+   */
+  | {
+      kind: "erase";
+      pointer: number;
+      start: Point;
+      last: Point;
+      dragging: boolean;
+      clicked?: string;
+      within: string[];
+      selection: Set<string>;
+      entered?: string;
+    };
 
 export function edits(
   view: View,
   overlay: Overlay,
   current: () => Editing | undefined,
-  { changed, selectionChanged, settled, snapping, drawing, drawn }: Hooks,
+  { changed, selectionChanged, settled, snapping, drawing, erasing, drawn }: Hooks,
 ): Edits {
   let selected = new Set<string>();
   let entered: string | undefined;
@@ -232,6 +250,38 @@ export function edits(
     }
     selected = new Set(present.flatMap((id) => level(editor, id) ?? []));
   };
+  /** As a click would select it, but outside the group gone into without leaving it. */
+  const erasable = (editor: Editor, id: string) => level(editor, id) ?? editor.topLevel(id);
+  const erase = (editing: Editing, press: Extract<Press, { kind: "erase" }>, at: Point, pins: string[], zoom: number) => {
+    const { editor, board } = editing;
+    const { last, within } = press;
+    const hits = [...editor.hitAlong(last.x, last.y, at.x, at.y, TOLERANCE / zoom), ...pins];
+    const holds = (id: string) => within.some((kept) => among(board, kept, new Set([id])));
+    const erased = new Set(hits.flatMap((id) => erasable(editor, id) ?? []).filter((id) => !holds(id)));
+    if (erased.size > 0) {
+      edit(editing, editor.remove([...erased]));
+    }
+    press.last = at;
+  };
+  /** The comments whose pins lie on the way on screen, which the pointer's capture hides from its events. */
+  const pinsAlong = (from: Point, to: { clientX: number; clientY: number }) => {
+    const start = view.client(from);
+    if (!start) {
+      return [];
+    }
+    const [dx, dy] = [to.clientX - start.clientX, to.clientY - start.clientY];
+    // No more than a way across the window takes, however far the view moved meanwhile.
+    const steps = Math.min(Math.ceil(Math.hypot(dx, dy) / TOLERANCE), Math.ceil((innerWidth + innerHeight) / TOLERANCE));
+    const pins = new Set<string>();
+    for (let step = 0; step <= steps; step++) {
+      const along = steps === 0 ? 0 : step / steps;
+      const pin = pinned(document.elementFromPoint(start.clientX + dx * along, start.clientY + dy * along));
+      if (pin !== undefined) {
+        pins.add(pin);
+      }
+    }
+    return [...pins];
+  };
   /** Undoing and redoing select what they touch, and nothing touched keeps the selection. */
   const edit = (editing: Editing, touched: string[], reselect = false) => {
     const { board } = editing;
@@ -268,6 +318,23 @@ export function edits(
     const pointer = event.pointerId;
     pulling = snapping() && !freed(event);
     sticking = !freed(event);
+    if (erasing()) {
+      const hit = pressedPin ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
+      press = {
+        kind: "erase",
+        pointer,
+        start: at,
+        last: at,
+        dragging: false,
+        clicked: hit === undefined ? undefined : erasable(editor, hit),
+        within: editor.covering(at.x, at.y),
+        selection: new Set(selected),
+        entered,
+      };
+      editor.beginGesture();
+      view.host.setPointerCapture(pointer);
+      return;
+    }
     const shape = drawing();
     if (shape) {
       press = { kind: "draw", pointer, start: at, shape, id: newId(), dragging: false };
@@ -336,6 +403,13 @@ export function edits(
     const at = view.at(event);
     const zoom = view.zoom();
     if (!press || event.pointerId !== press.pointer || !editing || !at || !zoom) {
+      return;
+    }
+    if (press.kind === "erase") {
+      press.dragging ||= distance(at, press.start) * zoom >= DRAG;
+      if (press.dragging) {
+        erase(editing, press, at, pinsAlong(press.last, event), zoom);
+      }
       return;
     }
     const { editor } = editing;
@@ -454,6 +528,16 @@ export function edits(
       overlay.marquee(undefined);
     } else if (press.kind === "draw") {
       finishDrawing(press, completed);
+    } else if (press.kind === "erase") {
+      const editing = current();
+      if (editing && !completed) {
+        selected = press.selection;
+        entered = press.entered;
+        edit(editing, editing.editor.rewindGesture());
+      } else if (editing && !press.dragging && press.clicked !== undefined) {
+        edit(editing, editing.editor.remove([press.clicked]));
+      }
+      editing?.editor.endGesture();
     } else if (press.kind !== "move" || press.dragging) {
       current()?.editor.endGesture();
     } else if (press.clicked !== undefined) {

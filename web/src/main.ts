@@ -74,6 +74,7 @@ const editing = edits(viewport, shown, () => opened, {
   settled: refreshBar,
   snapping: () => snapping,
   drawing: () => drawTool(),
+  erasing: () => tool === "eraser",
   drawn: () => useTool("select"),
 });
 const comments = pins(byId("viewport"), { choose: (id) => editing.choose(id), write: (id) => editing.write(id) });
@@ -88,7 +89,7 @@ let unsaved = false;
 let loading = true;
 /** On the desktop, a second export to the same file would take over the first one's draft. */
 let exporting = false;
-let tool: "select" | "hand" | Draw = "select";
+let tool: "select" | "hand" | "eraser" | Draw = "select";
 /** Left out of the board, it starts as the board's background suggests. */
 let snapping = false;
 let spaceHeld = false;
@@ -126,6 +127,7 @@ const ctrlY: Shortcut = { key: "y", ctrl: true };
 const commands = {
   select: { label: "Select", keys: [{ key: "v" }], run: () => useTool("select") },
   hand: { label: "Hand", keys: [{ key: "h" }], run: () => useTool("hand") },
+  eraser: { label: "Eraser", keys: [{ key: "e" }], unavailable: noneShown, run: () => useTool("eraser") },
   arrow: { label: "Arrow", keys: [{ key: "a" }], unavailable: noneShown, run: () => useTool("arrow") },
   line: { label: "Line", keys: [{ key: "l" }], unavailable: noneShown, run: () => useTool("line") },
   rectangle: { label: "Rectangle", keys: [{ key: "r" }], unavailable: noneShown, run: () => useTool("rectangle") },
@@ -287,6 +289,7 @@ const bar = toolbar(
     [
       { command: commands.select, icon: "pointer", pressed: () => tool === "select" },
       { command: commands.hand, icon: "hand", pressed: () => tool === "hand" },
+      { command: commands.eraser, icon: "eraser", pressed: () => tool === "eraser" },
     ],
     [
       {
@@ -383,13 +386,14 @@ function steady(command: Command): Command {
 }
 
 function drawTool(): Draw | undefined {
-  return tool === "select" || tool === "hand" ? undefined : tool;
+  return tool === "select" || tool === "hand" || tool === "eraser" ? undefined : tool;
 }
 
 function useTool(next: typeof tool): void {
   tool = next;
   viewport.hand(tool === "hand" || spaceHeld);
   viewport.host.classList.toggle("drawing", drawTool() !== undefined);
+  viewport.host.classList.toggle("erasing", tool === "eraser");
   refreshBar();
 }
 
@@ -451,6 +455,9 @@ function hint(): string {
   }
   if (spaceHeld) {
     return "Drag to move around";
+  }
+  if (tool === "eraser") {
+    return `Click or drag over what to erase · a drag spares the image or note it starts on · ${escapeKey} to select again`;
   }
   if (tool === "arrow") {
     return `Drag from where the arrow starts to where it points · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;

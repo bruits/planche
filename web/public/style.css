@@ -70,6 +70,14 @@ body {
   cursor: crosshair;
 }
 
+/* About as wide as the eraser reaches, and white to show over any image. */
+#viewport.erasing {
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Ccircle cx='8' cy='8' r='5' fill='white' stroke='black' stroke-width='1.5'/%3E%3C/svg%3E")
+      8 8,
+    crosshair;
+}
+
 #viewport.hand {
   cursor: grab;
 }

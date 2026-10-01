@@ -6,6 +6,9 @@ use std::f64::consts::{FRAC_1_SQRT_2, TAU};
 
 use crate::{Board, ElementId, ElementKind, Point, Rect, STROKE_WIDTH, Shape};
 
+/// The most points [`Board::hit_along`] tries, so that however long the way, it stays quick.
+const MOST_TRIES: f64 = 4096.0;
+
 impl Board {
     /// The topmost element that draws at `point`, or within `tolerance` of it. A group or a
     /// comment covers nothing on the board, so it is never the one hit, and a shape without text
@@ -15,6 +18,54 @@ impl Board {
             .into_iter()
             .rev()
             .find(|id| hits(&self.elements[id].kind, point, tolerance))
+    }
+
+    /// Every element that [`Board::hit`] would find anywhere on the way from `from` to `to`,
+    /// under others too, from back to front. The way is tried every `tolerance`, so that it
+    /// misses nothing it passes over, or at most [`MOST_TRIES`] times, spread evenly along it.
+    pub fn hit_along(&self, from: Point, to: Point, tolerance: f64) -> Vec<ElementId> {
+        // With no tolerance, only its ends.
+        let steps = (apart(from, to) / tolerance).ceil();
+        let steps = if steps.is_finite() {
+            steps.clamp(1.0, MOST_TRIES)
+        } else {
+            1.0
+        };
+        let points: Vec<Point> = (0..=steps as usize)
+            .map(|step| {
+                let along = step as f64 / steps;
+                Point {
+                    x: from.x + (to.x - from.x) * along,
+                    y: from.y + (to.y - from.y) * along,
+                }
+            })
+            .collect();
+        // What `hits` finds lies within reach of the frame or the segment, and a whole stroke
+        // keeps rounding at the edge from dropping it.
+        let reach = tolerance + STROKE_WIDTH;
+        let around = Rect {
+            x: from.x.min(to.x) - reach,
+            y: from.y.min(to.y) - reach,
+            width: (to.x - from.x).abs() + 2.0 * reach,
+            height: (to.y - from.y).abs() + 2.0 * reach,
+        };
+        let around = corners(&around, 0.0);
+        self.draw_order()
+            .into_iter()
+            .filter(|id| {
+                let kind = &self.elements[id].kind;
+                shape(kind).is_some_and(|shape| overlap(&shape, &around))
+                    && points.iter().any(|point| hits(kind, *point, tolerance))
+            })
+            .collect()
+    }
+
+    /// Every element whose area holds `point`, besides its outline, from back to front.
+    pub fn covering(&self, point: Point) -> Vec<ElementId> {
+        self.draw_order()
+            .into_iter()
+            .filter(|id| covers(&self.elements[id].kind, point))
+            .collect()
     }
 
     /// Every element that draws something within `area`, from back to front.
@@ -632,6 +683,101 @@ mod tests {
         assert_eq!(board.hit(point(7.0, 5.0), 0.0), Some(id(3)));
         assert_eq!(board.hit(point(2.0, 5.0), 0.0), Some(id(1)));
         assert_eq!(board.hit(point(17.0, 5.0), 0.0), None);
+    }
+
+    #[test]
+    fn a_way_hits_everything_it_passes_over_even_under_others() {
+        let board = board([
+            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
+            (2, element(None, "a1", image(5.0, 0.0, 10.0, 10.0, 0.0))),
+            (3, element(None, "a2", image(0.0, 50.0, 10.0, 10.0, 0.0))),
+            (4, element(None, "a3", image(40.0, 0.0, 10.0, 10.0, 0.0))),
+        ]);
+        let way = board.hit_along(point(2.0, 5.0), point(45.0, 5.0), 2.0);
+        assert_eq!(way, [id(1), id(2), id(4)]);
+    }
+
+    #[test]
+    fn a_way_misses_nothing_narrow_between_its_tries() {
+        for tenth in 1..1000 {
+            let x = f64::from(tenth) / 10.0;
+            let board = board([(1, element(None, "a0", image(x, -10.0, 0.1, 20.0, 0.0)))]);
+            assert_eq!(
+                board.hit_along(point(0.0, 0.0), point(100.0, 0.0), 1.0),
+                [id(1)],
+                "across x = {x}"
+            );
+            assert!(
+                board
+                    .hit_along(point(0.0, 12.0), point(100.0, 12.0), 1.0)
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn a_way_finds_a_thin_ellipse_near_the_corner_of_its_frame() {
+        let board = board([(
+            1,
+            element(
+                None,
+                "a0",
+                framed(Shape::Ellipse, area(0.0, 0.0, 2000.0, 16.0), 0.0),
+            ),
+        )]);
+        let near = point(2000.0, 16.0);
+        assert_eq!(board.hit(near, 4.0), Some(id(1)));
+        assert_eq!(board.hit_along(near, near, 4.0), [id(1)]);
+    }
+
+    #[test]
+    fn a_way_far_longer_than_its_tolerance_is_tried_a_bounded_number_of_times() {
+        let board = board([
+            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
+            (
+                2,
+                element(None, "a1", image(1e12 - 5.0, 0.0, 10.0, 10.0, 0.0)),
+            ),
+        ]);
+        let way = board.hit_along(point(5.0, 5.0), point(1e12, 5.0), 1e-6);
+        assert_eq!(way, [id(1), id(2)]);
+    }
+
+    #[test]
+    fn a_way_that_goes_nowhere_hits_what_is_under_it() {
+        let board = board([
+            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
+            (2, element(None, "a1", image(5.0, 0.0, 10.0, 10.0, 0.0))),
+        ]);
+        let under = point(7.0, 5.0);
+        assert_eq!(board.hit_along(under, under, 0.0), [id(1), id(2)]);
+        assert_eq!(board.hit_along(under, under, 2.0), [id(1), id(2)]);
+    }
+
+    #[test]
+    fn only_what_fills_an_area_covers_a_point() {
+        let board = board([
+            (1, element(None, "a0", image(0.0, 0.0, 100.0, 100.0, 0.0))),
+            (2, element(None, "a1", arrow((10.0, 50.0), (90.0, 50.0)))),
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    framed(Shape::Rectangle, area(20.0, 20.0, 60.0, 60.0), 0.0),
+                ),
+            ),
+            (
+                4,
+                element(
+                    None,
+                    "a3",
+                    labelled(Shape::Rectangle, area(40.0, 40.0, 20.0, 20.0), 0.0, "text"),
+                ),
+            ),
+        ]);
+        assert_eq!(board.covering(point(50.0, 50.0)), [id(1), id(4)]);
+        assert!(board.covering(point(150.0, 50.0)).is_empty());
     }
 
     fn framed(shape: Shape, frame: Rect, rotation: f64) -> ElementKind {
