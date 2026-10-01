@@ -707,3 +707,96 @@ async fn an_unknown_field_is_refused_before_the_web_app_hears_of_it() {
         .unwrap_err();
     assert!(refused.contains("unknown field `rotation`"), "{refused}");
 }
+
+#[tokio::test]
+async fn a_style_reaches_the_web_app_as_the_agent_gave_it() {
+    let elements = json!([
+        { "type": "note", "x": 0.0, "y": 0.0, "text": "Warm light", "colour": "#EC8353", "bold": true, "italic": false, "align": "centre" },
+        { "type": "sticky", "x": 0.0, "y": 0.0, "paper": "lilac", "strike": true },
+        { "type": "shape", "x": 0.0, "y": 0.0, "colour": "blue", "weight": "thick", "fill": "tint" },
+        { "type": "arrow", "from": { "x": 0.0, "y": 0.0 }, "to": { "x": 1.0, "y": 0.0 }, "dash": "dashed", "heads": "both" },
+        { "type": "line", "from": { "x": 0.0, "y": 0.0 }, "to": { "x": 1.0, "y": 0.0 }, "weight": "thin" },
+    ]);
+    let args = relayed("add", json!({ "elements": elements }))
+        .await
+        .unwrap();
+    assert_eq!(args, json!({ "elements": elements }));
+
+    let update = json!({
+        "id": "a",
+        "colour": "red",
+        "paper": "pink",
+        "weight": "medium",
+        "dash": "solid",
+        "heads": "end",
+        "fill": "solid",
+        "bold": false,
+        "italic": true,
+        "strike": false,
+        "align": "right",
+    });
+    let args = relayed("update", json!({ "updates": [update] }))
+        .await
+        .unwrap();
+    assert_eq!(args, json!({ "updates": [update] }));
+}
+
+#[tokio::test]
+async fn a_style_that_an_element_cannot_take_is_refused_before_the_web_app_hears_of_it() {
+    let point = json!({ "x": 0.0, "y": 0.0 });
+    let refusals = [
+        (
+            json!({ "type": "comment", "at": point, "text": "Why?", "colour": "red" }),
+            "unknown field `colour`",
+        ),
+        (
+            json!({ "type": "sticky", "x": 0.0, "y": 0.0, "colour": "red" }),
+            "unknown field `colour`",
+        ),
+        (
+            json!({ "type": "note", "x": 0.0, "y": 0.0, "text": "Hi", "weight": "thin" }),
+            "unknown field `weight`",
+        ),
+        (
+            json!({ "type": "line", "from": point, "to": point, "heads": "both" }),
+            "unknown field `heads`",
+        ),
+        (
+            json!({ "type": "arrow", "from": point, "to": point, "fill": "solid" }),
+            "unknown field `fill`",
+        ),
+        (
+            json!({ "type": "arrow", "from": point, "to": point, "heads": "neither" }),
+            "unknown variant `neither`",
+        ),
+        (
+            json!({ "type": "shape", "x": 0.0, "y": 0.0, "weight": "heavy" }),
+            "unknown variant `heavy`",
+        ),
+        (
+            json!({ "type": "sticky", "x": 0.0, "y": 0.0, "paper": "red" }),
+            "unknown variant `red`",
+        ),
+        (
+            json!({ "type": "shape", "x": 0.0, "y": 0.0, "bold": true }),
+            "unknown field `bold`",
+        ),
+        (
+            json!({ "type": "note", "x": 0.0, "y": 0.0, "text": "Hi", "colour": "purple" }),
+            "`purple` is not a colour",
+        ),
+    ];
+    for (element, expected) in refusals {
+        let refused = relayed("add", json!({ "elements": [element] }))
+            .await
+            .unwrap_err();
+        assert!(refused.contains(expected), "{refused}");
+    }
+    let refused = relayed(
+        "update",
+        json!({ "updates": [{ "id": "a", "align": "middle" }] }),
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.contains("unknown variant `middle`"), "{refused}");
+}

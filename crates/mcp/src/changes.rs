@@ -8,7 +8,7 @@ use std::path::{Component, Path, Prefix};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::Value;
 
 pub const MOST_IDS: usize = 100;
@@ -106,6 +106,13 @@ pub enum NewElement {
         /// Clockwise, in degrees.
         rotation: Option<f64>,
         group: Option<String>,
+        colour: Option<Colour>,
+        bold: Option<bool>,
+        italic: Option<bool>,
+        /// Struck through.
+        strike: Option<bool>,
+        /// Left by default.
+        align: Option<Align>,
     },
     /// A sticky note, which grows to hold its text. `x` and `y` are its top left corner.
     Sticky {
@@ -117,8 +124,16 @@ pub enum NewElement {
         font_size: Option<f64>,
         rotation: Option<f64>,
         group: Option<String>,
+        /// Yellow by default, whatever the theme.
+        paper: Option<Paper>,
+        bold: Option<bool>,
+        italic: Option<bool>,
+        strike: Option<bool>,
+        /// Left by default.
+        align: Option<Align>,
     },
-    /// A rectangle by default, which grows to hold its text. `x` and `y` are its top left corner.
+    /// A rectangle by default, which grows to hold its text, centred. `x` and `y` are its top
+    /// left corner.
     Shape {
         shape: Option<ShapeKind>,
         x: f64,
@@ -129,17 +144,28 @@ pub enum NewElement {
         font_size: Option<f64>,
         rotation: Option<f64>,
         group: Option<String>,
+        colour: Option<Colour>,
+        weight: Option<Weight>,
+        /// Hollow by default. Not for a cross.
+        fill: Option<Fill>,
     },
-    /// Its head is at `to`.
+    /// Its head is at `to`, unless `heads` says both ends.
     Arrow {
         from: Point,
         to: Point,
         group: Option<String>,
+        colour: Option<Colour>,
+        weight: Option<Weight>,
+        dash: Option<Dash>,
+        heads: Option<Heads>,
     },
     Line {
         from: Point,
         to: Point,
         group: Option<String>,
+        colour: Option<Colour>,
+        weight: Option<Weight>,
+        dash: Option<Dash>,
     },
     /// Pinned at `at`.
     Comment {
@@ -156,6 +182,88 @@ pub enum ShapeKind {
     Rectangle,
     Ellipse,
     Cross,
+}
+
+/// A colour of the palette, which each theme draws its own way so that it reads, ink by default,
+/// or `#rrggbb`, which every theme draws alike.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(inline, extend("pattern" = "^(ink|red|orange|green|blue|violet|#[0-9a-fA-F]{6})$"))]
+pub struct Colour(String);
+
+/// As the schema's pattern says, which clients may not check.
+impl<'de> Deserialize<'de> for Colour {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let colour = String::deserialize(deserializer)?;
+        let named = ["ink", "red", "orange", "green", "blue", "violet"].contains(&colour.as_str());
+        let hex = colour.strip_prefix('#').is_some_and(|digits| {
+            digits.len() == 6 && digits.bytes().all(|digit| digit.is_ascii_hexdigit())
+        });
+        if named || hex {
+            Ok(Self(colour))
+        } else {
+            Err(de::Error::custom(format!(
+                "`{colour}` is not a colour, which is ink, red, orange, green, blue, violet, or #rrggbb"
+            )))
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+pub enum Paper {
+    Yellow,
+    Pink,
+    Blue,
+    Green,
+    Lilac,
+}
+
+/// Of strokes, medium by default.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+pub enum Weight {
+    Thin,
+    Medium,
+    Thick,
+}
+
+/// Solid by default.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+pub enum Dash {
+    Solid,
+    Dashed,
+}
+
+/// Which ends of an arrow draw a head, `to` alone by default.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+pub enum Heads {
+    End,
+    Both,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+pub enum Fill {
+    Hollow,
+    Tint,
+    Solid,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+pub enum Align {
+    Left,
+    Centre,
+    Right,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -184,6 +292,27 @@ pub struct Update {
     /// For an image, the part of it to show, in its pixels, all of them to show it whole. Each
     /// pixel it still shows stays where it was, at the same size.
     pub crop: Option<Pixels>,
+    /// For a note, a shape, an arrow, or a line, a colour of the palette, which each theme draws
+    /// its own way, or `#rrggbb`, which every theme draws alike.
+    pub colour: Option<Colour>,
+    /// For a sticky note.
+    pub paper: Option<Paper>,
+    /// For a shape, an arrow, or a line.
+    pub weight: Option<Weight>,
+    /// For an arrow or a line.
+    pub dash: Option<Dash>,
+    /// For an arrow.
+    pub heads: Option<Heads>,
+    /// For a rectangle or an ellipse.
+    pub fill: Option<Fill>,
+    /// For a note or a sticky note.
+    pub bold: Option<bool>,
+    /// For a note or a sticky note.
+    pub italic: Option<bool>,
+    /// For a note or a sticky note, struck through.
+    pub strike: Option<bool>,
+    /// For a note or a sticky note.
+    pub align: Option<Align>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

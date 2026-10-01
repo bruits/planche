@@ -8,6 +8,7 @@ import * as core from "./core.js";
 import type { Editor, Kind, Point, Rect, Size } from "./core.js";
 import { FONT_SIZE, NOTE_WIDTH, PLACED_SIZE, STICKY_SIZE, type Restack } from "./edit.js";
 import { LONGEST_SIDE } from "./raster.js";
+import { isColour, restyled, settings, type Style } from "./style.js";
 import { fitted, holdsText } from "./text.js";
 
 /** The page's state that agents change. */
@@ -207,7 +208,42 @@ function reason(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
-type New = { group?: string } & (
+/** What agents set of a style, a colour in either case. */
+type Styling = Omit<Style, "size" | "colour"> & { colour?: string };
+
+const SETTABLE = ["colour", "paper", "weight", "dash", "heads", "fill", "bold", "italic", "strike", "align"] as const;
+
+/** In what `given` sets of its style, each where the style card would offer it, or `refuse` throws. */
+function styled(kind: Kind, given: Styling, refuse: (field: string) => Error): Kind {
+  const style: Style = {};
+  for (const field of SETTABLE) {
+    const value = given[field];
+    if (value === undefined) {
+      continue;
+    }
+    if (!settings(kind).includes(field)) {
+      throw refuse(field);
+    }
+    if (field === "colour") {
+      const colour = String(value).toLowerCase();
+      if (!isColour(colour)) {
+        throw new Error(`\`${colour}\` is not a colour, which is ink, red, orange, green, blue, violet, or #rrggbb`);
+      }
+      style.colour = colour;
+    } else {
+      Object.assign(style, { [field]: value });
+    }
+  }
+  // The zoom only sets a size, which agents give in font sizes instead.
+  return restyled(kind, style, 1);
+}
+
+/** As refusals name it, a cross apart, as it takes no fill. */
+function named(kind: Kind): string {
+  return kind.type === "shape" && kind.shape === "cross" ? "cross" : kind.type;
+}
+
+type New = { group?: string } & Styling & (
   | { type: "note"; x: number; y: number; width?: number; text: string; font_size?: number; rotation?: number }
   | {
       type: "sticky" | "shape";
@@ -261,10 +297,12 @@ function kindOf(editor: Editor, element: New, zoom: number, stick: boolean): Kin
       const font_size = positive(element.font_size ?? FONT_SIZE / zoom, "font_size");
       const frame = { x: element.x, y: element.y, width, height };
       const content = { content: text, font_size };
-      if (element.type === "shape") {
-        return fitted({ type: "shape", frame, rotation: 0, shape: element.shape ?? "rectangle", text: content });
-      }
-      return fitted({ type: element.type, frame, rotation: 0, text: content });
+      const kind: Kind =
+        element.type === "shape"
+          ? { type: "shape", frame, rotation: 0, shape: element.shape ?? "rectangle", text: content }
+          : { type: element.type, frame, rotation: 0, text: content };
+      const dressed = styled(kind, element, (field) => new Error(`A new ${named(kind)} takes no ${field}`));
+      return holdsText(dressed) ? fitted(dressed) : dressed;
     }
     case "arrow":
     case "line": {
@@ -273,7 +311,8 @@ function kindOf(editor: Editor, element: New, zoom: number, stick: boolean): Kin
       }
       const end = (point: Point): { at: Point; target?: string } => (stick ? core.stick(editor, point, 0) : undefined) ?? { at: point };
       const [from, to] = [end(element.from), end(element.to)];
-      return { type: element.type, from: from.at, to: to.at, from_target: from.target, to_target: to.target };
+      const kind: Kind = { type: element.type, from: from.at, to: to.at, from_target: from.target, to_target: to.target };
+      return styled(kind, element, (field) => new Error(`A new ${element.type} takes no ${field}`));
     }
     case "comment":
       if (!element.text.trim()) {
@@ -283,7 +322,7 @@ function kindOf(editor: Editor, element: New, zoom: number, stick: boolean): Kin
   }
 }
 
-interface Change {
+interface Change extends Styling {
   id: string;
   text?: string;
   font_size?: number;
@@ -314,9 +353,11 @@ async function update(page: Writing, target: Opened, clock: Clock, changes: Chan
 }
 
 /** From the core, as earlier changes of the call left it, but for the crop, which the core makes. */
-function patched(editor: Editor, { id, text, font_size, shape, caption, source, greyscale, crop }: Change): Kind {
+function patched(editor: Editor, change: Change): Kind {
+  const { id, text, font_size, shape, caption, source, greyscale, crop } = change;
   const kind = core.element(editor, id)!.kind;
-  const refuse = (field: string) => new Error(`${id} has type ${kind.type}, which takes no ${field}`);
+  const refuse = (field: string) =>
+    new Error(named(kind) === "cross" ? `${id} is a cross, which takes no ${field}` : `${id} has type ${kind.type}, which takes no ${field}`);
   if (text !== undefined) {
     if (kind.type === "comment") {
       kind.text = text;
@@ -361,7 +402,9 @@ function patched(editor: Editor, { id, text, font_size, shape, caption, source, 
       kind.edits.greyscale = greyscale;
     }
   }
-  return holdsText(kind) ? fitted(kind) : kind;
+  // After its shape, which tells whether it takes a fill.
+  const dressed = styled(kind, change, refuse);
+  return holdsText(dressed) ? fitted(dressed) : dressed;
 }
 
 interface Transform {
