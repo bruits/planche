@@ -2,11 +2,12 @@
 // to it and edit it, and save it elsewhere or export it.
 
 import * as core from "./core.js";
-import type { Background, Order, Point } from "./core.js";
+import type { Background, Kind, Order, Point } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
 import { animations } from "./animation.js";
 import {
+  among,
   assetsOf,
   decode,
   extent,
@@ -61,7 +62,6 @@ const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
 const SCHEMES: Scheme[] = ["light", "dark", "system"];
 
 const measurements = byId("measurements");
-const agentNotice = byId("agent");
 const details = new Map<string, string>();
 const shown = overlay(byId("viewport"));
 const viewport = view(byId("viewport"), {
@@ -138,6 +138,17 @@ const fewImages = () =>
   editing.selection().filter((id) => opened?.board.elements[id]?.kind.type === "image").length < 2
     ? "Select two images or more"
     : undefined;
+/** What is selected, with what the groups selected hold. */
+const selectedKinds = (): Kind[] => {
+  const board = opened?.board;
+  const chosen = new Set(editing.selection());
+  return board ? Object.entries(board.elements).flatMap(([id, { kind }]) => (among(board, id, chosen) ? [kind] : [])) : [];
+};
+const selectedImages = () => selectedKinds().filter((kind) => kind.type === "image");
+const greyed = () => {
+  const images = selectedImages();
+  return images.length > 0 && images.every((kind) => kind.edits.greyscale);
+};
 const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet" : undefined);
 const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection()) : []);
 const selectedMoving = () => selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
@@ -154,6 +165,13 @@ const flip = (label: string, key: string, horizontally: boolean): Command => ({
   unavailable: () =>
     noneSelected() ?? (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images flip"),
   run: () => editing.flip(horizontally),
+});
+const turn = (label: string, degrees: number, key: string): Command => ({
+  label,
+  keys: [{ key, shift: true }],
+  unavailable: () =>
+    noneSelected() ?? (opened && core.bounds(opened.editor, editing.selection()) ? undefined : "Comments do not turn"),
+  run: () => editing.rotate(degrees),
 });
 const arrangement = (label: string, order: Ordering): Command => ({
   label,
@@ -240,8 +258,44 @@ const commands = {
     by: "random",
     seed: crypto.getRandomValues(new Uint32Array(1))[0]!,
   })),
+  sameHeight: { label: "Same height", unavailable: fewImages, run: () => editing.normalize("height") },
+  sameWidth: { label: "Same width", unavailable: fewImages, run: () => editing.normalize("width") },
+  rotateLeft: turn("Rotate left", -90, "l"),
+  rotateRight: turn("Rotate right", 90, "r"),
+  straighten: {
+    label: "Straighten",
+    keys: [{ key: "r", alt: true }],
+    unavailable: () =>
+      noneSelected() ??
+      (selectedKinds().some((kind) => "rotation" in kind && kind.rotation !== 0) ? undefined : "Nothing selected is turned"),
+    run: () => editing.straighten(),
+  },
   flipHorizontally: flip("Flip horizontally", "h", true),
   flipVertically: flip("Flip vertically", "v", false),
+  crop: {
+    label: "Crop",
+    keys: [{ key: "enter" }],
+    unavailable: () => {
+      const selection = editing.selection();
+      const kind = selection.length === 1 ? opened?.board.elements[selection[0]!]?.kind : undefined;
+      return kind?.type === "image" ? undefined : "Select one image";
+    },
+    run: () => editing.crop(),
+  },
+  resetCrop: {
+    label: "Reset crop",
+    keys: [{ key: "c", alt: true }],
+    unavailable: () =>
+      noneSelected() ?? (selectedImages().some((kind) => kind.edits.crop) ? undefined : "Nothing selected is cropped"),
+    run: () => editing.resetCrop(),
+  },
+  greyscale: {
+    label: "Greyscale",
+    keys: [{ key: "g", alt: true }],
+    unavailable: () =>
+      noneSelected() ?? (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images turn grey"),
+    run: () => editing.greyscale(!greyed()),
+  },
   play: {
     label: () => (selectedMoving().some(moving) ? "Pause" : "Play"),
     keys: [{ key: "p" }],
@@ -541,7 +595,7 @@ function views(): Entry {
 
 /**
  * Ready to answer before any agent may ask, then on or off as it was left. The shell follows,
- * even when the browser forgot, so that the notice never hides access left on.
+ * even when the browser forgot, so that the menu's tick never hides access left on.
  */
 async function serveAgents(): Promise<void> {
   const { agent } = platform;
@@ -597,7 +651,6 @@ async function allowAgents(on: boolean): Promise<void> {
   }
   agentsAllowed = on;
   remember(AGENT, on ? "on" : undefined);
-  agentNotice.hidden = !on;
 }
 
 /** Remembered as the window is, so that a start the shell refuses forgets the choice. */
@@ -622,6 +675,12 @@ async function useCompact(on: boolean): Promise<void> {
 /** One that only opens its options, so never runs. */
 function submenu(label: string, options: Entry[]): Item {
   return { label, run() {}, options };
+}
+
+/** Of the options that apply to the selection, and left out of it when none does. */
+function relevantSubmenu(label: string, options: Entry[]): Item {
+  const shown = relevant(options);
+  return { ...submenu(label, shown), unavailable: () => (shown.length > 0 ? undefined : "None applies") };
 }
 
 /** Strokes and text draw in the theme's colours. */
@@ -700,6 +759,9 @@ function hint(): string {
   if (editing.writing() !== undefined) {
     return `${escapeKey} or click away to finish`;
   }
+  if (editing.cropping() !== undefined) {
+    return `Drag an edge or a corner to crop, or the inside to move the crop · ${insideKey} or click away to crop · ${escapeKey} to leave it as it was`;
+  }
   if (tool === "hand") {
     return `Drag to move around · ${escapeKey} to select again`;
   }
@@ -738,10 +800,11 @@ function hint(): string {
     return `Drag to move · drag an end to move it, holding ${freeKey} to keep it from sticking · right-click for more`;
   }
   if (editing.selection().length > 0) {
+    const crops = commands.crop.unavailable() === undefined ? `double-click or ${insideKey} to crop · ` : "";
     const keys = [commands.play, commands.sound]
       .filter((command) => command.unavailable() === undefined)
       .map((command) => `${describe(command.keys[0]!)} to ${command.label().toLowerCase()} · `);
-    return `Drag to move · corners scale · the circle rotates · ${keys.join("")}right-click for more`;
+    return `Drag to move · corners scale · the circle rotates · ${crops}${keys.join("")}right-click for more`;
   }
   return "Drop or paste images · scroll to move around · right-click for more";
 }
@@ -755,23 +818,33 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.goInside,
         commands.write,
         "separator",
-        commands.front,
-        commands.forward,
-        commands.backward,
-        commands.back,
-        "separator",
+        relevantSubmenu("Order", [commands.front, commands.forward, commands.backward, commands.back]),
         {
           ...submenu("Arrange", [
             commands.arrangeByName,
             commands.arrangeBySize,
             commands.arrangeByColour,
             commands.arrangeRandomly,
+            "separator",
+            commands.sameHeight,
+            commands.sameWidth,
           ]),
           unavailable: fewImages,
         },
+        relevantSubmenu("Transform", [
+          commands.rotateLeft,
+          commands.rotateRight,
+          commands.straighten,
+          "separator",
+          commands.flipHorizontally,
+          commands.flipVertically,
+          "separator",
+          commands.crop,
+          commands.resetCrop,
+          "separator",
+          { ...commands.greyscale, checked: greyed(), toggle: true },
+        ]),
         "separator",
-        commands.flipHorizontally,
-        commands.flipVertically,
         commands.play,
         commands.sound,
         "separator",
@@ -795,8 +868,8 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
 
 /**
  * Leaves out what does not apply to the selection, and the separators that would stand alone. Every
- * reason its entries give is about what is selected. Others go on a submenu's options, which stay
- * greyed.
+ * reason the entries give must be about what is selected, as one that passes would hide them for a
+ * while.
  */
 function relevant(entries: Entry[]): Entry[] {
   const kept: Entry[] = [];

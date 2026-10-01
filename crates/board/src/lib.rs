@@ -6,6 +6,7 @@
 
 mod animation;
 mod arrange;
+mod crop;
 mod edit;
 mod geometry;
 mod grid;
@@ -22,7 +23,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 pub use animation::{Animation, animation, frame_delay};
-pub use arrange::Order;
+pub use arrange::{Order, Side};
 pub use edit::{Editor, Restack};
 pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
 pub use svg::{sized_svg, svg_size};
@@ -55,6 +56,14 @@ pub enum Error {
     CannotGroup,
     #[error("elements only scale by a positive factor")]
     NotAScale,
+    #[error("element {0} is not an image")]
+    NotAnImage(ElementId),
+    #[error("a crop of image {id} must lie within its {width} by {height} pixels and show some")]
+    OutsideImage {
+        id: ElementId,
+        width: u32,
+        height: u32,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

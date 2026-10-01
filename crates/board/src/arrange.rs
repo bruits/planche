@@ -1,5 +1,5 @@
-//! Packs images into rows, in the order people pick. The shell draws the seed of a random order,
-//! as the core has no randomness of its own.
+//! Packs images into rows, in the order people pick, and sizes them alike. The shell draws the
+//! seed of a random order, as the core has no randomness of its own.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,15 +30,25 @@ pub enum Order {
     Random { seed: u32 },
 }
 
+/// Which side of what they cover [`crate::Editor::normalize`] makes alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Height,
+    Width,
+}
+
 const GAP: f64 = GRID_SPACING;
 /// How far apart, in board units, two positions count as one, so that arranging again changes
 /// nothing.
 const HAIR: f64 = 1e-6;
+/// How far off 1 a scale may be and count as none, so that sizing alike again changes nothing.
+const ALIKE: f64 = 1e-9;
 /// The chroma, from 0 to 1, below which a colour reads as a grey.
 const GREY: f64 = 0.05;
 
 struct Packed<'a> {
     id: ElementId,
+    kind: &'a ElementKind,
     bounds: Rect,
     row: usize,
     area: f64,
@@ -52,23 +62,63 @@ pub(crate) fn arrangement(
     ids: &[ElementId],
     order: &Order,
 ) -> Vec<(ElementId, Point)> {
-    let mut images: Vec<Packed> = ids
+    let mut images = images(board, ids);
+    sort(&mut images, order);
+    pack(&images)
+}
+
+/// Each image among `ids` scaled around its centre, but for those of the right size already.
+pub(crate) fn normalization(
+    board: &Board,
+    ids: &[ElementId],
+    side: Side,
+) -> Vec<(ElementId, ElementKind)> {
+    let images = images(board, ids);
+    let measure = |image: &Packed| match side {
+        Side::Height => image.bounds.height,
+        Side::Width => image.bounds.width,
+    };
+    let target = images.iter().map(measure).sum::<f64>() / images.len() as f64;
+    images
         .iter()
+        .filter_map(|image| {
+            let factor = target / measure(image);
+            if !factor.is_finite() || (factor - 1.0).abs() <= ALIKE {
+                return None;
+            }
+            let mut kind = image.kind.clone();
+            if let ElementKind::Image { frame, .. } = &mut kind {
+                let centre = frame.centre();
+                frame.width *= factor;
+                frame.height *= factor;
+                frame.x = centre.x - frame.width / 2.0;
+                frame.y = centre.y - frame.height / 2.0;
+            }
+            Some((image.id, kind))
+        })
+        .collect()
+}
+
+/// The images among `ids` themselves, once each, leaving out those of the groups among them.
+fn images<'a>(board: &'a Board, ids: &[ElementId]) -> Vec<Packed<'a>> {
+    ids.iter()
         .collect::<BTreeSet<_>>()
         .into_iter()
         .filter_map(|id| {
+            let kind = &board.elements.get(id)?.kind;
             let ElementKind::Image {
                 frame,
                 rotation,
                 edits,
                 filename,
                 ..
-            } = &board.elements.get(id)?.kind
+            } = kind
             else {
                 return None;
             };
             Some(Packed {
                 id: *id,
+                kind,
                 bounds: around(&corners(frame, *rotation)).expect("a frame has corners"),
                 row: 0,
                 area: frame.width * frame.height,
@@ -76,9 +126,7 @@ pub(crate) fn arrangement(
                 greyscale: edits.greyscale,
             })
         })
-        .collect();
-    sort(&mut images, order);
-    pack(&images)
+        .collect()
 }
 
 fn sort(images: &mut [Packed], order: &Order) {
@@ -542,6 +590,65 @@ mod tests {
             }
         );
         assert!(read(r#"{"by": "Name"}"#).is_err());
+    }
+
+    #[test]
+    fn images_sized_alike_cover_their_mean_height_around_their_own_centres() {
+        let mut editor = editor([
+            image(0.0, 0.0, 100.0, 50.0),
+            image(200.0, 0.0, 40.0, 150.0),
+            note(500.0, 500.0, None),
+        ]);
+
+        editor.normalize(&all(&editor), Side::Height).unwrap();
+
+        assert_eq!(
+            frame(&editor, 1),
+            Rect {
+                x: -50.0,
+                y: -25.0,
+                width: 200.0,
+                height: 100.0
+            }
+        );
+        let Rect {
+            x,
+            y,
+            width,
+            height,
+        } = frame(&editor, 2);
+        assert!((x + width / 2.0 - 220.0).abs() < HAIR && (y - 25.0).abs() < HAIR);
+        assert!((height - 100.0).abs() < HAIR && (width - 80.0 / 3.0).abs() < HAIR);
+        assert_eq!(
+            frame(&editor, 3),
+            Rect {
+                x: 500.0,
+                y: 500.0,
+                width: 40.0,
+                height: 20.0
+            }
+        );
+    }
+
+    #[test]
+    fn images_sized_alike_by_width_measure_what_they_cover_turned() {
+        let mut turned = image(0.0, 0.0, 100.0, 50.0);
+        if let ElementKind::Image { rotation, .. } = &mut turned {
+            *rotation = 90.0;
+        }
+        let mut editor = editor([turned, image(300.0, 0.0, 150.0, 30.0)]);
+
+        assert_eq!(
+            editor
+                .normalize(&all(&editor), Side::Width)
+                .map(|ids| ids.len()),
+            Ok(2)
+        );
+        for bits in [1, 2] {
+            let width = editor.board().bounds(&[id(bits)]).unwrap().width;
+            assert!((width - 100.0).abs() < HAIR, "{width}");
+        }
+        assert_eq!(editor.normalize(&all(&editor), Side::Width), Ok(Vec::new()));
     }
 
     #[test]

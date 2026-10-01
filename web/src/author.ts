@@ -1,6 +1,6 @@
 // What agents change on the open board, as the desktop shell passes their tools' calls on. Each
-// call waits for the user to finish a drag or a text, then edits in one go, which undoes in one
-// step, as an edit made during a gesture would join it.
+// call waits for the user to finish a drag, a text, or a crop, then edits in one go, which undoes
+// in one step, as an edit made during a gesture would join it.
 
 import { fromBase64 } from "./add.js";
 import { extent, holdsImage, imageKind, newId, prepare, release, row, type Added, type Opened } from "./board.js";
@@ -8,7 +8,7 @@ import * as core from "./core.js";
 import type { Editor, Kind, Point, Rect, Size } from "./core.js";
 import { FONT_SIZE, NOTE_WIDTH, PLACED_SIZE, STICKY_SIZE, type Restack } from "./edit.js";
 import { LONGEST_SIDE } from "./raster.js";
-import { anchored, fitted, holdsText } from "./text.js";
+import { fitted, holdsText } from "./text.js";
 
 /** The page's state that agents change. */
 export interface Writing {
@@ -100,7 +100,9 @@ async function ready(page: Writing, target: Opened, { started, deadline }: Clock
     const left = until - performance.now();
     const waited = left > 0 && (await Promise.race([page.idle().then(() => true), delay(left).then(() => false)]));
     if (!waited) {
-      throw new Error("The user is editing in Planche, dragging or writing a text, so nothing changed: try again");
+      throw new Error(
+        "The user is editing in Planche, dragging, writing a text, or cropping an image, so nothing changed: try again",
+      );
     }
   }
   if (page.opened() !== target) {
@@ -300,12 +302,18 @@ async function update(page: Writing, target: Opened, clock: Clock, changes: Chan
     changes.map(({ id }) => id),
   );
   const touched = page.apply((editor, touched) =>
-    changes.forEach((change) => touched.push(...editor.update(change.id, JSON.stringify(patched(editor, change))))),
+    changes.forEach((change) => {
+      touched.push(...editor.update(change.id, JSON.stringify(patched(editor, change))));
+      const { crop } = change;
+      if (crop !== undefined) {
+        touched.push(...editor.crop(change.id, crop.x, crop.y, crop.width, crop.height));
+      }
+    }),
   );
   return { touched };
 }
 
-/** From the core, as earlier changes of the call left it. */
+/** From the core, as earlier changes of the call left it, but for the crop, which the core makes. */
 function patched(editor: Editor, { id, text, font_size, shape, caption, source, greyscale, crop }: Change): Kind {
   const kind = core.element(editor, id)!.kind;
   const refuse = (field: string) => new Error(`${id} has type ${kind.type}, which takes no ${field}`);
@@ -351,21 +359,6 @@ function patched(editor: Editor, { id, text, font_size, shape, caption, source, 
     }
     if (greyscale !== undefined) {
       kind.edits.greyscale = greyscale;
-    }
-    if (crop !== undefined) {
-      const { width, height } = kind.natural_size;
-      const inside = (area: Rect) =>
-        area.x >= 0 && area.y >= 0 && area.width > 0 && area.height > 0 && area.x + area.width <= width && area.y + area.height <= height;
-      if (!inside(crop)) {
-        throw new Error(`The crop must lie within the image's ${width} by ${height} pixels`);
-      }
-      // The image keeps its scale, and its top left corner where it is, as turned.
-      const shown = kind.edits.crop ?? { x: 0, y: 0, width, height };
-      const { width: across, height: down } = kind.frame;
-      const size = { width: (crop.width * across) / shown.width, height: (crop.height * down) / shown.height };
-      kind.frame = anchored(kind.frame, kind.rotation, size);
-      const whole = crop.x === 0 && crop.y === 0 && crop.width === width && crop.height === height;
-      kind.edits.crop = whole ? null : crop;
     }
   }
   return holdsText(kind) ? fitted(kind) : kind;

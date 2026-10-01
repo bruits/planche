@@ -241,6 +241,18 @@ export function bounds(editor: Editor, ids: string[]): Rect | undefined {
   return bounds && { x: bounds[0]!, y: bounds[1]!, width: bounds[2]!, height: bounds[3]! };
 }
 
+/** The pixel of the image `id` at `at`, as displayed, `undefined` when it is no image. */
+export function pixelAt(editor: Editor, id: string, at: Point): Point | undefined {
+  const pixel = editor.pixelAt(id, at.x, at.y);
+  return pixel && { x: pixel[0]!, y: pixel[1]! };
+}
+
+/** Where the pixel of the image `id` lies, as `pixelAt` gives it. */
+export function pointOfPixel(editor: Editor, id: string, pixel: Point): Point | undefined {
+  const at = editor.pointOfPixel(id, pixel.x, pixel.y);
+  return at && { x: at[0]!, y: at[1]! };
+}
+
 /** Mirrors `board::Order`. */
 export type Order =
   | { by: "name" | "size" }
@@ -250,6 +262,9 @@ export type Order =
 export function arrange(editor: Editor, ids: string[], order: Order): string[] {
   return editor.arrange(ids, JSON.stringify(order));
 }
+
+/** Mirrors `board::Side`. */
+export type Side = "height" | "width";
 
 /** Every file but the assets. */
 export function write(snapshot: Snapshot): Files {

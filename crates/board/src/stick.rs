@@ -234,7 +234,7 @@ struct Picture {
 }
 
 impl Surface {
-    fn of(kind: &ElementKind) -> Option<Self> {
+    pub(crate) fn of(kind: &ElementKind) -> Option<Self> {
         match kind {
             ElementKind::Image {
                 natural_size,
@@ -275,7 +275,7 @@ impl Surface {
 
     /// A pixel of the picture, or a point of the frame, in parts of it from its top-left corner
     /// before it turned.
-    fn to_content(&self, point: Point, whole: bool) -> Option<Point> {
+    pub(crate) fn to_content(&self, point: Point, whole: bool) -> Option<Point> {
         let Self {
             frame,
             rotation,
@@ -328,7 +328,7 @@ impl Surface {
         })
     }
 
-    fn to_board(&self, content: Point, whole: bool) -> Option<Point> {
+    pub(crate) fn to_board(&self, content: Point, whole: bool) -> Option<Point> {
         let Self {
             frame,
             rotation,

@@ -89,7 +89,7 @@ export function fitted(kind: Holder): Holder {
 }
 
 /** Resized to `size` around its top left corner, as turned. */
-export function anchored(frame: Rect, rotation: number, { width, height }: Size): Rect {
+function anchored(frame: Rect, rotation: number, { width, height }: Size): Rect {
   const shift = turn({ x: (width - frame.width) / 2, y: (height - frame.height) / 2 }, rotation);
   const centre = { x: frame.x + frame.width / 2 + shift.x, y: frame.y + frame.height / 2 + shift.y };
   return { x: centre.x - width / 2, y: centre.y - height / 2, width, height };

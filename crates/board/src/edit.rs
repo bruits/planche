@@ -4,13 +4,15 @@
 //! It lives in memory only.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter;
 use std::mem;
 
-use crate::arrange::{Order, arrangement};
+use crate::arrange::{Order, Side, arrangement, normalization};
+use crate::crop::cropped;
 use crate::grid::settled;
 use crate::stick::{Landing, Motion, lands_on};
 use crate::{
-    Background, Board, Element, ElementId, ElementKind, Error, Point, Result, ZIndex, angle,
+    Background, Board, Element, ElementId, ElementKind, Error, Point, Rect, Result, ZIndex, angle,
 };
 
 /// Where an element moves among the elements of its group.
@@ -189,16 +191,96 @@ impl Editor {
         for id in ids {
             self.get(*id)?;
         }
-        let mut step = Changes::new();
-        for (id, by) in arrangement(&self.board, ids, order) {
-            let change = self.change(id, |mut element| {
-                shift(&mut element.kind, by.x, by.y);
-                Some(element)
-            });
-            check_valid(id, &change.after.as_ref().expect("moved").kind)?;
-            step.insert(id, change);
+        let moved = arrangement(&self.board, ids, order)
+            .into_iter()
+            .map(|(id, by)| {
+                let mut kind = self.board.elements[&id].kind.clone();
+                shift(&mut kind, by.x, by.y);
+                (id, kind)
+            })
+            .collect();
+        self.replace(moved)
+    }
+
+    /// Scales the images among the elements around their own centres, so that each covers as
+    /// much of `side` as they do on average. The other elements stay, but for what sticks to the
+    /// images, which follows them.
+    pub fn normalize(&mut self, ids: &[ElementId], side: Side) -> Result<Vec<ElementId>> {
+        for id in ids {
+            self.get(*id)?;
         }
-        self.follow(&mut step);
+        self.replace(normalization(&self.board, ids, side))
+    }
+
+    /// Shows only `area` of the image, in its pixels as displayed.
+    pub fn crop(&mut self, id: ElementId, area: Rect) -> Result<Vec<ElementId>> {
+        let kind = &self.get(id)?.kind;
+        let ElementKind::Image { natural_size, .. } = kind else {
+            return Err(Error::NotAnImage(id));
+        };
+        let cropped = cropped(kind, Some(area)).ok_or(Error::OutsideImage {
+            id,
+            width: natural_size.width,
+            height: natural_size.height,
+        })?;
+        self.replace(vec![(id, cropped)])
+    }
+
+    /// Shows the whole of each image among the elements, with those of the groups among them.
+    pub fn reset_crop(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        self.reshape(ids, |kind| {
+            if let Some(whole) = cropped(kind, None) {
+                *kind = whole;
+            }
+        })
+    }
+
+    /// Greys each image among the elements, with those of the groups among them, or not.
+    pub fn set_greyscale(&mut self, ids: &[ElementId], greyscale: bool) -> Result<Vec<ElementId>> {
+        self.reshape(ids, |kind| {
+            if let ElementKind::Image { edits, .. } = kind {
+                edits.greyscale = greyscale;
+            }
+        })
+    }
+
+    /// Turns each element, with those of the groups among them, upright around its own centre.
+    /// What sticks to them follows, then turns upright in its turn, so that each keeps to its
+    /// pixel.
+    pub fn straighten(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        let mut pending = self.with_descendants(ids)?;
+        // Turning one would turn all its elements at once, those it holds back included.
+        pending.retain(|id| !matches!(self.board.elements[id].kind, ElementKind::Group));
+        // Each element turns around its own centre, which following would take as a turn of all
+        // alike, so what sticks to another turns after it, on a scratch editor.
+        let mut turning = Editor::new(self.board.clone());
+        let mut touched = BTreeSet::new();
+        while !pending.is_empty() {
+            let board = &turning.board;
+            let carried = |id: &ElementId| {
+                iter::successors(board.elements[id].kind.target(), |target| {
+                    board.elements.get(target)?.kind.target()
+                })
+                .any(|target| pending.contains(&target))
+            };
+            let (later, now): (BTreeSet<ElementId>, BTreeSet<ElementId>) =
+                pending.iter().partition(|id| carried(id));
+            pending = later;
+            let now: Vec<ElementId> = now.into_iter().collect();
+            touched.extend(turning.reshape(&now, |kind| {
+                if let ElementKind::Image { rotation, .. }
+                | ElementKind::Note { rotation, .. }
+                | ElementKind::Sticky { rotation, .. }
+                | ElementKind::Shape { rotation, .. } = kind
+                {
+                    *rotation = 0.0;
+                }
+            })?);
+        }
+        let step = touched
+            .into_iter()
+            .map(|id| (id, self.change(id, |_| turning.board.elements.remove(&id))))
+            .collect();
         self.record(step)
     }
 
@@ -594,6 +676,20 @@ impl Editor {
         touched
     }
 
+    /// Each element as `kinds` has it, in one step that what sticks to them follows.
+    fn replace(&mut self, kinds: Vec<(ElementId, ElementKind)>) -> Result<Vec<ElementId>> {
+        let mut step = Changes::new();
+        for (id, kind) in kinds {
+            check_valid(id, &kind)?;
+            step.insert(
+                id,
+                self.change(id, |element| Some(Element { kind, ..element })),
+            );
+        }
+        self.follow(&mut step);
+        self.record(step)
+    }
+
     fn reshape(
         &mut self,
         ids: &[ElementId],
@@ -930,6 +1026,7 @@ fn set(board: &mut Board, id: ElementId, element: Option<Element>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stick::Surface;
     use crate::tests::{arrow, board, element, id};
     use crate::{Rect, Text};
 
@@ -1261,6 +1358,59 @@ mod tests {
         assert!(edits.flip_vertical && !edits.flip_horizontal);
         editor.flip(&ids([1]), false).unwrap();
         assert!(editor.is_saved());
+    }
+
+    #[test]
+    fn greying_sets_each_image_alike_whatever_it_was() {
+        let image = |greyscale| ElementKind::Image {
+            asset: crate::AssetId::of(b""),
+            natural_size: crate::Size {
+                width: 1,
+                height: 1,
+            },
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            rotation: 0.0,
+            edits: crate::ImageEdits {
+                greyscale,
+                ..crate::ImageEdits::default()
+            },
+            source: None,
+            filename: None,
+            caption: None,
+        };
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", image(true))),
+            (2, element(None, "a1", image(false))),
+        ]));
+
+        assert_eq!(editor.set_greyscale(&ids([1, 2]), true), Ok(ids([2])));
+        assert_eq!(editor.set_greyscale(&ids([1, 2]), true), Ok(Vec::new()));
+        assert_eq!(editor.set_greyscale(&ids([1, 2]), false), Ok(ids([1, 2])));
+    }
+
+    #[test]
+    fn straightening_turns_each_element_upright_in_its_place_and_leaves_ends_alone() {
+        let turned = |mut kind: ElementKind| {
+            if let ElementKind::Note { rotation, .. } = &mut kind {
+                *rotation = 30.0;
+            }
+            kind
+        };
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", turned(note(0.0)))),
+            (3, element(None, "a1", turned(note(20.0)))),
+            (4, element(None, "a2", arrow())),
+        ]));
+
+        assert_eq!(editor.straighten(&ids([1, 3, 4])), Ok(ids([2, 3])));
+        assert_eq!(editor.board().elements[&id(2)].kind, note(0.0));
+        assert_eq!(editor.board().elements[&id(3)].kind, note(20.0));
     }
 
     #[test]
@@ -2237,6 +2387,137 @@ mod tests {
         assert_placed(&editor, 2, 1, [140.0, 20.0, 20.0, 10.0], 0.0, 2.0);
         editor.flip(&ids([1]), false).unwrap();
         assert_placed(&editor, 2, 1, [140.0, 170.0, 20.0, 10.0], 0.0, 2.0);
+    }
+
+    #[test]
+    fn straightened_with_their_image_notes_keep_to_their_pixel_and_stand_upright() {
+        let mut image = picture(0.0, 0.0);
+        if let ElementKind::Image { rotation, .. } = &mut image {
+            *rotation = 30.0;
+        }
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", image)),
+            (
+                2,
+                element(None, "a1", on(framed(40.0, 40.0, 20.0, 10.0), 1)),
+            ),
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    on(turned(framed(120.0, 120.0, 20.0, 10.0), 30.0), 1),
+                ),
+            ),
+        ]));
+        let pixel = |editor: &Editor, bits| {
+            let centre = placement(editor, bits).0.centre();
+            editor.board().pixel_at(id(1), centre).unwrap()
+        };
+        let pixels = [pixel(&editor, 2), pixel(&editor, 3)];
+
+        editor.straighten(&ids([1, 2, 3])).unwrap();
+        for (bits, before) in [2, 3].into_iter().zip(pixels) {
+            assert_at(pixel(&editor, bits), before.x, before.y);
+            assert_eq!(placement(&editor, bits).1, 0.0, "note {bits} is turned");
+            assert_eq!(placement(&editor, bits).3, Some(id(1)));
+        }
+        assert_sound(&editor);
+    }
+
+    #[test]
+    fn straightened_down_a_chain_what_sticks_keeps_to_the_same_place_on_what_it_sticks_to() {
+        let mut image = picture(0.0, 0.0);
+        if let ElementKind::Image { rotation, .. } = &mut image {
+            *rotation = 30.0;
+        }
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", image)),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    on(turned(framed(40.0, 40.0, 80.0, 60.0), 45.0), 1),
+                ),
+            ),
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    on(turned(framed(60.0, 60.0, 20.0, 10.0), 10.0), 2),
+                ),
+            ),
+            (
+                4,
+                element(
+                    None,
+                    "a3",
+                    stuck((300.0, 300.0), None, (85.0, 75.0), Some(2)),
+                ),
+            ),
+        ]));
+        let on_note = |editor: &Editor, point: Point, whole: bool| {
+            let note = Surface::of(&editor.board().elements[&id(2)].kind).unwrap();
+            note.to_content(point, whole).unwrap()
+        };
+        let places = |editor: &Editor| {
+            [
+                editor
+                    .board()
+                    .pixel_at(id(1), placement(editor, 2).0.centre())
+                    .unwrap(),
+                on_note(editor, placement(editor, 3).0.centre(), true),
+                on_note(editor, ends(editor, 4)[1].0, false),
+            ]
+        };
+        let before = places(&editor);
+
+        editor.straighten(&ids([1, 2, 3])).unwrap();
+
+        for (after, before) in places(&editor).into_iter().zip(before) {
+            assert_at(after, before.x, before.y);
+        }
+        for bits in [2, 3] {
+            assert_eq!(placement(&editor, bits).1, 0.0);
+        }
+        assert_eq!(ends(&editor, 4)[1].1, Some(id(2)));
+        assert_sound(&editor);
+        editor.undo();
+        assert_eq!(places(&editor), before);
+    }
+
+    #[test]
+    fn straightened_as_a_group_a_note_keeps_to_its_pixel_on_the_image_beside_it() {
+        let mut image = picture(0.0, 0.0);
+        if let ElementKind::Image { rotation, .. } = &mut image {
+            *rotation = 30.0;
+        }
+        let mut editor = Editor::new(board([
+            (9, element(None, "a0", ElementKind::Group)),
+            (1, element(Some(9), "a0", image)),
+            (
+                2,
+                element(
+                    Some(9),
+                    "a1",
+                    on(turned(framed(120.0, 120.0, 20.0, 10.0), 30.0), 1),
+                ),
+            ),
+        ]));
+        let pixel = |editor: &Editor| {
+            let centre = placement(editor, 2).0.centre();
+            editor.board().pixel_at(id(1), centre).unwrap()
+        };
+        let before = pixel(&editor);
+
+        editor.straighten(&ids([9])).unwrap();
+
+        assert_at(pixel(&editor), before.x, before.y);
+        assert_eq!(placement(&editor, 2).1, 0.0);
+        assert_eq!(placement(&editor, 2).3, Some(id(1)));
+        assert_sound(&editor);
     }
 
     #[test]

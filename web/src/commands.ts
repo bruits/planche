@@ -130,6 +130,10 @@ export function listen(commands: Command[], listening: () => boolean): void {
       return;
     }
     event.preventDefault();
+    // What Enter does opens a mode, which a held Enter would leave and open again by turns.
+    if (event.repeat && event.key === "Enter") {
+      return;
+    }
     if (listening() && command.unavailable?.() === undefined) {
       command.run();
     }

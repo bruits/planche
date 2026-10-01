@@ -181,8 +181,8 @@ pub struct Update {
     pub source: Option<String>,
     /// For an image.
     pub greyscale: Option<bool>,
-    /// For an image, the part of it to show, in its pixels, all of them to show it whole. The
-    /// image keeps its scale and its top left corner.
+    /// For an image, the part of it to show, in its pixels, all of them to show it whole. Each
+    /// pixel it still shows stays where it was, at the same size.
     pub crop: Option<Pixels>,
 }
 

@@ -1,7 +1,8 @@
 // What shows over the board without being part of it: the outlines of the selection, its
-// handles, the rectangle that selects, the bounds of the group gone into, and the outlines of
-// what the ends being drawn or moved stick to. It lies in board space, so following the camera
-// only moves its view box, and its strokes keep their width at any zoom.
+// handles, the rectangle that selects, the bounds of the group gone into, the outlines of what
+// the ends being drawn or moved stick to, and the crop of an image being cropped. It lies in
+// board space, so following the camera only moves its view box, and its strokes keep their
+// width at any zoom.
 
 import type { Camera, Viewport } from "./camera.js";
 import type { Point, Rect } from "./core.js";
@@ -28,6 +29,19 @@ export interface Overlay {
   entered(corners: Point[] | undefined): void;
   /** What ends stick to, as `outline` takes them. */
   targets(outlines: Float64Array[]): void;
+  /** `undefined` hides it. */
+  crop(crop: Crop | undefined): void;
+}
+
+/**
+ * An image being cropped, the corners of the whole image and of what its crop keeps, and the
+ * grips on the corners and edges of what it keeps. Flipped once, they run the other way, which
+ * the shade's even-odd fill ignores.
+ */
+export interface Crop {
+  image: Point[];
+  kept: Point[];
+  grips: Point[];
 }
 
 /** The four corners of `box` unless it is too small, then the rotation handle above its top side. */
@@ -60,11 +74,34 @@ export function overlay(host: HTMLElement): Overlay {
   entered.setAttribute("display", "none");
   const targets = document.createElementNS(SVG, "g");
   targets.classList.add("targets");
-  svg.append(entered, targets, selection, grips, marquee);
+  const shade = document.createElementNS(SVG, "path");
+  shade.classList.add("crop-shade");
+  const kept = document.createElementNS(SVG, "polygon");
+  kept.classList.add("crop-frame");
+  const cropGrips = document.createElementNS(SVG, "g");
+  cropGrips.classList.add("handles");
+  const cropping = document.createElementNS(SVG, "g");
+  cropping.append(shade, kept, cropGrips);
+  cropping.setAttribute("display", "none");
+  svg.append(entered, targets, selection, grips, marquee, cropping);
   host.append(svg);
   let zoom = 1;
   let corners: Point[] | undefined;
   let ends: Point[] | undefined;
+  let crop: Crop | undefined;
+  const placeCrop = () => {
+    const size = HANDLE_SIZE / zoom;
+    cropGrips.replaceChildren(
+      ...(crop?.grips ?? []).map((point) => {
+        const grip = document.createElementNS(SVG, "rect");
+        grip.setAttribute("x", String(point.x - size / 2));
+        grip.setAttribute("y", String(point.y - size / 2));
+        grip.setAttribute("width", String(size));
+        grip.setAttribute("height", String(size));
+        return grip;
+      }),
+    );
+  };
   const place = () => {
     const points = ends ?? (corners ? handles(corners, zoom) : []);
     const size = HANDLE_SIZE / zoom;
@@ -93,6 +130,7 @@ export function overlay(host: HTMLElement): Overlay {
       if (camera.zoom !== zoom) {
         zoom = camera.zoom;
         place();
+        placeCrop();
       }
     },
     outline(outlines) {
@@ -128,6 +166,18 @@ export function overlay(host: HTMLElement): Overlay {
     },
     targets(outlines) {
       targets.replaceChildren(...shapes(outlines));
+    },
+    crop(shown) {
+      crop = shown;
+      placeCrop();
+      if (shown === undefined) {
+        cropping.setAttribute("display", "none");
+        return;
+      }
+      const path = (points: Point[]) => `M${points.map(({ x, y }) => `${x} ${y}`).join("L")}Z`;
+      shade.setAttribute("d", path(shown.image) + path(shown.kept));
+      kept.setAttribute("points", shown.kept.flatMap(({ x, y }) => [x, y]).join(" "));
+      cropping.removeAttribute("display");
     },
   };
 }

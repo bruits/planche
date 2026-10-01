@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use board::{
     Animation, AssetId, Background, Board, Element, ElementId, ElementKind, GRID_STEP, GridLevel,
-    Order, Point, Rect, Restack, Size,
+    Order, Point, Rect, Restack, Side, Size,
 };
 use format::zip;
 use js_sys::{Map, Uint8Array};
@@ -189,6 +189,52 @@ impl Editor {
         Ok(strings(self.0.arrange(&parse(ids)?, &order)?))
     }
 
+    /// `side` is `height` or `width`.
+    pub fn normalize(&mut self, ids: Vec<String>, side: &str) -> Result<Vec<String>, JsError> {
+        let side = match side {
+            "height" => Side::Height,
+            "width" => Side::Width,
+            _ => return Err(JsError::new(&format!("`{side}` is not a side"))),
+        };
+        Ok(strings(self.0.normalize(&parse(ids)?, side)?))
+    }
+
+    /// In the image's pixels, as displayed.
+    pub fn crop(
+        &mut self,
+        id: &str,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) -> Result<Vec<String>, JsError> {
+        let area = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        Ok(strings(self.0.crop(id.parse()?, area)?))
+    }
+
+    #[wasm_bindgen(js_name = resetCrop)]
+    pub fn reset_crop(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.reset_crop(&parse(ids)?)?))
+    }
+
+    #[wasm_bindgen(js_name = setGreyscale)]
+    pub fn set_greyscale(
+        &mut self,
+        ids: Vec<String>,
+        greyscale: bool,
+    ) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.set_greyscale(&parse(ids)?, greyscale)?))
+    }
+
+    pub fn straighten(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.straighten(&parse(ids)?)?))
+    }
+
     /// Whether the board is as it was when read or last saved, however it got back there.
     #[wasm_bindgen(js_name = isSaved)]
     pub fn is_saved(&self) -> bool {
@@ -321,6 +367,20 @@ impl Editor {
     pub fn bounds(&self, ids: Vec<String>) -> Result<Option<Vec<f64>>, JsError> {
         let bounds = self.0.board().bounds(&parse(ids)?);
         Ok(bounds.map(|bounds| vec![bounds.x, bounds.y, bounds.width, bounds.height]))
+    }
+
+    /// The x and y of the image's pixel at a point, as displayed, `undefined` for no image.
+    #[wasm_bindgen(js_name = pixelAt)]
+    pub fn pixel_at(&self, id: &str, x: f64, y: f64) -> Result<Option<Vec<f64>>, JsError> {
+        let pixel = self.0.board().pixel_at(id.parse()?, Point { x, y });
+        Ok(pixel.map(|pixel| vec![pixel.x, pixel.y]))
+    }
+
+    /// Where the image's pixel lies, as `pixelAt` gives it.
+    #[wasm_bindgen(js_name = pointOfPixel)]
+    pub fn point_of_pixel(&self, id: &str, x: f64, y: f64) -> Result<Option<Vec<f64>>, JsError> {
+        let point = self.0.board().point_of_pixel(id.parse()?, Point { x, y });
+        Ok(point.map(|point| vec![point.x, point.y]))
     }
 }
 
