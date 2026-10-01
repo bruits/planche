@@ -63,6 +63,8 @@ export interface Platform {
   name: string;
   /** Missing where agents cannot reach the app. */
   agent?: Agent;
+  /** Missing where the app has no window of its own. Throws why it cannot, such as on Wayland. */
+  keepOnTop?(on: boolean): Promise<void>;
   /** Why saving is impossible here, if it is. */
   cannotSave?: string;
   /** `null` when the user cancels. */

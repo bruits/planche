@@ -50,6 +50,8 @@ import { writeZip, zipFolder } from "./zip.js";
 const HINTS = "planche.hints";
 /** Where the browser remembers that agent access is on. */
 const AGENT = "planche.agent";
+/** Where the browser remembers that the window stays on top. */
+const ON_TOP = "planche.ontop";
 const ZOOM_STEP = 1.25;
 /** In the order the key goes through them. */
 const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
@@ -118,6 +120,7 @@ let spaceHeld = false;
 let frameRate = 0;
 let hintsShown = recall(HINTS) !== "hidden";
 let agentsAllowed = false;
+let onTop = false;
 
 const loadingBoard = () => (loading ? "A board is opening" : undefined);
 const noBoard = () => (opened === undefined ? "No board is open yet" : undefined);
@@ -322,6 +325,7 @@ const commands = {
   system: palette("System", "system"),
   highContrast: { label: "High contrast", run: () => appearance.toggleContrast() },
   agentAccess: { label: "Agent access", run: () => report(allowAgents(!agentsAllowed)) },
+  alwaysOnTop: { label: "Always on top", run: () => report(keepOnTop(!onTop)) },
   measurements: {
     label: "Measurements",
     run: () => {
@@ -417,6 +421,10 @@ document.addEventListener("contextmenu", (event) => {
   contextMenu(editing.aim(at, pinned(event.target)), at, { x: event.clientX, y: event.clientY });
 });
 
+// The shell follows even when the browser forgot, as the window outlives a reload of the page.
+if (platform.keepOnTop) {
+  report(keepOnTop(recall(ON_TOP) === "on"));
+}
 await Promise.all([core.start(), loadFont()]);
 receive(viewport, (incoming, at) => report(addImages(incoming, at)));
 report(serveAgents());
@@ -483,6 +491,7 @@ function views(): Entry {
   return submenu("View", [
     { ...commands.hints, checked: hintsShown, toggle: true },
     { ...commands.measurements, checked: !measurements.hidden, toggle: true },
+    ...(platform.keepOnTop ? [{ ...commands.alwaysOnTop, checked: onTop, toggle: true }] : []),
     ...(platform.agent ? [{ ...commands.agentAccess, checked: agentsAllowed, toggle: true }] : []),
   ]);
 }
@@ -539,6 +548,16 @@ async function allowAgents(on: boolean): Promise<void> {
   agentsAllowed = on;
   remember(AGENT, on ? "on" : undefined);
   agentNotice.hidden = !on;
+}
+
+/** Remembered as the window is, so that a start the shell refuses forgets the choice. */
+async function keepOnTop(on: boolean): Promise<void> {
+  try {
+    await platform.keepOnTop?.(on);
+    onTop = on;
+  } finally {
+    remember(ON_TOP, onTop ? "on" : undefined);
+  }
 }
 
 /** One that only opens its options, so never runs. */

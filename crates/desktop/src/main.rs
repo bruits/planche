@@ -18,7 +18,7 @@ use tauri::{
     AppHandle, DragDropEvent, Emitter, Manager, RunEvent, State, Window, WindowEvent, Wry,
 };
 use tauri_plugin_dialog::{
-    DialogExt, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind,
+    DialogExt, FileDialogBuilder, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind,
 };
 
 /// The menu item that quits by closing every window, as closing one asks first.
@@ -91,6 +91,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             confirm,
             mark_unsaved,
+            keep_on_top,
             read_dropped,
             pick_folder,
             pick_target,
@@ -216,6 +217,11 @@ fn ask(window: &Window, question: &str) -> MessageDialogBuilder<Wry> {
         .parent(window)
 }
 
+/// Over `window`, which Windows would otherwise keep above it once on top, but on Linux.
+fn files(window: &Window) -> FileDialogBuilder<Wry> {
+    window.dialog().file().set_parent(window)
+}
+
 fn check(picked: &Mutex<BTreeSet<PathBuf>>, root: &Path) -> Result<(), String> {
     if picked.lock().expect("never poisoned").contains(root) {
         Ok(())
@@ -241,6 +247,25 @@ fn mark_unsaved(unsaved: State<'_, Unsaved>, value: bool) {
     unsaved.0.store(value, Ordering::Relaxed);
 }
 
+/// GTK ignores it on Wayland without a word, so the shell refuses there.
+#[tauri::command]
+fn keep_on_top(window: Window, on: bool) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if on && on_wayland() {
+        return Err("Wayland keeps windows from staying on top".to_owned());
+    }
+    window
+        .set_always_on_top(on)
+        .map_err(|error| error.to_string())
+}
+
+/// As GTK picks its backend.
+#[cfg(target_os = "linux")]
+fn on_wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && !std::env::var("GDK_BACKEND").is_ok_and(|backend| backend.starts_with("x11"))
+}
+
 #[tauri::command(async)]
 fn read_dropped(picked: State<'_, Picked>, path: PathBuf) -> Result<Response, String> {
     check(&picked.dropped, &path)?;
@@ -252,11 +277,11 @@ fn read_dropped(picked: State<'_, Picked>, path: PathBuf) -> Result<Response, St
 /// A folder to read. `None` when the user cancels.
 #[tauri::command(async)]
 fn pick_folder(
-    app: AppHandle,
+    window: Window,
     picked: State<'_, Picked>,
     title: String,
 ) -> Result<Option<PathBuf>, String> {
-    let Some(root) = pick(&app, title)? else {
+    let Some(root) = pick(&window, title)? else {
         return Ok(None);
     };
     picked
@@ -270,11 +295,11 @@ fn pick_folder(
 /// An empty folder to write into. `None` when the user cancels.
 #[tauri::command(async)]
 fn pick_target(
-    app: AppHandle,
+    window: Window,
     picked: State<'_, Picked>,
     title: String,
 ) -> Result<Option<PathBuf>, String> {
-    let Some(root) = pick(&app, title)? else {
+    let Some(root) = pick(&window, title)? else {
         return Ok(None);
     };
     if !folder::is_empty(&root).map_err(|error| describe(&root, error))? {
@@ -288,8 +313,8 @@ fn pick_target(
     Ok(Some(root))
 }
 
-fn pick(app: &AppHandle, title: String) -> Result<Option<PathBuf>, String> {
-    let dialog = app.dialog().file().set_title(title);
+fn pick(window: &Window, title: String) -> Result<Option<PathBuf>, String> {
+    let dialog = files(window).set_title(title);
     dialog
         .blocking_pick_folder()
         .map(|folder| folder.into_path().map_err(|error| error.to_string()))
@@ -330,15 +355,11 @@ fn write_file(picked: State<'_, Picked>, request: Request<'_>) -> Result<(), Str
 /// A board's ZIP file to read, and its size. `None` when the user cancels.
 #[tauri::command(async)]
 fn pick_zip(
-    app: AppHandle,
+    window: Window,
     picked: State<'_, Picked>,
     title: String,
 ) -> Result<Option<(PathBuf, u64)>, String> {
-    let dialog = app
-        .dialog()
-        .file()
-        .set_title(title)
-        .add_filter("ZIP", &["zip"]);
+    let dialog = files(&window).set_title(title).add_filter("ZIP", &["zip"]);
     let Some(file) = dialog.blocking_pick_file() else {
         return Ok(None);
     };
@@ -378,14 +399,12 @@ fn read_zip(
 /// [`finish_export`]. `None` when the user cancels.
 #[tauri::command(async)]
 fn pick_export(
-    app: AppHandle,
+    window: Window,
     picked: State<'_, Picked>,
     title: String,
     name: String,
 ) -> Result<Option<PathBuf>, String> {
-    let dialog = app
-        .dialog()
-        .file()
+    let dialog = files(&window)
         .set_title(title)
         .set_file_name(name)
         .add_filter("ZIP", &["zip"]);

@@ -106,6 +106,8 @@ export function tauri({ core, event }: TauriApi): Platform {
       void core.invoke("mark_unsaved", { value });
     },
 
+    keepOnTop: (on) => core.invoke("keep_on_top", { on }),
+
     // Only on Linux, where the shell takes drops itself.
     watchDrops(dropped) {
       type Dropped = [string[], string[], number, number];
