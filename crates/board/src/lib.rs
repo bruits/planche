@@ -10,6 +10,7 @@ mod geometry;
 mod grid;
 mod stick;
 mod svg;
+mod video;
 mod z_index;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,6 +24,7 @@ pub use animation::{Animation, animation, frame_delay};
 pub use edit::{Editor, Restack};
 pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
 pub use svg::{sized_svg, svg_size};
+pub use video::{Video, video};
 pub use z_index::ZIndex;
 
 pub type Result<T> = std::result::Result<T, Error>;

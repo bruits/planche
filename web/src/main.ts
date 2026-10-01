@@ -39,6 +39,7 @@ import { create, type Renderer } from "./renderer.js";
 import { loadFont, texts } from "./text.js";
 import { toolbar, type Button } from "./toolbar.js";
 import { vectors } from "./vector.js";
+import { videos } from "./video.js";
 import { view } from "./view.js";
 import { writeZip, zipFolder } from "./zip.js";
 
@@ -59,8 +60,9 @@ const viewport = view(byId("viewport"), {
     if (opened && renderer) {
       drawings.update(opened.board, renderer, camera, size);
       animated.update(opened.board, renderer, camera, size);
+      films.update(opened.board, renderer, camera, size);
       if (lettering.update(opened.board, renderer, camera, size, editing.writing())) {
-        renderer.place(placed(opened.board, lettering, editing.writing()));
+        renderer.place(placed(opened.board, lettering, editing.writing(), unplayable));
       }
     }
   },
@@ -69,6 +71,11 @@ const viewport = view(byId("viewport"), {
 const lettering = texts(() => viewport.redraw());
 const drawings = vectors(() => viewport.redraw());
 const animated = animations(() => viewport.redraw(), () => refreshBar());
+const films = videos(
+  () => viewport.redraw(),
+  () => refreshBar(),
+  () => bar.say("A video cannot play here"),
+);
 const editing = edits(viewport, shown, () => opened, {
   changed,
   selectionChanged() {
@@ -96,6 +103,7 @@ let exporting = false;
 let tool: "select" | "hand" | "eraser" | Draw = "select";
 /** Left out of the board, it starts as the board's background suggests. */
 let snapping = false;
+let unplayable: ReadonlySet<string> = new Set();
 let spaceHeld = false;
 /** Kept while the measurements are hidden, so that they show at once when opened. */
 let frameRate = 0;
@@ -105,7 +113,9 @@ const loadingBoard = () => (loading ? "A board is opening" : undefined);
 const noBoard = () => (opened === undefined ? "No board is open yet" : undefined);
 const noneSelected = () => (editing.selection().length === 0 ? "Nothing is selected" : undefined);
 const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet" : undefined);
-const selectedAnimations = () => (opened ? assetsOf(opened.board, editing.selection()).filter(animated.holds) : []);
+const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection()) : []);
+const selectedMoving = () => selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
+const moving = (asset: string) => animated.playing(asset) || films.playing(asset);
 const restack = (label: string, to: Restack, shortcut: Shortcut): Command => ({
   label,
   keys: [shortcut],
@@ -191,12 +201,25 @@ const commands = {
   flipHorizontally: flip("Flip horizontally", "h", true),
   flipVertically: flip("Flip vertically", "v", false),
   play: {
-    label: () => (selectedAnimations().some(animated.playing) ? "Pause" : "Play"),
+    label: () => (selectedMoving().some(moving) ? "Pause" : "Play"),
     keys: [{ key: "p" }],
-    unavailable: () => noneSelected() ?? (selectedAnimations().length > 0 ? undefined : "Only animated images play"),
+    unavailable: () =>
+      noneSelected() ?? (selectedMoving().length > 0 ? undefined : "Only animated images and videos play"),
     run: () => {
-      const assets = selectedAnimations();
-      animated.play(assets, !assets.some(animated.playing));
+      const assets = selectedMoving();
+      const playing = !assets.some(moving);
+      animated.play(assets, playing);
+      films.play(assets, playing);
+      refreshBar();
+    },
+  },
+  sound: {
+    label: () => (selectedAssets().some(films.sounding) ? "Turn sound off" : "Turn sound on"),
+    keys: [{ key: "m" }],
+    unavailable: () => noneSelected() ?? (selectedAssets().some(films.holds) ? undefined : "Only videos have sound"),
+    run: () => {
+      const assets = selectedAssets().filter(films.holds);
+      films.sound(assets, !assets.some(films.sounding));
       refreshBar();
     },
   },
@@ -366,8 +389,10 @@ for (const query of ["(prefers-color-scheme: dark)", "(forced-colors: active)"])
 }
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 animated.reduce(reducedMotion.matches);
+films.reduce(reducedMotion.matches);
 reducedMotion.addEventListener("change", () => {
   animated.reduce(reducedMotion.matches);
+  films.reduce(reducedMotion.matches);
   refreshBar();
 });
 document.addEventListener("contextmenu", (event) => {
@@ -509,9 +534,10 @@ function hint(): string {
     return `Drag to move · drag an end to move it, holding ${freeKey} to keep it from sticking · right-click for more`;
   }
   if (editing.selection().length > 0) {
-    const play = commands.play.unavailable() === undefined;
-    const playKey = `${describe(commands.play.keys[0]!)} to ${commands.play.label().toLowerCase()} · `;
-    return `Drag to move · corners scale · the circle rotates · ${play ? playKey : ""}right-click for more`;
+    const keys = [commands.play, commands.sound]
+      .filter((command) => command.unavailable() === undefined)
+      .map((command) => `${describe(command.keys[0]!)} to ${command.label().toLowerCase()} · `);
+    return `Drag to move · corners scale · the circle rotates · ${keys.join("")}right-click for more`;
   }
   return "Drop or paste images · scroll to move around · right-click for more";
 }
@@ -533,6 +559,7 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.flipHorizontally,
         commands.flipVertically,
         commands.play,
+        commands.sound,
         "separator",
         commands.remove,
       ]
@@ -614,6 +641,8 @@ async function show(next: Opened): Promise<void> {
   lettering.reset();
   drawings.reset();
   animated.reset();
+  films.reset();
+  unplayable = new Set();
   comments.clear();
   showSaved();
   showTitle();
@@ -644,9 +673,13 @@ async function show(next: Opened): Promise<void> {
   const [, uploading] = await timed(() => load(created, decoded));
   details.set("upload", milliseconds(uploading));
   animated.keep(assets);
-  created.place(placed(next.board, lettering));
+  films.keep(assets.filter(({ asset }) => decoded.has(asset)));
+  unplayable = new Set(assets.filter(({ asset, video }) => video && !decoded.has(asset)).map(({ asset }) => asset));
+  created.place(placed(next.board, lettering, undefined, unplayable));
   viewport.redraw();
-  if (!empty) {
+  if (unplayable.size > 0) {
+    bar.say(`${summary}, ${unplayable.size === 1 ? "a video" : `${unplayable.size} videos`} this machine cannot play`);
+  } else if (!empty) {
     bar.say(summary);
   }
 }
@@ -672,6 +705,9 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   if (added.length > 0 && target !== undefined && target === opened && renderer !== undefined) {
     load(renderer, new Map(added.map(({ asset, decoded }) => [asset, decoded])));
     animated.keep(added);
+    films.keep(added);
+    const fresh = new Set(added.map(({ asset }) => asset));
+    unplayable = new Set([...unplayable].filter((asset) => !fresh.has(asset)));
     const { editor } = target;
     const frames = row(
       added.map(({ natural }) => natural),
@@ -723,7 +759,7 @@ function changed(touched: string[]): void {
   }
   refresh(opened, touched);
   renderer?.backdrop(opened.board.background);
-  renderer?.place(placed(opened.board, lettering, editing.writing()));
+  renderer?.place(placed(opened.board, lettering, editing.writing(), unplayable));
   showSaved();
   viewport.redraw();
 }

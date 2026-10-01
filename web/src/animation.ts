@@ -5,7 +5,7 @@
 import type { Camera, Viewport } from "./camera.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Size } from "./core.js";
-import { LONGEST_SIDE, onScreen, overlaps } from "./raster.js";
+import { LONGEST_SIDE, shownAssets } from "./raster.js";
 import type { Playing, Renderer } from "./renderer.js";
 
 /** How long a frame spends on frames of animated images before it starts no more, in milliseconds. */
@@ -103,14 +103,7 @@ export function animations(again: () => void, changed: () => void): Animations {
       if (clips.size === 0) {
         return;
       }
-      const area = onScreen(camera, viewport);
-      const shown = new Set<string>();
-      for (const id of board.draw_order) {
-        const { kind } = board.elements[id]!;
-        if (kind.type === "image" && clips.has(kind.asset) && overlaps(area, kind.frame)) {
-          shown.add(kind.asset);
-        }
-      }
+      const shown = shownAssets(board, camera, viewport, (asset) => clips.has(asset));
       const now = performance.now();
       let next = Infinity;
       // The most overdue first, so that one a frame had no time left for goes first in the next.

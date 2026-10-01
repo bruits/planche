@@ -23,6 +23,7 @@ import init, {
   strokeWidth,
   svgSize as vectorSize,
   verifyAsset as verify,
+  videoType as containerType,
   zipTailLength,
 } from "./wasm/bindings.js";
 
@@ -125,6 +126,8 @@ export function coreMemory(): number {
 
 /** The most bytes the core takes in one call to name or checksum a file, so that its memory does not grow with it. */
 const SLICE = 8 * 2 ** 20;
+/** What of a file tells whether it is a video. */
+export const VIDEO_START = 1024;
 
 function feed(sink: { update(slice: Bytes): void }, bytes: Bytes): void {
   for (let at = 0; at < bytes.length; at += SLICE) {
@@ -187,6 +190,11 @@ export function svgSize(bytes: Bytes): Size | undefined {
 export function animationPlays(bytes: Bytes): number | undefined {
   const times = plays(bytes);
   return times === 0 ? Infinity : times;
+}
+
+/** The type of the blob a video plays from, `undefined` when the bytes do not start as one. */
+export function videoType(start: Bytes): string | undefined {
+  return containerType(start.subarray(0, VIDEO_START));
 }
 
 /** The SVG with its root sized to `natural`, for every host to draw it at that size. */

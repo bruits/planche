@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use wasm_bindgen::prelude::*;
-use web_sys::{HtmlCanvasElement, ImageBitmap};
+use web_sys::{HtmlCanvasElement, HtmlMediaElement, HtmlVideoElement, ImageBitmap};
 
 /// Uniform buffers take multiples of 16 bytes on WebGL2, hence the padding.
 const CAMERA: &str = r#"
@@ -479,19 +479,8 @@ impl Renderer {
         };
         let (numerator, denominator) = frame.delay().numer_denom_ms();
         let canvas = frame.into_buffer();
-        let texture = self
-            .textures
-            .get(index as usize)
-            .and_then(Option::as_ref)
-            .ok_or_else(|| JsError::new(&format!("texture {index} is not uploaded")))?;
-        let size = texture.texture.size();
         let (width, height) = canvas.dimensions();
-        if (width, height) != (size.width, size.height) {
-            return Err(JsError::new(&format!(
-                "a {width} by {height} frame does not fit a {} by {} texture",
-                size.width, size.height
-            )));
-        }
+        let texture = self.fitting(index, width, height)?;
         self.queue.write_texture(
             texture.texture.as_image_copy(),
             canvas.as_raw(),
@@ -500,10 +489,28 @@ impl Renderer {
                 bytes_per_row: Some(4 * width),
                 rows_per_image: Some(height),
             },
-            size,
+            texture.texture.size(),
         );
         self.generate_mipmaps(&texture.texture);
         Ok(Some(f64::from(numerator) / f64::from(denominator)))
+    }
+
+    /// Draws the frame `video` shows onto the texture, which must be as large. Whether it had one
+    /// to show.
+    #[wasm_bindgen(js_name = copyVideo)]
+    pub fn copy_video(&self, index: u32, video: HtmlVideoElement) -> Result<bool, JsError> {
+        // Copying from one that has none throws, which kills the module on WebGPU.
+        if video.ready_state() < HtmlMediaElement::HAVE_CURRENT_DATA || video.video_width() == 0 {
+            return Ok(false);
+        }
+        let texture = self.fitting(index, video.video_width(), video.video_height())?;
+        self.copy_external(
+            wgpu::ExternalImageSource::HTMLVideoElement(video),
+            &texture.texture,
+        );
+        // Which submits the copy at once, as WebGL2 only records it until then.
+        self.generate_mipmaps(&texture.texture);
+        Ok(true)
     }
 
     /// Frees the texture, whose index the next upload may take. Items that still name it draw
@@ -670,22 +677,7 @@ impl Renderer {
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
-        self.queue.copy_external_image_to_texture(
-            &wgpu::CopyExternalImageSourceInfo {
-                source,
-                origin: wgpu::Origin2d::ZERO,
-                flip_y: false,
-            },
-            wgpu::CopyExternalImageDestInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-                color_space: wgpu::PredefinedColorSpace::Srgb,
-                premultiplied_alpha: false,
-            },
-            size,
-        );
+        self.copy_external(source, &texture);
         self.generate_mipmaps(&texture);
         let view = texture.create_view(&Default::default());
         let bytes = (0..texture.mip_level_count())
@@ -711,6 +703,47 @@ impl Renderer {
         };
         self.check()?;
         Ok(u32::try_from(index).expect("fewer than 2³² textures"))
+    }
+
+    fn copy_external(&self, source: wgpu::ExternalImageSource, texture: &wgpu::Texture) {
+        let size = wgpu::Extent3d {
+            width: source.width(),
+            height: source.height(),
+            depth_or_array_layers: 1,
+        };
+        self.queue.copy_external_image_to_texture(
+            &wgpu::CopyExternalImageSourceInfo {
+                source,
+                origin: wgpu::Origin2d::ZERO,
+                flip_y: false,
+            },
+            wgpu::CopyExternalImageDestInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+                color_space: wgpu::PredefinedColorSpace::Srgb,
+                premultiplied_alpha: false,
+            },
+            size,
+        );
+    }
+
+    fn fitting(&self, index: u32, width: u32, height: u32) -> Result<&Texture, JsError> {
+        let texture = self
+            .textures
+            .get(index as usize)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| JsError::new(&format!("texture {index} is not uploaded")))?;
+        let size = texture.texture.size();
+        if (width, height) == (size.width, size.height) {
+            Ok(texture)
+        } else {
+            Err(JsError::new(&format!(
+                "a {width} by {height} frame does not fit a {} by {} texture",
+                size.width, size.height
+            )))
+        }
     }
 
     fn check(&self) -> Result<(), JsError> {

@@ -3,7 +3,7 @@
 // power reuses it, and follows the camera only once it settles.
 
 import type { Camera, Viewport } from "./camera.js";
-import type { Rect } from "./core.js";
+import type { Board, Rect } from "./core.js";
 
 /** WebGL2 guarantees textures this large. */
 export const LONGEST_SIDE = 2048;
@@ -68,6 +68,24 @@ export function settling(again: () => void): Settling {
 /** What of the board shows. */
 export function onScreen(camera: Camera, { width, height }: Viewport): Rect {
   return { x: camera.x, y: camera.y, width: width / camera.zoom, height: height / camera.zoom };
+}
+
+/** The assets of the images that show, among those `kept`, each with its largest image's area. */
+export function shownAssets(
+  board: Board,
+  camera: Camera,
+  viewport: Viewport,
+  kept: (asset: string) => boolean,
+): Map<string, number> {
+  const area = onScreen(camera, viewport);
+  const shown = new Map<string, number>();
+  for (const id of board.draw_order) {
+    const { kind } = board.elements[id]!;
+    if (kind.type === "image" && kept(kind.asset) && overlaps(area, kind.frame)) {
+      shown.set(kind.asset, Math.max(shown.get(kind.asset) ?? 0, kind.frame.width * kind.frame.height));
+    }
+  }
+  return shown;
 }
 
 /** Whether the frame, however it turns, may show in `area`. */

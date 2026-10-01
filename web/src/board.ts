@@ -9,6 +9,7 @@ import type { Folder } from "./platform.js";
 import type { Placed } from "./renderer.js";
 import { holdsText, type Texts } from "./text.js";
 import { picture, type Picture } from "./vector.js";
+import { VIDEO_LIMIT, firstFrame } from "./video.js";
 
 export interface Opened {
   folder: Folder;
@@ -19,7 +20,10 @@ export interface Opened {
   added: Map<string, Blob>;
 }
 
-/** A bitmap capped as `decode` caps them, or an SVG, which is rasterised as it shows. */
+/**
+ * A bitmap capped as `decode` caps them, or a video's first frame, or an SVG, which is
+ * rasterised as it shows.
+ */
 export type Decoded = ImageBitmap | Picture;
 
 /** An image to add, decoded. */
@@ -29,6 +33,8 @@ export interface Added {
   natural: Size;
   decoded: Decoded;
   moving?: Moving;
+  /** Typed, to play from. */
+  video?: Blob;
 }
 
 /** An asset that images show, still encoded. */
@@ -38,6 +44,8 @@ export interface Asset {
   natural: Size;
   vector: boolean;
   moving?: Moving;
+  /** The blob, when a video. */
+  video?: Blob;
 }
 
 /**
@@ -94,6 +102,10 @@ export function files({ folder, added }: Opened): Folder {
 
 /** Throws when the bytes are not an image the host can decode. */
 export async function prepare(bytes: Blob, cap: number): Promise<Added> {
+  const type = core.videoType(new Uint8Array(await bytes.slice(0, core.VIDEO_START).arrayBuffer()));
+  if (type !== undefined) {
+    return prepareVideo(bytes, type);
+  }
   const whole = new Uint8Array(await bytes.arrayBuffer());
   const vector = checkedSvgSize(whole);
   const asset = await digest(whole);
@@ -114,6 +126,21 @@ export async function prepare(bytes: Blob, cap: number): Promise<Added> {
     resizeQuality: "high",
   }).finally(() => full.close());
   return { asset, bytes, natural, decoded: bitmap, moving };
+}
+
+async function prepareVideo(bytes: Blob, type: string): Promise<Added> {
+  if (bytes.size > VIDEO_LIMIT) {
+    throw new Error(`it is over the ${VIDEO_LIMIT / 1e6} MB limit for videos`);
+  }
+  const video = new Blob([bytes], { type });
+  const { bitmap, natural } = await firstFrame(video);
+  try {
+    const asset = await digest(new Uint8Array(await bytes.arrayBuffer()));
+    return { asset, bytes, natural, decoded: bitmap, video };
+  } catch (error) {
+    bitmap.close();
+    throw error;
+  }
 }
 
 /** Only a GIF, a PNG, or a WebP may move, and only their bytes are worth copying into the core. */
@@ -194,16 +221,31 @@ const HEAD_SHARE = 1 / 3;
 /** Between each side of an arrow's head and its line, in radians. */
 const HEAD_ANGLE = Math.PI / 6;
 
-/** What draws, back to front, but the text of `hidden`, which is being written. */
-export function placed(board: Board, texts: Texts, hidden?: string): Placed[] {
+/**
+ * What draws, back to front, but the text of `hidden`, which is being written. Images of the
+ * `unplayable` videos show where they lie, crossed out.
+ */
+export function placed(
+  board: Board,
+  texts: Texts,
+  hidden?: string,
+  unplayable: ReadonlySet<string> = new Set(),
+): Placed[] {
   const width = core.strokeWidth();
   return board.draw_order.flatMap((id): Placed[] => {
     const { kind } = board.elements[id]!;
     const text = holdsText(kind) ? texts.placed(id, kind) : undefined;
     const written = text && id !== hidden ? [text] : [];
     switch (kind.type) {
-      case "image":
-        return [image(kind)];
+      case "image": {
+        const { frame, rotation } = kind;
+        return unplayable.has(kind.asset)
+          ? [
+              { kind: "rectangle", frame, rotation, width },
+              { kind: "cross", frame, rotation, width },
+            ]
+          : [image(kind)];
+      }
       case "arrow":
         return arrow(kind.from, kind.to, width);
       case "line":
@@ -306,20 +348,37 @@ export async function readAssets({ folder, board }: Opened): Promise<Asset[]> {
     if (kind.type === "image" && !assets.has(kind.asset)) {
       const bytes = await folder.read(core.assetPath(kind.asset));
       core.verifyAsset(kind.asset, bytes);
-      const vector = checkedSvgSize(bytes) !== undefined;
       const natural = kind.natural_size;
-      assets.set(kind.asset, { asset: kind.asset, blob: new Blob([bytes]), natural, vector, moving: moves(bytes) });
+      const type = core.videoType(bytes);
+      if (type === undefined) {
+        const vector = checkedSvgSize(bytes) !== undefined;
+        assets.set(kind.asset, { asset: kind.asset, blob: new Blob([bytes]), natural, vector, moving: moves(bytes) });
+      } else {
+        const video = new Blob([bytes], { type });
+        assets.set(kind.asset, { asset: kind.asset, blob: video, natural, vector: false, video });
+      }
     }
   }
   return [...assets.values()];
 }
 
-/** Bitmaps with their longest side capped at `cap` pixels. Four decode at once, to bound the memory in flight. */
+/**
+ * Bitmaps with their longest side capped at `cap` pixels, and a video's first frame at the video's
+ * own size, as its frames go onto the same texture. Four decode at once, to bound the memory in
+ * flight. A video this machine cannot play is left out, for the board to open all the same.
+ */
 export async function decode(assets: Asset[], cap: number): Promise<Map<string, Decoded>> {
   const decoded = new Map<string, Decoded>();
   const pending = assets.values();
   const worker = async () => {
-    for (const { asset, blob, natural, vector } of pending) {
+    for (const { asset, blob, natural, vector, video } of pending) {
+      if (video) {
+        await firstFrame(video).then(
+          ({ bitmap }) => decoded.set(asset, bitmap),
+          () => undefined,
+        );
+        continue;
+      }
       if (vector) {
         decoded.set(asset, await picture(new Uint8Array(await blob.arrayBuffer()), natural));
         continue;

@@ -485,6 +485,12 @@ pub fn frame_delay(milliseconds: f64) -> f64 {
     board::frame_delay(milliseconds)
 }
 
+/// The type of the blob a video plays from, `undefined` when `bytes` do not start as one.
+#[wasm_bindgen(js_name = videoType)]
+pub fn video_type(bytes: &[u8]) -> Option<String> {
+    board::video(bytes).map(|video| video.mime().to_owned())
+}
+
 /// Writes a board's ZIP file one entry at a time.
 #[wasm_bindgen]
 #[derive(Default)]

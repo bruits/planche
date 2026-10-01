@@ -11,12 +11,12 @@ import type { View } from "./view.js";
 export type Incoming = { name: string; bytes: Blob } | { name: string; failure: string };
 
 /**
- * Image files the user picks, none when they cancel. The macOS webview offers every file,
+ * Image and video files the user picks, none when they cancel. The macOS webview offers every file,
  * whatever the input accepts, so that others fail to decode as any unknown format does.
  */
 export async function pick(): Promise<Incoming[]> {
   const files = await choose((input) => {
-    input.accept = "image/*";
+    input.accept = "image/*,video/*";
     input.multiple = true;
   });
   return (files ?? []).map((file) => ({ name: file.name, bytes: file }));

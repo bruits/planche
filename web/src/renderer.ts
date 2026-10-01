@@ -52,6 +52,11 @@ export interface Renderer {
   setImage(asset: string, canvas: HTMLCanvasElement): void;
   /** The frames the bytes of a loaded asset hold. Throws when they do not decode. */
   animate(asset: string, bytes: Bytes): Playing;
+  /**
+   * The frame the video shows, onto a loaded asset's texture. Whether it had one to show. Throws
+   * when it is not as large as the texture.
+   */
+  copyVideo(asset: string, video: HTMLVideoElement): boolean;
   /** The text `id` as the canvas holds it, in place of any before. */
   setText(id: string, canvas: HTMLCanvasElement): void;
   dropText(id: string): void;
@@ -184,6 +189,10 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
         restart: () => animation.restart(),
         free: () => animation.free(),
       };
+    },
+    copyVideo(asset, video) {
+      const texture = images.get(asset);
+      return texture !== undefined && renderer.copyVideo(texture, video);
     },
     setText(id, canvas) {
       replace(texts, id, canvas);
