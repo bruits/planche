@@ -319,6 +319,7 @@ body {
 
 .bar,
 #message,
+#agent,
 #measurements,
 .menu {
   background: var(--surface);
@@ -681,6 +682,16 @@ body {
     color: CanvasText;
     background: Canvas;
   }
+}
+
+#agent {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
 }
 
 #measurements {

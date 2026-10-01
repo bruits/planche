@@ -24,7 +24,7 @@ Three priorities guide the trade-offs. Performance: a board of hundreds of large
 
 Planche is a Rust monorepo using [Cargo workspaces](https://doc.rust-lang.org/book/ch14-03-cargo-workspaces.html). The core needs [rustup](https://rustup.rs/), which installs the toolchain and the WASM target pinned in `rust-toolchain.toml`, and [just](https://github.com/casey/just) for the recipes listed in [AGENTS.md](./AGENTS.md). The app also needs [Node.js](https://nodejs.org/) and [pnpm](https://pnpm.io/), then `just setup`, Python 3 for `just serve`, and on Linux the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). On Windows, `just` runs its recipes with the `sh` of [Git for Windows](https://gitforwindows.org/).
 
-The app is one web app in `web/`, in TypeScript without a framework, which runs the core as WASM on every platform: in a browser, and in the desktop shell's webview. Dependencies only point inward: `bindings` → `format` → `board`, and `desktop` → `folder`, which know nothing of boards. The crates live in `crates/`:
+The app is one web app in `web/`, in TypeScript without a framework, which runs the core as WASM on every platform: in a browser, and in the desktop shell's webview. Dependencies only point inward: `bindings` → `format` → `board`, and `desktop` → `folder` and `mcp`, which know nothing of boards. The crates live in `crates/`:
 
 ### board
 
@@ -40,7 +40,7 @@ The core for the web app, through [wasm-bindgen](https://github.com/wasm-bindgen
 
 ### desktop
 
-The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web app, and the file system that a browser lacks, limited to the folders and ZIP files the user picks and the files dropped on it, and writing only into folders that were empty and to files picked to export to. It asks before closing a window loses changes. The webview takes dropped files itself, but not on Linux, where WebKitGTK hides them from pages, so the shell takes them there. It is the Tauri track from the [foundation](./docs/technical/foundation.md), under test in the prototype.
+The desktop shell, on [Tauri 2](https://v2.tauri.app/): a window around the web app, and the file system that a browser lacks, limited to the folders and ZIP files the user picks and the files dropped on it, and writing only into folders that were empty and to files picked to export to. It asks before closing a window loses changes. The webview takes dropped files itself, but not on Linux, where WebKitGTK hides them from pages, so the shell takes them there. Once the user turns agent access on, it passes agents' questions about the board on to the web app, and run as `desktop mcp`, it is the gateway an agent's client spawns. It is the Tauri track from the [foundation](./docs/technical/foundation.md), under test in the prototype.
 
 ### renderer
 
@@ -49,3 +49,7 @@ The renderer, on wgpu: images as textured quads, the frames of animated ones, wh
 ### folder
 
 A folder on disk as the desktop shell reads and writes it: paths with `/` between segments, atomic writes, and nothing that leads out of it, neither links nor dot folders such as `.git/`. A single picked file, such as a ZIP file, is read in ranges and written in parts, just as atomically. It needs no Tauri, so its tests run on every platform.
+
+### mcp
+
+How agents read the board open in the desktop app, over [MCP](https://modelcontextprotocol.io/). An agent's client spawns the gateway, which passes bytes between its standard streams and the app, over a port of this machine only, once each side proved itself with a secret. Both find each other, and the secrets, through a file only the user can read, which exists while agent access is on. The app answers each tool call by asking the web app, which holds the board. It needs no Tauri, so its tests run on every platform. It is the MCP track from the [foundation](./docs/technical/foundation.md), reading only so far.

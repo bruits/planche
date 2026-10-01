@@ -1,0 +1,25 @@
+[package]
+name = "mcp"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Already in Tauri's tree, which finds the app's folder with it too.
+dirs = "7"
+# Already in Tauri's tree. With std, its error is a std::error::Error.
+getrandom = { version = "0.3", features = ["std"] }
+# The official SDK, without its HTTP transports.
+rmcp = { version = "3.5", default-features = false, features = ["server", "macros"] }
+# Already in the tree, through serde_with, at the major rmcp describes tool inputs with.
+schemars = "1"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Already in Tauri's tree, whose runtime the server runs on.
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[dev-dependencies]
+rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "client"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }

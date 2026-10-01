@@ -12,6 +12,7 @@ publish = false
 board = { path = "crates/board" }
 folder = { path = "crates/folder" }
 format = { path = "crates/format" }
+mcp = { path = "crates/mcp" }
 
 serde = { version = "1", features = ["derive"] }
 # Without float_roundtrip, some floats read back one bit off, and saving would rewrite

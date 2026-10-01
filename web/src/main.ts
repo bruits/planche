@@ -4,6 +4,7 @@
 import * as core from "./core.js";
 import type { Background, Point } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
+import { answer } from "./agent.js";
 import { animations } from "./animation.js";
 import {
   assetsOf,
@@ -35,7 +36,7 @@ import { overlay } from "./overlay.js";
 import { pinned, pins } from "./pins.js";
 import { platform, type Folder } from "./platform.js";
 import { recall, remember } from "./preferences.js";
-import { LONGEST_SIDE } from "./raster.js";
+import { LONGEST_SIDE, onScreen } from "./raster.js";
 import { create, type Renderer } from "./renderer.js";
 import { loadFont, texts } from "./text.js";
 import { theme, type Scheme } from "./theme.js";
@@ -47,12 +48,15 @@ import { writeZip, zipFolder } from "./zip.js";
 
 /** Where the browser remembers that hints are hidden. */
 const HINTS = "planche.hints";
+/** Where the browser remembers that agent access is on. */
+const AGENT = "planche.agent";
 const ZOOM_STEP = 1.25;
 /** In the order the key goes through them. */
 const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
 const SCHEMES: Scheme[] = ["light", "dark", "system"];
 
 const measurements = byId("measurements");
+const agentNotice = byId("agent");
 const details = new Map<string, string>();
 const shown = overlay(byId("viewport"));
 const viewport = view(byId("viewport"), {
@@ -112,6 +116,7 @@ let spaceHeld = false;
 /** Kept while the measurements are hidden, so that they show at once when opened. */
 let frameRate = 0;
 let hintsShown = recall(HINTS) !== "hidden";
+let agentsAllowed = false;
 
 const loadingBoard = () => (loading ? "A board is opening" : undefined);
 const noBoard = () => (opened === undefined ? "No board is open yet" : undefined);
@@ -315,6 +320,7 @@ const commands = {
   dark: palette("Dark", "dark"),
   system: palette("System", "system"),
   highContrast: { label: "High contrast", run: () => appearance.toggleContrast() },
+  agentAccess: { label: "Agent access", run: () => report(allowAgents(!agentsAllowed)) },
   measurements: {
     label: "Measurements",
     run: () => {
@@ -412,6 +418,7 @@ document.addEventListener("contextmenu", (event) => {
 
 await Promise.all([core.start(), loadFont()]);
 receive(viewport, (incoming, at) => report(addImages(incoming, at)));
+report(serveAgents());
 watchFrameRate(showMetrics);
 // Something to drop images on from the start.
 report(opening(() => show(untitled())));
@@ -475,7 +482,45 @@ function views(): Entry {
   return submenu("View", [
     { ...commands.hints, checked: hintsShown, toggle: true },
     { ...commands.measurements, checked: !measurements.hidden, toggle: true },
+    ...(platform.agent ? [{ ...commands.agentAccess, checked: agentsAllowed, toggle: true }] : []),
   ]);
+}
+
+/**
+ * Ready to answer before any agent may ask, then on or off as it was left. The shell follows,
+ * even when the browser forgot, so that the notice never hides access left on.
+ */
+async function serveAgents(): Promise<void> {
+  const { agent } = platform;
+  if (agent === undefined) {
+    return;
+  }
+  await agent.serve((call) =>
+    answer(call, {
+      opened: () => opened,
+      unsaved: () => unsaved,
+      selection: () => editing.selection(),
+      entered: () => editing.entered(),
+      writing: () => editing.writing(),
+      shown: () => {
+        const camera = viewport.camera();
+        return camera && onScreen(camera, viewport.size());
+      },
+    }),
+  );
+  await allowAgents(recall(AGENT) === "on");
+}
+
+/** Remembered once it works, so that a refusal leaves the choice as it was. */
+async function allowAgents(on: boolean): Promise<void> {
+  try {
+    await platform.agent?.allow(on);
+  } catch (error) {
+    throw new Error(on ? `Agent access stays off, as ${String(error)}` : String(error));
+  }
+  agentsAllowed = on;
+  remember(AGENT, on ? "on" : undefined);
+  agentNotice.hidden = !on;
 }
 
 /** One that only opens its options, so never runs. */

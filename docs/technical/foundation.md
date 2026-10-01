@@ -58,7 +58,7 @@ A Loro CRDT, whose movable tree maps well to groups. A Phoenix or Axum server, a
 
 ### MCP
 
-rmcp, the official SDK. On desktop, a stdio gateway and a local HTTP server protected by a token. On the web, a remote MCP through the cloud.
+rmcp, the official SDK. On desktop, a stdio gateway, which every client can spawn, passing bytes to the app over a local port protected by a token, so that no page in a browser can reach it. On the web, a remote MCP through the cloud.
 
 - **Limits:** WebMCP is only a draft, so nothing should depend on it. Image content is a prompt injection risk.
 

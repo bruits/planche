@@ -21,6 +21,8 @@ export interface View {
   centre(): Point | undefined;
   /** CSS pixels per board unit, `undefined` when nothing is shown. */
   zoom(): number | undefined;
+  /** `undefined` when nothing is shown. */
+  camera(): Camera | undefined;
   /** Moves the camera, when something is shown. */
   look(camera: Camera): void;
   /** Around the viewport's centre, when something is shown. */
@@ -215,6 +217,7 @@ export function view(host: HTMLElement, { frame, failed }: Drawing): View {
       return { x: x + host.clientWidth / 2 / zoom, y: y + host.clientHeight / 2 / zoom };
     },
     zoom: () => shown?.camera.zoom,
+    camera: () => shown?.camera,
     look(camera) {
       if (shown) {
         shown.camera = camera;

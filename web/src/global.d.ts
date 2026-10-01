@@ -23,6 +23,7 @@ interface DocumentEventMap {
 
 interface TauriApi {
   core: {
+    Channel: new <T>() => { onmessage: (message: T) => void };
     invoke<T>(
       command: string,
       args?: Record<string, unknown> | Uint8Array,

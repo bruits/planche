@@ -1,29 +1,50 @@
 //! The desktop shell: a window around the web app, and the file system that a browser lacks.
-//! It knows nothing of boards, since the web app runs the core.
+//! It knows nothing of boards, since the web app runs the core. Once the user turns agent access
+//! on, it passes agents' questions about the board on to the web app.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use percent_encoding::percent_decode_str;
-use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, Window, WindowEvent, Wry};
+use tauri::ipc::{Channel, InvokeBody, Request, Response};
+use tauri::webview::PageLoadEvent;
+use tauri::{
+    AppHandle, DragDropEvent, Emitter, Manager, RunEvent, State, Window, WindowEvent, Wry,
+};
 use tauri_plugin_dialog::{
     DialogExt, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind,
 };
 
 /// The menu item that quits by closing every window, as closing one asks first.
 const QUIT: &str = "quit";
+const NO_DIRECTORY: &str = "this machine has no folder for the app's data";
 
 fn main() {
+    let context = tauri::generate_context!();
+    // Before any window or Dock icon, as an agent's client spawns it to talk to the app.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|argument| argument == "mcp")
+    {
+        std::process::exit(gateway(&context.config().identifier));
+    }
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Picked::default())
         .manage(Unsaved::default())
+        .manage(Agent::default())
+        // Tauri keeps sending on the channel of a page that reloaded, to nobody.
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Started {
+                webview.state::<Agent>().bridge.detach();
+            }
+        })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
                 if !window.state::<Unsaved>().0.load(Ordering::Relaxed) {
@@ -81,7 +102,10 @@ fn main() {
             pick_export,
             append_export,
             finish_export,
-            discard_export
+            discard_export,
+            agent_attach,
+            agent_reply,
+            agent_allow
         ]);
     // The predefined Quit of macOS ends the app without closing its windows, so without asking.
     // Quitting from the Dock or logging out still does, as tao never lets the app refuse.
@@ -108,7 +132,6 @@ fn main() {
         app_menu.insert(&quit, at)?;
         Ok(menu)
     });
-    let context = tauri::generate_context!();
     // WebKitGTK gives pages no dropped files, so the shell takes them there.
     #[cfg(target_os = "linux")]
     let context = {
@@ -118,7 +141,28 @@ fn main() {
         }
         context
     };
-    builder.run(context).expect("the app runs");
+    builder
+        .build(context)
+        .expect("the app builds")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                app.state::<Agent>().stop();
+            }
+        });
+}
+
+fn gateway(identifier: &str) -> i32 {
+    let Some(directory) = mcp::directory(identifier) else {
+        eprintln!("planche mcp: {NO_DIRECTORY}");
+        return 1;
+    };
+    match mcp::gateway(&directory, io::stdin(), io::stdout()) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("planche mcp: {error}");
+            1
+        }
+    }
 }
 
 /// The folders and files the user picked or dropped, the only ones the webview may touch, so that a
@@ -136,6 +180,30 @@ struct Picked {
 
 #[derive(Default)]
 struct Unsaved(AtomicBool);
+
+/// How agents reach the web app's board, while agent access is on.
+struct Agent {
+    bridge: Arc<mcp::Bridge>,
+    running: Mutex<Option<mcp::Running>>,
+    /// One turn at a time, as starting waits on the network.
+    turning: tauri::async_runtime::Mutex<()>,
+}
+
+impl Default for Agent {
+    fn default() -> Self {
+        Self {
+            bridge: Arc::new(mcp::Bridge::new(Duration::from_secs(10))),
+            running: Mutex::default(),
+            turning: tauri::async_runtime::Mutex::default(),
+        }
+    }
+}
+
+impl Agent {
+    fn stop(&self) {
+        self.running.lock().expect("never poisoned").take();
+    }
+}
 
 /// Over `window`, which it keeps from taking clicks meanwhile, but on Linux.
 fn ask(window: &Window, question: &str) -> MessageDialogBuilder<Wry> {
@@ -382,4 +450,37 @@ fn header(request: &Request<'_>, name: &str) -> Option<String> {
 
 fn describe(path: &Path, error: io::Error) -> String {
     format!("{}: {error}", path.display())
+}
+
+/// Where agents' calls go from now on, until the page reloads.
+#[tauri::command]
+fn agent_attach(agent: State<'_, Agent>, channel: Channel<mcp::Call>) {
+    agent
+        .bridge
+        .attach(move |call| channel.send(call).map_err(|error| error.to_string()));
+}
+
+#[tauri::command(async)]
+fn agent_reply(agent: State<'_, Agent>, reply: mcp::Reply) {
+    agent.bridge.reply(reply);
+}
+
+/// Refused while another Planche has agent access on. A page asks again each time it starts, and
+/// its reload must not cut the agents off, so on stays on.
+#[tauri::command]
+async fn agent_allow(app: AppHandle, agent: State<'_, Agent>, on: bool) -> Result<(), String> {
+    let _turn = agent.turning.lock().await;
+    if !on {
+        agent.stop();
+        return Ok(());
+    }
+    if agent.running.lock().expect("never poisoned").is_some() {
+        return Ok(());
+    }
+    let directory = mcp::directory(&app.config().identifier).ok_or(NO_DIRECTORY)?;
+    let running = mcp::start(&directory, agent.bridge.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    *agent.running.lock().expect("never poisoned") = Some(running);
+    Ok(())
 }

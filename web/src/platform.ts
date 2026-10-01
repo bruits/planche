@@ -43,8 +43,24 @@ export interface Sink {
   discard(): Promise<void>;
 }
 
+export interface AgentCall {
+  id: number;
+  tool: string;
+  args: unknown;
+}
+
+/** Lets agents read the open board. */
+export interface Agent {
+  /** Answers every call, for as long as the page lives. `answer` throws why it cannot. */
+  serve(answer: (call: AgentCall) => unknown): Promise<void>;
+  /** Throws why it cannot, such as another Planche having it on. */
+  allow(on: boolean): Promise<void>;
+}
+
 export interface Platform {
   name: string;
+  /** Missing where agents cannot reach the app. */
+  agent?: Agent;
   /** Why saving is impossible here, if it is. */
   cannotSave?: string;
   /** `null` when the user cancels. */

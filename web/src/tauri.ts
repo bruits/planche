@@ -3,7 +3,7 @@
 
 import { typed } from "./commands.js";
 import type { Bytes } from "./core.js";
-import type { Platform } from "./platform.js";
+import type { AgentCall, Platform } from "./platform.js";
 
 export function tauri({ core, event }: TauriApi): Platform {
   let unsaved = false;
@@ -17,6 +17,27 @@ export function tauri({ core, event }: TauriApi): Platform {
   });
   return {
     name: "desktop",
+
+    agent: {
+      allow: (on) => core.invoke("agent_allow", { on }),
+      async serve(answer) {
+        const channel = new core.Channel<AgentCall>();
+        channel.onmessage = (call) => {
+          let reply;
+          try {
+            reply = { id: call.id, result: answer(call) };
+          } catch (error) {
+            reply = { id: call.id, error: error instanceof Error ? error.message : String(error) };
+          }
+          // An answer the shell cannot read fails the call at once.
+          core.invoke("agent_reply", { reply }).catch((error: unknown) => {
+            const failure = { id: call.id, error: `Planche could not send its answer: ${String(error)}` };
+            void core.invoke("agent_reply", { reply: failure });
+          });
+        };
+        await core.invoke("agent_attach", { channel });
+      },
+    },
 
     async open() {
       const root = await core.invoke<string | null>("pick_folder", { title: "Open a board" });
