@@ -197,7 +197,7 @@ impl Board {
             .filter(|id| self.elements.contains_key(id))
             .collect();
         while let Some(id) = pending.pop() {
-            if found.insert(id) {
+            if found.insert(id) && matches!(self.elements[&id].kind, ElementKind::Group) {
                 pending.extend(self.members(id));
             }
         }
@@ -333,6 +333,14 @@ impl ElementKind {
         matches!(
             self,
             Self::Image { .. } | Self::Note { .. } | Self::Sticky { .. } | Self::Shape { .. }
+        )
+    }
+
+    /// Whether it can stick whole to what it lies on.
+    pub(crate) fn sticks_whole(&self) -> bool {
+        matches!(
+            self,
+            Self::Note { .. } | Self::Sticky { .. } | Self::Shape { .. } | Self::Comment { .. }
         )
     }
 
@@ -1141,6 +1149,27 @@ mod tests {
                 .collect(),
             ..Board::default()
         }
+    }
+
+    #[test]
+    fn a_selection_takes_the_elements_of_its_groups_all_the_way_down() {
+        let board = board([
+            (1, element(None, "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", ElementKind::Group)),
+            (3, element(Some(2), "a0", arrow())),
+            (4, element(Some(1), "a1", arrow())),
+            (5, element(None, "a1", arrow())),
+            (6, element(None, "a2", ElementKind::Group)),
+        ]);
+        let found = |bits: &[u128]| {
+            board.with_descendants(&bits.iter().copied().map(id).collect::<Vec<_>>())
+        };
+        let set = |bits: &[u128]| bits.iter().copied().map(id).collect::<BTreeSet<_>>();
+        assert_eq!(found(&[1]), set(&[1, 2, 3, 4]));
+        // Each once, whether named, reached through a group, or both, and unknown ids left out.
+        assert_eq!(found(&[3, 1, 2, 3, 9]), set(&[1, 2, 3, 4]));
+        assert_eq!(found(&[5, 6]), set(&[5, 6]));
+        assert!(found(&[9]).is_empty());
     }
 
     #[test]

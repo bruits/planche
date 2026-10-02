@@ -26,8 +26,8 @@ setup:
 
 # Build the web app, exactly as CI does
 web:
-    cargo build -p bindings --target wasm32-unknown-unknown
-    wasm-bindgen target/wasm32-unknown-unknown/debug/bindings.wasm --target web --out-dir web/public/js/wasm
+    cargo build -p bindings --release --target wasm32-unknown-unknown
+    wasm-bindgen target/wasm32-unknown-unknown/release/bindings.wasm --target web --out-dir web/public/js/wasm
     cargo build -p renderer --release --target wasm32-unknown-unknown
     wasm-bindgen target/wasm32-unknown-unknown/release/renderer.wasm --target web --out-dir web/public/js/wasm
     pnpm --dir web exec tsc

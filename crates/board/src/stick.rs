@@ -38,31 +38,40 @@ pub(crate) struct Landing<'a> {
     board: &'a Board,
     /// With the bounds of each element's surface, which hold whatever lands on it.
     order: Vec<(ElementId, Option<Rect>)>,
+    places: BTreeMap<ElementId, usize>,
     holding: Holding,
 }
 
 impl<'a> Landing<'a> {
     pub(crate) fn new(board: &'a Board) -> Self {
-        let order = board.draw_order().into_iter();
+        let order: Vec<_> = board
+            .draw_order()
+            .into_iter()
+            .map(|id| (id, surface_bounds(&board.elements[&id].kind)))
+            .collect();
+        let places = order
+            .iter()
+            .enumerate()
+            .map(|(at, (id, _))| (*id, at))
+            .collect();
         Self {
             board,
-            order: order
-                .map(|id| (id, surface_bounds(&board.elements[&id].kind)))
-                .collect(),
+            order,
+            places,
             holding: holding(board),
         }
     }
 
     /// What the element sticks to where it lies: the topmost element drawn below it, bar what
     /// sticks to it, whose surface holds it whole, or holds the pin of a comment, which shows
-    /// above everything. `None` for what cannot stick whole.
+    /// above everything. `None` for what cannot stick whole. Each element must land once at most.
     pub(crate) fn land(&mut self, id: ElementId) -> Option<ElementId> {
         let board = self.board;
         let kind = &board.elements.get(&id)?.kind;
         let below = match kind {
             ElementKind::Comment { .. } => &self.order[..],
             ElementKind::Note { .. } | ElementKind::Sticky { .. } | ElementKind::Shape { .. } => {
-                &self.order[..self.order.iter().position(|(other, _)| *other == id)?]
+                &self.order[..*self.places.get(&id)?]
             }
             _ => return None,
         };
@@ -74,7 +83,10 @@ impl<'a> Landing<'a> {
                 && holds(&board.elements[other].kind, kind))
             .then_some(*other)
         });
-        for held in self.holding.values_mut() {
+        if let Some(held) = kind
+            .target()
+            .and_then(|before| self.holding.get_mut(&before))
+        {
             held.remove(&id);
         }
         if let Some(target) = target {

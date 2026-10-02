@@ -26,7 +26,7 @@ thiserror = "2"
 # Dropped at its next release.
 image-webp = { git = "https://github.com/image-rs/image-webp", rev = "28bed2274df92d600a823004e2fedd498ead4619" }
 
-# The bindings are a dev build (`just web`), where sha2 hashes at 40 to 50 MB/s, and an asset of
-# a gigabyte takes half a minute. Its hot loop is its own, so it alone needs the optimiser.
-[profile.dev.package.sha2]
-opt-level = 3
+# Dependencies only, which build once. The renderer's WASM gets an eighth smaller, and one unit
+# would gain the core's WASM little for slower rebuilds of the workspace's own crates.
+[profile.release.package."*"]
+codegen-units = 1

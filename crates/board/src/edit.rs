@@ -184,11 +184,18 @@ impl Editor {
     /// Sticks each note, sticky note, shape, and comment among the elements, with those of the
     /// groups among them, to what it lies on whole, or frees it when it lies on nothing.
     pub fn land(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
-        let mut landing = Landing::new(&self.board);
-        let targets: Vec<(ElementId, Option<ElementId>)> = self
+        let landing: Vec<ElementId> = self
             .with_descendants(ids)?
             .into_iter()
-            .map(|id| (id, landing.land(id)))
+            .filter(|id| self.board.elements[id].kind.sticks_whole())
+            .collect();
+        if landing.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut surfaces = Landing::new(&self.board);
+        let targets = landing
+            .into_iter()
+            .map(|id| (id, surfaces.land(id)))
             .collect();
         self.stick_whole(targets)
     }
@@ -196,8 +203,12 @@ impl Editor {
     /// Frees each note, sticky note, shape, and comment among the elements, with those of the
     /// groups among them, from what it sticks to.
     pub fn unstick(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
-        let targets = self.with_descendants(ids)?.into_iter().map(|id| (id, None));
-        self.stick_whole(targets.collect())
+        let stuck = self
+            .with_descendants(ids)?
+            .into_iter()
+            .filter(|id| self.board.elements[id].kind.target().is_some())
+            .map(|id| (id, None));
+        self.stick_whole(stuck.collect())
     }
 
     /// With the elements of the moved groups.
@@ -1526,6 +1537,22 @@ mod tests {
         };
         assert_eq!((from.x, from.y, to.x, to.y), (5.0, -5.0, 5.0, -5.0));
         assert_eq!(editor.undo(), ids([2, 3, 5]));
+    }
+
+    #[test]
+    fn moving_nested_groups_and_a_member_among_them_moves_each_element_once() {
+        let mut editor = editor();
+        editor.group(id(6), &[id(1), id(4)]).unwrap();
+        let x = |editor: &Editor, bits| match &editor.board().elements[&id(bits)].kind {
+            ElementKind::Note { frame, .. } => frame.x,
+            _ => unreachable!(),
+        };
+        // The outer group, one of the elements it holds further down, and another on its own.
+        assert_eq!(
+            editor.translate(&ids([6, 2, 5]), 5.0, 0.0).unwrap(),
+            ids([2, 3, 4, 5])
+        );
+        assert_eq!([2, 3, 4].map(|bits| x(&editor, bits)), [5.0, 15.0, 25.0]);
     }
 
     #[test]
@@ -2903,6 +2930,55 @@ mod tests {
             let kind = editor.board().elements[&id(bits)].kind.clone();
             assert!(editor.update(id(bits), kind).is_ok());
         }
+    }
+
+    #[test]
+    fn landing_what_cannot_stick_whole_changes_nothing() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (
+                2,
+                element(None, "a1", on(framed(10.0, 10.0, 20.0, 20.0), 1)),
+            ),
+            (3, element(None, "a2", arrow())),
+            (4, element(None, "a3", ElementKind::Group)),
+            (5, element(Some(4), "a0", picture(500.0, 0.0))),
+        ]));
+        let before = editor.board().clone();
+        assert!(editor.land(&ids([1, 3, 4])).unwrap().is_empty());
+        // Nor does unsticking the image free the note stuck to it.
+        assert!(editor.unstick(&ids([1, 3, 4])).unwrap().is_empty());
+        assert_eq!(editor.board(), &before);
+        assert!(!editor.can_undo());
+        assert_eq!(editor.unstick(&ids([2])).unwrap(), ids([2]));
+    }
+
+    #[test]
+    fn landing_or_unsticking_an_unknown_element_is_refused() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (2, element(None, "a1", framed(10.0, 10.0, 20.0, 20.0))),
+        ]));
+        let before = editor.board().clone();
+        assert_eq!(editor.land(&ids([2, 9])), Err(Error::UnknownElement(id(9))));
+        assert_eq!(
+            editor.unstick(&ids([9, 2])),
+            Err(Error::UnknownElement(id(9)))
+        );
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn what_lets_go_as_it_lands_can_be_landed_on() {
+        // 1 sticks to 2, drawn above it.
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", on(framed(0.0, 0.0, 50.0, 50.0), 2))),
+            (2, element(None, "a1", framed(0.0, 0.0, 50.0, 50.0))),
+        ]));
+        assert_eq!(editor.land(&ids([1, 2])).unwrap(), ids([1, 2]));
+        let target = |bits| editor.board().elements[&id(bits)].kind.target();
+        assert_eq!([1, 2].map(target), [None, Some(id(1))]);
+        assert_sound(&editor);
     }
 
     #[test]
