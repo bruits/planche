@@ -129,6 +129,8 @@ let renderer: Renderer | undefined;
 let autosave: Saving | undefined;
 /** Where a board without a folder or a file of its own is kept, `null` when nowhere. */
 let session: Session | null = null;
+/** The session held, whose board could not be read, until the user leaves the open one. */
+let unreadable: Session | null = null;
 /** Whether the board holds changes that leaving it would lose. */
 let unsaved = false;
 /** Whether it holds changes not yet on disk, so that closing the app first writes them. */
@@ -1269,13 +1271,16 @@ async function start(): Promise<void> {
   if (kept !== "restored") {
     if (kept instanceof Error) {
       // Left as it was, as it is the board's only copy.
+      unreadable = session;
       session = null;
     }
     // Remembered still, should the user not click this time.
     await begin(last !== null && "ask" in last);
   }
   if (kept instanceof Error) {
-    bar.say(`The board kept from last time could not be read, so it stays as it was, and this window keeps none: ${kept.message}`);
+    bar.say(
+      `The board kept from last time could not be read, and stays as it was until another board opens or a new one starts: ${kept.message}`,
+    );
   } else if (session === null) {
     bar.say("This window keeps no board for next time, as another one does or the browser cannot");
   }
@@ -1371,12 +1376,19 @@ function offer(last: Extract<Reopening, { ask(): unknown }>): void {
   );
 }
 
-const question = "Leave this board, and lose the changes saved nowhere else?";
+const question = "This board isn't saved to a file yet. Leave it anyway?";
 
-/** Whether another board may take the open one's place. */
+/** Whether another board may take the open one's place, which then takes the session back to empty it. */
 async function leave(): Promise<boolean> {
   await autosave?.flush();
-  return !atRisk() || platform.confirm(question);
+  if (atRisk() && !(await platform.confirm(question))) {
+    return false;
+  }
+  if (unreadable !== null) {
+    session = unreadable;
+    unreadable = null;
+  }
+  return true;
 }
 
 async function newBoard(): Promise<void> {
