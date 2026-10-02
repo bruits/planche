@@ -36,9 +36,10 @@ import { edits, type Draw, type Restack } from "./edit.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
 import { menuOpen, openMenu, type Entry, type Item } from "./menu.js";
-import { heapInUse, megabytes, milliseconds, timed, watchFrameRate } from "./metrics.js";
+import { heapInUse, megabytes, milliseconds, percentile, rate, timed } from "./metrics.js";
 import { overlay } from "./overlay.js";
 import { css, type Paint } from "./paint.js";
+import { testPhotos } from "./photos.js";
 import { pinned, pins } from "./pins.js";
 import { platform, type Folder, type Home, type Reopening, type Session, type ZipHome } from "./platform.js";
 import { recall, remember } from "./preferences.js";
@@ -74,9 +75,19 @@ const ADDED_MARGIN = 48;
 /** In the order the key goes through them. */
 const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
 const SCHEMES: Scheme[] = ["light", "dark", "system"];
+/** How many test photos the measurements offer to add at once, each about 17 MB of textures. */
+const TEST_PHOTOS = [10, 50, 100];
+/** As their assets would stay in the board's folder or file once undone. */
+const NOT_FOR_TEST_PHOTOS = "Only on a board not saved in a folder or a ZIP file";
 
 const measurements = byId("measurements");
 const details = new Map<string, string>();
+/** The rows of the measurements that the next draw ends, with when each began. */
+const untilDrawn = new Map<string, number>();
+const draws = rate((perSecond) => {
+  drawRate = perSecond;
+  showMetrics();
+});
 const shown = overlay(byId("viewport"));
 const viewport = view(byId("viewport"), {
   frame(camera, size) {
@@ -92,6 +103,14 @@ const viewport = view(byId("viewport"), {
       if (lettering.update(opened.board, renderer, camera, size, editing.writing())) {
         renderer.place(placed(opened.board, lettering, editing.writing(), unplayable));
       }
+    }
+  },
+  painted() {
+    draws.count();
+    if (untilDrawn.size > 0) {
+      const now = performance.now();
+      untilDrawn.forEach((since, name) => details.set(name, milliseconds(now - since)));
+      untilDrawn.clear();
     }
   },
   failed: (error) => fail(error),
@@ -127,6 +146,9 @@ const editing = edits(viewport, shown, () => opened, {
     const kind = id === undefined ? undefined : opened?.board.elements[id]?.kind;
     films.hover(kind?.type === "image" ? kind.asset : undefined);
   },
+  stepped(steps) {
+    details.set("drag step", `p50 ${milliseconds(percentile(steps, 0.5))}, p90 ${milliseconds(percentile(steps, 0.9))}`);
+  },
 });
 const comments = pins(byId("viewport"), { choose: (id) => editing.choose(id), write: (id) => editing.write(id) });
 const appearance = theme(restyle);
@@ -158,8 +180,8 @@ let unplayable: ReadonlySet<string> = new Set();
 let spaceHeld = false;
 /** Left out of the preferences, as a window without its title bar would open at full size. */
 let compact = false;
-/** Kept while the measurements are hidden, so that they show at once when opened. */
-let frameRate = 0;
+/** Draws per second, `undefined` until the measurements were shown for a second. */
+let drawRate: number | undefined;
 let hintsShown = recall(HINTS) !== "hidden";
 let agentsAllowed = false;
 let onTop = false;
@@ -518,7 +540,9 @@ const commands = {
     label: "Measurements",
     run: () => {
       measurements.hidden = !measurements.hidden;
-      showMetrics(frameRate);
+      drawRate = undefined;
+      draws.watch(!measurements.hidden);
+      showMetrics();
     },
   },
   style: {
@@ -747,7 +771,6 @@ if (platform.titleBar) {
 await Promise.all([core.start(), loadFont()]);
 receive(viewport, (incoming, at) => report(addImages(incoming, at)));
 report(serveAgents());
-watchFrameRate(showMetrics);
 // Something to drop images on from the start.
 report(opening(start));
 
@@ -841,12 +864,26 @@ function views(): Entry {
         { ...commands.hints, checked: hintsShown, toggle: true },
         { ...commands.measurements, checked: !measurements.hidden, toggle: true },
       ],
+      measurements.hidden ? [] : TEST_PHOTOS.map(testPhotosItem),
       [
         ...(platform.keepOnTop ? [{ ...commands.alwaysOnTop, checked: onTop, toggle: true }] : []),
         ...(platform.titleBar ? [{ ...commands.compact, checked: compact, toggle: true }] : []),
       ],
     ]),
   );
+}
+
+function testPhotosItem(count: number): Item {
+  return {
+    label: `Add ${count} test photos`,
+    unavailable: () => noneShown() ?? (savesToFiles() ? NOT_FOR_TEST_PHOTOS : undefined),
+    run: () => report(addTestPhotos(count)),
+  };
+}
+
+/** Whether the board saves itself into a folder or a ZIP file, rather than in the session or nowhere. */
+function savesToFiles(): boolean {
+  return autosave !== undefined && !autosave.store.session;
 }
 
 function settings(): Entry {
@@ -1622,6 +1659,7 @@ async function show(next: Opened, camera?: Camera): Promise<void> {
 }
 
 async function present(next: Opened, camera?: Camera): Promise<void> {
+  const start = performance.now();
   // The core's memory holds it until freed.
   opened?.editor.free();
   opened = next;
@@ -1667,6 +1705,9 @@ async function present(next: Opened, camera?: Camera): Promise<void> {
   unplayable = new Set(assets.filter(({ asset, video }) => video && !decoded.has(asset)).map(({ asset }) => asset));
   created.place(placed(next.board, lettering, undefined, unplayable));
   viewport.redraw();
+  if (assets.length > 0) {
+    untilDrawn.set("first image", start);
+  }
   if (unplayable.size > 0) {
     bar.say(`${summary}, ${unplayable.size === 1 ? "a video" : `${unplayable.size} videos`} this machine cannot play`);
   } else if (!empty) {
@@ -1679,7 +1720,10 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   const target = opened;
   const added: Added[] = [];
   const failures: string[] = [];
-  for (const image of await incoming) {
+  const images = await incoming;
+  // Once read, as the user's pace and the platform's reading are not the app's.
+  const since = performance.now();
+  for (const image of images) {
     if ("failure" in image) {
       failures.push(`${image.name}: ${image.failure}`);
       continue;
@@ -1691,7 +1735,8 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
       failures.push(`${image.name}: this app cannot open it here (${reason})`);
     }
   }
-  await editing.idle();
+  // Nor the time an edit under way takes to end.
+  const [, waited] = await timed(() => editing.idle());
   if (added.length > 0 && target !== undefined && target === opened && renderer !== undefined) {
     keep(target, added);
     const frames = row(
@@ -1708,12 +1753,37 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
       }),
     );
     editing.select(ids);
+    untilDrawn.set(`add ${added.length} images`, since + waited);
   } else {
     added.forEach(({ decoded }) => release(decoded));
   }
   if (failures.length > 0) {
     bar.say(`Not added, ${failures.join("; ")}`);
   }
+}
+
+/**
+ * Into the board shown when asked, as `addImages` adds, unless it saves into a folder or a file once they
+ * are made. A Save as while they are prepared still lets them in, as one right after they are added would.
+ */
+async function addTestPhotos(count: number): Promise<void> {
+  const at = viewport.centre();
+  if (at === undefined) {
+    return;
+  }
+  const photos = testPhotos(count, (done) =>
+    done < count ? bar.say(`Making test photos, ${done} of ${count}…`, true) : bar.say(`Adding ${count} test photos…`),
+  );
+  await addImages(
+    photos.then((made) => {
+      if (!savesToFiles()) {
+        return made;
+      }
+      bar.say("Not added, as the board now saves into a folder or a ZIP file");
+      return [];
+    }),
+    at,
+  );
 }
 
 /** What of the board shows between the handle and the toolbar, less a margin, `undefined` when none of it shows. */
@@ -1888,15 +1958,14 @@ function showTitle(): void {
   document.title = opened ? `${unsaved ? "• " : ""}${opened.folder.name} — Planche` : "Planche";
 }
 
-function showMetrics(fps: number): void {
-  frameRate = fps;
+function showMetrics(): void {
   if (measurements.hidden) {
     return;
   }
   const heap = heapInUse();
   const lines = new Map([
     ["platform", platform.name],
-    ["frames", `${fps.toFixed(0)} fps`],
+    ["draws", drawRate === undefined ? "…" : `${drawRate.toFixed(0)} a second`],
     ["core memory", megabytes(core.coreMemory())],
     ...(renderer === undefined
       ? []

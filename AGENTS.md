@@ -12,6 +12,8 @@ just test lfs                          # only the tests whose name holds lfs
 just wasm                              # build the core for the browser, exactly as CI does
 just setup                             # install the web app's tools, once
 just web                               # build the web app, exactly as CI does
+just bench                             # time a release build of the core compiled to WASM, by hand and never in CI
+just bench debug                       # the same, on a dev build of the core
 just serve                             # serve the web app on http://localhost:8080
 just desktop                           # run the desktop app
 just ci                                # everything CI checks, in CI order

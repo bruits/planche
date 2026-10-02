@@ -96,6 +96,8 @@ export interface Hooks {
   hovered(): void;
   /** Once the topmost element the pointer is on changed, which a press keeps, `undefined` when none is or a finger touches. */
   pointed(id: string | undefined): void;
+  /** Once a press that moved ends, how many milliseconds each of its moves took to handle. */
+  stepped(steps: number[]): void;
 }
 
 /** A size, a share of an image's own size, or an angle, as a gesture shows it. */
@@ -270,11 +272,13 @@ export function edits(
   view: View,
   overlay: Overlay,
   current: () => Editing | undefined,
-  { changed, selectionChanged, settled, snapping, drawing, erasing, sampling, drawn, styled, selecting, hovered, pointed }: Hooks,
+  { changed, selectionChanged, settled, snapping, drawing, erasing, sampling, drawn, styled, selecting, hovered, pointed, stepped }: Hooks,
 ): Edits {
   let selected = new Set<string>();
   let entered: string | undefined;
   let press: Press | undefined;
+  /** How long each of the press's moves took to handle, in milliseconds. */
+  let handled: number[] = [];
   /** What of the selection the pointer is on while nothing is pressed. */
   let over: Grab | undefined;
   /** What a click would select, but for what is selected already. */
@@ -315,6 +319,7 @@ export function edits(
   };
   const settle = () => {
     press = undefined;
+    handled = [];
     resolve();
   };
   const field = writer(view.host);
@@ -704,6 +709,19 @@ export function edits(
     if (event.pointerId !== press.pointer || !editing || !at || !zoom) {
       return;
     }
+    const pressed = press;
+    const start = performance.now();
+    carry(editing, at, zoom, event);
+    // A move short of a drag only tells it from a click.
+    if (!("dragging" in pressed) || pressed.dragging) {
+      handled.push(performance.now() - start);
+    }
+  });
+  /** Carries any press on to `at`, erasing and cropping too, which `drag` leaves to it. */
+  const carry = (editing: Editing, at: Point, zoom: number, event: PointerEvent) => {
+    if (!press) {
+      return;
+    }
     if (press.kind === "erase") {
       press.dragging ||= distance(at, press.start) * zoom >= DRAG;
       if (press.dragging) {
@@ -722,7 +740,7 @@ export function edits(
     }
     last = at;
     drag(editing, at, zoom, event);
-  });
+  };
   // As the keys change what a press does, or what a press would take, without the pointer moving.
   for (const type of ["keydown", "keyup"] as const) {
     addEventListener(type, (event) => {
@@ -896,6 +914,9 @@ export function edits(
   const release = (completed: boolean) => {
     if (!press) {
       return;
+    }
+    if (handled.length > 0) {
+      stepped(handled);
     }
     wasClick = (press.kind === "move" || press.kind === "marquee") && !press.dragging;
     const held = holding() !== undefined;

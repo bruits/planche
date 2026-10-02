@@ -32,6 +32,12 @@ web:
     wasm-bindgen target/wasm32-unknown-unknown/release/renderer.wasm --target web --out-dir web/public/js/wasm
     pnpm --dir web exec tsc
 
+# Time the core compiled to WASM, by hand and never in CI: just bench for a release build, or just bench debug
+bench profile="release":
+    cargo build -p bindings --target wasm32-unknown-unknown {{ if profile == "release" { "--release" } else if profile == "debug" { "" } else { error("the profile is release or debug") } }}
+    wasm-bindgen target/wasm32-unknown-unknown/{{ profile }}/bindings.wasm --target nodejs --out-dir target/bench/{{ profile }}
+    node crates/bindings/bench.cjs target/bench/{{ profile }} {{ profile }}
+
 # Serve the web app on http://localhost:8080
 serve: web
     python3 -m http.server 8080 --directory web/public
