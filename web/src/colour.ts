@@ -63,12 +63,23 @@ function small(decoded: Decoded, natural: Size): ImageData {
 
 function mean({ data, width, height }: ImageData, { natural_size: natural, edits }: Image): Colour | undefined {
   const crop = edits.crop ?? { x: 0, y: 0, ...natural };
-  const [left, right] = span(crop.x, crop.width, width / natural.width, width);
-  const [top, bottom] = span(crop.y, crop.height, height / natural.height, height);
+  const [across, down] = [width / natural.width, height / natural.height];
+  const [left, right] = span(crop.x, crop.width, across, width);
+  const [top, bottom] = span(crop.y, crop.height, down, height);
+  // How far the nearest point of a pixel lies from the ellipse's centre, in its radius, so that it
+  // keeps the pixels it reaches into, as a crop does. Flips mirror it onto itself.
+  const off = (at: number, start: number, length: number, scale: number) => {
+    const centre = (start + length / 2) * scale;
+    return (Math.min(Math.max(centre, at), at + 1) - centre) / ((length / 2) * scale);
+  };
   const sum: Colour = [0, 0, 0];
   let weight = 0;
   for (let y = top; y < bottom; y++) {
     for (let x = left; x < right; x++) {
+      const outside = off(x, crop.x, crop.width, across) ** 2 + off(y, crop.y, crop.height, down) ** 2 > 1;
+      if (edits.crop_shape === "ellipse" && outside) {
+        continue;
+      }
       const at = (y * width + x) * 4;
       const alpha = data[at + 3]!;
       for (let channel = 0; channel < 3; channel++) {

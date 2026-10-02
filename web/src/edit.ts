@@ -20,11 +20,12 @@
 // toggles the element instead. The eraser removes what a click would select, or all that a drag
 // passes over but what it starts within, in one edit. Cropping shows an image whole, what its crop
 // leaves out dimmed, and its edges and corners drag the crop, or its inside moves it, until Enter
-// or a press elsewhere crops it, or Escape leaves it as it was.
+// or a press elsewhere crops it, or Escape leaves it as it was. Resetting the crop meanwhile starts
+// it over from the whole image.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
-import type { Background, Board, Editor, Kind, Order, Point, Rect, Side, Size } from "./core.js";
+import type { Background, Board, CropShape, Editor, Kind, Order, Point, Rect, Side, Size } from "./core.js";
 import { among, newId } from "./board.js";
 import { cursor, dotted, type Crop, type Grab, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
@@ -121,6 +122,11 @@ const GRIPS: [number, number][] = [
   [0, 0.5],
 ];
 const CORNERS = GRIPS.filter(([x, y]) => x !== 0.5 && y !== 0.5);
+/** Around the ellipse that fills a crop, in parts of its width and height, close enough to draw it. */
+const CURVE: [number, number][] = Array.from({ length: 128 }, (_, at) => {
+  const angle = (at / 128) * 2 * Math.PI;
+  return [0.5 + Math.cos(angle) / 2, 0.5 + Math.sin(angle) / 2];
+});
 /** Across, then by 45° each, clockwise as the board's y runs down, with no hair off an axis. */
 const DIRECTIONS: [number, number][] = [
   [1, 0],
@@ -184,7 +190,10 @@ export interface Edits {
   /** The one image selected. */
   crop(): void;
   cropping(): string | undefined;
+  /** Of the images among the selection, or of the one being cropped, which it starts over. */
   resetCrop(): void;
+  /** Of the images among the selection. */
+  cropShape(shape: CropShape): void;
   /** The images among the selection, which stays as it is. */
   arrange(order: Order): void;
   /** The images among the selection. */
@@ -294,7 +303,7 @@ export function edits(
    * image shown whole, until the crop is done, so that meanwhile the board reads as unsaved and
    * agents read the image whole.
    */
-  let cropping: { id: string; area: Rect } | undefined;
+  let cropping: { id: string; area: Rect; shape: CropShape } | undefined;
   let waiting: (() => void)[] = [];
   const underway = () => press !== undefined || written !== undefined || cropping !== undefined;
   const resolve = () => {
@@ -472,10 +481,10 @@ export function edits(
     if (!cropping || kind?.type !== "image") {
       return undefined;
     }
-    const { id, area } = cropping;
+    const { id, area, shape } = cropping;
     return {
       image: lying(editing, id, whole(kind.natural_size), CORNERS),
-      kept: lying(editing, id, area, CORNERS),
+      kept: lying(editing, id, area, shape === "ellipse" ? CURVE : CORNERS),
       grips: lying(editing, id, area, GRIPS),
     };
   };
@@ -1087,7 +1096,8 @@ export function edits(
     }
     const { editor } = editing;
     editor.beginGesture();
-    cropping = { id, area: kind.edits.crop ?? whole(kind.natural_size) };
+    const { crop, crop_shape: shape = "rectangle" } = kind.edits;
+    cropping = { id, area: crop ?? whole(kind.natural_size), shape };
     selected = new Set([id]);
     edit(editing, editor.resetCrop([id]));
   };
@@ -1096,13 +1106,14 @@ export function edits(
     if (!cropping) {
       return;
     }
-    const { id, area } = cropping;
+    const { id, area, shape } = cropping;
     cropping = undefined;
     const { editor } = editing;
     const touched = editor.rewindGesture();
     try {
       if (keep) {
         touched.push(...editor.crop(id, area.x, area.y, area.width, area.height));
+        touched.push(...core.setCropShape(editor, [id], shape));
       }
     } finally {
       editor.endGesture();
@@ -1110,7 +1121,7 @@ export function edits(
       resolve();
     }
   };
-  // Captured ahead of the commands, which wait while an image is being cropped.
+  // Captured ahead of the commands on Enter and Escape, which wait while an image is being cropped.
   addEventListener(
     "keydown",
     (event) => {
@@ -1302,7 +1313,21 @@ export function edits(
         }
       }),
     cropping: () => cropping?.id,
-    resetCrop: () => run((editing, ids) => edit(editing, editing.editor.resetCrop(ids))),
+    resetCrop() {
+      const editing = current();
+      const kind = cropping && editing?.board.elements[cropping.id]?.kind;
+      if (cropping && kind?.type === "image") {
+        // Not while dragging the crop, which would carry on from where the drag started.
+        if (press === undefined) {
+          cropping.area = whole(kind.natural_size);
+          cropping.shape = "rectangle";
+          show();
+        }
+        return;
+      }
+      run((editing, ids) => edit(editing, editing.editor.resetCrop(ids)));
+    },
+    cropShape: (shape) => run((editing, ids) => edit(editing, core.setCropShape(editing.editor, ids, shape))),
     arrange: (order) => run((editing, ids) => edit(editing, core.arrange(editing.editor, ids, order))),
     normalize: (side) => run((editing, ids) => edit(editing, editing.editor.normalize(ids, side))),
     restack: (to) => run((editing, ids) => edit(editing, editing.editor.restack(ids, to))),

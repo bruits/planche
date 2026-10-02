@@ -236,7 +236,7 @@ impl<R: Relay> Server<R> {
     }
 
     /// Changes elements' text, font size, shape, or style, and images' caption, source, greyscale,
-    /// or crop. A note's height follows its text.
+    /// crop, or crop shape. A note's height follows its text.
     #[tool(annotations(read_only_hint = false, open_world_hint = false))]
     async fn update(
         &self,

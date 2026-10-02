@@ -4,9 +4,9 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use board::{
-    Align, AssetHasher, AssetId, Background, Board, Colour, Dash, Editor, Element, ElementId,
-    ElementKind, Fill, Heads, ImageEdits, Paper, Point, Rect, Restack, Shape, Size, Text, Weight,
-    ZIndex,
+    Align, AssetHasher, AssetId, Background, Board, Colour, CropShape, Dash, Editor, Element,
+    ElementId, ElementKind, Fill, Heads, ImageEdits, Paper, Point, Rect, Restack, Shape, Size,
+    Text, Weight, ZIndex,
 };
 use format::save::{Known, Save};
 use format::{Error, Files, zip};
@@ -73,6 +73,7 @@ fn sample() -> Board {
                         flip_horizontal: true,
                         flip_vertical: false,
                         greyscale: true,
+                        crop_shape: CropShape::Rectangle,
                     },
                     source: Some("https://example.com/harbour".to_owned()),
                     filename: Some("harbour.png".to_owned()),
@@ -241,7 +242,7 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
     fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
-    let cases: [(Edit, &[u128]); 17] = [
+    let cases: [(Edit, &[u128]); 19] = [
         (
             |editor| editor.add(id(10), None, note(None, "New").kind),
             &[10],
@@ -291,6 +292,11 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
             },
             &[2],
         ),
+        (
+            |editor| editor.set_crop_shape(&[id(1)], CropShape::Ellipse),
+            &[2],
+        ),
+        (|editor| editor.reset_crop(&[id(2)]), &[2]),
         (|editor| editor.remove(&[STICKY]), &[5, 6]),
         (|editor| editor.remove(&[ELLIPSE]), &[4, 5, 9]),
         (|editor| editor.unstick(&[id(9)]), &[9]),
@@ -421,6 +427,25 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
     assert!(arrow.get("weight").is_none());
     assert_eq!(written(STICKY)["paper"], "pink");
     assert_eq!(format::read(&files).unwrap(), board);
+}
+
+#[test]
+fn a_crop_shape_is_written_only_once_not_a_rectangle_and_reads_back() {
+    let image = ElementId::from_random(2);
+    let mut editor = Editor::new(sample());
+    let shape = |files: &Files| {
+        let bytes = &files[&format!("elements/{image}.json")];
+        serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["kind"]["edits"]
+            .get("crop_shape")
+            .cloned()
+    };
+    assert_eq!(shape(&format::write(editor.board()).unwrap()), None);
+
+    editor.set_crop_shape(&[image], CropShape::Ellipse).unwrap();
+
+    let files = format::write(editor.board()).unwrap();
+    assert_eq!(shape(&files), Some("ellipse".into()));
+    assert_eq!(format::read(&files).unwrap(), *editor.board());
 }
 
 #[test]

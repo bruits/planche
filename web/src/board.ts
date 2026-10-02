@@ -298,7 +298,7 @@ export function placed(
 
 function image(kind: Extract<Kind, { type: "image" }>): Placed {
   const { width, height } = kind.natural_size;
-  const { crop, flip_horizontal, flip_vertical, greyscale } = kind.edits;
+  const { crop, flip_horizontal, flip_vertical, greyscale, crop_shape } = kind.edits;
   const shown = crop ?? { x: 0, y: 0, width, height };
   let [x, y] = [shown.x / width, shown.y / height];
   let [across, down] = [shown.width / width, shown.height / height];
@@ -310,7 +310,8 @@ function image(kind: Extract<Kind, { type: "image" }>): Placed {
     [y, down] = [y + down, -down];
   }
   const texture = { x, y, width: across, height: down };
-  return { kind: "image", asset: kind.asset, frame: kind.frame, rotation: kind.rotation, texture, greyscale };
+  const elliptical = crop_shape === "ellipse";
+  return { kind: "image", asset: kind.asset, frame: kind.frame, rotation: kind.rotation, texture, greyscale, elliptical };
 }
 
 function line(kind: Extract<Kind, { type: "arrow" | "line" }>): Extract<Placed, { kind: "line" }> {

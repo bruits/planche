@@ -4,7 +4,9 @@
 use std::collections::BTreeSet;
 use std::f64::consts::{FRAC_1_SQRT_2, TAU};
 
-use crate::{Board, ElementId, ElementKind, Fill, Point, Rect, Shape, Text, Weight};
+use crate::{
+    Board, CropShape, ElementId, ElementKind, Fill, ImageEdits, Point, Rect, Shape, Text, Weight,
+};
 
 /// The most points [`Board::hit_along`] tries, so that however long the way, it stays quick.
 const MOST_TRIES: f64 = 4096.0;
@@ -262,6 +264,16 @@ pub(crate) fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
         ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
             distance(point, *from, *to) <= reach
         }
+        ElementKind::Image {
+            frame,
+            rotation,
+            edits:
+                ImageEdits {
+                    crop_shape: CropShape::Ellipse,
+                    ..
+                },
+            ..
+        } => near_ellipse(frame, *rotation, point, tolerance) || covers(kind, point),
         _ => shape(kind).is_some_and(|shape| near(&shape, point, tolerance)),
     }
 }
@@ -278,6 +290,16 @@ pub(crate) fn covers(kind: &ElementKind, point: Point) -> bool {
             rotation,
             shape: Shape::Ellipse,
             ..
+        }
+        | ElementKind::Image {
+            frame,
+            rotation,
+            edits:
+                ImageEdits {
+                    crop_shape: CropShape::Ellipse,
+                    ..
+                },
+            ..
         } => within_ellipse(frame, *rotation, point),
         _ => shape(kind).is_some_and(|shape| inside(&shape, point)),
     }
@@ -289,6 +311,16 @@ pub(crate) fn nearest_on_outline(kind: &ElementKind, point: Point) -> Option<Poi
             frame,
             rotation,
             shape: Shape::Ellipse,
+            ..
+        }
+        | ElementKind::Image {
+            frame,
+            rotation,
+            edits:
+                ImageEdits {
+                    crop_shape: CropShape::Ellipse,
+                    ..
+                },
             ..
         } if frame.width != 0.0 && frame.height != 0.0 => {
             Some(nearest_on_ellipse(frame, *rotation, point))
@@ -359,6 +391,18 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
                 && (filled(*shape, *fill, text)
                     || !area.iter().all(|corner| inside(&outline, *corner)))
         }
+        ElementKind::Image {
+            frame,
+            rotation,
+            edits:
+                ImageEdits {
+                    crop_shape: CropShape::Ellipse,
+                    ..
+                },
+            ..
+        } if frame.width != 0.0 && frame.height != 0.0 => {
+            ellipse_touches(frame, *rotation, area, true)
+        }
         _ => shape(kind).is_some_and(|shape| overlap(&shape, area)),
     }
 }
@@ -378,6 +422,14 @@ pub(crate) fn holds(target: &ElementKind, kind: &ElementKind) -> bool {
                     // Close enough, as no cheap test tells whether one ellipse holds another.
                     ElementKind::Shape {
                         shape: Shape::Ellipse,
+                        ..
+                    }
+                    | ElementKind::Image {
+                        edits:
+                            ImageEdits {
+                                crop_shape: CropShape::Ellipse,
+                                ..
+                            },
                         ..
                     } => (0..64).all(|step| {
                         let turn = f64::from(step) / 64.0 * TAU;
@@ -668,6 +720,24 @@ mod tests {
         assert_eq!(board.hit(point(90.0, 10.0), 0.0), None);
         assert_eq!(board.hit(point(62.0, 0.0), 0.0), None);
         assert_eq!(board.hit(point(62.0, 0.0), 3.0), Some(id(1)));
+    }
+
+    #[test]
+    fn an_image_shown_as_an_ellipse_is_hit_and_touched_within_it_only() {
+        let mut shown = image(0.0, 0.0, 200.0, 100.0, 90.0);
+        if let ElementKind::Image { edits, .. } = &mut shown {
+            edits.crop_shape = CropShape::Ellipse;
+        }
+        // Turned a quarter around (100, 50), its long axis runs from (100, -50) to (100, 150),
+        // and its frame spans x 50 to 150.
+        let board = board([(1, element(None, "a0", shown))]);
+        assert_eq!(board.hit(point(100.0, -45.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit(point(100.0, -52.0), 3.0), Some(id(1)));
+        // In a corner of its frame, out of the ellipse.
+        assert_eq!(board.hit(point(55.0, -40.0), 0.0), None);
+        assert!(board.covering(point(55.0, -40.0)).is_empty());
+        assert!(board.touching(area(50.0, -50.0, 10.0, 10.0)).is_empty());
+        assert_eq!(board.touching(area(95.0, -55.0, 10.0, 10.0)), [id(1)]);
     }
 
     #[test]

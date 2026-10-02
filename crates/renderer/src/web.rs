@@ -25,11 +25,39 @@ fn place(corner: vec2f, rect: vec4f, degrees: f32) -> vec4f {
 }
 "#;
 
+/// Negative within the ellipse, as the core measures it, bounded where a thin ellipse would
+/// otherwise show a gap or fat tips.
+const ELLIPSE: &str = r#"
+fn ellipse(local: vec2f, half: vec2f) -> f32 {
+    let axes = max(half, vec2f(0.5));
+    let point = abs(local);
+    let scaled = length(point / axes);
+    let gradient = length(point / (axes * axes));
+    let estimate = select(1e30, abs(scaled * (scaled - 1.0) / gradient), gradient > 0.0);
+    let unit = point / axes;
+    let straight = axes * sqrt(max(1.0 - unit.yx * unit.yx, vec2f(0.0))) - point;
+    let frame = length(max(point - axes, vec2f(0.0)));
+    return select(max(estimate, frame), -min(estimate, min(straight.x, straight.y)), scaled < 1.0);
+}
+"#;
+
+/// An image shown as an ellipse covers a quad a pixel wider than its frame, and its fragments
+/// measure in device pixels how far they are from the ellipse, which smooths its edge over one
+/// pixel.
 const QUADS: &str = r#"
 @group(1) @binding(0) var image: texture_2d<f32>;
 @group(1) @binding(1) var image_sampler: sampler;
 
-struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f, @location(1) grey: f32 };
+struct Out {
+    @builtin(position) position: vec4f,
+    /// From (0, 0) at the frame's top-left to (1, 1), and beyond it for the edge of an ellipse.
+    @location(0) parts: vec2f,
+    @location(1) crop: vec4f,
+    @location(2) grey: f32,
+    /// In device pixels.
+    @location(3) size: vec2f,
+    @location(4) elliptical: f32,
+};
 
 @vertex fn vs(
     @builtin(vertex_index) index: u32,
@@ -37,19 +65,27 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f, @locati
     @location(1) degrees: f32,
     @location(2) crop: vec4f,
     @location(3) grey: f32,
+    @location(4) elliptical: f32,
 ) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
+    let size = abs(rect.zw) * camera.zoom;
+    let margin = select(vec2f(0.0), 1.0 / max(size, vec2f(1e-6)), elliptical > 0.5);
     var out: Out;
-    out.position = place(corner, rect, degrees);
-    out.uv = crop.xy + corner * crop.zw;
+    out.parts = mix(-margin, 1.0 + margin, corner);
+    out.position = place(out.parts, rect, degrees);
+    out.crop = crop;
     out.grey = grey;
+    out.size = size;
+    out.elliptical = elliptical;
     return out;
 }
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
-    let color = textureSample(image, image_sampler, in.uv);
+    let color = textureSample(image, image_sampler, in.crop.xy + clamp(in.parts, vec2f(0.0), vec2f(1.0)) * in.crop.zw);
     let luma = dot(color.rgb, vec3f(0.2126, 0.7152, 0.0722));
-    return vec4f(mix(color.rgb, vec3f(luma), in.grey), color.a);
+    let away = ellipse((in.parts - 0.5) * in.size, in.size * 0.5);
+    let shown = select(1.0, clamp(0.5 - away, 0.0, 1.0), in.elliptical > 0.5);
+    return vec4f(mix(color.rgb, vec3f(luma), in.grey), color.a * shown);
 }
 "#;
 
@@ -145,20 +181,6 @@ struct Out {
 fn box(local: vec2f, half: vec2f) -> f32 {
     let outside = abs(local) - half;
     return length(max(outside, vec2f(0.0))) + min(max(outside.x, outside.y), 0.0);
-}
-
-/// Negative within the ellipse, as the core measures it, bounded where a thin ellipse would
-/// otherwise show a gap or fat tips.
-fn ellipse(local: vec2f, half: vec2f) -> f32 {
-    let axes = max(half, vec2f(0.5));
-    let point = abs(local);
-    let scaled = length(point / axes);
-    let gradient = length(point / (axes * axes));
-    let estimate = select(1e30, abs(scaled * (scaled - 1.0) / gradient), gradient > 0.0);
-    let unit = point / axes;
-    let straight = axes * sqrt(max(1.0 - unit.yx * unit.yx, vec2f(0.0))) - point;
-    let frame = length(max(point - axes, vec2f(0.0)));
-    return select(max(estimate, frame), -min(estimate, min(straight.x, straight.y)), scaled < 1.0);
 }
 
 /// The nearest point of [0, `span`] that a dash covers, dashes being half of each `period` and
@@ -324,10 +346,11 @@ const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// 2 for a text, its texture or -1, then its instance.
 ///
 /// An image's instance is its x, y, width, height, rotation, the crop's x, y, width, and height
-/// in texture coordinates, which a negative size flips, and 1 to draw in greys or 0. A text's is
-/// its x, y, width, height, rotation, colour, and padding. A stroke's is the shape, geometry,
-/// rotation, width, and colour that [`STROKES`] reads. Colours are red, green, and blue from 0 to 1.
-const STRIDE: usize = 12;
+/// in texture coordinates, which a negative size flips, 1 to draw in greys or 0, and 1 to show
+/// the ellipse that fills it or 0. A text's is its x, y, width, height, rotation, colour, and
+/// padding. A stroke's is the shape, geometry, rotation, width, and colour that [`STROKES`]
+/// reads, and padding. Colours are red, green, and blue from 0 to 1.
+const STRIDE: usize = 13;
 const IMAGE: f32 = 0.0;
 const STROKE: f32 = 1.0;
 /// Bytes per instance, which every kind shares, as WebGL2 finds instances by one stride.
@@ -484,12 +507,12 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
     };
     let quads = pipeline(
         &device,
-        &[CAMERA, QUADS].concat(),
+        &[CAMERA, ELLIPSE, QUADS].concat(),
         &[&camera_layout, &image_layout],
         &[Some(wgpu::VertexBufferLayout {
             array_stride: INSTANCE,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x4, 3 => Float32],
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x4, 3 => Float32, 4 => Float32],
         })],
         target.clone(),
     );
@@ -506,7 +529,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
     );
     let strokes = pipeline(
         &device,
-        &[CAMERA, STROKES].concat(),
+        &[CAMERA, ELLIPSE, STROKES].concat(),
         &[&camera_layout],
         &[Some(wgpu::VertexBufferLayout {
             array_stride: INSTANCE,

@@ -12,7 +12,8 @@ use crate::crop::cropped;
 use crate::grid::settled;
 use crate::stick::{Landing, Motion, lands_on};
 use crate::{
-    Background, Board, Element, ElementId, ElementKind, Error, Point, Rect, Result, ZIndex, angle,
+    Background, Board, CropShape, Element, ElementId, ElementKind, Error, Point, Rect, Result,
+    ZIndex, angle,
 };
 
 /// Where an element moves among the elements of its group.
@@ -245,11 +246,29 @@ impl Editor {
         self.replace(vec![(id, cropped)])
     }
 
-    /// Shows the whole of each image among the elements, with those of the groups among them.
+    /// Shows the whole of each image among the elements, with those of the groups among them,
+    /// as a rectangle.
     pub fn reset_crop(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
         self.reshape(ids, |kind| {
             if let Some(whole) = cropped(kind, None) {
                 *kind = whole;
+            }
+            if let ElementKind::Image { edits, .. } = kind {
+                edits.crop_shape = CropShape::Rectangle;
+            }
+        })
+    }
+
+    /// Shows each image among the elements, with those of the groups among them, as `shape`
+    /// within its crop.
+    pub fn set_crop_shape(
+        &mut self,
+        ids: &[ElementId],
+        shape: CropShape,
+    ) -> Result<Vec<ElementId>> {
+        self.reshape(ids, |kind| {
+            if let ElementKind::Image { edits, .. } = kind {
+                edits.crop_shape = shape;
             }
         })
     }
@@ -2729,6 +2748,45 @@ mod tests {
         assert_eq!(
             [2, 3, 5].map(target),
             [Some(1), None, Some(4)].map(|bits| bits.map(id))
+        );
+    }
+
+    #[test]
+    fn landing_on_an_image_shown_as_an_ellipse_takes_its_curve_to_hold_what_lands() {
+        let mut shown = picture(0.0, 0.0);
+        if let ElementKind::Image { edits, .. } = &mut shown {
+            edits.crop_shape = CropShape::Ellipse;
+        }
+        let ellipse = |x, y, width, height| ElementKind::Shape {
+            frame: Rect {
+                x,
+                y,
+                width,
+                height,
+            },
+            rotation: 0.0,
+            shape: crate::Shape::Ellipse,
+            text: Text::new(String::new(), 2.0),
+            target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            fill: Fill::Hollow,
+            dash: Dash::Solid,
+        };
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", shown)),
+            (2, element(None, "a1", framed(90.0, 90.0, 20.0, 20.0))),
+            // In a corner of the picture's frame, out of its curve.
+            (3, element(None, "a2", framed(5.0, 5.0, 20.0, 20.0))),
+            (4, element(None, "a3", ellipse(50.0, 50.0, 100.0, 100.0))),
+            // Within the frame, its curve out of the picture's.
+            (5, element(None, "a4", ellipse(0.0, 20.0, 200.0, 40.0))),
+        ]));
+        editor.land(&ids([2, 3, 4, 5])).unwrap();
+        let target = |bits| editor.board().elements[&id(bits)].kind.target();
+        assert_eq!(
+            [2, 3, 4, 5].map(target),
+            [Some(1), None, Some(1), None].map(|bits| bits.map(id))
         );
     }
 

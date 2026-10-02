@@ -742,6 +742,21 @@ async fn a_style_reaches_the_web_app_as_the_agent_gave_it() {
 }
 
 #[tokio::test]
+async fn a_crop_shape_reaches_the_web_app_as_the_agent_gave_it() {
+    let update = json!({ "id": "a", "crop_shape": "ellipse" });
+    let args = relayed("update", json!({ "updates": [update] }))
+        .await
+        .unwrap();
+    assert_eq!(args, json!({ "updates": [update] }));
+
+    let star = json!({ "id": "a", "crop_shape": "star" });
+    let refused = relayed("update", json!({ "updates": [star] }))
+        .await
+        .unwrap_err();
+    assert!(refused.contains("unknown variant `star`"), "{refused}");
+}
+
+#[tokio::test]
 async fn a_style_that_an_element_cannot_take_is_refused_before_the_web_app_hears_of_it() {
     let point = json!({ "x": 0.0, "y": 0.0 });
     let refusals = [

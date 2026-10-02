@@ -76,7 +76,7 @@ pub(crate) fn cropped(kind: &ElementKind, area: Option<Rect>) -> Option<ElementK
 mod tests {
     use super::*;
     use crate::tests::{board, element, id};
-    use crate::{AssetId, Colour, Editor, Error, ImageEdits, Size, Text};
+    use crate::{AssetId, Colour, CropShape, Editor, Error, ImageEdits, Size, Text};
 
     fn area(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect {
@@ -115,11 +115,15 @@ mod tests {
         Editor::new(board(elements))
     }
 
-    fn crop_of(editor: &Editor) -> Option<Rect> {
+    fn edits_of(editor: &Editor) -> ImageEdits {
         match &editor.board().elements[&id(1)].kind {
-            ElementKind::Image { edits, .. } => edits.crop,
+            ElementKind::Image { edits, .. } => *edits,
             _ => unreachable!(),
         }
+    }
+
+    fn crop_of(editor: &Editor) -> Option<Rect> {
+        edits_of(editor).crop
     }
 
     fn assert_near(a: Point, b: Point) {
@@ -251,6 +255,45 @@ mod tests {
                 .unwrap(),
             before.unwrap(),
         );
+    }
+
+    #[test]
+    fn resetting_the_crop_shows_the_whole_image_as_a_rectangle() {
+        let mut editor = editor([image(0.0, false, false)]);
+        editor.crop(id(1), area(50.0, 20.0, 100.0, 60.0)).unwrap();
+        editor.set_crop_shape(&[id(1)], CropShape::Ellipse).unwrap();
+
+        editor.reset_crop(&[id(1)]).unwrap();
+
+        assert_eq!(edits_of(&editor).crop, None);
+        assert_eq!(edits_of(&editor).crop_shape, CropShape::Rectangle);
+        editor.undo();
+        assert_eq!(edits_of(&editor).crop, Some(area(50.0, 20.0, 100.0, 60.0)));
+        assert_eq!(edits_of(&editor).crop_shape, CropShape::Ellipse);
+    }
+
+    #[test]
+    fn the_crop_shape_applies_to_the_images_of_a_group_in_one_step() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", image(30.0, true, false))),
+            (3, element(Some(1), "a1", image(0.0, false, false))),
+        ]));
+        let shapes = |editor: &Editor| {
+            [2, 3].map(|bits| match &editor.board().elements[&id(bits)].kind {
+                ElementKind::Image { edits, .. } => edits.crop_shape,
+                _ => unreachable!(),
+            })
+        };
+
+        assert_eq!(
+            editor.set_crop_shape(&[id(1)], CropShape::Ellipse).unwrap(),
+            [id(2), id(3)]
+        );
+
+        assert_eq!(shapes(&editor), [CropShape::Ellipse; 2]);
+        editor.undo();
+        assert_eq!(shapes(&editor), [CropShape::Rectangle; 2]);
     }
 
     #[test]

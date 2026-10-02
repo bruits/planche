@@ -265,6 +265,15 @@ pub enum Fill {
     Solid,
 }
 
+/// What an image shows of its crop, the whole of it by default, or the ellipse that fills it.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+pub enum CropShape {
+    Rectangle,
+    Ellipse,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
@@ -300,6 +309,8 @@ pub struct Update {
     /// For an image, the part of it to show, in its pixels, all of them to show it whole. Each
     /// pixel it still shows stays where it was, at the same size.
     pub crop: Option<Pixels>,
+    /// For an image.
+    pub crop_shape: Option<CropShape>,
     /// For a note, a shape, an arrow, or a line, a colour of the palette, which each theme draws
     /// its own way, or `#rrggbb`, which every theme draws alike.
     pub colour: Option<Colour>,

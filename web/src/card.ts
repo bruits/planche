@@ -6,7 +6,7 @@
 
 import { among, type Opened } from "./board.js";
 import { ariaKeys, describe, type Command, type Shortcut } from "./commands.js";
-import type { Colour, Kind, Point } from "./core.js";
+import type { Colour, CropShape, Kind, Point } from "./core.js";
 import type { Reading } from "./edit.js";
 import { icon, type Icon } from "./icons.js";
 import { css, type Paint } from "./paint.js";
@@ -97,6 +97,8 @@ export interface CardCommands {
   flipHorizontally: Command;
   flipVertically: Command;
   crop: Command;
+  rectangularCrop: Command;
+  ellipticalCrop: Command;
   open: Command;
 }
 
@@ -349,18 +351,29 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     }
     if (images()) {
       const grey = targets().every(({ kind }) => kind.type === "image" && kind.edits.greyscale);
+      const shaped = (shape: CropShape) =>
+        targets().every(({ kind }) => kind.type === "image" && (kind.edits.crop_shape ?? "rectangle") === shape);
       const crops = commands.crop.unavailable?.() === undefined;
       rows.push(
-        row("Image", [
-          button("Greyscale", icon("contrast"), () => greyscale(), { pressed: grey }),
-          button("Flip horizontally", icon("flipHorizontally"), () => commands.flipHorizontally.run(), {
-            shortcut: commands.flipHorizontally.keys?.[0],
-          }),
-          button("Flip vertically", icon("flipVertically"), () => commands.flipVertically.run(), {
-            shortcut: commands.flipVertically.keys?.[0],
-          }),
-          ...(crops ? [button("Crop", icon("crop"), () => commands.crop.run(), { shortcut: commands.crop.keys?.[0] })] : []),
-        ]),
+        row(
+          "Image",
+          [
+            button("Greyscale", icon("contrast"), () => greyscale(), { pressed: grey }),
+            button("Flip horizontally", icon("flipHorizontally"), () => commands.flipHorizontally.run(), {
+              shortcut: commands.flipHorizontally.keys?.[0],
+            }),
+            button("Flip vertically", icon("flipVertically"), () => commands.flipVertically.run(), {
+              shortcut: commands.flipVertically.keys?.[0],
+            }),
+            ...(crops ? [button("Crop", icon("crop"), () => commands.crop.run(), { shortcut: commands.crop.keys?.[0] })] : []),
+          ],
+          [
+            button("Rectangular crop", icon("square"), () => commands.rectangularCrop.run(), {
+              pressed: shaped("rectangle"),
+            }),
+            button("Elliptical crop", icon("circle"), () => commands.ellipticalCrop.run(), { pressed: shaped("ellipse") }),
+          ],
+        ),
       );
     }
     return rows;

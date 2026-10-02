@@ -2,7 +2,7 @@
 // to it and edit it, which it saves as it goes, and save it elsewhere or export it.
 
 import * as core from "./core.js";
-import type { Background, Kind, Order, Point, Rect } from "./core.js";
+import type { Background, CropShape, Kind, Order, Point, Rect } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
 import { animations } from "./animation.js";
@@ -31,7 +31,7 @@ import {
 import { fit, type Camera } from "./camera.js";
 import { card } from "./card.js";
 import { meanColours } from "./colour.js";
-import { describe, listen, mac, typed, typing, type Command, type Shortcut } from "./commands.js";
+import { describe, listen, mac, named, typed, typing, type Command, type Shortcut } from "./commands.js";
 import { edits, type Draw, type Restack } from "./edit.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
@@ -187,6 +187,10 @@ const greyed = () => {
   const images = selectedImages();
   return images.length > 0 && images.every((kind) => kind.edits.greyscale);
 };
+const shapedAs = (shape: CropShape) => {
+  const images = selectedImages();
+  return images.length > 0 && images.every((kind) => (kind.edits.crop_shape ?? "rectangle") === shape);
+};
 const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet" : undefined);
 const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection()) : []);
 const selectedMoving = () => selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
@@ -196,6 +200,12 @@ const restack = (label: string, to: Restack, shortcut: Shortcut): Command => ({
   keys: [shortcut],
   unavailable: noneSelected,
   run: () => editing.restack(to),
+});
+const cropShape = (label: string, shape: CropShape): Command => ({
+  label,
+  unavailable: () =>
+    noneSelected() ?? (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images are cropped"),
+  run: () => editing.cropShape(shape),
 });
 const flip = (label: string, key: string, horizontally: boolean): Command => ({
   label,
@@ -354,11 +364,21 @@ const commands = {
   },
   resetCrop: {
     label: "Reset crop",
-    keys: [{ key: "c", alt: true }],
+    keys: [
+      { key: "c", command: true, shift: true },
+      { key: "c", alt: true },
+    ],
     unavailable: () =>
-      noneSelected() ?? (selectedImages().some((kind) => kind.edits.crop) ? undefined : "Nothing selected is cropped"),
+      editing.cropping() !== undefined
+        ? undefined
+        : (noneSelected() ??
+          (selectedImages().some((kind) => kind.edits.crop || kind.edits.crop_shape === "ellipse")
+            ? undefined
+            : "Nothing selected is cropped")),
     run: () => editing.resetCrop(),
   },
+  rectangularCrop: cropShape("Rectangular crop", "rectangle"),
+  ellipticalCrop: cropShape("Elliptical crop", "ellipse"),
   greyscale: {
     label: "Greyscale",
     keys: [{ key: "g", alt: true }],
@@ -634,6 +654,8 @@ const styleCard = card(
     flipHorizontally: commands.flipHorizontally,
     flipVertically: commands.flipVertically,
     crop: commands.crop,
+    rectangularCrop: commands.rectangularCrop,
+    ellipticalCrop: commands.ellipticalCrop,
     open: commands.style,
   },
 );
@@ -659,7 +681,10 @@ refreshBar();
 if (platform.titleBar) {
   handle(byId("handle"), viewport.host, platform.titleBar.drag, leaveCompact);
 }
-listen(Object.values(commands), () => !menuOpen() && !busy());
+listen(
+  Object.values(commands),
+  (command) => !menuOpen() && (!busy() || (command === commands.resetCrop && editing.cropping() !== undefined)),
+);
 addEventListener("keydown", (event) => {
   // A focused button takes Space to press itself.
   if (event.key !== " " || spaceHeld || menuOpen() || typing(event.target) || event.target instanceof HTMLButtonElement) {
@@ -1006,7 +1031,8 @@ function hint(): string {
     return `${escapeKey} or click away to finish`;
   }
   if (editing.cropping() !== undefined) {
-    return `Drag an edge or a corner to crop, or the inside to move the crop · ${insideKey} or click away to crop · ${escapeKey} to leave it as it was`;
+    const resetKey = describe(commands.resetCrop.keys[0]!);
+    return `Drag an edge or a corner to crop, or the inside to move the crop · ${resetKey} to start over · ${insideKey} or click away to crop · ${escapeKey} to leave it as it was`;
   }
   const styles = commands.style.unavailable() === undefined ? `${describe(commands.style.keys[0]!)} to style · ` : "";
   if (tool === "hand") {
@@ -1057,9 +1083,9 @@ function hint(): string {
   }
   if (editing.selection().length > 0) {
     const crops = commands.crop.unavailable() === undefined ? `double-click or ${insideKey} to crop · ` : "";
-    const keys = [commands.play, commands.sound]
+    const keys = [commands.resetCrop, commands.play, commands.sound]
       .filter((command) => command.unavailable() === undefined)
-      .map((command) => `${describe(command.keys[0]!)} to ${command.label().toLowerCase()} · `);
+      .map((command) => `${describe(command.keys[0]!)} to ${named(command).toLowerCase()} · `);
     return `Drag to move · corners scale · turn from outside a corner · ${crops}${keys.join("")}${styles}right-click for more`;
   }
   return "Drop or paste images · scroll to move around · right-click for more";
@@ -1098,6 +1124,9 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
           "separator",
           commands.crop,
           commands.resetCrop,
+          "separator",
+          { ...commands.rectangularCrop, checked: shapedAs("rectangle") },
+          { ...commands.ellipticalCrop, checked: shapedAs("ellipse") },
           "separator",
           { ...commands.greyscale, checked: greyed(), toggle: true },
         ]),

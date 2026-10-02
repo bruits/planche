@@ -115,7 +115,7 @@ function capitalise(word: string): string {
  * A command that cannot run, or that `listening` holds back, still takes its keys, so that they
  * never fall through to the host, such as ⌘A selecting the page's text or ⌘+ zooming it.
  */
-export function listen(commands: Command[], listening: () => boolean): void {
+export function listen(commands: Command[], listening: (command: Command) => boolean): void {
   addEventListener("keydown", (event) => {
     // 229 is what a key composing text, such as an accent, reports in some browsers.
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || typing(event.target)) {
@@ -134,7 +134,7 @@ export function listen(commands: Command[], listening: () => boolean): void {
     if (event.repeat && event.key === "Enter") {
       return;
     }
-    if (listening() && command.unavailable?.() === undefined) {
+    if (listening(command) && command.unavailable?.() === undefined) {
       command.run();
     }
   });

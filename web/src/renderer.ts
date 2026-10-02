@@ -19,6 +19,8 @@ export type Placed =
       /** The part of the asset it shows, from 0 to 1 across and down, which a negative size flips. */
       texture: Rect;
       greyscale: boolean;
+      /** Whether it shows only the ellipse that fills its frame. */
+      elliptical: boolean;
     }
   | { kind: "text"; id: string; frame: Rect; rotation: number; paint: Paint }
   | { kind: "line"; from: Point; to: Point; width: number; paint: Paint; dashed?: boolean }
@@ -87,8 +89,8 @@ export interface Renderer {
 
 /** How long a render may wait for the GPU to hand its pixels over, in milliseconds. */
 const READBACK_TIME = 15_000;
-/** Floats per item, as `draw` reads them. */
-const STRIDE = 12;
+/** Floats per item, as `draw` reads them, those an item leaves out being zeros. */
+const STRIDE = 13;
 /** As the renderer tells its items apart. */
 const KINDS = { image: 0, stroke: 1, text: 2 };
 /** As the renderer tells its strokes apart. */
@@ -295,7 +297,7 @@ function floats(item: Placed, texture: number, paints: Paints): number[] {
       const { frame, texture: shown } = item;
       return [
         ...[KINDS.image, texture, frame.x, frame.y, frame.width, frame.height, item.rotation],
-        ...[shown.x, shown.y, shown.width, shown.height, item.greyscale ? 1 : 0],
+        ...[shown.x, shown.y, shown.width, shown.height, item.greyscale ? 1 : 0, item.elliptical ? 1 : 0],
       ];
     }
     case "text": {

@@ -506,6 +506,8 @@ pub struct ImageEdits {
     pub flip_horizontal: bool,
     pub flip_vertical: bool,
     pub greyscale: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub crop_shape: CropShape,
 }
 
 impl ImageEdits {
@@ -515,9 +517,19 @@ impl ImageEdits {
             flip_horizontal: _,
             flip_vertical: _,
             greyscale: _,
+            crop_shape: _,
         } = self;
         crop.is_none_or(|crop| crop.is_finite())
     }
+}
+
+/// What an image shows of its crop, the whole of it or the ellipse that fills it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CropShape {
+    #[default]
+    Rectangle,
+    Ellipse,
 }
 
 /// Wraps to the width of what holds it.

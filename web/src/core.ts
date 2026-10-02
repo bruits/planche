@@ -86,6 +86,8 @@ export type Dash = "solid" | "dashed";
 export type Heads = "end" | "both";
 export type Fill = "hollow" | "tint" | "solid";
 export type Align = "left" | "centre" | "right";
+/** Mirrors `board::CropShape`. */
+export type CropShape = "rectangle" | "ellipse";
 
 /** Mirrors `board::ElementKind`, as far as the shells read it. */
 export type Kind =
@@ -95,7 +97,7 @@ export type Kind =
       natural_size: Size;
       frame: Rect;
       rotation: number;
-      edits: { crop: Rect | null; flip_horizontal: boolean; flip_vertical: boolean; greyscale: boolean };
+      edits: { crop: Rect | null; flip_horizontal: boolean; flip_vertical: boolean; greyscale: boolean; crop_shape?: CropShape };
       source?: string;
       filename?: string;
       caption?: string;
@@ -222,6 +224,10 @@ export function background(editor: Editor): Background {
 
 export function setBackground(editor: Editor, background: Background): void {
   editor.setBackground(JSON.stringify(background));
+}
+
+export function setCropShape(editor: Editor, ids: string[], shape: CropShape): string[] {
+  return editor.setCropShape(ids, JSON.stringify(shape));
 }
 
 const widths = new Map<Weight, number>();

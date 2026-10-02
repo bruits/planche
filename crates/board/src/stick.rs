@@ -633,6 +633,22 @@ mod tests {
     }
 
     #[test]
+    fn an_end_near_the_curve_of_an_image_shown_as_an_ellipse_snaps_onto_it() {
+        let mut shown = image(area(0.0, 0.0, 200.0, 100.0));
+        if let ElementKind::Image { edits, .. } = &mut shown {
+            edits.crop_shape = crate::CropShape::Ellipse;
+        }
+        let board = board([(1, element(None, "a0", shown))]);
+        // Far from the frame's sides, within reach of the curve.
+        let (target, on) = board.stick(point(168.0, 17.0), 3.0).unwrap();
+        assert_eq!(target, id(1));
+        let curve = ((on.x - 100.0) / 100.0).hypot((on.y - 50.0) / 50.0);
+        assert!((curve - 1.0).abs() < 1e-9, "{curve}");
+        // In a corner of the frame, which shows nothing.
+        assert_eq!(board.stick(point(5.0, 5.0), 3.0), None);
+    }
+
+    #[test]
     fn an_end_keeps_to_the_same_point_of_what_it_sticks_to() {
         let before = image(area(0.0, 0.0, 100.0, 100.0));
         let ElementKind::Image {

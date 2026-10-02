@@ -228,6 +228,19 @@ impl Editor {
         Ok(strings(self.0.reset_crop(&parse(ids)?)?))
     }
 
+    /// `shape` as JSON.
+    #[wasm_bindgen(js_name = setCropShape)]
+    pub fn set_crop_shape(
+        &mut self,
+        ids: Vec<String>,
+        shape: &str,
+    ) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.set_crop_shape(
+            &parse(ids)?,
+            serde_json::from_str(shape)?,
+        )?))
+    }
+
     #[wasm_bindgen(js_name = setGreyscale)]
     pub fn set_greyscale(
         &mut self,

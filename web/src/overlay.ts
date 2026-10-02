@@ -67,9 +67,9 @@ export interface Overlay {
 }
 
 /**
- * An image being cropped, the corners of the whole image and of what its crop keeps, and the
- * grips on the corners and edges of what it keeps. Flipped once, they run the other way, which
- * the shade's even-odd fill ignores.
+ * An image being cropped, the corners of the whole image, the outline of what its crop keeps, and
+ * the grips on the corners and edges of its crop. Flipped once, they run the other way, which the
+ * shade's even-odd fill ignores.
  */
 export interface Crop {
   image: Point[];

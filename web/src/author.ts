@@ -5,7 +5,7 @@
 import { fromBase64 } from "./add.js";
 import { extent, holdsImage, imageKind, newId, prepare, release, row, type Added, type Opened } from "./board.js";
 import * as core from "./core.js";
-import type { Editor, Kind, Point, Rect, Size } from "./core.js";
+import type { CropShape, Editor, Kind, Point, Rect, Size } from "./core.js";
 import { FONT_SIZE, NOTE_WIDTH, PLACED_SIZE, STICKY_SIZE, type Restack } from "./edit.js";
 import { LONGEST_SIDE } from "./raster.js";
 import { isColour, restyled, settings, TEXT, type Style } from "./style.js";
@@ -336,6 +336,7 @@ interface Change extends Styling {
   greyscale?: boolean;
   /** In the image's pixels, all of them for none. */
   crop?: Rect;
+  crop_shape?: CropShape;
 }
 
 async function update(page: Writing, target: Opened, clock: Clock, changes: Change[]) {
@@ -358,7 +359,7 @@ async function update(page: Writing, target: Opened, clock: Clock, changes: Chan
 
 /** From the core, as earlier changes of the call left it, but for the crop, which the core makes. */
 function patched(editor: Editor, change: Change): Kind {
-  const { id, text, font_size, shape, caption, source, greyscale, crop } = change;
+  const { id, text, font_size, shape, caption, source, greyscale, crop, crop_shape } = change;
   const kind = core.element(editor, id)!.kind;
   const refuse = (field: string, blank = false) =>
     new Error(
@@ -397,6 +398,7 @@ function patched(editor: Editor, change: Change): Kind {
     source !== undefined && "source",
     greyscale !== undefined && "greyscale",
     crop !== undefined && "crop",
+    crop_shape !== undefined && "crop_shape",
   ].find((field) => field);
   if (imageField) {
     if (kind.type !== "image") {
@@ -410,6 +412,9 @@ function patched(editor: Editor, change: Change): Kind {
     }
     if (greyscale !== undefined) {
       kind.edits.greyscale = greyscale;
+    }
+    if (crop_shape !== undefined) {
+      kind.edits.crop_shape = crop_shape;
     }
   }
   // After its shape, which tells whether it takes a fill.
