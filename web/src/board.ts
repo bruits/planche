@@ -211,11 +211,22 @@ export function imageKind(
   return { type: "image", asset, natural_size: natural, frame, rotation: 0, edits, ...about };
 }
 
-export function row(sizes: Size[], at: Point): Rect[] {
-  let x = at.x - sizes.reduce((sum, { width }) => sum + width, 0) / 2;
+/** Side by side around `at`, shrunk as one and moved to fit within `area` when given. */
+export function row(sizes: Size[], at: Point, area?: Rect): Rect[] {
+  const across = sizes.reduce((sum, { width }) => sum + width, 0);
+  const tallest = Math.max(...sizes.map(({ height }) => height));
+  const scale = area ? Math.min(1, area.width / across, area.height / tallest) : 1;
+  const [wide, high] = [across * scale, tallest * scale];
+  const centre = area
+    ? {
+        x: Math.min(Math.max(at.x, area.x + wide / 2), area.x + area.width - wide / 2),
+        y: Math.min(Math.max(at.y, area.y + high / 2), area.y + area.height - high / 2),
+      }
+    : at;
+  let x = centre.x - wide / 2;
   return sizes.map(({ width, height }) => {
-    const frame = { x, y: at.y - height / 2, width, height };
-    x += width;
+    const frame = { x, y: centre.y - (height * scale) / 2, width: width * scale, height: height * scale };
+    x += frame.width;
     return frame;
   });
 }

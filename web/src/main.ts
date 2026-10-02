@@ -2,7 +2,7 @@
 // to it and edit it, which it saves as it goes, and save it elsewhere or export it.
 
 import * as core from "./core.js";
-import type { Background, Kind, Order, Point } from "./core.js";
+import type { Background, Kind, Order, Point, Rect } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
 import { animations } from "./animation.js";
@@ -67,6 +67,8 @@ const SESSION = "planche.session";
 const ZOOM_STEP = 1.25;
 /** What the zoom's menu zooms to at once. */
 const ZOOMS = [0.25, 0.5, 1, 2, 4];
+/** Left around images added, in CSS pixels, past the zones outside their corners that turn them. */
+const ADDED_MARGIN = 48;
 /** In the order the key goes through them. */
 const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
 const SCHEMES: Scheme[] = ["light", "dark", "system"];
@@ -1610,7 +1612,7 @@ async function present(next: Opened, camera?: Camera): Promise<void> {
   }
 }
 
-/** At their natural size, side by side around `at`, and as one edit. */
+/** Side by side around `at`, at their natural size unless they would not show whole, and as one edit. */
 async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void> {
   const target = opened;
   const added: Added[] = [];
@@ -1633,6 +1635,7 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
     const frames = row(
       added.map(({ natural }) => natural),
       at,
+      room(),
     );
     const ids = added.map(() => newId());
     // Into the group gone into, where they stay selected.
@@ -1649,6 +1652,23 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   if (failures.length > 0) {
     bar.say(`Not added, ${failures.join("; ")}`);
   }
+}
+
+/** What of the board shows between the handle and the toolbar, less a margin, `undefined` when none of it shows. */
+function room(): Rect | undefined {
+  const camera = viewport.camera();
+  if (camera === undefined) {
+    return undefined;
+  }
+  const { width, height } = viewport.size();
+  // A press on the handle drags the window instead. It measures 0 while hidden.
+  const top = byId("handle").getBoundingClientRect().bottom;
+  const shown = onScreen({ ...camera, y: camera.y + top / camera.zoom }, { width, height: Math.min(height, bar.top()) - top });
+  if (shown.width <= 0 || shown.height <= 0) {
+    return undefined;
+  }
+  const margin = Math.min(ADDED_MARGIN / camera.zoom, Math.min(shown.width, shown.height) / 10);
+  return { x: shown.x + margin, y: shown.y + margin, width: shown.width - 2 * margin, height: shown.height - 2 * margin };
 }
 
 function keep(target: Opened, added: Added[]): void {
