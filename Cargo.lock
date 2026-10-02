@@ -696,6 +696,7 @@ name = "desktop"
 version = "0.0.0"
 dependencies = [
  "folder",
+ "format",
  "mcp",
  "percent-encoding",
  "tauri",

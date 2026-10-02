@@ -5,6 +5,7 @@ import init, {
   AssetHasher,
   Crc32,
   Editor,
+  Known,
   Snapshot,
   ZipIndex,
   ZipWriter,
@@ -15,6 +16,7 @@ import init, {
   gridLevel as level,
   isAssetFile,
   isBoardFile,
+  isStrayElement,
   locateZipDirectory,
   newBoardFiles,
   snapScaleToGrid as snapScale,
@@ -29,6 +31,7 @@ import init, {
 
 export {
   Editor,
+  Known,
   Snapshot,
   ZipIndex,
   ZipWriter,
@@ -37,6 +40,7 @@ export {
   frameDelay,
   isAssetFile,
   isBoardFile,
+  isStrayElement,
   locateZipDirectory,
   zipTailLength,
 };
@@ -324,6 +328,10 @@ export type Side = "height" | "width";
 /** Every file but the assets. */
 export function write(snapshot: Snapshot): Files {
   return snapshot.write() as Files;
+}
+
+export function known(listed: string[], files: Files): Known {
+  return Known.read(listed, [...files.keys()], [...files.values()]);
 }
 
 /** The files a new board folder starts with, besides those of `write`. */

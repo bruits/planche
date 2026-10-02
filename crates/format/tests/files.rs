@@ -8,6 +8,7 @@ use board::{
     ElementKind, Fill, Heads, ImageEdits, Paper, Point, Rect, Restack, Shape, Size, Text, Weight,
     ZIndex,
 };
+use format::save::{Known, Save};
 use format::{Error, Files, zip};
 
 const NOTE: ElementId = ElementId::from_random(3);
@@ -701,21 +702,121 @@ fn stray_files_are_not_part_of_the_board() {
         "assets/Thumbs.db".to_owned(),
     ] {
         assert!(!format::is_element_file(&stray), "{stray}");
+        assert!(!format::is_asset_file(&stray), "{stray}");
         files.insert(stray, vec![0]);
     }
     assert_eq!(format::read(&files).unwrap(), board);
 }
 
 #[test]
-fn a_conflicted_copy_is_refused() {
-    let mut files = format::write(&sample()).unwrap();
+fn only_a_file_named_after_its_digest_is_an_asset() {
+    let asset = format::asset_path(AssetId::of(IMAGE));
+    assert!(format::is_asset_file(&asset));
+    for stray in [
+        "assets/js/app.js".to_owned(),
+        "assets/".to_owned(),
+        asset.to_uppercase().replace("ASSETS/", "assets/"),
+        format!("{asset}/inside"),
+    ] {
+        assert!(!format::is_asset_file(&stray), "{stray}");
+    }
+}
+
+#[test]
+fn a_conflicted_copy_is_left_out_and_told_apart() {
+    let board = sample();
+    let mut files = format::write(&board).unwrap();
     let copy = format!("elements/{NOTE} (conflicted copy).json");
-    assert!(!format::is_element_file(&copy));
-    files.insert(
-        copy.clone(),
-        files[&format!("elements/{NOTE}.json")].clone(),
+    assert!(!format::is_board_file(&copy));
+    assert!(format::is_stray_element(&copy));
+    assert!(!format::is_stray_element(&format!("elements/{NOTE}.json")));
+    files.insert(copy, files[&format!("elements/{NOTE}.json")].clone());
+    assert_eq!(format::read(&files).unwrap(), board);
+}
+
+#[test]
+fn a_save_writes_only_the_files_whose_bytes_changed() {
+    let mut editor = Editor::new(sample());
+    let files = format::write(editor.board()).unwrap();
+    let mut listed: Vec<String> = files.keys().cloned().collect();
+    listed.push(format::asset_path(AssetId::of(IMAGE)));
+    let mut known = Known::new(listed, files);
+    let everything: Vec<ElementId> = editor.board().elements.keys().copied().collect();
+    assert_eq!(
+        known.save(editor.board(), everything.clone()).unwrap(),
+        Save::default()
     );
-    assert!(matches!(format::read(&files), Err(Error::InvalidName(name)) if name == copy));
+
+    let mut touched = editor.translate(&[ELLIPSE], 8.0, -8.0).unwrap();
+    touched.extend(editor.remove(&[STICKY]).unwrap());
+    // Touched, but back as it was.
+    touched.extend(editor.translate(&[NOTE], 1.0, 0.0).unwrap());
+    touched.extend(editor.translate(&[NOTE], -1.0, 0.0).unwrap());
+    editor.set_background(Background::Grid);
+    let save = known.save(editor.board(), touched).unwrap();
+
+    let after = format::write(editor.board()).unwrap();
+    let written: Vec<&str> = save.files.iter().map(|(path, _)| path.as_str()).collect();
+    let mut expected: Vec<String> = [ELLIPSE, ARROW, ElementId::from_random(9)]
+        .map(|id| format!("elements/{id}.json"))
+        .into();
+    expected.push("board.json".to_owned());
+    assert_eq!(written, expected);
+    assert!(save.files.iter().all(|(path, bytes)| after[path] == *bytes));
+    assert_eq!(save.deletions, [format!("elements/{STICKY}.json")]);
+    assert!(save.assets.is_empty());
+
+    for (path, bytes) in save.files {
+        known.wrote(&path, bytes);
+    }
+    for path in &save.deletions {
+        known.deleted(path);
+    }
+    assert_eq!(
+        known.save(editor.board(), everything).unwrap(),
+        Save::default()
+    );
+}
+
+#[test]
+fn a_first_save_copies_the_images_then_writes_the_manifest_before_every_element() {
+    let board = sample();
+    let save = Known::default()
+        .save(&board, board.elements.keys().copied())
+        .unwrap();
+    assert_eq!(save.assets, [format::asset_path(AssetId::of(IMAGE))]);
+    // Cut after any of them, the folder still reads as a board.
+    assert_eq!(save.files.first().unwrap().0, "board.json");
+    let files: Files = save.files.into_iter().collect();
+    assert_eq!(files, format::write(&board).unwrap());
+    assert!(save.deletions.is_empty());
+}
+
+#[test]
+fn a_save_deletes_only_the_element_files_it_knew() {
+    let board = sample();
+    let files = format::write(&board).unwrap();
+    let known = Known::new(files.keys().cloned().collect::<Vec<_>>(), files);
+    // Added by another program since the board was read, and so not on this board.
+    let theirs = ElementId::from_random(42);
+    assert!(known.save(&board, [theirs]).unwrap().deletions.is_empty());
+}
+
+#[test]
+fn an_overwrite_leaves_the_folder_holding_this_board_alone() {
+    let ours = sample();
+    // Read again once another program moved the note and added an element.
+    let mut theirs = sample();
+    theirs.elements.get_mut(&NOTE).unwrap().z = z("a9");
+    let added = ElementId::from_random(42);
+    theirs.elements.insert(added, note(None, "Theirs"));
+    let files = format::write(&theirs).unwrap();
+    let known = Known::new(files.keys().cloned().collect::<Vec<_>>(), files);
+
+    let save = known.overwrite(&ours).unwrap();
+    let written: Vec<&str> = save.files.iter().map(|(path, _)| path.as_str()).collect();
+    assert_eq!(written, [format!("elements/{NOTE}.json")]);
+    assert_eq!(save.deletions, [format!("elements/{added}.json")]);
 }
 
 #[test]

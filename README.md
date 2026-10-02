@@ -15,5 +15,5 @@ A fast, open-source board to gather your reference images, kept as plain files y
 - `crates/renderer/` — the renderer, on wgpu
 - `web/` — the app, which runs in a browser and in the desktop shell
 - `samples/` — boards to try the app on
-- `docs/technical/` — the [technical foundation](./docs/technical/foundation.md)
+- `docs/technical/` — the [technical foundation](./docs/technical/foundation.md), and how boards [save](./docs/technical/saving.md)
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — contributing guidelines and project philosophy

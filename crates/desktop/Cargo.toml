@@ -13,6 +13,8 @@ test = false
 
 [dependencies]
 folder.workspace = true
+# Which files of a board the page may write and delete.
+format.workspace = true
 mcp.workspace = true
 # Already in Tauri's tree, through `url`.
 percent-encoding = "2"

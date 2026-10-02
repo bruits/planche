@@ -2,8 +2,9 @@
 // checks every file access itself, since it cannot trust the page.
 
 import { typed } from "./commands.js";
-import type { Bytes } from "./core.js";
-import type { AgentCall, Platform } from "./platform.js";
+import type { AgentCall, Home, Platform, Slices } from "./platform.js";
+
+const LOSING = "Close, and lose the changes to this board?";
 
 export function tauri({ core, event }: TauriApi): Platform {
   let unsaved = false;
@@ -14,6 +15,46 @@ export function tauri({ core, event }: TauriApi): Platform {
     if (reload && unsaved) {
       event.preventDefault();
     }
+  });
+  const folder = (root: string): Home => ({
+    name: basename(root),
+    list: (depth) => core.invoke<string[]>("list_files", { root, depth }),
+    read: async (path) => new Uint8Array(await core.invoke<ArrayBuffer>("read_file", { root, path })),
+    write(path, bytes) {
+      // Headers only carry ASCII, and paths may not.
+      const headers = { root: encodeURIComponent(root), path: encodeURIComponent(path) };
+      return core.invoke<string>("write_file", bytes, { headers });
+    },
+    remove: (path) => core.invoke("remove_file", { root, path }),
+    stamps: async (paths) => new Map(await core.invoke<[string, string][]>("stamp_files", { root, paths })),
+    remember: () => core.invoke("remember_board", { path: root, zip: false }),
+  });
+  const zip = (path: string, size: number): Slices => ({
+    name: basename(path),
+    size,
+    read: async (start, end) => new Uint8Array(await core.invoke<ArrayBuffer>("read_zip", { path, start, end })),
+    home: {
+      async rewrite(over) {
+        if (!(await core.invoke<boolean>("rewrite_zip", { path, over }))) {
+          return null;
+        }
+        let written: number | null = null;
+        const headers = { path: encodeURIComponent(path) };
+        const sink = {
+          name: basename(path),
+          append: (bytes: Uint8Array) => core.invoke<void>("append_export", bytes, { headers }),
+          close: async () => {
+            written = await core.invoke<number | null>("finish_rewrite", { path, over });
+          },
+          discard: () => core.invoke<void>("discard_export", { path }),
+        };
+        return { sink, written: () => (written === null ? null : zip(path, written)) };
+      },
+      changed: () => core.invoke<boolean>("zip_changed", { path }),
+      reread: async () => zip(path, await core.invoke<number>("reread_zip", { path })),
+      adopt: () => core.invoke("adopt_zip", { path }),
+      remember: () => core.invoke("remember_board", { path, zip: true }),
+    },
   });
   return {
     name: "desktop",
@@ -41,47 +82,36 @@ export function tauri({ core, event }: TauriApi): Platform {
 
     async open() {
       const root = await core.invoke<string | null>("pick_folder", { title: "Open a board" });
-      if (root === null) {
-        return null;
-      }
-      return {
-        name: basename(root),
-        list: (depth) => core.invoke<string[]>("list_files", { root, depth }),
-        read: async (path) =>
-          new Uint8Array(await core.invoke<ArrayBuffer>("read_file", { root, path })),
-      };
+      return root === null ? null : folder(root);
     },
 
     async pickTarget() {
       const title = "Save the board in an empty folder";
       const root = await core.invoke<string | null>("pick_target", { title });
-      if (root === null) {
-        return null;
-      }
-      return {
-        name: basename(root),
-        async write(path: string, bytes: Bytes) {
-          // Headers only carry ASCII, and paths may not.
-          const headers = { root: encodeURIComponent(root), path: encodeURIComponent(path) };
-          await core.invoke("write_file", bytes, { headers });
-        },
-      };
+      return root === null ? null : folder(root);
     },
 
     async openZip() {
       const title = "Open a board's ZIP file";
       const picked = await core.invoke<[string, number] | null>("pick_zip", { title });
-      if (picked === null) {
+      return picked === null ? null : zip(...picked);
+    },
+
+    async session() {
+      const root = await core.invoke<string | null>("session");
+      return root === null ? null : { ...folder(root), remember: undefined, clear: () => core.invoke("clear_session") };
+    },
+
+    async reopen() {
+      const found = await core.invoke<[string, string, number] | null>("reopen_board");
+      if (found === null) {
         return null;
       }
-      const [path, size] = picked;
-      return {
-        name: basename(path),
-        size,
-        read: async (start, end) =>
-          new Uint8Array(await core.invoke<ArrayBuffer>("read_zip", { path, start, end })),
-      };
+      const [kind, path, size] = found;
+      return kind === "zip" ? { zip: zip(path, size) } : { folder: folder(path) };
     },
+
+    forget: () => core.invoke("forget_board"),
 
     async pickZip(name) {
       const title = "Export the board as a ZIP file";
@@ -99,11 +129,23 @@ export function tauri({ core, event }: TauriApi): Platform {
     },
 
     // The dialog plugin replaces the webview's own `confirm` with one that fails.
-    confirm: (question) => core.invoke<boolean>("confirm", { question }),
+    confirm: (question, choices) => core.invoke<boolean>("confirm", { question, choices }),
 
     markUnsaved(value) {
       unsaved = value;
       void core.invoke("mark_unsaved", { value });
+    },
+
+    whenClosing(write) {
+      void event.listen("closing", async () => {
+        let close: boolean;
+        try {
+          close = (await write()) || (await core.invoke<boolean>("confirm", { question: LOSING }));
+        } catch {
+          close = await core.invoke<boolean>("confirm", { question: LOSING });
+        }
+        await core.invoke(close ? "close_window" : "keep_window");
+      });
     },
 
     keepOnTop: (on) => core.invoke("keep_on_top", { on }),

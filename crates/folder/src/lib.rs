@@ -11,7 +11,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::thread;
+use std::time::{Duration, SystemTime};
 
 /// Every file in `root` and in its folders, down to `depth` levels in all, sorted. Names
 /// that are not UTF-8 are left out too.
@@ -51,15 +52,7 @@ pub fn is_empty(root: &Path) -> io::Result<bool> {
 }
 
 pub fn read(root: &Path, path: &str) -> io::Result<Vec<u8>> {
-    let segments = segments(path)?;
-    if segments.iter().any(|segment| segment.starts_with('.')) {
-        return Err(refused(path));
-    }
-    let file = file(root, path, &segments)?;
-    if is_link(&file) {
-        return Err(refused(path));
-    }
-    fs::read(file)
+    fs::read(visible(root, path)?)
 }
 
 /// Writes through a temporary file renamed over the target. A top-level dot file is only
@@ -81,6 +74,63 @@ pub fn write(root: &Path, path: &str, bytes: &[u8]) -> io::Result<()> {
     let mut draft = Draft::create(&file)?;
     draft.append(bytes)?;
     draft.commit()
+}
+
+/// Also when the file is gone already. Dot files are never removed.
+pub fn remove(root: &Path, path: &str) -> io::Result<()> {
+    let file = visible(root, path)?;
+    match retried(|| fs::remove_file(&file)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
+/// The stamps of those of `paths` that are in the folder, which tell that another program
+/// changed one since.
+pub fn stamps<'a>(
+    root: &Path,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> io::Result<Vec<(&'a str, Stamp)>> {
+    let mut stamps = Vec::new();
+    for path in paths {
+        match fs::metadata(visible(root, path)?) {
+            Ok(metadata) => stamps.push((path, stamp_of(&metadata))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(stamps)
+}
+
+/// The file at `path`, unless it is a dot file or a link, which [`list`] leaves out.
+fn visible(root: &Path, path: &str) -> io::Result<PathBuf> {
+    let segments = segments(path)?;
+    if segments.iter().any(|segment| segment.starts_with('.')) {
+        return Err(refused(path));
+    }
+    let file = file(root, path, &segments)?;
+    if is_link(&file) {
+        return Err(refused(path));
+    }
+    Ok(file)
+}
+
+/// Windows refuses to replace or remove a file for as long as another program, such as an
+/// indexer or an antivirus, holds it open, which it mostly does for a moment.
+fn retried(mut act: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+    // Access denied, and a sharing or a lock violation.
+    let held =
+        |error: &io::Error| cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32 | 33));
+    let mut tries = 0;
+    loop {
+        match act() {
+            Err(error) if held(&error) && tries < 5 => {
+                tries += 1;
+                thread::sleep(Duration::from_millis(100));
+            }
+            result => return result,
+        }
+    }
 }
 
 /// A file written in parts through a temporary file beside it, which takes the file's place
@@ -134,7 +184,7 @@ impl Draft {
         let out = self.out.take().expect("open until the draft ends");
         out.sync_all()?;
         drop(out);
-        fs::rename(&self.temporary, &self.file)?;
+        retried(|| fs::rename(&self.temporary, &self.file))?;
         self.gone = true;
         Ok(())
     }
@@ -267,6 +317,8 @@ mod tests {
         ] {
             assert!(refuses(read(&root, outside)), "{outside}");
             assert!(refuses(write(&root, outside, b"")), "{outside}");
+            assert!(refuses(remove(&root, outside)), "{outside}");
+            assert!(refuses(stamps(&root, [outside])), "{outside}");
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -417,6 +469,40 @@ mod tests {
         assert!(refuses(write(&root, "elements/.hidden", b"")));
         assert!(refuses(read(&root, ".git/config")));
         assert!(refuses(read(&root, ".gitattributes")));
+        assert!(refuses(remove(&root, ".gitattributes")));
+        assert!(refuses(remove(&root, ".git/config")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_removal_leaves_the_rest_and_forgives_a_file_gone_already() {
+        let root = scratch("remove");
+        write(&root, "elements/a.json", b"a").unwrap();
+        write(&root, "elements/b.json", b"b").unwrap();
+        remove(&root, "elements/a.json").unwrap();
+        remove(&root, "elements/a.json").unwrap();
+        assert_eq!(list(&root, 2).unwrap(), ["elements/b.json"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stamps_tell_which_files_changed() {
+        let root = scratch("stamps");
+        write(&root, "board.json", b"before").unwrap();
+        let before = stamps(&root, ["board.json", "elements/gone.json"]).unwrap();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].0, "board.json");
+
+        // Rewritten at the same size, which only its modification time tells.
+        fs::write(root.join("board.json"), b"after!").unwrap();
+        let later = before[0].1.1.unwrap() + std::time::Duration::from_secs(3600);
+        let rewritten = File::options()
+            .write(true)
+            .open(root.join("board.json"))
+            .unwrap();
+        rewritten.set_modified(later).unwrap();
+        drop(rewritten);
+        assert_ne!(stamps(&root, ["board.json"]).unwrap(), before);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -460,6 +546,8 @@ mod tests {
         assert!(refuses(read(&root, "assets/secret")));
         assert!(refuses(read(&root, "board.json")));
         assert!(refuses(write(&root, "assets/secret", b"")));
+        assert!(refuses(remove(&root, "board.json")));
+        assert!(refuses(stamps(&root, ["board.json"])));
         write(&root, "notes", b"mine").unwrap();
         write(&root, ".gitattributes", b"mine").unwrap();
         write(&root, ".dangling", b"mine").unwrap();

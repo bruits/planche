@@ -10,7 +10,7 @@ use board::{
     Animation, AssetId, Background, Board, Element, ElementId, ElementKind, GRID_STEP, GridLevel,
     Order, Point, Rect, Restack, Side, Size, Weight,
 };
-use format::zip;
+use format::{save, zip};
 use js_sys::{Map, Uint8Array};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -409,6 +409,83 @@ impl Snapshot {
     }
 }
 
+/// A board's folder as the app last read or wrote it, so that a save writes only the files
+/// whose bytes changed, and deletes only the element files it knew.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct Known(save::Known);
+
+#[wasm_bindgen]
+impl Known {
+    /// Of an empty folder.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// From the folder's listing, and the board files read from it.
+    pub fn read(listed: Vec<String>, paths: Vec<String>, contents: Vec<Uint8Array>) -> Known {
+        let files = paths
+            .into_iter()
+            .zip(contents)
+            .map(|(path, bytes)| (path, bytes.to_vec()))
+            .collect();
+        Self(save::Known::new(listed, files))
+    }
+
+    /// What saving the board of `snapshot` writes, `touched` naming at least every element
+    /// changed since the last save.
+    pub fn save(&self, snapshot: &Snapshot, touched: Vec<String>) -> Result<Save, JsError> {
+        Ok(Save(self.0.save(&snapshot.0, parse(touched)?)?))
+    }
+
+    /// What makes the folder hold the board of `snapshot` and no other element, whatever
+    /// another program wrote there since, once read again.
+    pub fn overwrite(&self, snapshot: &Snapshot) -> Result<Save, JsError> {
+        Ok(Save(self.0.overwrite(&snapshot.0)?))
+    }
+
+    /// Once the board file at `path` holds `bytes`.
+    pub fn wrote(&mut self, path: &str, bytes: Vec<u8>) {
+        self.0.wrote(path, bytes);
+    }
+
+    /// Once the asset at `path` is in the folder.
+    pub fn copied(&mut self, path: &str) {
+        self.0.copied(path);
+    }
+
+    pub fn deleted(&mut self, path: &str) {
+        self.0.deleted(path);
+    }
+
+    /// What the board file at `path` held when last read or written, `undefined` for one it
+    /// never knew.
+    pub fn bytes(&self, path: &str) -> Option<Vec<u8>> {
+        self.0.bytes(path).map(<[u8]>::to_vec)
+    }
+}
+
+/// What a save writes, in order: the assets, the board files, then the deletions.
+#[wasm_bindgen]
+pub struct Save(save::Save);
+
+#[wasm_bindgen]
+impl Save {
+    /// Those the folder lacks, to copy from where the board's images are read.
+    pub fn assets(&self) -> Vec<String> {
+        self.0.assets.clone()
+    }
+
+    pub fn files(&self) -> Map {
+        to_map(self.0.files.iter().cloned())
+    }
+
+    pub fn deletions(&self) -> Vec<String> {
+        self.0.deletions.clone()
+    }
+}
+
 /// The files a new board folder starts with, besides those of [`Snapshot::write`].
 #[wasm_bindgen(js_name = newBoardFiles)]
 pub fn new_board_files() -> Map {
@@ -474,6 +551,12 @@ pub fn snap_scale_to_grid(
 #[wasm_bindgen(js_name = isBoardFile)]
 pub fn is_board_file(path: &str) -> bool {
     format::is_board_file(path)
+}
+
+/// Such as a sync tool's conflicted copy of an element file, which the board leaves out.
+#[wasm_bindgen(js_name = isStrayElement)]
+pub fn is_stray_element(path: &str) -> bool {
+    format::is_stray_element(path)
 }
 
 #[wasm_bindgen(js_name = isAssetFile)]

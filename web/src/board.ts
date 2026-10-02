@@ -5,7 +5,7 @@ import type { Moving } from "./animation.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Editor, Files, Kind, Point, Rect, Size } from "./core.js";
 import { milliseconds, timed } from "./metrics.js";
-import type { Folder } from "./platform.js";
+import type { Folder, Home } from "./platform.js";
 import type { Placed } from "./renderer.js";
 import { holdsText, type Texts } from "./text.js";
 import { picture, type Picture } from "./vector.js";
@@ -49,32 +49,44 @@ export interface Asset {
   video?: Blob;
 }
 
+/** A folder's files as the board was read from it. */
+export interface Reading {
+  listed: string[];
+  /** Those of the board, all but the assets. */
+  files: Files;
+  /** Theirs, taken before they were read, where the folder has them. */
+  stamps: Map<string, string>;
+}
+
 /**
  * The board in the folder that `pick` gives, `null` when the user cancels. Otherwise replaces
  * `timings` with how long each step took.
  */
-export async function open(
-  pick: () => Promise<Folder | null>,
+export async function open<T extends Folder>(
+  pick: () => Promise<T | null>,
   timings: Map<string, string>,
-): Promise<Opened | null> {
+): Promise<{ opened: Opened & { folder: T }; reading: Reading } | null> {
   const folder = await pick();
   if (folder === null) {
     return null;
   }
-  const [paths, listing] = await timed(() => folder.list(core.fileDepth()));
+  const [listed, listing] = await timed(() => folder.list(core.fileDepth()));
+  const board = listed.filter(core.isBoardFile);
+  // Before reading, so that what another program writes meanwhile tells by its stamp.
+  const stamps = "stamps" in folder ? await (folder as unknown as Home).stamps(board) : new Map<string, string>();
   const [files, reading] = await timed(async () => {
     const files: Files = new Map();
-    for (const path of paths.filter(core.isBoardFile)) {
+    for (const path of board) {
       files.set(path, await folder.read(path));
     }
     return files;
   });
   const [editor, parsing] = await timed(() => core.read(files));
   timings.clear();
-  timings.set(`list ${paths.length} files`, milliseconds(listing));
+  timings.set(`list ${listed.length} files`, milliseconds(listing));
   timings.set(`read ${files.size} files`, milliseconds(reading));
   timings.set("parse", milliseconds(parsing));
-  return { folder, editor, board: core.board(editor), added: new Map() };
+  return { opened: { folder, editor, board: core.board(editor), added: new Map() }, reading: { listed, files, stamps } };
 }
 
 /** A new board, which has no folder yet. */

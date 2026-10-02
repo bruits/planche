@@ -1,15 +1,17 @@
 //! The desktop shell: a window around the web app, and the file system that a browser lacks.
-//! It knows nothing of boards, since the web app runs the core. Once the user turns agent access
-//! on, it passes agents' questions about the board on to the web app.
+//! It knows of boards only which of their files the page may write, since the web app runs the
+//! core. Once the user turns agent access on, it passes agents' questions about the board on to
+//! the web app.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use percent_encoding::percent_decode_str;
 use tauri::ipc::{Channel, InvokeBody, Request, Response};
@@ -24,6 +26,9 @@ use tauri_plugin_dialog::{
 /// The menu item that quits by closing every window, as closing one asks first.
 const QUIT: &str = "quit";
 const NO_DIRECTORY: &str = "this machine has no folder for the app's data";
+/// In the app's folder, what board to reopen at launch: `folder` or `zip`, a line break, and
+/// its path.
+const LAST: &str = "last-board";
 
 fn main() {
     let context = tauri::generate_context!();
@@ -38,20 +43,35 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Picked::default())
         .manage(Unsaved::default())
+        .manage(Session::default())
         .manage(Agent::default())
-        // Tauri keeps sending on the channel of a page that reloaded, to nobody.
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Started {
+                // Tauri keeps sending on the channel of a page that reloaded, to nobody.
                 webview.state::<Agent>().bridge.detach();
+                // What the page that went away held went with it, its exports' drafts too.
+                let unsaved = webview.state::<Unsaved>();
+                unsaved.changes.store(false, Ordering::Relaxed);
+                unsaved.closing.store(false, Ordering::Relaxed);
+                let picked = webview.state::<Picked>();
+                picked.exports.lock().expect("never poisoned").clear();
             }
         })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
-                if !window.state::<Unsaved>().0.load(Ordering::Relaxed) {
+                let unsaved = window.state::<Unsaved>();
+                if !unsaved.changes.load(Ordering::Relaxed) {
                     return;
                 }
-                // The dialog cannot block here, on the main thread, so the window closes later.
                 api.prevent_close();
+                // The page writes what it can, then closes the window or asks.
+                if !unsaved.closing.swap(true, Ordering::Relaxed) {
+                    // It only fails once the window is gone anyway.
+                    let _ = window.emit("closing", ());
+                    return;
+                }
+                // Closed again while the page still writes, or after it went away. The dialog
+                // cannot block here, on the main thread, so the window closes later.
                 let closing = window.clone();
                 ask(window, "Close, and lose the changes to this board?").show(move |close| {
                     if close {
@@ -91,17 +111,31 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             confirm,
             mark_unsaved,
+            close_window,
+            keep_window,
             keep_on_top,
             show_title_bar,
             drag_window,
             read_dropped,
             pick_folder,
             pick_target,
+            session,
+            clear_session,
+            remember_board,
+            forget_board,
+            reopen_board,
             list_files,
             read_file,
             write_file,
+            remove_file,
+            stamp_files,
             pick_zip,
             read_zip,
+            zip_changed,
+            rewrite_zip,
+            finish_rewrite,
+            reread_zip,
+            adopt_zip,
             pick_export,
             append_export,
             finish_export,
@@ -169,20 +203,63 @@ fn gateway(identifier: &str) -> i32 {
 }
 
 /// The folders and files the user picked or dropped, the only ones the webview may touch, so that a
-/// script injected into it could not reach the rest of the disk. It may only write into
-/// folders that were empty when picked, which hold nothing but what the app wrote, and to
-/// files picked to export to, which only change once the export is complete.
+/// script injected into it could not reach the rest of the disk. In a folder, it may only write
+/// a board's files and delete its element files, and a file picked to export to only changes
+/// once the export is complete.
 #[derive(Default)]
 struct Picked {
     readable: Mutex<BTreeSet<PathBuf>>,
     writable: Mutex<BTreeSet<PathBuf>>,
-    zips: Mutex<BTreeMap<PathBuf, folder::Stamp>>,
+    zips: Mutex<BTreeMap<PathBuf, Zip>>,
     exports: Mutex<BTreeMap<PathBuf, folder::Draft>>,
     dropped: Mutex<BTreeSet<PathBuf>>,
 }
 
+impl Picked {
+    fn grant(&self, root: &Path) {
+        for set in [&self.readable, &self.writable] {
+            set.lock().expect("never poisoned").insert(root.to_owned());
+        }
+    }
+
+    /// Picked again, it may be the open board's, which only matches it once it adopts it.
+    fn read_zip(&self, file: &Path, stamp: folder::Stamp) {
+        let mut zips = self.zips.lock().expect("never poisoned");
+        zips.entry(file.to_owned())
+            .and_modify(|zip| zip.read = stamp)
+            .or_insert(Zip::new(stamp));
+    }
+}
+
+/// A picked ZIP file's stamps: as the web app last located its entries, which reads need, and as
+/// the board on screen last matched it, which tells another program's changes.
+#[derive(Clone, Copy)]
+struct Zip {
+    read: folder::Stamp,
+    board: folder::Stamp,
+}
+
+impl Zip {
+    fn new(stamp: folder::Stamp) -> Self {
+        Self {
+            read: stamp,
+            board: stamp,
+        }
+    }
+}
+
+/// Whether the page holds changes not yet safe on disk, so that closing first lets it write them.
 #[derive(Default)]
-struct Unsaved(AtomicBool);
+struct Unsaved {
+    changes: AtomicBool,
+    /// Once a close waits on the page, so that another one asks, should the page be gone.
+    closing: AtomicBool,
+}
+
+/// The folder that keeps the board being edited while it has no folder of its own, which one
+/// app at a time holds, with the file that locks it.
+#[derive(Default)]
+struct Session(Mutex<Option<(PathBuf, File)>>);
 
 /// How agents reach the web app's board, while agent access is on.
 struct Agent {
@@ -238,15 +315,32 @@ fn not_picked(path: &Path) -> String {
 
 // Commands run off the main thread, which would otherwise freeze the window on every file.
 
-/// The webview's own `confirm` does not work here.
+/// The webview's own `confirm` does not work here. `choices` names the buttons, yes then no.
 #[tauri::command(async)]
-fn confirm(window: Window, question: String) -> bool {
-    ask(&window, &question).blocking_show()
+fn confirm(window: Window, question: String, choices: Option<(String, String)>) -> bool {
+    let dialog = ask(&window, &question);
+    match choices {
+        Some((yes, no)) => dialog.buttons(MessageDialogButtons::OkCancelCustom(yes, no)),
+        None => dialog,
+    }
+    .blocking_show()
 }
 
 #[tauri::command]
 fn mark_unsaved(unsaved: State<'_, Unsaved>, value: bool) {
-    unsaved.0.store(value, Ordering::Relaxed);
+    unsaved.changes.store(value, Ordering::Relaxed);
+}
+
+/// Once the page wrote what it could on closing, or the user chose to lose the rest.
+#[tauri::command]
+fn close_window(window: Window) -> Result<(), String> {
+    window.destroy().map_err(|error| error.to_string())
+}
+
+/// Once the user chose to keep the window, and the changes the page could not write.
+#[tauri::command]
+fn keep_window(unsaved: State<'_, Unsaved>) {
+    unsaved.closing.store(false, Ordering::Relaxed);
 }
 
 /// GTK ignores it on Wayland without a word, so the shell refuses there.
@@ -292,7 +386,7 @@ fn read_dropped(picked: State<'_, Picked>, path: PathBuf) -> Result<Response, St
         .map_err(|error| describe(&path, error))
 }
 
-/// A folder to read. `None` when the user cancels.
+/// A board's folder, which the board saves itself into. `None` when the user cancels.
 #[tauri::command(async)]
 fn pick_folder(
     window: Window,
@@ -302,15 +396,11 @@ fn pick_folder(
     let Some(root) = pick(&window, title)? else {
         return Ok(None);
     };
-    picked
-        .readable
-        .lock()
-        .expect("never poisoned")
-        .insert(root.clone());
+    picked.grant(&root);
     Ok(Some(root))
 }
 
-/// An empty folder to write into. `None` when the user cancels.
+/// An empty folder to save a board into. `None` when the user cancels.
 #[tauri::command(async)]
 fn pick_target(
     window: Window,
@@ -323,12 +413,126 @@ fn pick_target(
     if !folder::is_empty(&root).map_err(|error| describe(&root, error))? {
         return Err(format!("{} is not empty", root.display()));
     }
-    picked
-        .writable
-        .lock()
-        .expect("never poisoned")
-        .insert(root.clone());
+    picked.grant(&root);
     Ok(Some(root))
+}
+
+/// The session's folder, `None` while another Planche holds it.
+#[tauri::command(async)]
+fn session(
+    app: AppHandle,
+    picked: State<'_, Picked>,
+    session: State<'_, Session>,
+) -> Result<Option<PathBuf>, String> {
+    let mut held = session.0.lock().expect("never poisoned");
+    if let Some((root, _)) = held.as_ref() {
+        return Ok(Some(root.clone()));
+    }
+    let directory = app_directory(&app)?;
+    let locked = directory.join("session.lock");
+    let lock = File::create(&locked).map_err(|error| describe(&locked, error))?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(None),
+        Err(TryLockError::Error(error)) => return Err(describe(&locked, error)),
+    }
+    let root = directory.join("session");
+    fs::create_dir_all(&root).map_err(|error| describe(&root, error))?;
+    picked.grant(&root);
+    *held = Some((root.clone(), lock));
+    Ok(Some(root))
+}
+
+/// Empties the session's folder, as another board takes its place.
+#[tauri::command(async)]
+fn clear_session(session: State<'_, Session>) -> Result<(), String> {
+    let held = session.0.lock().expect("never poisoned");
+    let (root, _) = held.as_ref().ok_or("this app does not hold the session")?;
+    match fs::remove_dir_all(root) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => {
+            return Err(describe(root, error));
+        }
+        _ => {}
+    }
+    fs::create_dir_all(root).map_err(|error| describe(root, error))
+}
+
+/// The board to reopen at launch, a folder or a ZIP file picked since the app started.
+#[tauri::command(async)]
+fn remember_board(
+    app: AppHandle,
+    picked: State<'_, Picked>,
+    path: PathBuf,
+    zip: bool,
+) -> Result<(), String> {
+    if zip {
+        if !picked
+            .zips
+            .lock()
+            .expect("never poisoned")
+            .contains_key(&path)
+        {
+            return Err(not_picked(&path));
+        }
+    } else {
+        check(&picked.writable, &path)?;
+    }
+    let text = path
+        .to_str()
+        .ok_or_else(|| format!("{} is not named in UTF-8", path.display()))?;
+    let kind = if zip { "zip" } else { "folder" };
+    let file = app_directory(&app)?.join(LAST);
+    let mut draft = folder::Draft::create(&file).map_err(|error| describe(&file, error))?;
+    draft
+        .append(format!("{kind}\n{text}").as_bytes())
+        .map_err(|error| describe(&file, error))?;
+    draft.commit().map_err(|error| describe(&file, error))
+}
+
+#[tauri::command(async)]
+fn forget_board(app: AppHandle) -> Result<(), String> {
+    let file = app_directory(&app)?.join(LAST);
+    match fs::remove_file(&file) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(describe(&file, error)),
+        _ => Ok(()),
+    }
+}
+
+/// The board remembered, picked again: `folder` or `zip`, its path, and a ZIP file's size.
+/// `None` when there is none, or it is gone.
+#[tauri::command(async)]
+fn reopen_board(
+    app: AppHandle,
+    picked: State<'_, Picked>,
+) -> Result<Option<(String, PathBuf, u64)>, String> {
+    let file = app_directory(&app)?.join(LAST);
+    let text = match fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(describe(&file, error)),
+    };
+    let Some((kind, path)) = text.split_once('\n') else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(path);
+    match kind {
+        "folder" if path.is_dir() => {
+            picked.grant(&path);
+            Ok(Some((kind.to_owned(), path, 0)))
+        }
+        "zip" if path.is_file() => {
+            let stamp = folder::stamp(&path).map_err(|error| describe(&path, error))?;
+            picked.read_zip(&path, stamp);
+            Ok(Some((kind.to_owned(), path, stamp.0)))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn app_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = mcp::directory(&app.config().identifier).ok_or(NO_DIRECTORY)?;
+    fs::create_dir_all(&directory).map_err(|error| describe(&directory, error))?;
+    Ok(directory)
 }
 
 fn pick(window: &Window, title: String) -> Result<Option<PathBuf>, String> {
@@ -358,16 +562,69 @@ fn read_file(picked: State<'_, Picked>, root: PathBuf, path: String) -> Result<R
         .map_err(|error| describe(&root, error))
 }
 
-/// Writes the raw body to the file that the `root` and `path` headers name, percent-encoded.
+/// Writes the raw body to the board's file that the `root` and `path` headers name,
+/// percent-encoded, and returns its stamp.
 #[tauri::command(async)]
-fn write_file(picked: State<'_, Picked>, request: Request<'_>) -> Result<(), String> {
+fn write_file(picked: State<'_, Picked>, request: Request<'_>) -> Result<String, String> {
     let bytes = raw_body(&request)?;
     let (Some(root), Some(path)) = (header(&request, "root"), header(&request, "path")) else {
         return Err("the `root` and `path` headers must be set".to_owned());
     };
     let root = PathBuf::from(root);
     check(&picked.writable, &root)?;
-    folder::write(&root, &path, bytes).map_err(|error| describe(&root, error))
+    // A folder the user opened holds other files too.
+    let attributes = path == format::git_attributes().0;
+    let asset = format::is_asset_file(&path);
+    if !(attributes || asset || format::is_board_file(&path)) {
+        return Err(format!("`{path}` is not a file of a board"));
+    }
+    let stamp = || {
+        let stamps = folder::stamps(&root, [path.as_str()]);
+        stamps.map_err(|error| describe(&root, error))
+    };
+    // An asset never changes once named, and so is never written over.
+    if asset && !stamp()?.is_empty() {
+        return Ok(String::new());
+    }
+    folder::write(&root, &path, bytes).map_err(|error| describe(&root, error))?;
+    // Its user's from then on, which the app never reads.
+    if attributes {
+        return Ok(String::new());
+    }
+    Ok(stamp()?
+        .first()
+        .map(|(_, stamp)| stamped(*stamp))
+        .unwrap_or_default())
+}
+
+#[tauri::command(async)]
+fn remove_file(picked: State<'_, Picked>, root: PathBuf, path: String) -> Result<(), String> {
+    check(&picked.writable, &root)?;
+    if !format::is_element_file(&path) {
+        return Err(format!("`{path}` is not an element's file"));
+    }
+    folder::remove(&root, &path).map_err(|error| describe(&root, error))
+}
+
+/// The stamps of those of `paths` in `root`, which change whenever a program writes one.
+#[tauri::command(async)]
+fn stamp_files(
+    picked: State<'_, Picked>,
+    root: PathBuf,
+    paths: Vec<String>,
+) -> Result<Vec<(String, String)>, String> {
+    check(&picked.readable, &root)?;
+    let stamps = folder::stamps(&root, paths.iter().map(String::as_str))
+        .map_err(|error| describe(&root, error))?;
+    Ok(stamps
+        .into_iter()
+        .map(|(path, stamp)| (path.to_owned(), stamped(stamp)))
+        .collect())
+}
+
+fn stamped((size, modified): folder::Stamp) -> String {
+    let since = modified.and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
+    format!("{size}:{}", since.unwrap_or_default().as_nanos())
 }
 
 /// A board's ZIP file to read, and its size. `None` when the user cancels.
@@ -383,17 +640,13 @@ fn pick_zip(
     };
     let file = file.into_path().map_err(|error| error.to_string())?;
     let stamp = folder::stamp(&file).map_err(|error| describe(&file, error))?;
-    picked
-        .zips
-        .lock()
-        .expect("never poisoned")
-        .insert(file.clone(), stamp);
+    picked.read_zip(&file, stamp);
     Ok(Some((file, stamp.0)))
 }
 
 /// The bytes from `start` to `end` of a picked ZIP file, raw. Refused once the file changed
-/// since it was last picked, such as by an export over it, since the web app located its
-/// entries then.
+/// since it was last read, such as by an export over it, since the web app located its entries
+/// then.
 #[tauri::command(async)]
 fn read_zip(
     picked: State<'_, Picked>,
@@ -401,16 +654,79 @@ fn read_zip(
     start: u64,
     end: u64,
 ) -> Result<Response, String> {
-    let opened = picked
-        .zips
-        .lock()
-        .expect("never poisoned")
-        .get(&path)
-        .copied()
-        .ok_or_else(|| not_picked(&path))?;
-    folder::read_range(&path, start..end, opened)
+    let read = zip(&picked, &path)?.read;
+    folder::read_range(&path, start..end, read)
         .map(Response::new)
         .map_err(|error| describe(&path, error))
+}
+
+/// Whether another program changed the picked ZIP file since the board was read from it or
+/// written to it.
+#[tauri::command(async)]
+fn zip_changed(picked: State<'_, Picked>, path: PathBuf) -> Result<bool, String> {
+    changed(&picked, &path)
+}
+
+fn changed(picked: &Picked, path: &Path) -> Result<bool, String> {
+    let board = zip(picked, path)?.board;
+    Ok(folder::stamp(path).map_err(|error| describe(path, error))? != board)
+}
+
+/// Starts writing the picked ZIP file over, as [`pick_export`] starts an export, to finish with
+/// [`finish_rewrite`]. `false`, and nothing started, when another program changed the file
+/// since the board was read from it or written to it, unless `over`.
+#[tauri::command(async)]
+fn rewrite_zip(picked: State<'_, Picked>, path: PathBuf, over: bool) -> Result<bool, String> {
+    if !over && changed(&picked, &path)? {
+        return Ok(false);
+    }
+    start_export(&picked, &path)?;
+    Ok(true)
+}
+
+/// Puts the rewritten ZIP file in place, which reads on, and returns its size. `None`, leaving
+/// the file as it was, when another program changed it meanwhile, unless `over`.
+#[tauri::command(async)]
+fn finish_rewrite(
+    picked: State<'_, Picked>,
+    path: PathBuf,
+    over: bool,
+) -> Result<Option<u64>, String> {
+    let draft = take_export(&picked, &path)?;
+    if !over && changed(&picked, &path)? {
+        draft.discard().map_err(|error| describe(&path, error))?;
+        return Ok(None);
+    }
+    draft.commit().map_err(|error| describe(&path, error))?;
+    let stamp = folder::stamp(&path).map_err(|error| describe(&path, error))?;
+    let mut zips = picked.zips.lock().expect("never poisoned");
+    zips.insert(path, Zip::new(stamp));
+    Ok(Some(stamp.0))
+}
+
+/// Reads the picked ZIP file on as another program left it, and returns its size. The board
+/// only matches it once [`adopt_zip`].
+#[tauri::command(async)]
+fn reread_zip(picked: State<'_, Picked>, path: PathBuf) -> Result<u64, String> {
+    let stamp = folder::stamp(&path).map_err(|error| describe(&path, error))?;
+    let mut zips = picked.zips.lock().expect("never poisoned");
+    let zip = zips.get_mut(&path).ok_or_else(|| not_picked(&path))?;
+    zip.read = stamp;
+    Ok(stamp.0)
+}
+
+/// Once the board on screen was read from the picked ZIP file as last read.
+#[tauri::command(async)]
+fn adopt_zip(picked: State<'_, Picked>, path: PathBuf) -> Result<(), String> {
+    let mut zips = picked.zips.lock().expect("never poisoned");
+    let zip = zips.get_mut(&path).ok_or_else(|| not_picked(&path))?;
+    zip.board = zip.read;
+    Ok(())
+}
+
+fn zip(picked: &Picked, path: &Path) -> Result<Zip, String> {
+    let zips = picked.zips.lock().expect("never poisoned");
+    zips.get(path).copied().ok_or_else(|| not_picked(path))
 }
 
 /// A file to export a ZIP file to, suggested as `name`, which stays as it was until
@@ -430,15 +746,21 @@ fn pick_export(
         return Ok(None);
     };
     let file = file.into_path().map_err(|error| error.to_string())?;
-    let mut exports = picked.exports.lock().expect("never poisoned");
-    // Left by a page that went away mid-export, whose temporary file Windows could not remove
-    // while open. The web app runs one export at a time, so it is never a live one.
-    if let Some(stale) = exports.remove(&file) {
-        stale.discard().map_err(|error| describe(&file, error))?;
-    }
-    let draft = folder::Draft::create(&file).map_err(|error| describe(&file, error))?;
-    exports.insert(file.clone(), draft);
+    // Over the open board's own ZIP file, its next save finds it changed, and asks.
+    start_export(&picked, &file)?;
     Ok(Some(file))
+}
+
+/// Refused while another draft of the file is under way, as both would write to the same
+/// temporary file.
+fn start_export(picked: &Picked, file: &Path) -> Result<(), String> {
+    let mut exports = picked.exports.lock().expect("never poisoned");
+    if exports.contains_key(file) {
+        return Err(format!("{} is being written already", file.display()));
+    }
+    let draft = folder::Draft::create(file).map_err(|error| describe(file, error))?;
+    exports.insert(file.to_owned(), draft);
+    Ok(())
 }
 
 /// Appends the raw body to the export that the `path` header names, percent-encoded.

@@ -21,6 +21,7 @@ just ci                                # everything CI checks, in CI order
 
 - In [CONTRIBUTING.md](./CONTRIBUTING.md): [Quality Guidelines](./CONTRIBUTING.md#quality-guidelines) applies to agents and humans equally, [Getting Started](./CONTRIBUTING.md#getting-started) helps you understand the project structure, and [Philosophy](./CONTRIBUTING.md#philosophy) is the project's north star.
 - [docs/technical/foundation.md](./docs/technical/foundation.md) says what is decided, the renderer and the image pipeline included, and which tracks are still open. Read it before adding a crate or a dependency.
+- [docs/technical/saving.md](./docs/technical/saving.md) says how a board saves itself, and where that stops. Read it before changing what writes a board's files.
 
 ## Agent Guardrails
 

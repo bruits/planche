@@ -7,6 +7,13 @@ interface Window {
   __TAURI__?: TauriApi;
 }
 
+/** Chromium only, where a handle the page kept needs the user's leave again after a restart. */
+interface FileSystemHandle {
+  queryPermission?(descriptor: { mode: "read" | "readwrite" }): Promise<PermissionState>;
+  /** Only right after a click or a key, unless already granted. */
+  requestPermission?(descriptor: { mode: "read" | "readwrite" }): Promise<PermissionState>;
+}
+
 /** Safari's pinch on a trackpad, which it reports instead of Ctrl-scrolling as others do. */
 interface GestureEvent extends UIEvent {
   /** Since the gesture started. */

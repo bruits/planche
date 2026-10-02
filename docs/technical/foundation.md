@@ -6,7 +6,7 @@ What is decided, what is still being explored, and why. A track becomes a decisi
 
 - **Stack.** Mostly Rust, with a thin presentation layer: one web app in TypeScript, without a framework, runs the Rust core as WASM in the browser and in the desktop shell's webview.
 - **Platforms.** The browser, Windows, macOS, and Linux first. iOS and Android come later, but the design must not rule them out.
-- **File format.** A folder of deterministic JSON files, one per element, with images named by their SHA-256 digest (`crates/format`). A single-file export is a ZIP of that folder, holding the board's files and the images it draws: stored rather than deflated, since images are compressed already, dated 1980-01-01, and never ZIP64, so that the same board gives the same bytes and a shell reads an image straight out of it. A ZIP file that another tool compressed is refused rather than inflated. Images need Git LFS. SQLite (as in BeeRef) was rejected because Git cannot merge it, and a single JSON with base64 images (as in `.excalidraw`) because it is heavy and its diffs are useless. JSON Canvas is too poor as a native format, but fits import and export.
+- **File format.** A folder of deterministic JSON files, one per element, with images named by their SHA-256 digest (`crates/format`). A single-file export is a ZIP of that folder, holding the board's files and the images it draws: stored rather than deflated, since images are compressed already, dated 1980-01-01, and never ZIP64, so that the same board gives the same bytes and a shell reads an image straight out of it. A ZIP file that another tool compressed is refused rather than inflated. Images need Git LFS. SQLite (as in BeeRef) was rejected because Git cannot merge it, and a single JSON with base64 images (as in `.excalidraw`) because it is heavy and its diffs are useless. JSON Canvas is too poor as a native format, but fits import and export. How a board saves itself into it is in [saving](./saving.md).
 - **Licence.** MIT or Apache-2.0 for the client and the format. The sync server, if there is one, will be AGPL.
 
 ### Rendering
@@ -61,7 +61,7 @@ A Loro CRDT, whose movable tree maps well to groups. A Phoenix or Axum server, a
 
 rmcp, the official SDK. On desktop, a stdio gateway, which every client can spawn, passing bytes to the app over a local port protected by a token, so that no page in a browser can reach it. On the web, a remote MCP through the cloud.
 
-- **Limits:** WebMCP is only a draft, so nothing should depend on it. Image content is a prompt injection risk, and an agent that reads it may edit the board, though never save it. An agent may also add, and so see, any image file the user can read, even from a sandboxed client. Each edit waits for the user to finish a drag, a text, or a crop, as it would otherwise join it.
+- **Limits:** WebMCP is only a draft, so nothing should depend on it. Image content is a prompt injection risk, and an agent that reads it may edit the board, which saves itself, so that only undo or Git takes an edit back. An agent may also add, and so see, any image file the user can read, even from a sandboxed client. Each edit waits for the user to finish a drag, a text, or a crop, as it would otherwise join it.
 
 ### Plugins
 

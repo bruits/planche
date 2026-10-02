@@ -1,9 +1,15 @@
-// The browser, where only Chromium lets a page read and write a folder. Elsewhere a folder
-// can still be picked through a file input, read-only, and a board saved by exporting its ZIP
-// file, which downloads.
+// The browser, where only Chromium lets a page read and write a folder, which the board then
+// saves itself into, and remembers it for the next visit. Elsewhere a folder can still be picked
+// through a file input, read-only, and a board saved by exporting its ZIP file, which downloads.
+// Every engine keeps the board being edited in the origin's private file system meanwhile.
 
 import type { Bytes } from "./core.js";
-import type { Folder, Platform } from "./platform.js";
+import type { Folder, Home, Platform, Session } from "./platform.js";
+
+/** Where the page remembers the folder of the board to reopen. */
+const DATABASE = "planche";
+const HANDLES = "handles";
+const BOARD = "board";
 
 let unsaved = false;
 addEventListener("beforeunload", (event) => {
@@ -22,18 +28,8 @@ export const browser: Platform = {
     if (!window.showDirectoryPicker) {
       return pickWithInput();
     }
-    const root = await cancellable(window.showDirectoryPicker());
-    if (root === null) {
-      return null;
-    }
-    return {
-      name: root.name,
-      list: async (depth) => (await walk(root, "", depth)).sort(),
-      read: async (path) => {
-        const [folder, name] = await locate(root, path, false);
-        return bytesOf(await (await folder.getFileHandle(name)).getFile());
-      },
-    };
+    const root = await cancellable(window.showDirectoryPicker({ mode: "readwrite" }));
+    return root && home(root, true);
   },
 
   async pickTarget() {
@@ -50,24 +46,7 @@ export const browser: Platform = {
         throw new Error(`${root.name} is not empty`);
       }
     }
-    return {
-      name: root.name,
-      async write(path: string, bytes: Bytes) {
-        const segments = path.split("/");
-        if (segments.length > 1 && segments.some((segment) => segment.startsWith("."))) {
-          throw new Error(`${path} is not a file of the folder`);
-        }
-        const [folder, name] = await locate(root, path, true);
-        if (name.startsWith(".") && (await exists(folder, name))) {
-          return;
-        }
-        const file = await folder.getFileHandle(name, { create: true });
-        // The browser writes to a swap file and moves it in place on close.
-        const writable = await file.createWritable();
-        await writable.write(bytes);
-        await writable.close();
-      },
-    };
+    return home(root, true);
   },
 
   async openZip() {
@@ -108,6 +87,61 @@ export const browser: Platform = {
     };
   },
 
+  async session() {
+    // Safari writes there only from a worker before version 26.
+    const writable = typeof FileSystemFileHandle !== "undefined" && "createWritable" in FileSystemFileHandle.prototype;
+    if (!navigator.storage?.getDirectory || !writable || !(await holdSession())) {
+      return null;
+    }
+    const root = await (await navigator.storage.getDirectory()).getDirectoryHandle("session", { create: true });
+    const session = home(root, false);
+    let persisting = false;
+    return {
+      ...session,
+      async write(path, bytes) {
+        // Asked once there is something to keep, as Firefox asks the user.
+        if (!persisting) {
+          persisting = true;
+          void navigator.storage.persist?.();
+        }
+        return session.write(path, bytes);
+      },
+      async clear() {
+        for await (const name of root.keys()) {
+          await root.removeEntry(name, { recursive: true });
+        }
+      },
+    } satisfies Session;
+  },
+
+  async reopen() {
+    try {
+      const root = await handles<FileSystemDirectoryHandle | undefined>("readonly", (store) => store.get(BOARD));
+      if (root === undefined) {
+        return null;
+      }
+      const folder = home(root, true);
+      const permission = await root.queryPermission?.({ mode: "readwrite" });
+      if (permission === "granted") {
+        return { folder };
+      }
+      if (permission !== "prompt") {
+        return null;
+      }
+      return {
+        name: root.name,
+        ask: async () => ((await root.requestPermission?.({ mode: "readwrite" })) === "granted" ? folder : null),
+      };
+    } catch {
+      // Storage the browser keeps from the page, as in a private window.
+      return null;
+    }
+  },
+
+  async forget() {
+    await handles("readwrite", (store) => store.delete(BOARD)).catch(() => {});
+  },
+
   confirm: async (question) => window.confirm(question),
 
   markUnsaved(value) {
@@ -117,6 +151,100 @@ export const browser: Platform = {
   // The page sees them all.
   watchDrops() {},
 };
+
+/** One tab at a time keeps its board in the session, for as long as it lives. */
+let held: Promise<boolean> | undefined;
+function holdSession(): Promise<boolean> {
+  held ??= new Promise((resolve) => {
+    if (!navigator.locks) {
+      resolve(true);
+      return;
+    }
+    void navigator.locks.request("planche.session", { ifAvailable: true }, (lock) => {
+      resolve(lock !== null);
+      return lock === null ? undefined : new Promise(() => {});
+    });
+  });
+  return held;
+}
+
+/** The board in `root`, kept to reopen once `remembered`. */
+function home(root: FileSystemDirectoryHandle, remembered: boolean): Home {
+  return {
+    name: root.name,
+    list: async (depth) => (await walk(root, "", depth)).sort(),
+    read: async (path) => {
+      const [folder, name] = await locate(root, path, false);
+      return bytesOf(await (await folder.getFileHandle(name)).getFile());
+    },
+    async write(path, bytes) {
+      const segments = path.split("/");
+      if (segments.length > 1 && segments.some((segment) => segment.startsWith("."))) {
+        throw new Error(`${path} is not a file of the folder`);
+      }
+      const [folder, name] = await locate(root, path, true);
+      if (name.startsWith(".") && (await exists(folder, name))) {
+        return "";
+      }
+      const file = await folder.getFileHandle(name, { create: true });
+      // The browser writes to a swap file and moves it in place on close.
+      const writable = await file.createWritable();
+      await writable.write(bytes);
+      await writable.close();
+      return stamp(await file.getFile());
+    },
+    async remove(path) {
+      try {
+        const [folder, name] = await locate(root, path, false);
+        await folder.removeEntry(name);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "NotFoundError")) {
+          throw error;
+        }
+      }
+    },
+    async stamps(paths) {
+      const stamps = new Map<string, string>();
+      for (const path of paths) {
+        try {
+          const [folder, name] = await locate(root, path, false);
+          stamps.set(path, stamp(await (await folder.getFileHandle(name)).getFile()));
+        } catch (error) {
+          if (!(error instanceof DOMException && error.name === "NotFoundError")) {
+            throw error;
+          }
+        }
+      }
+      return stamps;
+    },
+    remember: remembered
+      ? () => handles("readwrite", (store) => store.put(root, BOARD)).then(() => {}, () => {})
+      : undefined,
+  };
+}
+
+function stamp(file: File): string {
+  return `${file.size}:${file.lastModified}`;
+}
+
+/** One request on the handles the page keeps. */
+async function handles<T>(mode: IDBTransactionMode, ask: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    const opening = indexedDB.open(DATABASE, 1);
+    opening.onupgradeneeded = () => opening.result.createObjectStore(HANDLES);
+    opening.onsuccess = () => resolve(opening.result);
+    opening.onerror = () => reject(opening.error);
+  });
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const request = ask(database.transaction(HANDLES, mode).objectStore(HANDLES));
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  } finally {
+    database.close();
+  }
+}
 
 async function walk(folder: FileSystemDirectoryHandle, prefix: string, depth: number): Promise<string[]> {
   const paths: string[] = [];
