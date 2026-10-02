@@ -93,6 +93,8 @@ export interface Hooks {
   selecting(): boolean;
   /** Once what of the selection the pointer is on, or a press holds, changed. */
   hovered(): void;
+  /** Once the topmost element the pointer is on changed, which a press keeps, `undefined` when none is or a finger touches. */
+  pointed(id: string | undefined): void;
 }
 
 /** A size, a share of an image's own size, or an angle, as a gesture shows it. */
@@ -197,6 +199,8 @@ export interface Edits {
   redo(): void;
   /** Forgets the selection and any drag, as when another board opens. */
   reset(): void;
+  /** Looks again at what the pointer rests on, as once another board shows. */
+  rehover(): void;
   /** What of the selection a press holds, or else the pointer is on. */
   grab(): Grab["kind"] | undefined;
   /** What a gesture that scales, stretches, or turns the selection reads, `undefined` for none. */
@@ -257,7 +261,7 @@ export function edits(
   view: View,
   overlay: Overlay,
   current: () => Editing | undefined,
-  { changed, selectionChanged, settled, snapping, drawing, erasing, sampling, drawn, styled, selecting, hovered }: Hooks,
+  { changed, selectionChanged, settled, snapping, drawing, erasing, sampling, drawn, styled, selecting, hovered, pointed }: Hooks,
 ): Edits {
   let selected = new Set<string>();
   let entered: string | undefined;
@@ -266,6 +270,8 @@ export function edits(
   let over: Grab | undefined;
   /** What a click would select, but for what is selected already. */
   let previewed: string | undefined;
+  /** The topmost element the pointer is on, as last told. */
+  let under: string | undefined;
   /** The pointer's last event over the board, which hovering looks at again as the keys or the camera change. */
   let seen: PointerEvent | undefined;
   let keys: Keys | undefined;
@@ -417,13 +423,9 @@ export function edits(
       view.host.style.setProperty("--handle-cursor", shown);
     }
   };
+  const hovers = (event: PointerEvent) => event.pointerType !== "touch" && pinned(event.target) === undefined;
   const hoverable = (event: PointerEvent) =>
-    event.pointerType !== "touch" &&
-    !keys?.altKey &&
-    selecting() &&
-    !underway() &&
-    !view.panning() &&
-    pinned(event.target) === undefined;
+    hovers(event) && !keys?.altKey && selecting() && !underway() && !view.panning();
   /** What a press would take where the pointer last was, and what a click there would select. */
   const hover = () => {
     hovering = false;
@@ -437,9 +439,9 @@ export function edits(
     let corners: Point[] | undefined;
     over = undefined;
     previewed = undefined;
+    const hit = editing && seen && at && zoom && hovers(seen) ? editing.editor.hit(at.x, at.y, TOLERANCE / zoom) : undefined;
     if (editing && seen && at && zoom && hoverable(seen)) {
       const { editor } = editing;
-      const hit = editor.hit(at.x, at.y, TOLERANCE / zoom);
       corners = selected.size > 0 && !lone(editing) ? box(editor, [...selected]) : undefined;
       over = corners && grabbing(editing, corners, at, zoom, hit);
       const top = hit === undefined || over ? undefined : (level(editor, hit) ?? editor.topLevel(hit));
@@ -449,6 +451,10 @@ export function edits(
     showGrab(corners);
     if (over?.kind !== was) {
       hovered();
+    }
+    if (hit !== under) {
+      under = hit;
+      pointed(hit);
     }
   };
   /** On the next frame, once however many events come before it. */
@@ -1349,8 +1355,11 @@ export function edits(
       overlay.start(undefined);
       overlay.preview(undefined);
       showGrab(undefined);
+      under = undefined;
+      pointed(undefined);
       selectionChanged();
     },
+    rehover,
     grab: () => (holding() ?? over)?.kind,
     reading() {
       const editing = current();

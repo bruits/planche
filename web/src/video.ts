@@ -91,6 +91,10 @@ export interface Videos {
   play(assets: string[], playing: boolean): void;
   /** Whether motion is reduced, which pauses those the user did not play. */
   reduce(reduced: boolean): void;
+  /** Whether those the user did not play play only while the pointer is on them. */
+  playOnHover(on: boolean): void;
+  /** What the pointer is on, `undefined` when no image. */
+  hover(asset: string | undefined): void;
   /** Whether `asset` plays with its sound, which it does from when asked until the board closes. */
   sounding(asset: string): boolean;
   sound(assets: string[], on: boolean): void;
@@ -120,10 +124,20 @@ interface Run {
   copied?: number;
 }
 
-/** `again` asks for another frame, `changed` tells that one stopped on its own, and `failed` that this machine cannot play one. */
+/**
+ * `again` asks for another frame, `changed` tells that one stopped on its own, or started or
+ * stopped as the pointer came or went, and `failed` that this machine cannot play one.
+ */
 export function videos(again: () => void, changed: () => void, failed: () => void): Videos {
   const clips = new Map<string, Clip>();
   let reduced = false;
+  let onHover = false;
+  let hovered: string | undefined;
+  /** Whether it plays while it shows. */
+  const runs = (asset: string) => {
+    const clip = clips.get(asset);
+    return clip !== undefined && !clip.paused && (clip.chosen || !onHover || asset === hovered);
+  };
   const stop = (clip: Clip) => {
     if (clip.run !== undefined) {
       clip.time = clip.run.element.currentTime;
@@ -199,7 +213,7 @@ export function videos(again: () => void, changed: () => void, failed: () => voi
       if (clips.size === 0) {
         return;
       }
-      const shown = shownAssets(board, camera, viewport, (asset) => clips.get(asset)?.paused === false);
+      const shown = shownAssets(board, camera, viewport, runs);
       const largest = [...shown].sort(([, a], [, b]) => b - a).slice(0, MOST_PLAYING);
       const playing = new Set(largest.map(([asset]) => asset));
       const now = performance.now();
@@ -236,7 +250,7 @@ export function videos(again: () => void, changed: () => void, failed: () => voi
       }
     },
     holds: (asset) => clips.has(asset),
-    playing: (asset) => clips.get(asset)?.paused === false,
+    playing: runs,
     play(assets, playing) {
       for (const asset of assets) {
         const clip = clips.get(asset);
@@ -255,6 +269,18 @@ export function videos(again: () => void, changed: () => void, failed: () => voi
         }
       }
       again();
+    },
+    playOnHover(on) {
+      onHover = on;
+      again();
+    },
+    hover(asset) {
+      const moved = asset !== hovered && [hovered, asset].some((one) => one !== undefined && clips.has(one));
+      hovered = asset;
+      if (onHover && moved) {
+        changed();
+        again();
+      }
     },
     sounding: (asset) => clips.get(asset)?.sound === true,
     sound(assets, on) {

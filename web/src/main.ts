@@ -62,6 +62,8 @@ const HINTS = "planche.hints";
 const AGENT = "planche.agent";
 /** Where the browser remembers that the window stays on top. */
 const ON_TOP = "planche.ontop";
+/** Where the browser remembers that videos play only while the pointer is on them. */
+const HOVER_PLAY = "planche.hoverplay";
 /** Where the browser remembers the name of the board in the session, and whether it is saved elsewhere. */
 const SESSION = "planche.session";
 const ZOOM_STEP = 1.25;
@@ -121,6 +123,10 @@ const editing = edits(viewport, shown, () => opened, {
   styled: (kind, zoom) => look.dressed(kind, zoom),
   selecting: () => tool === "select" && !spaceHeld && picker.sampling() === undefined,
   hovered: () => refreshBar(),
+  pointed(id) {
+    const kind = id === undefined ? undefined : opened?.board.elements[id]?.kind;
+    films.hover(kind?.type === "image" ? kind.asset : undefined);
+  },
 });
 const comments = pins(byId("viewport"), { choose: (id) => editing.choose(id), write: (id) => editing.write(id) });
 const appearance = theme(restyle);
@@ -157,6 +163,7 @@ let frameRate = 0;
 let hintsShown = recall(HINTS) !== "hidden";
 let agentsAllowed = false;
 let onTop = false;
+let hoverPlay = recall(HOVER_PLAY) === "on";
 let arranging = false;
 
 type Ordering = (opened: Opened, ids: string[]) => Order | Promise<Order>;
@@ -478,6 +485,15 @@ const commands = {
   highContrast: { label: "High contrast", run: () => appearance.toggleContrast() },
   agentAccess: { label: "Agent access", run: () => report(allowAgents(!agentsAllowed)) },
   alwaysOnTop: { label: "Always on top", run: () => report(keepOnTop(!onTop)) },
+  hoverPlay: {
+    label: "Play videos on hover",
+    run: () => {
+      hoverPlay = !hoverPlay;
+      remember(HOVER_PLAY, hoverPlay ? "on" : undefined);
+      films.playOnHover(hoverPlay);
+      refreshBar();
+    },
+  },
   measurements: {
     label: "Measurements",
     run: () => {
@@ -665,6 +681,7 @@ addEventListener("blur", () => holdSpace(false));
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 animated.reduce(reducedMotion.matches);
 films.reduce(reducedMotion.matches);
+films.playOnHover(hoverPlay);
 reducedMotion.addEventListener("change", () => {
   animated.reduce(reducedMotion.matches);
   films.reduce(reducedMotion.matches);
@@ -794,6 +811,7 @@ function views(): Entry {
   return submenu("View", [
     { ...commands.hints, checked: hintsShown, toggle: true },
     { ...commands.measurements, checked: !measurements.hidden, toggle: true },
+    { ...commands.hoverPlay, checked: hoverPlay, toggle: true },
     ...(platform.keepOnTop ? [{ ...commands.alwaysOnTop, checked: onTop, toggle: true }] : []),
     ...(platform.titleBar ? [{ ...commands.compact, checked: compact, toggle: true }] : []),
     ...(platform.agent ? [{ ...commands.agentAccess, checked: agentsAllowed, toggle: true }] : []),
@@ -1591,6 +1609,7 @@ async function present(next: Opened, camera?: Camera): Promise<void> {
   created.backdrop(next.board.background);
   details.set("renderer", created.backend);
   viewport.show(created, camera ?? fit(extent(next), viewport.size()));
+  editing.rehover();
   renderer = created;
   refreshBar();
   if (assets.length > 0) {
