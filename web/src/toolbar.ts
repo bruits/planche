@@ -1,5 +1,6 @@
 // The bar at the bottom of the window: the tools, some of which share a button, the commands
-// that act at once, and a menu of the rest. Above it sit a line of hints, and the app's messages.
+// that act at once, the zoom, and a menu of the rest. Above it sit a line of hints, and the
+// app's messages.
 
 import { ariaKeys, describe, named, type Command } from "./commands.js";
 import { icon, type Icon } from "./icons.js";
@@ -19,6 +20,14 @@ export interface Family {
   tools: Button[];
 }
 
+/** A button that shows the zoom, and opens a menu of `entries`. */
+export interface Zoom {
+  /** As the button shows it, `undefined` when nothing is shown. */
+  zoom(): string | undefined;
+  unavailable(): string | undefined;
+  entries(): Entry[];
+}
+
 export interface Toolbar {
   /** Shows which tool is in use, and `hint` unless a button's own is showing. */
   refresh(hint: string): void;
@@ -26,6 +35,8 @@ export interface Toolbar {
   say(message: string, busy?: boolean): void;
   /** Marks the menu's button while the board has changes to lose. */
   unsaved(unsaved: boolean): void;
+  /** Shows the zoom as it is, cheaply enough for every frame. */
+  zoomed(): void;
   /** Shows `shown` as the hint while `element`, outside the bar, is hovered or focused. */
   explain(element: HTMLElement, shown: () => string): void;
   /** Its top edge, with the hint and the message, in CSS pixels from the window's. */
@@ -40,7 +51,7 @@ const READING_TIME = 40;
  * `groups` of buttons, apart from each other, the last one ending with the button of the menu
  * that `entries` fills.
  */
-export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entries: () => Entry[]): Toolbar {
+export function toolbar(host: HTMLElement, groups: (Button | Family | Zoom)[][], entries: () => Entry[]): Toolbar {
   // Always there, even empty, as screen readers only follow a live region that already shows.
   const message = document.createElement("p");
   message.id = "message";
@@ -73,6 +84,7 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
   /** Each button for a tool or a command, with the one it stands for, and the one it shows. */
   const buttons: { button: HTMLButtonElement; current: () => Button; shown: Button }[] = [];
   const chevrons: { chevron: HTMLButtonElement; tools: Button[] }[] = [];
+  const zooms: { button: HTMLButtonElement; value: HTMLElement; item: Zoom }[] = [];
   const stops: HTMLButtonElement[] = [];
   const add = (current: () => Button) => {
     const shown = current();
@@ -100,6 +112,19 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
       row.append(separator());
     }
     for (const item of group) {
+      if ("zoom" in item) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "zoom";
+        const value = document.createElement("span");
+        button.append(value, icon("chevron"));
+        opens(button, "Zoom", item.entries, { above: button, left: true });
+        explain(button, () => "Zoom");
+        row.append(button);
+        stops.push(button);
+        zooms.push({ button, value, item });
+        continue;
+      }
       if (!("tools" in item)) {
         add(() => item);
         continue;
@@ -146,6 +171,18 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
     stops[(to + stops.length) % stops.length]!.focus();
   });
 
+  const zoomed = () => {
+    for (const { button, value, item } of zooms) {
+      const zoom = item.zoom();
+      const text = zoom ?? "–";
+      if (value.textContent !== text) {
+        value.textContent = text;
+        button.setAttribute("aria-label", zoom === undefined ? "Zoom" : `Zoom ${zoom}`);
+      }
+    }
+  };
+  zoomed();
+
   function explain(button: HTMLElement, shown: () => string): void {
     const listen = (type: string, change: () => void) =>
       button.addEventListener(type, () => {
@@ -180,6 +217,11 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
         const reason = reasons.every((one) => one !== undefined) ? reasons[0] : undefined;
         mark(chevron, { "aria-disabled": reason !== undefined && "true", title: reason });
       }
+      for (const { button, item } of zooms) {
+        const reason = item.unavailable();
+        mark(button, { "aria-disabled": reason !== undefined && "true", title: reason });
+      }
+      zoomed();
       base = next;
       showHint();
     },
@@ -194,6 +236,7 @@ export function toolbar(host: HTMLElement, groups: (Button | Family)[][], entrie
       menuButton.classList.toggle("unsaved", unsaved);
       menuButton.setAttribute("aria-label", unsaved ? "Menu, with unsaved changes" : "Menu");
     },
+    zoomed,
     explain,
     top: () => host.getBoundingClientRect().top,
   };

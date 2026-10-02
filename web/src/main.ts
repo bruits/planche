@@ -61,6 +61,8 @@ const AGENT = "planche.agent";
 /** Where the browser remembers that the window stays on top. */
 const ON_TOP = "planche.ontop";
 const ZOOM_STEP = 1.25;
+/** What the zoom's menu zooms to at once. */
+const ZOOMS = [0.25, 0.5, 1, 2, 4];
 /** In the order the key goes through them. */
 const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
 const SCHEMES: Scheme[] = ["light", "dark", "system"];
@@ -70,6 +72,7 @@ const details = new Map<string, string>();
 const shown = overlay(byId("viewport"));
 const viewport = view(byId("viewport"), {
   frame(camera, size) {
+    bar.zoomed();
     shown.frame(camera, size);
     comments.frame(camera);
     editing.follow();
@@ -195,6 +198,12 @@ const backdrop = (label: string, background: Background): Command => ({
   label,
   unavailable: noBoard,
   run: () => useBackground(background),
+});
+const zoomTo = (label: string, zoom: number, keys?: Shortcut[]): Command => ({
+  label,
+  keys,
+  unavailable: noneShown,
+  run: () => viewport.zoomBy(zoom / viewport.zoom()!),
 });
 const palette = (label: string, to: Scheme): Command => ({ label, run: () => appearance.choose(to) });
 /** The palette's colour, or a sticky note's paper, at `at`. */
@@ -399,12 +408,7 @@ const commands = {
     unavailable: noneShown,
     run: () => viewport.zoomBy(1 / ZOOM_STEP),
   },
-  actualSize: {
-    label: "Zoom to 100%",
-    keys: [{ key: "0", code: "Digit0", command: true }],
-    unavailable: noneShown,
-    run: () => viewport.zoomBy(1 / viewport.zoom()!),
-  },
+  actualSize: zoomTo("Zoom to 100%", 1, [{ key: "0", code: "Digit0", command: true }]),
   fit: {
     label: "Zoom to fit",
     keys: [{ code: "Digit1", shift: true }],
@@ -414,6 +418,12 @@ const commands = {
         viewport.look(fit(extent(opened), viewport.size()));
       }
     },
+  },
+  fitSelection: {
+    label: "Zoom to selection",
+    keys: [{ code: "Digit2", shift: true }],
+    unavailable: noneSelected,
+    run: () => fitTo(editing.selection()),
   },
   hints: {
     label: "Hints",
@@ -543,6 +553,14 @@ const bar = toolbar(
       { command: commands.addImages, icon: "photo" },
     ],
     [
+      {
+        zoom: () => {
+          const zoom = viewport.zoom();
+          return zoom === undefined ? undefined : percent(zoom);
+        },
+        unavailable: noneShown,
+        entries: zooms,
+      },
       { command: steady(commands.undo), icon: "undo" },
       { command: steady(commands.redo), icon: "redo" },
     ],
@@ -553,9 +571,6 @@ const bar = toolbar(
     commands.openZip,
     commands.saveAs,
     commands.exportZip,
-    "separator",
-    commands.fit,
-    commands.actualSize,
     "separator",
     grids(),
     themes(),
@@ -704,6 +719,33 @@ function holdSpace(held: boolean): void {
   }
 }
 
+function percent(zoom: number): string {
+  return `${Math.round(zoom * 100)}%`;
+}
+
+function zooms(): Entry[] {
+  const now = viewport.zoom();
+  return [
+    commands.zoomIn,
+    commands.zoomOut,
+    commands.fit,
+    commands.fitSelection,
+    "separator",
+    ...ZOOMS.map((zoom) => ({
+      ...zoomTo(percent(zoom), zoom, zoom === 1 ? commands.actualSize.keys : undefined),
+      checked: now !== undefined && percent(now) === percent(zoom),
+    })),
+  ];
+}
+
+/** Zooms to fit `ids`, when any of them shows. */
+function fitTo(ids: string[]): void {
+  const area = opened && extent(opened, ids);
+  if (area) {
+    viewport.look(fit(area, viewport.size()));
+  }
+}
+
 function grids(): Entry {
   const current = opened?.board.background;
   return {
@@ -773,12 +815,7 @@ async function serveAgents(): Promise<void> {
       zoom: () => viewport.zoom(),
       centre: () => viewport.centre(),
       select: (ids) => editing.select(ids),
-      frame(ids) {
-        const area = opened && extent(opened, ids);
-        if (area) {
-          viewport.look(fit(area, viewport.size()));
-        }
-      },
+      frame: fitTo,
     }),
   );
   await allowAgents(recall(AGENT) === "on");

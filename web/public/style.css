@@ -580,6 +580,27 @@ body {
   height: 14px;
 }
 
+.bar .zoom {
+  display: flex;
+  gap: 2px;
+  width: auto;
+  padding: 0 6px 0 8px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Wide enough for four digits, so that the bar stays put as the zoom changes. */
+.bar .zoom span {
+  min-width: 5.5ch;
+  text-align: center;
+}
+
+.bar .zoom svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
 .bar button[aria-expanded="true"] {
   background: var(--hover);
 }
