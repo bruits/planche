@@ -2,22 +2,24 @@
 // to it and edit it, which it saves as it goes, and save it elsewhere or export it.
 
 import * as core from "./core.js";
-import type { Background, CropShape, Kind, Order, Point, Rect } from "./core.js";
+import type { Background, CropShape, Kind, Order, Point, Rect, Size } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
 import { animations } from "./animation.js";
 import {
   among,
+  assetSizes,
   assetsOf,
-  decode,
+  decodeAsset,
   extent,
   files,
   holdsImage,
   imageKind,
   placed,
   open,
+  pool,
   prepare,
-  readAssets,
+  readAsset,
   newId,
   refresh,
   release,
@@ -43,7 +45,7 @@ import { testPhotos } from "./photos.js";
 import { pinned, pins } from "./pins.js";
 import { platform, type Folder, type Home, type Reopening, type Session, type ZipHome } from "./platform.js";
 import { recall, remember } from "./preferences.js";
-import { LONGEST_SIDE, onScreen } from "./raster.js";
+import { LONGEST_SIDE, onScreen, shownAssets } from "./raster.js";
 import { render } from "./render.js";
 import { create, type Renderer } from "./renderer.js";
 import { ACROSS, sampler } from "./sampler.js";
@@ -101,7 +103,7 @@ const viewport = view(byId("viewport"), {
       animated.update(opened.board, renderer, camera, size);
       films.update(opened.board, renderer, camera, size);
       if (lettering.update(opened.board, renderer, camera, size, editing.writing())) {
-        renderer.place(placed(opened.board, lettering, editing.writing(), unplayable));
+        renderer.place(placed(opened.board, lettering, editing.writing(), crossedOut));
       }
     }
   },
@@ -176,7 +178,10 @@ let exporting = false;
 let tool: "select" | "hand" | "eraser" | Draw = "select";
 /** Left out of the board, it starts as the board's background suggests. */
 let snapping = false;
-let unplayable: ReadonlySet<string> = new Set();
+/** The assets whose images show crossed out, as this machine cannot decode or play them. */
+let crossedOut: ReadonlySet<string> = new Set();
+/** The assets the renderer holds a texture or a drawing of, which adding them again needs not decode. */
+const loaded = new Set<string>();
 let spaceHeld = false;
 /** Left out of the preferences, as a window without its title bar would open at full size. */
 let compact = false;
@@ -920,7 +925,7 @@ async function serveAgents(): Promise<void> {
           throw new Error("Planche shows no board yet");
         }
         const background = getComputedStyle(document.body).backgroundColor;
-        return render({ opened, renderer, drawings, unplayable, background }, request);
+        return render({ opened, renderer, drawings, crossedOut, background }, request);
       },
       background: () => getComputedStyle(document.body).backgroundColor,
       loading: () => loading,
@@ -1255,7 +1260,7 @@ async function readBoard(at: { clientX: number; clientY: number }): Promise<Imag
   return renderer.render({
     area: { x: camera.x + x! / scale, y: camera.y + y! / scale, width: ACROSS / scale, height: ACROSS / scale },
     size: { width: ACROSS, height: ACROSS },
-    items: placed(opened.board, lettering, editing.writing(), unplayable),
+    items: placed(opened.board, lettering, editing.writing(), crossedOut),
     background: getComputedStyle(document.body).backgroundColor,
     images: new Map(),
     texts: new Map(),
@@ -1669,7 +1674,8 @@ async function present(next: Opened, camera?: Camera): Promise<void> {
   drawings.reset();
   animated.reset();
   films.reset();
-  unplayable = new Set();
+  crossedOut = new Set();
+  loaded.clear();
   comments.clear();
   showSaved();
   showTitle();
@@ -1680,61 +1686,182 @@ async function present(next: Opened, camera?: Camera): Promise<void> {
     bar.say(summary, true);
   }
   viewport.clear();
-  // Nothing shows until its images are read, which may take a while.
   refreshBar();
-  const [assets, reading] = await timed(() => readAssets(next));
-  details.set(`read ${assets.length} images`, milliseconds(reading));
-  const { width, height } = viewport.size();
-  const created = await create(viewport.host, width, height);
-  // Edits may have changed it while the renderer was created.
-  created.backdrop(next.board.background);
-  details.set("renderer", created.backend);
-  viewport.show(created, camera ?? fit(extent(next), viewport.size()));
-  editing.rehover();
-  renderer = created;
-  refreshBar();
-  if (assets.length > 0) {
-    bar.say(`${summary}, decoding ${assets.length} images…`, true);
+  const size = viewport.size();
+  const firstCamera = camera ?? fit(extent(next), size);
+  // Whether an image failed the opening, which then shows nothing.
+  let failed = false;
+  const ready = create(viewport.host, size.width, size.height).then((created) => {
+    if (failed || opened !== next) {
+      created.destroy();
+      return undefined;
+    }
+    // Edits may have changed it while the renderer was created.
+    created.backdrop(next.board.background);
+    details.set("renderer", created.backend);
+    renderer = created;
+    created.place(placed(next.board, lettering, editing.writing(), crossedOut));
+    viewport.show(created, camera ?? fit(extent(next), viewport.size()));
+    editing.rehover();
+    refreshBar();
+    return created;
+  });
+  // Handled at once, as the images may fail the opening before anything awaits the renderer.
+  const settled = ready.catch(() => undefined);
+  // Its own, as a Save as or another board may replace `autosave` meanwhile.
+  const saving = autosave;
+  const pending = assetSizes(next.board);
+  const total = pending.size;
+  const visible = new Set(shownAssets(next.board, firstCamera, size, () => true).keys());
+  let undecodable = 0;
+  let unplayable = 0;
+  let shown = 0;
+  let done = 0;
+  // The largest of those that show first, as the camera moves meanwhile, then as they draw.
+  const nextAsset = () => {
+    const areas = shownAssets(next.board, viewport.camera() ?? firstCamera, viewport.size(), (asset) => pending.has(asset));
+    let asset = pending.keys().next().value;
+    let largest = -1;
+    for (const [candidate, area] of areas) {
+      if (area > largest) {
+        [asset, largest] = [candidate, area];
+      }
+    }
+    if (asset === undefined) {
+      return undefined;
+    }
+    const natural = pending.get(asset)!;
+    pending.delete(asset);
+    return { asset, natural };
+  };
+  const showAsset = async ({ asset, natural }: { asset: string; natural: Size }) => {
+    const reading = () => readAsset(files(next), asset, natural);
+    // A board whose asset is missing or unlike its digest does not open, as saving it would fail.
+    // Saves wait only while it is read, as one may move a ZIP file's images.
+    const read = await (saving ? saving.during(reading) : reading()).catch((error: unknown) => {
+      failed = true;
+      throw error;
+    });
+    let decoded = await decodeAsset(read, LONGEST_SIDE).catch(() => undefined);
+    try {
+      const created = await ready;
+      if (created === undefined || failed || opened !== next || renderer !== created) {
+        return;
+      }
+      if (decoded) {
+        load(created, new Map([[asset, decoded]]));
+        decoded = undefined;
+        // Once their texture is there, which they play onto.
+        animated.keep([read]);
+        films.keep([read]);
+        if (shown === 0) {
+          untilDrawn.set("first image", start);
+        }
+        shown += 1;
+      } else {
+        if (read.video) {
+          unplayable += 1;
+        } else {
+          undecodable += 1;
+        }
+        crossOut(created, asset);
+      }
+      done += 1;
+      if (visible.delete(asset) && visible.size === 0) {
+        untilDrawn.set("visible images", start);
+      }
+      bar.say(`${summary}, ${done} of ${total} images…`, true);
+      viewport.redraw();
+    } finally {
+      release(decoded);
+    }
+  };
+  try {
+    await pool(nextAsset, showAsset);
+  } catch (error) {
+    failed = true;
+    // Nothing shows of a board that does not open, once its renderer is there or failed.
+    const created = await settled;
+    if (opened === next) {
+      if (created !== undefined && renderer === created) {
+        viewport.clear();
+        renderer = undefined;
+      }
+      drawings.reset();
+      animated.reset();
+      films.reset();
+      crossedOut = new Set();
+      loaded.clear();
+      // Nor what the user began on its images meanwhile, which ends where it began.
+      editing.reset();
+      changed(next.editor.rewindGesture());
+      next.editor.endGesture();
+      comments.clear();
+    }
+    throw error;
   }
-  const [decoded, decoding] = await timed(() => decode(assets, LONGEST_SIDE));
-  details.set("decode", milliseconds(decoding));
-  const [, uploading] = await timed(() => load(created, decoded));
-  details.set("upload", milliseconds(uploading));
-  animated.keep(assets);
-  films.keep(assets.filter(({ asset }) => decoded.has(asset)));
-  unplayable = new Set(assets.filter(({ asset, video }) => video && !decoded.has(asset)).map(({ asset }) => asset));
-  created.place(placed(next.board, lettering, undefined, unplayable));
-  viewport.redraw();
-  if (assets.length > 0) {
-    untilDrawn.set("first image", start);
+  await ready;
+  if (total > 0) {
+    untilDrawn.set("last image", start);
   }
-  if (unplayable.size > 0) {
-    bar.say(`${summary}, ${unplayable.size === 1 ? "a video" : `${unplayable.size} videos`} this machine cannot play`);
+  const crossed = [
+    ...(undecodable > 0 ? [`${undecodable === 1 ? "an image" : `${undecodable} images`} this machine cannot decode`] : []),
+    ...(unplayable > 0 ? [`${unplayable === 1 ? "a video" : `${unplayable} videos`} this machine cannot play`] : []),
+  ];
+  if (crossed.length > 0) {
+    bar.say(`${summary}, ${crossed.join(", and ")}`);
   } else if (!empty) {
     bar.say(summary);
+  }
+}
+
+/** Its images show crossed out, from the next draw on. */
+function crossOut(into: Renderer, asset: string): void {
+  crossedOut = new Set([...crossedOut, asset]);
+  if (opened) {
+    into.place(placed(opened.board, lettering, editing.writing(), crossedOut));
   }
 }
 
 /** Side by side around `at`, at their natural size unless they would not show whole, and as one edit. */
 async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void> {
   const target = opened;
-  const added: Added[] = [];
-  const failures: string[] = [];
+  const into = renderer;
+  // By where each came, which they are laid out in.
+  const prepared: (Added | undefined)[] = [];
+  const failures: (string | undefined)[] = [];
   const images = await incoming;
   // Once read, as the user's pace and the platform's reading are not the app's.
   const since = performance.now();
-  for (const image of images) {
-    if ("failure" in image) {
-      failures.push(`${image.name}: ${image.failure}`);
-      continue;
-    }
-    try {
-      added.push({ ...(await prepare(image.bytes, LONGEST_SIDE)), filename: image.filename });
-    } catch (error) {
-      const reason = error instanceof Error && error.message ? error.message : String(error);
-      failures.push(`${image.name}: this app cannot open it here (${reason})`);
-    }
-  }
+  const pending = images.entries();
+  let done = 0;
+  await pool(
+    () => pending.next().value,
+    async ([index, image]) => {
+      try {
+        if ("failure" in image) {
+          failures[index] = `${image.name}: ${image.failure}`;
+          return;
+        }
+        const one: Added = { ...(await prepare(image.bytes, LONGEST_SIDE, heldSize)), filename: image.filename };
+        // At once, so that their bitmaps do not pile up.
+        if (one.decoded && into && target === opened && into === renderer) {
+          load(into, new Map([[one.asset, one.decoded]]));
+          one.decoded = undefined;
+        }
+        prepared[index] = one;
+      } catch (error) {
+        const reason = error instanceof Error && error.message ? error.message : String(error);
+        failures[index] = `${image.name}: this app cannot open it here (${reason})`;
+      } finally {
+        done += 1;
+        if (images.length > 1) {
+          bar.say(`Adding ${done} of ${images.length} images…`, true);
+        }
+      }
+    },
+  );
+  const added = prepared.filter((one) => one !== undefined);
   // Nor the time an edit under way takes to end.
   const [, waited] = await timed(() => editing.idle());
   if (added.length > 0 && target !== undefined && target === opened && renderer !== undefined) {
@@ -1757,9 +1884,16 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   } else {
     added.forEach(({ decoded }) => release(decoded));
   }
-  if (failures.length > 0) {
-    bar.say(`Not added, ${failures.join("; ")}`);
+  const failed = failures.filter((failure) => failure !== undefined);
+  if (failed.length > 0) {
+    bar.say(`Not added, ${failed.join("; ")}`);
+  } else if (images.length > 1) {
+    bar.say("");
   }
+}
+
+function heldSize(asset: string): Size | undefined {
+  return opened && loaded.has(asset) && !crossedOut.has(asset) ? assetSizes(opened.board).get(asset) : undefined;
 }
 
 /**
@@ -1771,9 +1905,7 @@ async function addTestPhotos(count: number): Promise<void> {
   if (at === undefined) {
     return;
   }
-  const photos = testPhotos(count, (done) =>
-    done < count ? bar.say(`Making test photos, ${done} of ${count}…`, true) : bar.say(`Adding ${count} test photos…`),
-  );
+  const photos = testPhotos(count, (done) => bar.say(`Making test photos, ${done} of ${count}…`, true));
   await addImages(
     photos.then((made) => {
       if (!savesToFiles()) {
@@ -1805,12 +1937,12 @@ function room(): Rect | undefined {
 
 function keep(target: Opened, added: Added[]): void {
   if (renderer !== undefined) {
-    load(renderer, new Map(added.map(({ asset, decoded }) => [asset, decoded])));
+    load(renderer, new Map(added.flatMap(({ asset, decoded }) => (decoded ? [[asset, decoded] as const] : []))));
   }
   animated.keep(added);
   films.keep(added);
   const fresh = new Set(added.map(({ asset }) => asset));
-  unplayable = new Set([...unplayable].filter((asset) => !fresh.has(asset)));
+  crossedOut = new Set([...crossedOut].filter((asset) => !fresh.has(asset)));
   added.forEach(({ asset, bytes }) => target.added.set(core.assetPath(asset), bytes));
 }
 
@@ -1825,6 +1957,7 @@ function load(into: Renderer, decoded: Map<string, Decoded>): void {
     }
   }
   into.load(bitmaps);
+  decoded.forEach((_, asset) => loaded.add(asset));
 }
 
 function summarise({ folder, board }: Opened): string {
@@ -1837,7 +1970,7 @@ function changed(touched: string[]): void {
   }
   refresh(opened, touched);
   renderer?.backdrop(opened.board.background);
-  renderer?.place(placed(opened.board, lettering, editing.writing(), unplayable));
+  renderer?.place(placed(opened.board, lettering, editing.writing(), crossedOut));
   autosave?.touched(touched);
   showSaved();
   viewport.redraw();

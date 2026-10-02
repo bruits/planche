@@ -26,12 +26,12 @@ export interface Opened {
  */
 export type Decoded = ImageBitmap | Picture;
 
-/** An image to add, decoded. */
+/** An image to add, decoded unless the board shows it already. */
 export interface Added {
   asset: string;
   bytes: Blob;
   natural: Size;
-  decoded: Decoded;
+  decoded?: Decoded;
   moving?: Moving;
   /** Typed, to play from. */
   video?: Blob;
@@ -113,15 +113,26 @@ export function files({ folder, added }: Opened): Folder {
   };
 }
 
-/** Throws when the bytes are not an image the host can decode. */
-export async function prepare(bytes: Blob, cap: number): Promise<Added> {
+/**
+ * Left undecoded when `held` gives the natural size of its asset, which the board shows already.
+ * Throws when the bytes are not an image the host can decode.
+ */
+export async function prepare(
+  bytes: Blob,
+  cap: number,
+  held: (asset: string) => Size | undefined = () => undefined,
+): Promise<Added> {
   const type = core.videoType(new Uint8Array(await bytes.slice(0, core.VIDEO_START).arrayBuffer()));
   if (type !== undefined) {
-    return prepareVideo(bytes, type);
+    return prepareVideo(bytes, type, held);
   }
   const whole = new Uint8Array(await bytes.arrayBuffer());
   const vector = checkedSvgSize(whole);
   const asset = await digest(whole);
+  const known = held(asset);
+  if (known !== undefined) {
+    return { asset, bytes, natural: known };
+  }
   if (vector !== undefined) {
     return { asset, bytes, natural: vector, decoded: await picture(whole, vector) };
   }
@@ -141,19 +152,23 @@ export async function prepare(bytes: Blob, cap: number): Promise<Added> {
   return { asset, bytes, natural, decoded: bitmap, moving };
 }
 
-async function prepareVideo(bytes: Blob, type: string): Promise<Added> {
+/** One video's bytes at a time, as each is held twice while it is hashed, up to `VIDEO_LIMIT`. */
+let hashingVideo: Promise<unknown> = Promise.resolve();
+
+async function prepareVideo(bytes: Blob, type: string, held: (asset: string) => Size | undefined): Promise<Added> {
   if (bytes.size > VIDEO_LIMIT) {
     throw new Error(`it is over the ${VIDEO_LIMIT / 1e6} MB limit for videos`);
   }
+  const hashed = hashingVideo.then(async () => digest(new Uint8Array(await bytes.arrayBuffer())));
+  hashingVideo = hashed.catch(() => undefined);
+  const asset = await hashed;
+  const known = held(asset);
+  if (known !== undefined) {
+    return { asset, bytes, natural: known };
+  }
   const video = new Blob([bytes], { type });
   const { bitmap, natural } = await firstFrame(video);
-  try {
-    const asset = await digest(new Uint8Array(await bytes.arrayBuffer()));
-    return { asset, bytes, natural, decoded: bitmap, video };
-  } catch (error) {
-    bitmap.close();
-    throw error;
-  }
+  return { asset, bytes, natural, decoded: bitmap, video };
 }
 
 /** Only a GIF, a PNG, or a WebP may move, and only their bytes are worth copying into the core. */
@@ -164,7 +179,7 @@ function moves(bytes: Bytes): Moving | undefined {
   return plays === undefined ? undefined : { bytes, plays };
 }
 
-export function release(decoded: Decoded): void {
+export function release(decoded: Decoded | undefined): void {
   if (decoded instanceof ImageBitmap) {
     decoded.close();
   }
@@ -175,7 +190,7 @@ export function release(decoded: Decoded): void {
  * worth copying into the core. Throws for other markup, such as HTML.
  */
 function checkedSvgSize(bytes: Bytes): Size | undefined {
-  if (!new TextDecoder().decode(bytes.subarray(0, 256)).trimStart().startsWith("<")) {
+  if (!markup(bytes)) {
     return undefined;
   }
   const size = core.svgSize(bytes);
@@ -185,13 +200,18 @@ function checkedSvgSize(bytes: Bytes): Size | undefined {
   return size;
 }
 
+/** Whether the bytes start as markup, which only an SVG may. */
+function markup(bytes: Bytes): boolean {
+  return new TextDecoder().decode(bytes.subarray(0, 256)).trimStart().startsWith("<");
+}
+
 export function newId(): string {
   return hex(crypto.getRandomValues(new Uint8Array(16)));
 }
 
 /**
- * The asset id of `bytes`, which the host hashes without holding the page up where it can. Only
- * a secure context can, which the macOS webview may not be.
+ * The asset id of `bytes`, which the host hashes without holding the page up in a secure context,
+ * which every shell's webview is, and the core otherwise, as for a page served over plain HTTP.
  */
 async function digest(bytes: Bytes): Promise<string> {
   return crypto.subtle ? hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))) : core.assetId(bytes);
@@ -254,13 +274,13 @@ const TINT = 0.18;
 
 /**
  * What draws, back to front, but the text of `hidden`, which is being written. Images of the
- * `unplayable` videos show where they lie, crossed out.
+ * `crossedOut` assets show where they lie, crossed out.
  */
 export function placed(
   board: Board,
   texts: Pick<Texts, "placed">,
   hidden?: string,
-  unplayable: ReadonlySet<string> = new Set(),
+  crossedOut: ReadonlySet<string> = new Set(),
 ): Placed[] {
   const width = core.strokeWidth();
   return board.draw_order.flatMap((id): Placed[] => {
@@ -270,7 +290,7 @@ export function placed(
     switch (kind.type) {
       case "image": {
         const { frame, rotation } = kind;
-        return unplayable.has(kind.asset)
+        return crossedOut.has(kind.asset)
           ? [
               { kind: "rectangle", frame, rotation, width, paint: "ink" },
               { kind: "cross", frame, rotation, width, paint: "ink" },
@@ -400,60 +420,79 @@ export function among({ elements }: Board, id: string, chosen: Set<string>): boo
   return false;
 }
 
-/** Each asset its images show, once. Throws when one is missing or does not match its digest. */
-export async function readAssets({ folder, board }: Opened): Promise<Asset[]> {
-  const assets = new Map<string, Asset>();
+/** How many images are read, decoded, or prepared at once, which bounds the memory in flight. */
+const AT_ONCE = 4;
+
+/**
+ * Runs `work` on each item `next` hands out, `AT_ONCE` at a time, until it hands out none. Once
+ * one throws, it hands out no more, and throws that once the items under way are done.
+ */
+export async function pool<T>(next: () => T | undefined, work: (item: T) => Promise<void>): Promise<void> {
+  let failure: { reason: unknown } | undefined;
+  const worker = async () => {
+    while (failure === undefined) {
+      try {
+        const item = next();
+        if (item === undefined) {
+          return;
+        }
+        await work(item);
+      } catch (reason) {
+        failure ??= { reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: AT_ONCE }, worker));
+  if (failure !== undefined) {
+    throw failure.reason;
+  }
+}
+
+/** The natural size of each asset its images show, in the order they draw. */
+export function assetSizes(board: Board): Map<string, Size> {
+  const sizes = new Map<string, Size>();
   for (const id of board.draw_order) {
     const { kind } = board.elements[id]!;
-    if (kind.type === "image" && !assets.has(kind.asset)) {
-      assets.set(kind.asset, await readAsset(folder, kind.asset, kind.natural_size));
+    if (kind.type === "image" && !sizes.has(kind.asset)) {
+      sizes.set(kind.asset, kind.natural_size);
     }
   }
-  return [...assets.values()];
+  return sizes;
 }
 
 /** Throws when it is missing or does not match its digest. */
 export async function readAsset(folder: Folder, asset: string, natural: Size): Promise<Asset> {
   const bytes = await folder.read(core.assetPath(asset));
-  core.verifyAsset(asset, bytes);
+  core.verifyAsset(asset, await digest(bytes));
   const type = core.videoType(bytes);
   if (type === undefined) {
-    const vector = checkedSvgSize(bytes) !== undefined;
+    const vector = markup(bytes);
     return { asset, blob: new Blob([bytes]), natural, vector, moving: moves(bytes) };
   }
   const video = new Blob([bytes], { type });
   return { asset, blob: video, natural, vector: false, video };
 }
 
-/**
- * Bitmaps with their longest side capped at `cap` pixels, and a video's first frame at the video's
- * own size, as its frames go onto the same texture. Four decode at once, to bound the memory in
- * flight. A video this machine cannot play is left out, for the board to open all the same.
- */
+/** Each as `decodeAsset` decodes it, but those this machine cannot decode or play, which are left out. */
 export async function decode(assets: Asset[], cap: number): Promise<Map<string, Decoded>> {
   const decoded = new Map<string, Decoded>();
   const pending = assets.values();
-  const worker = async () => {
-    for (const asset of pending) {
+  await pool(
+    () => pending.next().value,
+    async (asset) => {
       try {
         decoded.set(asset.asset, await decodeAsset(asset, cap));
-      } catch (error) {
-        if (!asset.video) {
-          throw error;
-        }
-      }
-    }
-  };
-  const done = await Promise.allSettled(Array.from({ length: 4 }, worker));
-  const failed = done.find((result) => result.status === "rejected");
-  if (failed) {
-    decoded.forEach(release);
-    throw failed.reason;
-  }
+      } catch {}
+    },
+  );
   return decoded;
 }
 
-/** Throws when a video does not play here. */
+/**
+ * A bitmap with its longest side capped at `cap` pixels, or a video's first frame at the video's
+ * own size, as its frames go onto the same texture. Throws when this machine cannot decode it or
+ * play it.
+ */
 export async function decodeAsset({ blob, natural, vector, video }: Asset, cap: number): Promise<Decoded> {
   if (video) {
     return (await firstFrame(video)).bitmap;

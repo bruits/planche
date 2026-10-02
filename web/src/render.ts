@@ -27,12 +27,12 @@ export interface Scene {
   opened: Opened;
   renderer: Renderer;
   drawings: Vectors;
-  unplayable: ReadonlySet<string>;
+  crossedOut: ReadonlySet<string>;
   background: string;
 }
 
 /** Throws what the agent reads when there is nothing to draw. */
-export async function render({ opened, renderer, drawings, unplayable, background }: Scene, request: Request): Promise<Rendered> {
+export async function render({ opened, renderer, drawings, crossedOut, background }: Scene, request: Request): Promise<Rendered> {
   const { board } = opened;
   const chosen = request.ids && new Set(request.ids);
   const ids = chosen ? board.draw_order.filter((id) => among(board, id, chosen)) : board.draw_order;
@@ -67,7 +67,7 @@ export async function render({ opened, renderer, drawings, unplayable, backgroun
       images.set(asset, canvas);
     }
   }
-  const items = placed({ ...board, draw_order: ids }, { placed: (id) => lettering.get(id) }, undefined, unplayable);
+  const items = placed({ ...board, draw_order: ids }, { placed: (id) => lettering.get(id) }, undefined, crossedOut);
   const pixels = await renderer.render({ area, size, items, background, images, texts });
   const canvas = Object.assign(document.createElement("canvas"), size);
   canvas.getContext("2d")!.putImageData(pixels, 0, 0);

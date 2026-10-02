@@ -12,8 +12,8 @@ type Colour = [number, number, number];
 const SIDE = 32;
 
 /**
- * By the id of each image among `ids`, in sRGB, but for those that show nothing opaque, and the
- * videos this machine cannot play. Throws when an asset is missing or does not match its digest.
+ * By the id of each image among `ids`, in sRGB, but for those that show nothing opaque, and those
+ * this machine cannot decode or play. Throws when an asset is missing or does not match its digest.
  */
 export async function meanColours(opened: Opened, ids: string[]): Promise<Record<string, Colour>> {
   const images = new Map<string, Image>();

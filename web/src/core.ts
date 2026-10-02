@@ -193,9 +193,9 @@ export function assetId(bytes: Bytes): string {
   return hasher.finish();
 }
 
-/** Throws the core's error when these are not the bytes of `asset`. */
-export function verifyAsset(asset: string, bytes: Bytes): void {
-  verify(asset, assetId(bytes));
+/** Throws the core's error when `found`, the id of bytes read for `asset`, is not `asset`. */
+export function verifyAsset(asset: string, found: string): void {
+  verify(asset, found);
 }
 
 export function crc32(bytes: Bytes): number {
