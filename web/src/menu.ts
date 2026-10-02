@@ -7,7 +7,8 @@ import { icon, type Icon } from "./icons.js";
 
 /**
  * `checked` ticks, among entries that exclude each other, such as tools that share a button or
- * a submenu's options, the one in use, or with `toggle`, one that turns on and off on its own.
+ * a submenu's options, the one in use, or with `toggle`, switches on one that turns on and off
+ * on its own.
  * With `options`, it opens a submenu of them and does not run, and theirs open none.
  */
 export type Entry = Item | "separator";
@@ -274,11 +275,15 @@ function menuItem(command: Item, activate: (item: HTMLButtonElement) => void): H
   }
   // Hidden from assistive technologies, which `aria-checked` tells already.
   if (command.checked !== undefined) {
-    const tick = document.createElement("span");
-    tick.className = "tick";
-    tick.setAttribute("aria-hidden", "true");
-    tick.textContent = "✓";
-    end.append(tick);
+    const state = document.createElement("span");
+    state.setAttribute("aria-hidden", "true");
+    if (command.toggle) {
+      state.className = "switch";
+    } else {
+      state.className = "tick";
+      state.textContent = "✓";
+    }
+    end.append(state);
   }
   // Still focusable, as the pattern wants, so that its reason can be read.
   const reason = command.unavailable?.();

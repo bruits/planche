@@ -606,6 +606,7 @@ const bar = toolbar(
     grids(),
     themes(),
     views(),
+    settings(),
   ],
 );
 const look = styles();
@@ -808,19 +809,31 @@ function themes(): Entry {
 }
 
 function views(): Entry {
-  return submenu("View", [
-    { ...commands.hints, checked: hintsShown, toggle: true },
-    { ...commands.measurements, checked: !measurements.hidden, toggle: true },
+  return submenu(
+    "View",
+    sectioned([
+      [
+        { ...commands.hints, checked: hintsShown, toggle: true },
+        { ...commands.measurements, checked: !measurements.hidden, toggle: true },
+      ],
+      [
+        ...(platform.keepOnTop ? [{ ...commands.alwaysOnTop, checked: onTop, toggle: true }] : []),
+        ...(platform.titleBar ? [{ ...commands.compact, checked: compact, toggle: true }] : []),
+      ],
+    ]),
+  );
+}
+
+function settings(): Entry {
+  return submenu("Settings", [
     { ...commands.hoverPlay, checked: hoverPlay, toggle: true },
-    ...(platform.keepOnTop ? [{ ...commands.alwaysOnTop, checked: onTop, toggle: true }] : []),
-    ...(platform.titleBar ? [{ ...commands.compact, checked: compact, toggle: true }] : []),
     ...(platform.agent ? [{ ...commands.agentAccess, checked: agentsAllowed, toggle: true }] : []),
   ]);
 }
 
 /**
  * Ready to answer before any agent may ask, then on or off as it was left. The shell follows,
- * even when the browser forgot, so that the menu's tick never hides access left on.
+ * even when the browser forgot, so that the menu's switch never hides access left on.
  */
 async function serveAgents(): Promise<void> {
   const { agent } = platform;
@@ -895,6 +908,10 @@ async function useCompact(on: boolean): Promise<void> {
 /** One that only opens its options, so never runs. */
 function submenu(label: string, options: Entry[]): Item {
   return { label, run() {}, options };
+}
+
+function sectioned(sections: Entry[][]): Entry[] {
+  return sections.filter((section) => section.length > 0).flatMap((section, at) => (at > 0 ? ["separator", ...section] : section));
 }
 
 /** Of the options that apply to the selection, and left out of it when none does. */
@@ -1153,10 +1170,7 @@ function styleMenu(): Entry {
     : [];
   const sizes: Entry[] = can.has("size") ? [commands.larger, commands.smaller] : [];
   const sections = [[commands.style], colours, text, sizes, [commands.copyStyle, commands.pasteStyle]];
-  return submenu(
-    "Style",
-    sections.filter((section) => section.length > 0).flatMap((section, at) => (at > 0 ? ["separator", ...section] : section)),
-  );
+  return submenu("Style", sectioned(sections));
 }
 
 /**

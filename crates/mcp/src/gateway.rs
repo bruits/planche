@@ -11,7 +11,7 @@ use crate::discovery::MOST_LINE;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Planche is not running, or its agent access is off: turn it on in the View menu")]
+    #[error("Planche is not running, or its agent access is off: turn it on in the Settings menu")]
     NotRunning,
     #[error(
         "Planche does not answer on port {0}: it may have stopped unexpectedly, so open it again"
