@@ -92,6 +92,7 @@ const draws = rate((perSecond) => {
 });
 const shown = overlay(byId("viewport"));
 const viewport = view(byId("viewport"), {
+  advance: () => editing.catchUp(),
   frame(camera, size) {
     bar.zoomed();
     shown.frame(camera, size);
@@ -148,8 +149,9 @@ const editing = edits(viewport, shown, () => opened, {
     const kind = id === undefined ? undefined : opened?.board.elements[id]?.kind;
     films.hover(kind?.type === "image" ? kind.asset : undefined);
   },
-  stepped(steps) {
-    details.set("drag step", `p50 ${milliseconds(percentile(steps, 0.5))}, p90 ${milliseconds(percentile(steps, 0.9))}`);
+  stepped(steps, moves) {
+    const [p50, p90] = [percentile(steps, 0.5), percentile(steps, 0.9)];
+    details.set("drag step", `p50 ${milliseconds(p50)}, p90 ${milliseconds(p90)}, ${steps.length} for ${moves} moves`);
   },
 });
 const comments = pins(byId("viewport"), { choose: (id) => editing.choose(id), write: (id) => editing.write(id) });

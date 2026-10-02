@@ -96,8 +96,11 @@ export interface Hooks {
   hovered(): void;
   /** Once the topmost element the pointer is on changed, which a press keeps, `undefined` when none is or a finger touches. */
   pointed(id: string | undefined): void;
-  /** Once a press that moved ends, how many milliseconds each of its moves took to handle. */
-  stepped(steps: number[]): void;
+  /**
+   * Once a press that moved ends, how many milliseconds each of its steps took to handle, and how
+   * many moves of the pointer those steps caught up with.
+   */
+  stepped(steps: number[], moves: number): void;
 }
 
 /** A size, a share of an image's own size, or an angle, as a gesture shows it. */
@@ -142,6 +145,8 @@ const DIRECTIONS: [number, number][] = [
 ];
 
 export interface Edits {
+  /** Carries a press on to where the pointer last moved, before the frame that shows it. */
+  catchUp(): void;
   /** Whether a gesture, some writing, or a crop is under way, which edits from elsewhere would break. */
   busy(): boolean;
   /** Once none is under way. */
@@ -277,8 +282,13 @@ export function edits(
   let selected = new Set<string>();
   let entered: string | undefined;
   let press: Press | undefined;
-  /** How long each of the press's moves took to handle, in milliseconds. */
+  /** How long each of the press's steps took to handle, in milliseconds. */
   let handled: number[] = [];
+  /** The pointer's last move during the press, which waits for the next frame. */
+  let moved: PointerEvent | undefined;
+  let movesBehind = 0;
+  /** How many moves of the pointer the press's steps caught up with. */
+  let moves = 0;
   /** What of the selection the pointer is on while nothing is pressed. */
   let over: Grab | undefined;
   /** What a click would select, but for what is selected already. */
@@ -320,6 +330,9 @@ export function edits(
   const settle = () => {
     press = undefined;
     handled = [];
+    moved = undefined;
+    movesBehind = 0;
+    moves = 0;
     resolve();
   };
   const field = writer(view.host);
@@ -703,10 +716,23 @@ export function edits(
       rehover();
       return;
     }
+    if (event.pointerId !== press.pointer) {
+      return;
+    }
+    // Once a frame, as some engines send several moves a frame, each as costly to carry.
+    moved = event;
+    movesBehind += 1;
+    view.step();
+  });
+  const catchUp = () => {
+    const event = moved;
+    const caught = movesBehind;
+    moved = undefined;
+    movesBehind = 0;
     const editing = current();
-    const at = view.at(event);
+    const at = event && view.at(event);
     const zoom = view.zoom();
-    if (event.pointerId !== press.pointer || !editing || !at || !zoom) {
+    if (!press || !event || !editing || !at || !zoom) {
       return;
     }
     const pressed = press;
@@ -715,8 +741,17 @@ export function edits(
     // A move short of a drag only tells it from a click.
     if (!("dragging" in pressed) || pressed.dragging) {
       handled.push(performance.now() - start);
+      moves += caught;
     }
-  });
+  };
+  /** Carries the press on to the pointer's last move before it ends, which still ends when that fails. */
+  const flush = () => {
+    try {
+      catchUp();
+    } catch (error) {
+      reportError(error);
+    }
+  };
   /** Carries any press on to `at`, erasing and cropping too, which `drag` leaves to it. */
   const carry = (editing: Editing, at: Point, zoom: number, event: PointerEvent) => {
     if (!press) {
@@ -739,7 +774,8 @@ export function edits(
       return;
     }
     last = at;
-    drag(editing, at, zoom, event);
+    // With the keys held now, which may have changed since the move.
+    drag(editing, at, zoom, keys ?? event);
   };
   // As the keys change what a press does, or what a press would take, without the pointer moving.
   for (const type of ["keydown", "keyup"] as const) {
@@ -754,7 +790,8 @@ export function edits(
         press?.kind === "rotate" ||
         press?.kind === "end" ||
         (press?.kind === "draw" && SEGMENTS.has(press.shape));
-      if (held && modifier && editing && last && zoom) {
+      // Unless a move waits for the frame, which takes the keys then.
+      if (held && modifier && editing && last && zoom && !moved) {
         drag(editing, last, zoom, event);
       } else if (!press) {
         rehover();
@@ -915,8 +952,9 @@ export function edits(
     if (!press) {
       return;
     }
+    flush();
     if (handled.length > 0) {
-      stepped(handled);
+      stepped(handled, moves);
     }
     wasClick = (press.kind === "move" || press.kind === "marquee") && !press.dragging;
     const held = holding() !== undefined;
@@ -1124,6 +1162,7 @@ export function edits(
   };
   /** Crops the image as shown, or leaves it as it was, as one edit with all of its cropping. */
   const finishCropping = (editing: Editing, keep: boolean) => {
+    flush();
     if (!cropping) {
       return;
     }
@@ -1199,6 +1238,7 @@ export function edits(
   };
 
   return {
+    catchUp,
     busy: underway,
     idle: () => (underway() ? new Promise((resolve) => waiting.push(resolve)) : Promise.resolve()),
     apply(work) {

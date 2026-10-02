@@ -13,6 +13,8 @@ export interface View {
   clear(): void;
   /** On the next frame, however often it is called before. */
   redraw(): void;
+  /** Advances on the next frame as `redraw` does, but draws only if a redraw asks for it by then. */
+  step(): void;
   /**
    * Draws at once, without waiting for a frame, which a hidden window never gets. The canvas holds
    * the drawing until this task ends. `undefined` when nothing is shown.
@@ -39,6 +41,8 @@ export interface View {
 }
 
 export interface Drawing {
+  /** Before each frame a redraw or a step asked for, so that what waited for it shows in it. */
+  advance(): void;
   /** Before the renderer draws each frame. */
   frame(camera: Camera, viewport: Viewport): void;
   /** Once it drew one, which the GPU may not have finished yet. */
@@ -57,9 +61,11 @@ const LINE = 16;
  * Scrolling pans, and zooms with Ctrl or ⌘ held, which is how browsers report pinching a
  * trackpad. The middle button pans, and so does the main one with Alt or the hand tool.
  */
-export function view(host: HTMLElement, { frame, painted, failed }: Drawing): View {
+export function view(host: HTMLElement, { advance, frame, painted, failed }: Drawing): View {
   let shown: { renderer: Renderer; camera: Camera } | undefined;
   let pending = false;
+  /** Whether the next frame draws, which a step alone does not ask for. */
+  let drawing = false;
   let panning: number | undefined;
   let hand = false;
   /** Safari's pinch, as the scale it has reached, `undefined` when none is under way. */
@@ -81,14 +87,27 @@ export function view(host: HTMLElement, { frame, painted, failed }: Drawing): Vi
       failed(error);
     }
   };
-  const redraw = () => {
+  const step = () => {
     if (!pending) {
       pending = true;
       requestAnimationFrame(() => {
-        pending = false;
-        draw();
+        // The redraws it asks for are this frame's.
+        try {
+          advance();
+        } finally {
+          pending = false;
+          // Before drawing, as what the draw shows may ask for the next frame's.
+          if (drawing) {
+            drawing = false;
+            draw();
+          }
+        }
       });
     }
+  };
+  const redraw = () => {
+    drawing = true;
+    step();
   };
   const zoomAt = (factor: number, clientX: number, clientY: number) => {
     if (shown) {
@@ -174,7 +193,8 @@ export function view(host: HTMLElement, { frame, painted, failed }: Drawing): Vi
   const resize = () => {
     if (shown) {
       shown.renderer.resize(host.clientWidth, host.clientHeight);
-      redraw();
+      // At once, as resizing clears the canvas, and the next frame's draw comes after this one shows.
+      draw();
     }
   };
   new ResizeObserver(resize).observe(host);
@@ -205,6 +225,7 @@ export function view(host: HTMLElement, { frame, painted, failed }: Drawing): Vi
       shown = undefined;
     },
     redraw,
+    step,
     drawNow: paint,
     at({ clientX, clientY }) {
       if (!shown) {

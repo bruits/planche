@@ -1,3 +1,4 @@
+use std::mem;
 use std::sync::{Arc, Mutex};
 
 use wasm_bindgen::Clamped;
@@ -948,8 +949,13 @@ impl Renderer {
             let grid: Vec<u8> = grid.iter().flat_map(|value| value.to_le_bytes()).collect();
             self.queue.write_buffer(&self.grid_uniform, 0, &grid);
         }
-        if self.instances.size() < (items.len() / STRIDE) as u64 * INSTANCE {
-            self.instances = instance_buffer(&self.device, items.len() / STRIDE);
+        let needed = items.len() / STRIDE;
+        let capacity = (self.instances.size() / INSTANCE) as usize;
+        if capacity < needed {
+            // By half again, so that a board gaining images one by one does not make one at each
+            // draw, and destroyed, as dropping one frees nothing on WebGPU.
+            let grown = instance_buffer(&self.device, needed.max(capacity + capacity / 2));
+            mem::replace(&mut self.instances, grown).destroy();
         }
         let (items, _) = items.as_chunks::<STRIDE>();
         let instances: Vec<u8> = items

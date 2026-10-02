@@ -102,6 +102,9 @@ export function overlay(host: HTMLElement): Overlay {
   const svg = document.createElementNS(SVG, "svg");
   const selection = document.createElementNS(SVG, "g");
   selection.classList.add("selection");
+  // One for all, as a selection of hundreds would otherwise make as many elements at each move.
+  const outlined = document.createElementNS(SVG, "path");
+  selection.append(outlined);
   const grips = document.createElementNS(SVG, "g");
   grips.classList.add("handles");
   const preview = document.createElementNS(SVG, "g");
@@ -179,7 +182,7 @@ export function overlay(host: HTMLElement): Overlay {
       }
     },
     outline(outlines) {
-      selection.replaceChildren(...shapes(outlines));
+      outlined.setAttribute("d", traced(outlines));
     },
     box(box) {
       corners = box;
@@ -243,6 +246,20 @@ export function overlay(host: HTMLElement): Overlay {
       cropping.removeAttribute("display");
     },
   };
+}
+
+/** The outlines as one path, but an arrow's two ends, a line that closing would draw twice. */
+function traced(outlines: Float64Array[]): string {
+  return outlines
+    .filter((points) => points.length > 0)
+    .map((points) => {
+      let path = `M${points[0]} ${points[1]}`;
+      for (let at = 2; at < points.length; at += 2) {
+        path += `L${points[at]} ${points[at + 1]}`;
+      }
+      return points.length > 4 ? `${path}Z` : path;
+    })
+    .join("");
 }
 
 function shapes(outlines: Float64Array[]): SVGElement[] {

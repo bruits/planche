@@ -252,15 +252,22 @@ export function row(sizes: Size[], at: Point, area?: Rect): Rect[] {
 }
 
 export function refresh({ editor, board }: Opened, touched: string[]): void {
-  for (const id of touched) {
+  // Only which elements there are, where each stacks, and in which group, order the board.
+  let reordered = false;
+  for (const id of new Set(touched)) {
+    const before = board.elements[id];
     const element = core.element(editor, id);
     if (element === undefined) {
       delete board.elements[id];
     } else {
       board.elements[id] = element;
     }
+    reordered ||=
+      (before === undefined) !== (element === undefined) || before?.z !== element?.z || before?.group !== element?.group;
   }
-  board.draw_order = editor.drawOrder();
+  if (reordered) {
+    board.draw_order = editor.drawOrder();
+  }
   board.background = core.background(editor);
 }
 
