@@ -213,7 +213,7 @@ export function newId(): string {
  * The asset id of `bytes`, which the host hashes without holding the page up in a secure context,
  * which every shell's webview is, and the core otherwise, as for a page served over plain HTTP.
  */
-async function digest(bytes: Bytes): Promise<string> {
+export async function digest(bytes: Bytes): Promise<string> {
   return crypto.subtle ? hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))) : core.assetId(bytes);
 }
 

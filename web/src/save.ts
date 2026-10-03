@@ -12,7 +12,7 @@ import { writeZip, zipFolder } from "./zip.js";
 const SOON = 1000;
 /** A ZIP file is written whole each time. */
 const LATER = 10_000;
-/** However long the edits go on. */
+/** After the first change, or the end of the save it came during, however long the edits go on. */
 const AT_LATEST = 10_000;
 
 /** Where a board saves itself. */
@@ -210,12 +210,19 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
   let rereading = false;
   let failure: string | undefined;
   let stopped = false;
+  let passes = 0;
+  /** The pass the last flush waits for. */
+  let flushed = 0;
 
   const schedule = (wait: number) => {
     clearTimeout(timer);
     timer = setTimeout(start, wait);
   };
   function start(): void {
+    // The save under way writes again at once for a flush, or waits as it ends.
+    if (running) {
+      return;
+    }
     clearTimeout(timer);
     timer = undefined;
     since = undefined;
@@ -278,6 +285,10 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
   async function run(): Promise<void> {
     while (due && !stopped) {
       due = false;
+      passes += 1;
+      clearTimeout(timer);
+      timer = undefined;
+      since = undefined;
       writing = true;
       const touched = [...dirty];
       dirty.clear();
@@ -314,6 +325,12 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
         writing = false;
         snapshot.free();
       }
+      // Edits made meanwhile wait as if made now, or saves would follow one another while they go on.
+      if (due && passes >= flushed && !stopped) {
+        since = Date.now();
+        schedule(delay);
+        return;
+      }
     }
   }
 
@@ -330,6 +347,7 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
       schedule(Math.max(0, Math.min(delay, since + AT_LATEST - now)));
     },
     async flush() {
+      flushed = passes + 1;
       if (due && !holding && held === 0 && !stopped) {
         start();
       }

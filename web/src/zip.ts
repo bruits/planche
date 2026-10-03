@@ -1,6 +1,7 @@
 // A board's single ZIP file. The core says which bytes it needs, and they are read or
 // written a slice at a time, so that a large board never sits whole in memory.
 
+import { digest } from "./board.js";
 import * as core from "./core.js";
 import type { Bytes, Snapshot } from "./core.js";
 import type { Folder, Sink, Slices } from "./platform.js";
@@ -36,9 +37,9 @@ export async function writeZip(snapshot: Snapshot, folder: Folder, sink: Sink): 
     const writer = new core.ZipWriter();
     for (const path of paths) {
       const bytes = files.get(path) ?? (await folder.read(path));
-      const digest = core.isAssetFile(path) ? core.assetId(bytes) : undefined;
+      const found = core.isAssetFile(path) ? await digest(bytes) : undefined;
       // wasm-bindgen types the bytes it copies out loosely.
-      await sink.append(writer.entry(path, bytes.length, core.crc32(bytes), digest) as Bytes);
+      await sink.append(writer.entry(path, bytes.length, core.crc32(bytes), found) as Bytes);
       await sink.append(bytes);
     }
     await sink.append(writer.finish() as Bytes);
