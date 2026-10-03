@@ -11,6 +11,7 @@ import {
   prepare,
   release,
   row,
+  setLabel,
   type Added,
   type Opened,
 } from "./board.js";
@@ -262,19 +263,6 @@ function filled(text: string | undefined): string | undefined {
   return text?.trim() ? text : undefined;
 }
 
-function fillField(
-  kind: Extract<Kind, { type: "image" }>,
-  field: "caption" | "source",
-  text: string,
-): void {
-  const written = filled(text);
-  if (written === undefined) {
-    delete kind[field];
-  } else {
-    kind[field] = written;
-  }
-}
-
 /** What agents set of a style, a colour in either case. */
 type Styling = Omit<Style, "size" | "colour"> & { colour?: string };
 
@@ -489,10 +477,10 @@ function patched(editor: Editor, change: Update): Kind {
       throw refuse(imageField);
     }
     if (caption !== undefined) {
-      fillField(kind, "caption", caption);
+      setLabel(kind, "caption", caption);
     }
     if (source !== undefined) {
-      fillField(kind, "source", source);
+      setLabel(kind, "source", source);
     }
     if (greyscale !== undefined) {
       kind.edits.greyscale = greyscale;

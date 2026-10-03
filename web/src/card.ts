@@ -2,15 +2,25 @@
 // open, it follows the selection from one element to the next, until Esc or a press on nothing
 // closes it. While a gesture scales, stretches, or turns the selection, what it reads shows there
 // instead. Its buttons set what applies to every element selected, and that becomes the style of
-// what their tools draw next, unless ⌥ is held.
+// what their tools draw next, unless ⌥ is held. A lone image shows what it is, and its caption and
+// source to write in.
 
-import { among, type Opened } from "./board.js";
+import {
+  among,
+  loneImage,
+  MOST_LABEL,
+  setLabel,
+  webAddress,
+  type Image,
+  type Opened,
+} from "./board.js";
 import { ariaKeys, describe, type Command, type Shortcut } from "./commands.js";
 import type { Colour, CropShape, Kind, Point } from "./core.js";
 import type { Reading } from "./edit.js";
 import { message } from "./errors.js";
 import { icon, type Icon } from "./icons.js";
 import { css, type Paint } from "./paint.js";
+import { unitsPerPixel } from "./vector.js";
 import { defaultAlignment, holdsText } from "./text.js";
 import {
   PALETTE,
@@ -100,6 +110,7 @@ export interface CardCommands {
   crop: Command;
   rectangularCrop: Command;
   ellipticalCrop: Command;
+  openSource: Command;
   open: Command;
 }
 
@@ -156,11 +167,39 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     open = true;
     show(event.detail === 0);
   });
+  panel.addEventListener("focusout", (event) => {
+    if (event.target instanceof HTMLInputElement && event.target.closest(".info")) {
+      // Once the focus has landed where it goes, which a task waits for and a microtask does not,
+      // as what the field held back may build the card again.
+      setTimeout(() => {
+        if (!panel.hidden) {
+          fill();
+        }
+      });
+    }
+  });
+  // Written before a press elsewhere starts a gesture, which the edit would cut across.
+  addEventListener(
+    "pointerdown",
+    (event) => {
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLInputElement &&
+        panel.contains(active) &&
+        !(event.target instanceof Node && panel.contains(event.target))
+      ) {
+        active.blur();
+      }
+    },
+    true,
+  );
 
   let open = false;
   /** What the card shows, so that it only builds again once that changed, and at which zoom, as sizes go by it. */
   let built = "";
   let filledAt: number | undefined;
+  /** While a field's text is saved, as the focus moves on, under which the card must not build again. */
+  let saving = false;
   /** With whether the alignment it holds is only the one its holder takes by default. */
   let copied: { style: Style; natural: boolean } | undefined;
 
@@ -176,6 +215,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       .filter((id) => among(board, id, chosen) && board.elements[id]!.kind.type !== "group")
       .map((id) => ({ id, kind: board.elements[id]!.kind }));
   };
+  const alone = () => loneImage(host.current()?.board, host.selection());
   /** Of the targets, those that have a style, which images and comments lack. */
   const styled = () => targets().filter(({ kind }) => settings(kind).length > 0);
   const common = (): Setting[] => {
@@ -264,7 +304,8 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     if (pressed !== undefined) {
       made.setAttribute("aria-pressed", String(pressed));
     }
-    host.explain(made, () => explained);
+    // As the title stands then, which an Open button's address changes in place.
+    host.explain(made, () => made.title);
     made.addEventListener("click", (event) => {
       press(event);
       // Back to the board, as the toolbar's buttons give it back, unless the keys pressed it, even
@@ -395,7 +436,78 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
         ),
       );
     }
+    const lone = alone();
+    if (lone) {
+      rows.push(info(lone.id, lone.image));
+    }
     return rows;
+  };
+  const info = (id: string, image: Image) => {
+    const made = document.createElement("div");
+    made.className = "info";
+    made.setAttribute("role", "group");
+    made.setAttribute("aria-label", "Info");
+    // So that another image builds the card again, whose fields are its own.
+    made.dataset.element = id;
+    const { width, height } = image.natural_size;
+    const shown = Math.round(unitsPerPixel(image) * 100);
+    const facts = document.createElement("p");
+    facts.className = "facts";
+    facts.textContent = [image.filename, `${width} × ${height}`, `${shown}%`]
+      .filter(Boolean)
+      .join(" · ");
+    facts.title = `${width} by ${height} pixels, laid out at ${shown}% of their size`;
+    const source = field(id, "source", "Source");
+    const opener = button("Open source", icon("external"), () => commands.openSource.run(), {
+      shortcut: commands.openSource.keys?.[0],
+    });
+    opener.classList.add("opens");
+    source.append(opener);
+    made.append(facts, field(id, "caption", "Caption"), source);
+    return made;
+  };
+  /** Its text is set in place, which leaves a field being written in, or pressed out of, alone. */
+  const field = (id: string, name: "caption" | "source", placeholder: string) => {
+    const line = document.createElement("div");
+    line.className = "field";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.name = name;
+    input.placeholder = placeholder;
+    input.setAttribute("aria-label", placeholder);
+    input.maxLength = MOST_LABEL;
+    const written = () => {
+      const kind = host.current()?.board.elements[id]?.kind;
+      return kind?.type === "image" ? (kind[name] ?? "") : "";
+    };
+    input.addEventListener("keydown", (event) => {
+      // 229 is what a key composing text, such as an accent, reports in some browsers.
+      if (event.isComposing || event.keyCode === 229) {
+        return;
+      }
+      if (event.key === "Escape") {
+        input.value = written();
+      }
+      if (event.key === "Enter" || event.key === "Escape") {
+        input.blur();
+      }
+    });
+    input.addEventListener("change", () => {
+      const kind = host.current()?.board.elements[id]?.kind;
+      if (kind?.type !== "image" || input.value === written()) {
+        return;
+      }
+      const next = { ...kind };
+      setLabel(next, name, input.value);
+      saving = true;
+      try {
+        edit((editor, touched) => touched.push(...editor.update(id, JSON.stringify(next))));
+      } finally {
+        saving = false;
+      }
+    });
+    line.append(input);
+    return line;
   };
   /** The palette over the colours picked lately, column by column, and the pipette over a colour of one's own. */
   const colours = () => {
@@ -479,21 +591,52 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     filledAt = host.zoom();
     const rows = build();
     const signature = rows.map((made) => made.outerHTML).join("");
-    if (signature === built) {
-      return;
+    // Not under a field being written in, which would lose what it holds, until it is left.
+    const active = document.activeElement;
+    const writing = active instanceof HTMLInputElement && panel.contains(active.closest(".info"));
+    if (signature !== built && !writing && !saving) {
+      rebuild(rows, signature);
     }
-    const focused = panel.contains(document.activeElement)
-      ? document.activeElement?.getAttribute("aria-label")
-      : null;
+    sync();
+  };
+  const rebuild = (rows: HTMLElement[], signature: string) => {
+    const focused = panel.contains(document.activeElement) ? document.activeElement : null;
+    const label = focused?.getAttribute("aria-label");
+    const holder = focused?.closest<HTMLElement>(".info")?.dataset.element;
     // Gone without the pointer leaving them, they would leave their hint behind.
     panel
       .querySelectorAll("button, .custom")
       .forEach((old) => old.dispatchEvent(new PointerEvent("pointerleave")));
     built = signature;
     panel.replaceChildren(...rows.flatMap((made, at) => (at > 0 ? [rule(), made] : [made])));
-    if (focused) {
-      const again = [...panel.querySelectorAll<HTMLElement>("[aria-label]")];
-      again.find((element) => element.getAttribute("aria-label") === focused)?.focus();
+    sync();
+    const again = [...panel.querySelectorAll<HTMLElement>("[aria-label]")].find(
+      (element) => element.getAttribute("aria-label") === label,
+    );
+    // Not into another image's field, which would take what was being written for this one.
+    if (label && again?.closest<HTMLElement>(".info")?.dataset.element === holder) {
+      again?.focus();
+    }
+  };
+  /** The lone image's fields and its Open button, as the board now has them. */
+  const sync = () => {
+    // The image its fields are for, which a field written in holds while the selection moves on.
+    const id = panel.querySelector<HTMLElement>(".info")?.dataset.element;
+    const kind = id === undefined ? undefined : host.current()?.board.elements[id]?.kind;
+    const image = kind?.type === "image" ? kind : undefined;
+    panel.querySelectorAll<HTMLInputElement>(".info input").forEach((input) => {
+      if (input !== document.activeElement && image) {
+        input.value = image[input.name as "caption" | "source"] ?? "";
+      }
+    });
+    const opener = panel.querySelector<HTMLButtonElement>(".info .opens");
+    const address = webAddress(image?.source);
+    if (opener) {
+      opener.hidden = address === undefined;
+      const shortcut = commands.openSource.keys?.[0];
+      const name = address ? `Open ${new URL(address).host}` : "Open source";
+      opener.setAttribute("aria-label", name);
+      opener.title = shortcut ? `${name} · ${describe(shortcut)}` : name;
     }
   };
   const visible = () => targets().length > 0 && (common().length > 0 || images()) && !host.busy();

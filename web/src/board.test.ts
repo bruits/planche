@@ -12,6 +12,7 @@ import {
   reader,
   readAsset,
   row,
+  webAddress,
 } from "./board.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Kind } from "./core.js";
@@ -296,5 +297,20 @@ describe("reader", () => {
     expect(await saver.flush()).toBe(true);
     expect(await opened.folder.list(3)).not.toContain(`assets/${assets[0]}`);
     await saver.stop();
+  });
+});
+
+describe("webAddress", () => {
+  it.each([
+    ["https://example.com/cat.png", "https://example.com/cat.png"],
+    ["  HTTP://Example.com/a b  ", "http://example.com/a%20b"],
+    ["javascript:alert(1)", undefined],
+    ["file:///Applications/Calculator.app", undefined],
+    ["data:image/png;base64,AAAA", undefined],
+    ["//example.com/cat.png", undefined],
+    ["a cat on a mat", undefined],
+    [undefined, undefined],
+  ])("opens %s as %s", (text, address) => {
+    expect(webAddress(text)).toBe(address);
   });
 });

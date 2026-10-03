@@ -154,6 +154,9 @@ export function tauri({ core, event }: TauriApi): Platform {
     // The dialog plugin replaces the webview's own `confirm` with one that fails.
     confirm: (question, choices) => core.invoke<boolean>("confirm", { question, choices }),
 
+    // The webview opens no window of its own.
+    openAddress: (address) => core.invoke("open_address", { address }),
+
     markUnsaved(value) {
       unsaved = value;
       void core.invoke("mark_unsaved", { value });

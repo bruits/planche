@@ -128,6 +128,8 @@ export interface Platform {
   forget(): Promise<void>;
   /** `choices` name the answers, yes then no, where the host lets them. */
   confirm(question: string, choices?: [string, string]): Promise<boolean>;
+  /** In the system's browser, or a new tab, right after a click or a key, an http or https address. */
+  openAddress(address: string): Promise<void>;
   /** Whether the board holds changes not yet safe on disk, so that closing the app asks first. */
   markUnsaved(unsaved: boolean): void;
   /**

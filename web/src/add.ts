@@ -1,6 +1,7 @@
 // Images brought in by picking them, dropping them on the viewport, or pasting them: files, or
 // images from a web page, which may give only their address.
 
+import { MOST_LABEL, webAddress } from "./board.js";
 import { choose } from "./browser.js";
 import type { Point } from "./core.js";
 import { platform } from "./platform.js";
@@ -8,10 +9,10 @@ import type { View } from "./view.js";
 
 /**
  * An image to add, still encoded, or why it cannot be. `name` tells the user which one failed,
- * `filename` names the file it was picked or dropped as.
+ * `filename` names the file it was picked or dropped as, and `source` the web address it came from.
  */
 export type Incoming =
-  | { name: string; filename?: string | undefined; bytes: Blob }
+  | { name: string; filename?: string | undefined; source?: string | undefined; bytes: Blob }
   | { name: string; failure: string };
 
 /**
@@ -71,7 +72,10 @@ async function gather(transfer: DataTransfer, dropped: boolean): Promise<Incomin
   const address = source(transfer);
   if (files.length > 0) {
     const named = dropped && address === undefined;
-    return files.map((file) => (named ? fromFile(file) : { name: file.name, bytes: file }));
+    const from = recorded(address);
+    return files.map((file) =>
+      named ? fromFile(file) : { name: file.name, source: from, bytes: file },
+    );
   }
   return address === undefined ? [] : [await download(address)];
 }
@@ -105,10 +109,25 @@ async function download(address: string): Promise<Incoming> {
     if (!response.ok) {
       throw new Error(response.statusText);
     }
-    return { name, bytes: await response.blob() };
+    return { name, source: recorded(address), bytes: await response.blob() };
   } catch {
     return { name, failure: "it could not be downloaded: save the image, or copy it instead" };
   }
+}
+
+/**
+ * As a web address an image came from is kept, without the credentials it may hold, which say too
+ * much as a path would of a disk.
+ */
+function recorded(address: string | undefined): string | undefined {
+  const href = webAddress(address);
+  if (href === undefined) {
+    return undefined;
+  }
+  const url = new URL(href);
+  url.username = "";
+  url.password = "";
+  return url.href.length > MOST_LABEL ? undefined : url.href;
 }
 
 /** By hand, since the desktop app's policy lets it fetch nothing but its own files. */

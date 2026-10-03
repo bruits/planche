@@ -20,6 +20,9 @@ mcp.workspace = true
 percent-encoding = "2"
 tauri = "2"
 tauri-plugin-dialog = "2"
+# Opens an image's source in the system's browser, which the webview cannot. Tauri's own opener
+# plugin wraps it, with D-Bus and an async runtime besides.
+open = "5"
 
 [build-dependencies]
 tauri-build = "2"

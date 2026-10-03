@@ -30,6 +30,7 @@ import {
   files,
   holdsImage,
   imageKind,
+  loneImage,
   placed,
   pool,
   prepare,
@@ -38,6 +39,7 @@ import {
   refresh,
   release,
   renamed,
+  webAddress,
   row,
   type Added,
   type Decoded,
@@ -319,6 +321,7 @@ const selectedKinds = (): Kind[] => {
     : [];
 };
 const selectedImages = () => selectedKinds().filter((kind) => kind.type === "image");
+const selectedImage = () => loneImage(opened?.board, editing.selection())?.image;
 const greyed = () => {
   const images = selectedImages();
   return images.length > 0 && images.every((kind) => kind.edits.greyscale);
@@ -619,11 +622,7 @@ const commands = {
   crop: {
     label: "Crop",
     keys: [{ key: "enter" }],
-    unavailable: () => {
-      const selection = editing.selection();
-      const kind = selection.length === 1 ? opened?.board.elements[selection[0]!]?.kind : undefined;
-      return kind?.type === "image" ? undefined : "Select one image";
-    },
+    unavailable: () => (selectedImage() ? undefined : "Select one image"),
     run: () => editing.crop(),
   },
   resetCrop: {
@@ -676,6 +675,23 @@ const commands = {
       const assets = selectedAssets().filter(films.holds);
       films.sound(assets, !assets.some(films.sounding));
       refreshBar();
+    },
+  },
+  openSource: {
+    label: "Open source",
+    keys: [{ key: "o", command: true, shift: true }],
+    unavailable: () => {
+      const image = selectedImage();
+      if (image === undefined) {
+        return "Select one image";
+      }
+      return webAddress(image.source) === undefined ? "Its source is no web address" : undefined;
+    },
+    run: () => {
+      const address = webAddress(selectedImage()?.source);
+      if (address !== undefined) {
+        report(platform.openAddress(address));
+      }
     },
   },
   group: {
@@ -940,6 +956,7 @@ const styleCard = card(
     crop: commands.crop,
     rectangularCrop: commands.rectangularCrop,
     ellipticalCrop: commands.ellipticalCrop,
+    openSource: commands.openSource,
     open: commands.style,
   },
 );
@@ -1444,7 +1461,7 @@ function hint(): string {
   if (editing.selection().length > 0) {
     const crops =
       commands.crop.unavailable() === undefined ? `double-click or ${insideKey} to crop · ` : "";
-    const keys = [commands.resetCrop, commands.play, commands.sound]
+    const keys = [commands.resetCrop, commands.play, commands.sound, commands.openSource]
       .filter((command) => command.unavailable() === undefined)
       .map((command) => `${describe(command.keys[0]!)} to ${named(command).toLowerCase()} · `);
     return `Drag to move, holding ${centreKey} to copy · corners scale · turn from outside a corner · ${crops}${keys.join("")}${styling}right-click for more`;
@@ -1517,6 +1534,7 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         "separator",
         commands.play,
         commands.sound,
+        commands.openSource,
         "separator",
         commands.remove,
       ]
@@ -1779,6 +1797,7 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
         const one: Added = {
           ...(await prepare(image.bytes, LONGEST_SIDE, heldSize)),
           filename: image.filename,
+          source: image.source,
         };
         loadAtOnce(one, target, into);
         prepared[index] = one;
@@ -1806,12 +1825,12 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
     // Into the group gone into, where they stay selected.
     const group = editing.entered();
     editing.apply((editor, touched) =>
-      added.forEach(({ asset, natural, filename }, index) => {
+      added.forEach(({ asset, natural, filename, source }, index) => {
         touched.push(
           ...editor.add(
             ids[index]!,
             group,
-            JSON.stringify(imageKind(asset, natural, frames[index]!, { filename })),
+            JSON.stringify(imageKind(asset, natural, frames[index]!, { filename, source })),
           ),
         );
       }),

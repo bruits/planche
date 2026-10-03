@@ -110,6 +110,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             confirm,
+            open_address,
             mark_unsaved,
             close_window,
             keep_window,
@@ -324,6 +325,17 @@ fn confirm(window: Window, question: String, choices: Option<(String, String)>) 
         None => dialog,
     }
     .blocking_show()
+}
+
+/// Only an http or https address, as agents and boards from elsewhere write what the page asks to
+/// open, which might otherwise launch an app.
+#[tauri::command]
+fn open_address(address: String) -> Result<(), String> {
+    let url = tauri::Url::parse(&address).map_err(|error| error.to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!("{address} is not a web address"));
+    }
+    open::that_detached(url.as_str()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

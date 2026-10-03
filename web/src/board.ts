@@ -37,7 +37,13 @@ export interface Added {
   /** Typed, to play from. */
   video?: Blob;
   filename?: string | undefined;
+  source?: string | undefined;
 }
+
+export type Image = Extract<Kind, { type: "image" }>;
+
+/** As long as agents may write a caption or a source, which crates/mcp holds them to. */
+export const MOST_LABEL = 2000;
 
 /** An asset that images show, still encoded. */
 export interface Asset {
@@ -229,6 +235,33 @@ function hex(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export function webAddress(text: string | undefined): string | undefined {
+  // Whatever an agent or a board from elsewhere wrote, which may launch an app as a file would.
+  try {
+    const url = new URL(text?.trim() ?? "");
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function loneImage(
+  board: Board | undefined,
+  ids: string[],
+): { id: string; image: Image } | undefined {
+  const [id] = ids;
+  const kind = ids.length === 1 ? board?.elements[id!]?.kind : undefined;
+  return kind?.type === "image" ? { id: id!, image: kind } : undefined;
+}
+
+export function setLabel(kind: Image, field: "caption" | "source", text: string): void {
+  if (text.trim()) {
+    kind[field] = text;
+  } else {
+    delete kind[field];
+  }
+}
+
 export function imageKind(
   asset: string,
   natural: Size,
@@ -381,7 +414,7 @@ export function placed(
   });
 }
 
-function image(kind: Extract<Kind, { type: "image" }>): Placed {
+function image(kind: Image): Placed {
   const { width, height } = kind.natural_size;
   const { crop, flip_horizontal, flip_vertical, greyscale, crop_shape } = kind.edits;
   const shown = crop ?? { x: 0, y: 0, width, height };

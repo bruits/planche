@@ -153,6 +153,10 @@ export const browser: Platform = {
 
   confirm: async (question) => window.confirm(question),
 
+  async openAddress(address) {
+    window.open(address, "_blank", "noopener,noreferrer");
+  },
+
   markUnsaved(value) {
     unsaved = value;
   },
