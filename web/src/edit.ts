@@ -27,6 +27,8 @@
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
 import type {
+  Alignment,
+  Axis,
   Background,
   Board,
   Copied,
@@ -214,6 +216,8 @@ export interface Edits {
   arrange(order: Order): void;
   /** The images among the selection. */
   normalize(side: Side): void;
+  align(to: Alignment): void;
+  distribute(axis: Axis): void;
   background(to: Background): void;
   restack(to: Restack): void;
   /** Into a new group named `id`, which it selects. */
@@ -1593,6 +1597,9 @@ export function edits(
     arrange: (order) =>
       run((editing, ids) => edit(editing, core.arrange(editing.editor, ids, order))),
     normalize: (side) => run((editing, ids) => edit(editing, editing.editor.normalize(ids, side))),
+    align: (to) => run((editing, ids) => edit(editing, editing.editor.align(ids, to))),
+    distribute: (axis) =>
+      run((editing, ids) => edit(editing, editing.editor.distribute(ids, axis))),
     restack: (to) => run((editing, ids) => edit(editing, editing.editor.restack(ids, to))),
     background: (to) =>
       run((editing) => {

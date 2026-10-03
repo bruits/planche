@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use ts_rs::{Config, TS, TypeVisitor};
 
 use crate::{
-    BoardView, Copied, Element, ElementKind, End, Media, Order, Restack, Setting, Side, Style,
-    Transform,
+    Alignment, Axis, BoardView, Copied, Element, ElementKind, End, Media, Order, Restack, Setting,
+    Side, Style, Transform,
 };
 
 /// Each type the web app reads or writes, and those they hold, exported, in the order of their
@@ -18,6 +18,8 @@ pub fn typescript() -> String {
         config: &config,
         declared: BTreeMap::new(),
     };
+    found.visit::<Alignment>();
+    found.visit::<Axis>();
     found.visit::<BoardView>();
     found.visit::<Copied>();
     found.visit::<Element>();
@@ -74,6 +76,8 @@ mod tests {
     fn each_type_the_web_app_takes_is_declared_once_and_alike_every_time() {
         assert_eq!(typescript(), typescript());
         for name in [
+            "Alignment",
+            "Axis",
             "Board",
             "Copied",
             "Element",

@@ -9,6 +9,7 @@ use std::mem;
 
 use serde::Deserialize;
 
+use crate::align::{Alignment, Axis, alignment, distribution};
 use crate::arrange::{Order, Side, arrangement, normalization};
 use crate::crop::cropped;
 use crate::grid::settled;
@@ -35,9 +36,9 @@ pub enum Restack {
 #[serde(default, deny_unknown_fields)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Transform {
-    /// Of the images among the elements, each in its place.
+    /// Of the images among the elements, each in its place, `horizontal` swapping left and right.
     #[cfg_attr(feature = "ts", ts(optional))]
-    pub flip: Option<Flip>,
+    pub flip: Option<Axis>,
     #[cfg_attr(feature = "ts", ts(optional))]
     pub scale: Option<Scaling>,
     /// Clockwise, in degrees.
@@ -54,14 +55,6 @@ pub struct Transform {
     /// Unless given, what moved, scaled, or turned lands where it is, and the rest stays.
     #[cfg_attr(feature = "ts", ts(optional))]
     pub sticking: Option<Sticking>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub enum Flip {
-    Horizontal,
-    Vertical,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -297,7 +290,8 @@ impl Editor {
             id,
             self.change(id, |element| Some(Element { kind, ..element })),
         )]);
-        self.carry(&mut step, moved.into_iter().collect());
+        let unmoved = changed(&step);
+        self.carry(&mut step, moved.into_iter().collect(), &unmoved);
         self.record(step)
     }
 
@@ -372,7 +366,7 @@ impl Editor {
         let sticking = sticking.or(moved.then_some(Sticking::Land));
         self.composed(|editor| {
             if let Some(flip) = flip {
-                editor.flip(ids, flip == Flip::Horizontal)?;
+                editor.flip(ids, flip == Axis::Horizontal)?;
             }
             if let (Some(factor), Some(pivot)) = (factor, pivot) {
                 editor.scale(ids, pivot, factor)?;
@@ -431,6 +425,20 @@ impl Editor {
             self.get(*id)?;
         }
         self.replace(normalization(&self.board, ids, side))
+    }
+
+    /// Lines the elements among `ids` up on a side or the middle of their extent, each whole with
+    /// what its groups hold, and sets them down where they land. One stuck to what another of them
+    /// moves follows it instead.
+    pub fn align(&mut self, ids: &[ElementId], to: Alignment) -> Result<Vec<ElementId>> {
+        let movers = self.movers(ids)?;
+        self.move_each(alignment(&self.board, &movers, to))
+    }
+
+    /// As [`Editor::align`] does, with the gaps between three or more elements made alike.
+    pub fn distribute(&mut self, ids: &[ElementId], axis: Axis) -> Result<Vec<ElementId>> {
+        let movers = self.movers(ids)?;
+        self.move_each(distribution(&self.board, &movers, axis))
     }
 
     /// Shows only `area` of the image, in its pixels as displayed.
@@ -952,35 +960,136 @@ impl Editor {
         self.record(step)
     }
 
+    /// The outermost of `ids`, but for those stuck to what another of them holds, which follow it,
+    /// as a group does all of whose elements are.
+    fn movers(&self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        let chosen = self.with_descendants(ids)?;
+        let outermost: Vec<ElementId> = chosen
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.board.elements[id]
+                    .group
+                    .is_none_or(|group| !chosen.contains(&group))
+            })
+            .collect();
+        let holders: BTreeMap<ElementId, ElementId> = outermost
+            .iter()
+            .flat_map(|unit| {
+                let held = self.board.with_descendants(&[*unit]);
+                held.into_iter().map(move |id| (id, *unit))
+            })
+            .collect();
+        let rides = |unit: &ElementId| {
+            self.board.with_descendants(&[*unit]).iter().all(|id| {
+                let kind = &self.board.elements[id].kind;
+                matches!(kind, ElementKind::Group)
+                    || kind
+                        .targets()
+                        .any(|target| holders.get(&target).is_some_and(|holder| holder != unit))
+            })
+        };
+        Ok(outermost.into_iter().filter(|unit| !rides(unit)).collect())
+    }
+
+    /// Each element by its own amount, with what its groups hold, set down where it lands, as one
+    /// edit.
+    fn move_each(&mut self, moves: Vec<(ElementId, Point)>) -> Result<Vec<ElementId>> {
+        let still = |by: &Point| by.x == 0.0 && by.y == 0.0;
+        if moves.iter().all(|(_, by)| still(by)) {
+            return Ok(Vec::new());
+        }
+        let moving: Vec<ElementId> = moves
+            .iter()
+            .filter(|(_, by)| !still(by))
+            .map(|(id, _)| *id)
+            .collect();
+        let by: BTreeMap<ElementId, Point> = moves
+            .into_iter()
+            .flat_map(|(unit, by)| {
+                let held = self.board.with_descendants(&[unit]);
+                held.into_iter().map(move |id| (id, by))
+            })
+            .collect();
+        // What stays sets down again only where what it sticks to went from under it.
+        let resting: Vec<(ElementId, ElementId, ElementKind)> = by
+            .iter()
+            .filter(|(_, by)| still(by))
+            .filter_map(|(id, _)| {
+                let target = self.board.elements[id].kind.target()?;
+                Some((*id, target, self.board.elements.get(&target)?.kind.clone()))
+            })
+            .collect();
+        let ids: Vec<ElementId> = by.keys().copied().collect();
+        self.composed(|editor| {
+            // What each unit holds goes with it, by nothing too, so that no other unit carries it.
+            let held = by.keys().copied().collect();
+            editor.reshape_each(
+                &ids,
+                |id, kind| shift(kind, by[&id].x, by[&id].y),
+                |id, target| by.get(&id) == by.get(&target),
+                &held,
+            )?;
+            let left = resting.into_iter().filter(|(_, target, was)| {
+                let now = editor.board.elements.get(target);
+                now.is_none_or(|element| element.kind != *was)
+            });
+            let landing: Vec<ElementId> =
+                moving.into_iter().chain(left.map(|(id, ..)| id)).collect();
+            editor.land(&landing)?;
+            Ok(())
+        })
+    }
+
     fn reshape(
         &mut self,
         ids: &[ElementId],
         edit: impl Fn(&mut ElementKind),
     ) -> Result<Vec<ElementId>> {
+        self.reshape_each(ids, |_, kind| edit(kind), |_, _| true, &BTreeSet::new())
+    }
+
+    /// As [`Editor::reshape`] does, with `alike` as [`Editor::free_ends_moved_off`] takes it, and
+    /// `placed` kept where the edit leaves them, though it changes nothing of theirs.
+    fn reshape_each(
+        &mut self,
+        ids: &[ElementId],
+        edit: impl Fn(ElementId, &mut ElementKind),
+        alike: impl Fn(ElementId, ElementId) -> bool,
+        placed: &BTreeSet<ElementId>,
+    ) -> Result<Vec<ElementId>> {
         let mut step = Changes::new();
         for id in self.with_descendants(ids)? {
             let change = self.change(id, |mut element| {
-                edit(&mut element.kind);
+                edit(id, &mut element.kind);
                 Some(element)
             });
             check_valid(id, &change.after.as_ref().expect("reshaped").kind)?;
             step.insert(id, change);
         }
-        let reshaped = changed(&step);
-        self.follow(&mut step);
-        self.free_ends_moved_off(&mut step, &reshaped);
+        let mut reshaped = changed(&step);
+        reshaped.extend(placed);
+        let moved = motions(&step).collect();
+        self.carry(&mut step, moved, &reshaped);
+        self.free_ends_moved_off(&mut step, &reshaped, alike);
         self.record(step)
     }
 
     /// Leaves out what the step changes itself, which moved alike, and follows what sticks to
     /// those that follow, and so on.
     fn follow(&self, step: &mut Changes) {
-        self.carry(step, motions(step).collect());
+        let unmoved = changed(step);
+        self.carry(step, motions(step).collect(), &unmoved);
     }
 
-    /// As `follow` does, with what the step changes moving as `moved` has it.
-    fn carry(&self, step: &mut Changes, mut moved: BTreeMap<ElementId, Motion>) {
-        let unmoved = changed(step);
+    /// As `follow` does, with what the step changes moving as `moved` has it, and `unmoved` left
+    /// as the step has it.
+    fn carry(
+        &self,
+        step: &mut Changes,
+        mut moved: BTreeMap<ElementId, Motion>,
+        unmoved: &BTreeSet<ElementId>,
+    ) {
         let mut seen: BTreeSet<ElementId> = moved.keys().copied().collect();
         while !moved.is_empty() {
             let mut next = BTreeMap::new();
@@ -1009,25 +1118,43 @@ impl Editor {
         }
     }
 
-    fn free_ends_moved_off(&self, step: &mut Changes, reshaped: &BTreeSet<ElementId>) {
+    /// `alike` tells whether an element and the target of one of its ends moved by the same
+    /// amount, which keeps the end on it.
+    fn free_ends_moved_off(
+        &self,
+        step: &mut Changes,
+        reshaped: &BTreeSet<ElementId>,
+        alike: impl Fn(ElementId, ElementId) -> bool,
+    ) {
         let moved: BTreeSet<ElementId> = motions(step).map(|(id, _)| id).collect();
-        for (id, change) in step.iter_mut() {
-            if !reshaped.contains(id) {
-                continue;
-            }
-            let ends = change
-                .after
-                .as_mut()
+        let freed: Vec<(ElementId, usize)> = step
+            .iter()
+            .filter(|(id, _)| reshaped.contains(id))
+            .flat_map(|(id, change)| {
+                let ends = change.after.as_ref().and_then(|after| after.kind.ends());
+                ends.into_iter()
+                    .flatten()
+                    .enumerate()
+                    .filter_map(|(at, (point, target))| {
+                        let target = target?;
+                        let lies = step
+                            .get(&target)
+                            .and_then(|change| change.after.as_ref())
+                            .or_else(|| self.board.elements.get(&target));
+                        let stays = (moved.contains(&target) && alike(*id, target))
+                            || lies.is_some_and(|element| lands_on(&element.kind, point));
+                        (!stays).then_some((*id, at))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for (id, at) in freed {
+            let ends = step
+                .get_mut(&id)
+                .and_then(|change| change.after.as_mut())
                 .and_then(|after| after.kind.ends_mut());
-            for (point, target) in ends.into_iter().flatten() {
-                target.take_if(|target| {
-                    !moved.contains(target)
-                        && !self
-                            .board
-                            .elements
-                            .get(target)
-                            .is_some_and(|element| lands_on(&element.kind, *point))
-                });
+            if let Some(ends) = ends {
+                *ends[at].1 = None;
             }
         }
     }
@@ -2983,7 +3110,7 @@ mod tests {
         let target = |editor: &Editor, bits| editor.board().elements[&id(bits)].kind.target();
         // A flip moves nothing, so sets nothing down.
         let flip = Transform {
-            flip: Some(Flip::Horizontal),
+            flip: Some(Axis::Horizontal),
             ..Transform::default()
         };
         editor.transform(&ids([1, 3]), &flip).unwrap();

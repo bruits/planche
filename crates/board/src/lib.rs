@@ -4,6 +4,7 @@
 //! Board space has y pointing down. A [`Rect`] is placed by its top-left corner before
 //! rotation, and an element with a frame rotates clockwise, in degrees, around its centre.
 
+mod align;
 mod animation;
 mod arrange;
 mod copy;
@@ -27,10 +28,11 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
+pub use align::{Alignment, Axis};
 pub use animation::frame_delay;
 pub use arrange::{Order, Side};
 pub use copy::Copied;
-pub use edit::{Editor, Flip, Placement, Restack, Scaling, Sticking, Transform};
+pub use edit::{Editor, Placement, Restack, Scaling, Sticking, Transform};
 pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
 pub use media::{MEDIA_START, Media, media};
 pub use stick::End;

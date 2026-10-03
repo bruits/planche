@@ -358,8 +358,8 @@ pub struct Update {
 pub struct TransformArguments {
     #[schemars(length(min = 1, max = MOST_IDS))]
     pub ids: Vec<String>,
-    /// Images only.
-    pub flip: Option<Flip>,
+    /// Images only, `horizontal` swapping left and right.
+    pub flip: Option<Axis>,
     /// A factor, about `about`.
     pub scale: Option<f64>,
     /// In board units, which the elements together scale to, about `about`.
@@ -380,7 +380,7 @@ pub struct TransformArguments {
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
-pub enum Flip {
+pub enum Axis {
     Horizontal,
     Vertical,
 }
@@ -403,6 +403,38 @@ pub enum Restack {
     Forward,
     Backward,
     Back,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+pub struct AlignArguments {
+    #[schemars(length(min = 2, max = MOST_IDS))]
+    pub ids: Vec<String>,
+    /// The side, or the middle, of their extent they line up on.
+    pub to: Alignment,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+pub enum Alignment {
+    Left,
+    Centre,
+    Right,
+    Top,
+    Middle,
+    Bottom,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+pub struct DistributeArguments {
+    #[schemars(length(min = 3, max = MOST_IDS))]
+    pub ids: Vec<String>,
+    pub axis: Axis,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -588,6 +620,8 @@ mod tests {
         found.visit::<UpdateArguments>();
         found.visit::<TransformArguments>();
         found.visit::<RestackArguments>();
+        found.visit::<AlignArguments>();
+        found.visit::<DistributeArguments>();
         found.visit::<SelectArguments>();
         found.visit::<Ids>();
         let mut written = String::from(

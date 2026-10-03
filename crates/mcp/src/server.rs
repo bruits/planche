@@ -15,8 +15,9 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 use crate::changes::{
-    AddArguments, AddImagesArguments, Ids, MOST_IDS, MOST_IMAGES, RestackArguments,
-    SelectArguments, TransformArguments, UpdateArguments, read_images, refused, without_nulls,
+    AddArguments, AddImagesArguments, AlignArguments, DistributeArguments, Ids, MOST_IDS,
+    MOST_IMAGES, RestackArguments, SelectArguments, TransformArguments, UpdateArguments,
+    read_images, refused, without_nulls,
 };
 use crate::discovery::MOST_LINE;
 
@@ -263,6 +264,35 @@ impl<R: Relay> Server<R> {
         Parameters(arguments): Parameters<RestackArguments>,
     ) -> Result<CallToolResult, ErrorData> {
         Ok(self.change("restack", json!(arguments)).await)
+    }
+
+    /// Lines elements up on a side or the middle of their extent, each whole with its groups'
+    /// elements. What sticks to another of them follows it.
+    #[tool(annotations(
+        read_only_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
+    async fn align(
+        &self,
+        Parameters(arguments): Parameters<AlignArguments>,
+    ) -> Result<CallToolResult, ErrorData> {
+        Ok(self.change("align", json!(arguments)).await)
+    }
+
+    /// Spaces three elements or more across or down, the first and last staying, so that the
+    /// gaps between them come alike, or their middles where they are too wide for gaps. Each
+    /// moves whole with its groups' elements, and what sticks to another of them follows it.
+    #[tool(annotations(
+        read_only_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
+    async fn distribute(
+        &self,
+        Parameters(arguments): Parameters<DistributeArguments>,
+    ) -> Result<CallToolResult, ErrorData> {
+        Ok(self.change("distribute", json!(arguments)).await)
     }
 
     /// Groups two elements or more of the same group, and gives the new group's id.

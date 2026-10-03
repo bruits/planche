@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use board::{
-    AssetId, Board, Colour, Copied, ElementId, ElementKind, GRID_STEP, GridLevel, Order, Point,
-    Rect, Restack, Side, Size, Style, Transform, Weight,
+    Alignment, AssetId, Axis, Board, Colour, Copied, ElementId, ElementKind, GRID_STEP, GridLevel,
+    Order, Point, Rect, Restack, Side, Size, Style, Transform, Weight,
 };
 use format::{save, zip};
 use js_sys::{Map, Uint8Array};
@@ -174,6 +174,18 @@ impl Editor {
     pub fn normalize(&mut self, ids: Vec<String>, side: String) -> Result<Vec<String>, JsError> {
         let side: Side = serde_json::from_value(side.into())?;
         Ok(strings(self.0.normalize(&parse(ids)?, side)?))
+    }
+
+    /// `to` is `left`, `centre`, `right`, `top`, `middle`, or `bottom`.
+    pub fn align(&mut self, ids: Vec<String>, to: String) -> Result<Vec<String>, JsError> {
+        let to: Alignment = serde_json::from_value(to.into())?;
+        Ok(strings(self.0.align(&parse(ids)?, to)?))
+    }
+
+    /// `axis` is `horizontal` or `vertical`.
+    pub fn distribute(&mut self, ids: Vec<String>, axis: String) -> Result<Vec<String>, JsError> {
+        let axis: Axis = serde_json::from_value(axis.into())?;
+        Ok(strings(self.0.distribute(&parse(ids)?, axis)?))
     }
 
     /// In the image's pixels, as displayed.

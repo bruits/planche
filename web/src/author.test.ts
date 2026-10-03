@@ -142,6 +142,34 @@ describe("write", () => {
     expect(opened.editor.json()).toBe(before);
   });
 
+  it("lines up and spaces what an agent names, each as one edit", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const pins = [
+      { type: "comment", at: { x: 0, y: 0 }, text: "One" },
+      { type: "comment", at: { x: 30, y: 50 }, text: "Two" },
+      { type: "comment", at: { x: 100, y: 20 }, text: "Three" },
+    ];
+    const { added } = (await write("add", { elements: pins }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const ids = added.map(({ id }) => id);
+    const pinned = () =>
+      ids.map((id) => {
+        const kind = core.element(opened.editor, id)?.kind;
+        return kind?.type === "comment" ? kind.at : undefined;
+      });
+    await write("align", { ids, to: "top" }, writing, later());
+    await write("distribute", { ids, axis: "horizontal" }, writing, later());
+    expect(pinned()).toEqual([
+      { x: 0, y: 0 },
+      { x: 50, y: 0 },
+      { x: 100, y: 0 },
+    ]);
+    opened.editor.undo();
+    expect(pinned()[1]).toEqual({ x: 30, y: 0 });
+  });
+
   it("refuses a transform that cannot be made, which changes nothing", async () => {
     const opened = untitled();
     const { writing } = page(opened);

@@ -144,6 +144,18 @@ describe("edits", () => {
     expect(Object.keys(opened.board.elements)).toEqual([STICKY]);
   });
 
+  it("aligns the selection, and undoes it in one step", () => {
+    const other = "b".repeat(32);
+    const { opened, editing } = page([
+      [other, { ...sticky, frame: { x: 300, y: 40, width: 100, height: 100 } }],
+    ]);
+    editing.select([STICKY, other]);
+    editing.align("top");
+    expect(core.element(opened.editor, other)?.kind).toMatchObject({ frame: { x: 300, y: 0 } });
+    editing.undo();
+    expect(core.element(opened.editor, other)?.kind).toMatchObject({ frame: { x: 300, y: 40 } });
+  });
+
   it("undoes in one step an edit applied from outside, as an agent's", () => {
     const { editing, at } = page();
     editing.apply((editor, touched) => {

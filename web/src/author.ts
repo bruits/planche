@@ -15,7 +15,7 @@ import {
   type Opened,
 } from "./board.js";
 import * as core from "./core.js";
-import type { Editor, Kind, Point, Rect, Restack, Size } from "./core.js";
+import type { Alignment, Axis, Editor, Kind, Point, Rect, Restack, Size } from "./core.js";
 import { FONT_SIZE, NOTE_WIDTH, PLACED_SIZE, STICKY_SIZE } from "./edit.js";
 import { message } from "./errors.js";
 import { LONGEST_SIDE } from "./raster.js";
@@ -80,6 +80,24 @@ export async function write(
       return {
         touched: page.apply((editor, touched) =>
           touched.push(...editor.restack(ids, args.to as Restack)),
+        ),
+      };
+    }
+    case "align": {
+      await ready(page, target, clock);
+      const ids = known(target, args.ids);
+      return {
+        touched: page.apply((editor, touched) =>
+          touched.push(...editor.align(ids, args.to as Alignment)),
+        ),
+      };
+    }
+    case "distribute": {
+      await ready(page, target, clock);
+      const ids = known(target, args.ids);
+      return {
+        touched: page.apply((editor, touched) =>
+          touched.push(...editor.distribute(ids, args.axis as Axis)),
         ),
       };
     }

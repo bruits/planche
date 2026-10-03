@@ -3,6 +3,8 @@
 
 import * as core from "./core.js";
 import type {
+  Alignment,
+  Axis,
   Background,
   Copied,
   CropShape,
@@ -370,6 +372,18 @@ const arrangement = (label: string, order: Ordering): Command => ({
   unavailable: () => (arranging ? "Images are being arranged" : fewImages()),
   run: () => report(arrange(label, order)),
 });
+const alignment = (label: string, to: Alignment, key: string): Command => ({
+  label,
+  keys: [{ key, alt: true }],
+  unavailable: () => (editing.selection().length < 2 ? "Select two elements or more" : undefined),
+  run: () => editing.align(to),
+});
+const distribution = (label: string, axis: Axis, key: string): Command => ({
+  label,
+  keys: [{ key, alt: true, shift: true }],
+  unavailable: () => (editing.selection().length < 3 ? "Select three elements or more" : undefined),
+  run: () => editing.distribute(axis),
+});
 const backdrop = (label: string, background: Background): Command => ({
   label,
   unavailable: noBoard,
@@ -579,6 +593,15 @@ const commands = {
     run: () => editing.normalize("height"),
   },
   sameWidth: { label: "Same width", unavailable: fewImages, run: () => editing.normalize("width") },
+  // Figma's keys.
+  alignLeft: alignment("Left", "left", "a"),
+  alignCentre: alignment("Centre", "centre", "h"),
+  alignRight: alignment("Right", "right", "d"),
+  alignTop: alignment("Top", "top", "w"),
+  alignMiddle: alignment("Middle", "middle", "v"),
+  alignBottom: alignment("Bottom", "bottom", "s"),
+  distributeHorizontally: distribution("Distribute horizontally", "horizontal", "h"),
+  distributeVertically: distribution("Distribute vertically", "vertical", "v"),
   rotateLeft: turn("Rotate left", -90, "l"),
   rotateRight: turn("Rotate right", 90, "r"),
   straighten: {
@@ -1463,6 +1486,18 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
           ]),
           unavailable: fewImages,
         },
+        relevantSubmenu("Align", [
+          commands.alignLeft,
+          commands.alignCentre,
+          commands.alignRight,
+          "separator",
+          commands.alignTop,
+          commands.alignMiddle,
+          commands.alignBottom,
+          "separator",
+          commands.distributeHorizontally,
+          commands.distributeVertically,
+        ]),
         relevantSubmenu("Transform", [
           commands.rotateLeft,
           commands.rotateRight,

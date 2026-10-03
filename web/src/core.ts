@@ -35,6 +35,8 @@ import init, {
 } from "./wasm/bindings.js";
 import type {
   Align,
+  Alignment,
+  Axis,
   Background,
   Board,
   Colour,
@@ -84,6 +86,8 @@ export type Files = Map<string, Bytes>;
 
 export type {
   Align,
+  Alignment,
+  Axis,
   Background,
   Board,
   Colour,

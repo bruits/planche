@@ -12,15 +12,25 @@ export type AddImagesArguments = { images: Array<NewImage>, };
 
 export type Align = "left" | "centre" | "right";
 
+export type AlignArguments = { ids: Array<string>, 
+/**
+ * The side, or the middle, of their extent they line up on.
+ */
+to: Alignment, };
+
+export type Alignment = "left" | "centre" | "right" | "top" | "middle" | "bottom";
+
+export type Axis = "horizontal" | "vertical";
+
 export type Colour = string;
 
 export type CropShape = "rectangle" | "ellipse";
 
 export type Dash = "solid" | "dashed";
 
-export type Fill = "hollow" | "tint" | "solid";
+export type DistributeArguments = { ids: Array<string>, axis: Axis, };
 
-export type Flip = "horizontal" | "vertical";
+export type Fill = "hollow" | "tint" | "solid";
 
 export type Heads = "end" | "both";
 
@@ -126,9 +136,9 @@ export type ShapeKind = "rectangle" | "ellipse" | "cross";
 
 export type TransformArguments = { ids: Array<string>, 
 /**
- * Images only.
+ * Images only, `horizontal` swapping left and right.
  */
-flip?: Flip, 
+flip?: Axis, 
 /**
  * A factor, about `about`.
  */

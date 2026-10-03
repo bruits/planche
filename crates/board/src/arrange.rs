@@ -44,7 +44,7 @@ pub enum Side {
 const GAP: f64 = GRID_SPACING;
 /// How far apart, in board units, two positions count as one, so that arranging again changes
 /// nothing.
-const HAIR: f64 = 1e-6;
+pub(crate) const HAIR: f64 = 1e-6;
 /// How far off 1 a scale may be and count as none, so that sizing alike again changes nothing.
 const ALIKE: f64 = 1e-9;
 /// The chroma, from 0 to 1, below which a colour reads as a grey.
