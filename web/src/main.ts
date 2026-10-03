@@ -18,7 +18,6 @@ import {
   placed,
   pool,
   prepare,
-  readAsset,
   newId,
   refresh,
   release,
@@ -53,10 +52,11 @@ import { testPhotos } from "./photos.js";
 import { pinned, pins } from "./pins.js";
 import { platform } from "./platform.js";
 import { recall, remember } from "./preferences.js";
-import { LONGEST_SIDE, onScreen, shownAssets } from "./raster.js";
+import { LONGEST_SIDE, onScreen } from "./raster.js";
 import { render } from "./render.js";
 import { create, type Renderer } from "./renderer.js";
 import { ACROSS, sampler } from "./sampler.js";
+import { showing } from "./showing.js";
 import { PALETTE, PAPERS, styles } from "./style.js";
 import { loadFont, texts } from "./text.js";
 import { theme, type Scheme } from "./theme.js";
@@ -183,6 +183,75 @@ const life = lifecycle({
     showTitle();
   },
   timings: details,
+});
+
+const present = showing({
+  opened: () => opened,
+  saver: () => life.saver(),
+  camera: () => viewport.camera(),
+  size: () => viewport.size(),
+  say: (...said) => bar.say(...said),
+  reset(next) {
+    // The core's memory holds it until freed.
+    opened?.editor.free();
+    opened = next;
+    renderer = undefined;
+    snapping = next.board.background !== "plain";
+    lettering.reset();
+    drawings.reset();
+    animated.reset();
+    films.reset();
+    crossedOut = new Set();
+    loaded.clear();
+    comments.clear();
+    life.showSaved();
+    showTitle();
+    editing.reset();
+    viewport.clear();
+    refreshBar();
+  },
+  async attach(next, camera, wanted) {
+    const { width, height } = viewport.size();
+    const created = await create(viewport.host, width, height);
+    if (!wanted()) {
+      created.destroy();
+      return undefined;
+    }
+    // Edits may have changed it while the renderer was created.
+    created.backdrop(next.board.background);
+    details.set("renderer", created.backend);
+    renderer = created;
+    created.place(placed(next.board, lettering, editing.writing(), crossedOut));
+    viewport.show(created, camera ?? fit(extent(next), viewport.size()));
+    editing.rehover();
+    refreshBar();
+    return created;
+  },
+  decode: (read) => decodeAsset(read, LONGEST_SIDE).catch(() => undefined),
+  release,
+  load(into, asset, decoded, read) {
+    load(into, new Map([[asset, decoded]]));
+    // Once their texture is there, which they play onto.
+    animated.keep([read]);
+    films.keep([read]);
+  },
+  crossOut,
+  redraw: () => viewport.redraw(),
+  abandon(into) {
+    if (into !== undefined && renderer === into) {
+      viewport.clear();
+      renderer = undefined;
+    }
+    drawings.reset();
+    animated.reset();
+    films.reset();
+    crossedOut = new Set();
+    loaded.clear();
+    editing.reset();
+    comments.clear();
+  },
+  changed,
+  drawn: (name, since) => untilDrawn.set(name, since),
 });
 
 let opened: Opened | undefined;
@@ -1478,169 +1547,6 @@ async function show(next: Opened, camera?: Camera): Promise<void> {
   }
 }
 
-async function present(next: Opened, camera?: Camera): Promise<void> {
-  const start = performance.now();
-  // The core's memory holds it until freed.
-  opened?.editor.free();
-  opened = next;
-  renderer = undefined;
-  snapping = next.board.background !== "plain";
-  lettering.reset();
-  drawings.reset();
-  animated.reset();
-  films.reset();
-  crossedOut = new Set();
-  loaded.clear();
-  comments.clear();
-  life.showSaved();
-  showTitle();
-  editing.reset();
-  const summary = summarise(next);
-  const empty = next.board.draw_order.length === 0;
-  if (!empty) {
-    bar.say(summary, true);
-  }
-  viewport.clear();
-  refreshBar();
-  const size = viewport.size();
-  const firstCamera = camera ?? fit(extent(next), size);
-  // Whether an image failed the opening, which then shows nothing.
-  let failed = false;
-  const ready = create(viewport.host, size.width, size.height).then((created) => {
-    if (failed || opened !== next) {
-      created.destroy();
-      return undefined;
-    }
-    // Edits may have changed it while the renderer was created.
-    created.backdrop(next.board.background);
-    details.set("renderer", created.backend);
-    renderer = created;
-    created.place(placed(next.board, lettering, editing.writing(), crossedOut));
-    // The rule takes `next` for a callback.
-    // oxlint-disable-next-line promise/no-callback-in-promise
-    viewport.show(created, camera ?? fit(extent(next), viewport.size()));
-    editing.rehover();
-    refreshBar();
-    return created;
-  });
-  // Handled at once, as the images may fail the opening before anything awaits the renderer.
-  const settled = ready.catch(() => undefined);
-  // Its own, as a Save as or another board may replace it meanwhile.
-  const saving = life.saver();
-  const pending = assetSizes(next.board);
-  const total = pending.size;
-  const visible = new Set(shownAssets(next.board, firstCamera, size, () => true).keys());
-  let undecodable = 0;
-  let unplayable = 0;
-  let shown = 0;
-  let done = 0;
-  // The largest of those that show first, as the camera moves meanwhile, then as they draw.
-  const nextAsset = () => {
-    const areas = shownAssets(
-      next.board,
-      viewport.camera() ?? firstCamera,
-      viewport.size(),
-      (asset) => pending.has(asset),
-    );
-    let asset = pending.keys().next().value;
-    let largest = -1;
-    for (const [candidate, area] of areas) {
-      if (area > largest) {
-        [asset, largest] = [candidate, area];
-      }
-    }
-    if (asset === undefined) {
-      return undefined;
-    }
-    const natural = pending.get(asset)!;
-    pending.delete(asset);
-    return { asset, natural };
-  };
-  const showAsset = async ({ asset, natural }: { asset: string; natural: Size }) => {
-    const reading = () => readAsset(files(next), asset, natural);
-    // A board whose asset is missing or unlike its digest does not open, as saving it would fail.
-    // Saves wait only while it is read, as one may move a ZIP file's images.
-    const read = await (saving ? saving.during(reading) : reading()).catch((error: unknown) => {
-      failed = true;
-      throw error;
-    });
-    let decoded = await decodeAsset(read, LONGEST_SIDE).catch(() => undefined);
-    try {
-      const created = await ready;
-      if (created === undefined || failed || opened !== next || renderer !== created) {
-        return;
-      }
-      if (decoded) {
-        load(created, new Map([[asset, decoded]]));
-        decoded = undefined;
-        // Once their texture is there, which they play onto.
-        animated.keep([read]);
-        films.keep([read]);
-        if (shown === 0) {
-          untilDrawn.set("first image", start);
-        }
-        shown += 1;
-      } else {
-        if (read.video) {
-          unplayable += 1;
-        } else {
-          undecodable += 1;
-        }
-        crossOut(created, asset);
-      }
-      done += 1;
-      if (visible.delete(asset) && visible.size === 0) {
-        untilDrawn.set("visible images", start);
-      }
-      bar.say(`${summary}, ${done} of ${total} images…`, true);
-      viewport.redraw();
-    } finally {
-      release(decoded);
-    }
-  };
-  try {
-    await pool(nextAsset, showAsset);
-  } catch (error) {
-    failed = true;
-    // Nothing shows of a board that does not open, once its renderer is there or failed.
-    const created = await settled;
-    if (opened === next) {
-      if (created !== undefined && renderer === created) {
-        viewport.clear();
-        renderer = undefined;
-      }
-      drawings.reset();
-      animated.reset();
-      films.reset();
-      crossedOut = new Set();
-      loaded.clear();
-      // Nor what the user began on its images meanwhile, which ends where it began.
-      editing.reset();
-      changed(next.editor.rewindGesture());
-      next.editor.endGesture();
-      comments.clear();
-    }
-    throw error;
-  }
-  await ready;
-  if (total > 0) {
-    untilDrawn.set("last image", start);
-  }
-  const crossed = [
-    ...(undecodable > 0
-      ? [`${undecodable === 1 ? "an image" : `${undecodable} images`} this machine cannot decode`]
-      : []),
-    ...(unplayable > 0
-      ? [`${unplayable === 1 ? "a video" : `${unplayable} videos`} this machine cannot play`]
-      : []),
-  ];
-  if (crossed.length > 0) {
-    bar.say(`${summary}, ${crossed.join(", and ")}`);
-  } else if (!empty) {
-    bar.say(summary);
-  }
-}
-
 /** Its images show crossed out, from the next draw on. */
 function crossOut(into: Renderer, asset: string): void {
   crossedOut = new Set([...crossedOut, asset]);
@@ -1807,10 +1713,6 @@ function load(into: Renderer, decoded: Map<string, Decoded>): void {
   }
   into.load(bitmaps);
   decoded.forEach((_, asset) => loaded.add(asset));
-}
-
-function summarise({ folder, board }: Opened): string {
-  return `${folder.name}: ${board.draw_order.length} elements`;
 }
 
 function changed(touched: string[]): void {

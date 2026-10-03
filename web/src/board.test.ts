@@ -1,12 +1,21 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
-import { readAsset, row } from "./board.js";
+import { open, readAsset, row } from "./board.js";
 import { memoryHome, sample, SAMPLES } from "../test/folders.js";
 
 /** One of the demo's images. */
 const ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f";
 const NATURAL = { width: 320, height: 240 };
+
+describe("open", () => {
+  it("refuses a board one of whose images is missing", async () => {
+    const files = sample("demo");
+    files.delete(`assets/${ASSET}`);
+    const { home } = memoryHome("demo", files);
+    await expect(open(async () => home, new Map())).rejects.toThrow(`asset ${ASSET} is missing`);
+  });
+});
 
 describe("readAsset", () => {
   it("reads an asset whose bytes match its digest", async () => {

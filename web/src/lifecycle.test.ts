@@ -9,6 +9,9 @@ import { memoryHome, memorySession, sample } from "../test/folders.js";
 /** One of the demo's sticky notes. */
 const STICKY = "b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74";
 const STICKY_FILE = `elements/${STICKY}.json`;
+/** One of the demo's notes, and one of its images. */
+const NOTE = "47b0c6e291d84f138a5c3e7fd06b2491";
+const IMAGE = "1a4e83c05f294b76a3d107e89c526b0f";
 
 /** The demo's sticky note as another program rewrote it. */
 const THEIRS = JSON.stringify({
@@ -34,7 +37,8 @@ function sticky(opened: Opened | undefined, id: string): string | undefined {
 /**
  * The app around the boards, launched with `session`, or none where another window holds it,
  * `reopen` to open again, `picked` as the board the user opens, and `target` as the folder they
- * save it as, answering `answer` when asked, and looking at the board shown from `camera`.
+ * save it as, answering `answer` when asked, and looking at the board shown from `camera`. A
+ * board `fails` to show as one whose image is unlike its digest would.
  */
 function app({
   session,
@@ -43,6 +47,7 @@ function app({
   target,
   answer = true,
   camera,
+  fails,
 }: {
   session?: Session;
   reopen?: Reopening;
@@ -50,8 +55,10 @@ function app({
   target?: Home;
   answer?: boolean;
   camera?: Camera;
+  fails?: (next: Opened) => boolean;
 }) {
   let opened: Opened | undefined;
+  let chosen = picked;
   const said: string[] = [];
   const shownAt: (Camera | undefined)[] = [];
   const confirm = vi.fn<(question: string) => Promise<boolean>>(async () => answer);
@@ -60,7 +67,7 @@ function app({
     session: async () => session ?? null,
     reopen: async () => reopen ?? null,
     forget,
-    open: async () => picked ?? null,
+    open: async () => chosen ?? null,
     openZip: async () => null,
     pickTarget: async () => target ?? null,
     confirm,
@@ -74,6 +81,9 @@ function app({
       opened = next;
       shownAt.push(at);
       life.showSaved();
+      if (fails?.(next)) {
+        throw new Error("an asset does not match its digest");
+      }
     },
     camera: () => camera,
     say: (text) => void said.push(text),
@@ -86,7 +96,8 @@ function app({
     refresh(opened!, touched);
     life.touched(touched);
   };
-  return { life, opened: () => opened, said, confirm, forget, move, shownAt };
+  const choose = (folder: Folder | Home) => void (chosen = folder);
+  return { life, opened: () => opened, said, confirm, forget, move, choose, shownAt };
 }
 
 describe("lifecycle", () => {
@@ -490,5 +501,126 @@ describe("offer", () => {
     expect(said.at(-1)).toBe("");
     dispatchEvent(new Event("pointerdown"));
     expect(ask).toHaveBeenCalledOnce();
+  });
+});
+
+describe("leaving", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("writes edits that land while the open board's last saves run, then leaves it without asking", async () => {
+    const { home, written } = memoryHome("demo", sample("demo"));
+    const landing = [NOTE, IMAGE];
+    let edit: ((id: string) => void) | undefined;
+    const busy: Home = {
+      ...home,
+      async write(path, bytes) {
+        const id = landing.shift();
+        if (id !== undefined) {
+          edit?.(id);
+        }
+        return home.write(path, bytes);
+      },
+    };
+    const { life, opened, confirm, move } = app({
+      session: memorySession().session,
+      picked: busy,
+      answer: false,
+    });
+    edit = move;
+    await life.start();
+    await life.openFolder();
+    move(STICKY);
+    await life.newBoard();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(opened()?.folder.name).toBe("Untitled");
+    expect(written.toSorted()).toEqual(
+      [STICKY, NOTE, IMAGE].map((id) => `elements/${id}.json`).toSorted(),
+    );
+  });
+
+  it("lets the app close once the images being read are read and the last edits written", async () => {
+    const { home, written } = memoryHome("demo", sample("demo"));
+    const { life, move } = app({ session: memorySession().session, picked: home });
+    await life.start();
+    await life.openFolder();
+    let read!: () => void;
+    const image = new Promise<void>((resolve) => (read = resolve));
+    const reading = life.saver()!.during(() => image);
+    move(STICKY);
+    const closing = life.closing();
+    expect(written).toEqual([]);
+    read();
+    await reading;
+    expect(await closing).toBe(true);
+    expect(written).toEqual([STICKY_FILE]);
+  });
+});
+
+describe("a board that fails to show", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("leaves a blank board in its place, and saves nothing more of it", async () => {
+    vi.useFakeTimers();
+    try {
+      const broken = memoryHome("broken", sample("demo"));
+      let edit: ((id: string) => void) | undefined;
+      const { life, opened, choose, move } = app({
+        session: memorySession().session,
+        // The user edits it while its images load.
+        fails: (next) => next.folder === broken.home && (edit?.(STICKY), true),
+      });
+      edit = move;
+      await life.start();
+      choose(broken.home);
+      await expect(life.openFolder()).rejects.toThrow("does not match its digest");
+      expect(opened()?.folder.name).toBe("Untitled");
+      expect(opened()?.board.draw_order).toEqual([]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await life.closing()).toBe(true);
+      expect(broken.written).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the open board when the board picked lacks an image", async () => {
+    const first = memoryHome("demo", sample("demo"));
+    const lacking = sample("demo");
+    lacking.delete("assets/5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f");
+    const { life, opened, choose, move } = app({
+      session: memorySession().session,
+      picked: first.home,
+    });
+    await life.start();
+    await life.openFolder();
+    choose(memoryHome("lacking", lacking).home);
+    await expect(life.openFolder()).rejects.toThrow("is missing");
+    expect(opened()?.folder).toBe(first.home);
+    move(STICKY);
+    expect(await life.closing()).toBe(true);
+    expect(first.written).toEqual([STICKY_FILE]);
+  });
+
+  it("says why a board read again after another program changed it does not show, and leaves a blank board", async () => {
+    const { home, overwrite } = memoryHome("demo", sample("demo"));
+    let changedOnDisk = false;
+    const { life, opened, said } = app({
+      session: memorySession().session,
+      picked: home,
+      fails: (next) => changedOnDisk && next.folder === home,
+    });
+    await life.start();
+    await life.openFolder();
+    changedOnDisk = true;
+    overwrite(STICKY_FILE, THEIRS);
+    await life.saver()?.check();
+    expect(said).toContain(
+      "demo changed on disk, and could not be read again: an asset does not match its digest",
+    );
+    expect(opened()?.folder.name).toBe("Untitled");
   });
 });

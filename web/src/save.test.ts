@@ -198,6 +198,112 @@ describe("saving", () => {
     await saver.check();
     expect(asked).toHaveBeenCalledOnce();
   });
+
+  it("lets an edit made during a flush's pass wait the delay, as the board rests between saves", async () => {
+    const { store, written, finish } = memoryStore({ gated: true });
+    const saver = saving(store, hooks().around);
+    saver.touched(["a"]);
+    const flushing = saver.flush();
+    saver.touched(["b"]);
+    await finish();
+    expect(await flushing).toBe(false);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(written).toEqual([["a"]]);
+    await vi.advanceTimersByTimeAsync(1);
+    await finish();
+    expect(written).toEqual([["a"], ["b"]]);
+  });
+
+  it("drains edits made during its passes before it ends", async () => {
+    const { store, written, finish } = memoryStore({ gated: true });
+    const saver = saving(store, hooks().around);
+    saver.touched(["a"]);
+    const draining = saver.drain();
+    saver.touched(["b"]);
+    await finish();
+    await finish();
+    expect(await draining).toBe(true);
+    expect(written).toEqual([["a"], ["b"]]);
+  });
+
+  it("drains once the reads under way end, writing nothing while they run", async () => {
+    const { store, written } = memoryStore();
+    const saver = saving(store, hooks().around);
+    saver.touched(["a"]);
+    let read!: () => void;
+    const image = new Promise<void>((resolve) => (read = resolve));
+    const reading = saver.during(() => image);
+    const draining = saver.drain();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(written).toEqual([]);
+    read();
+    await reading;
+    expect(await draining).toBe(true);
+    expect(written).toEqual([["a"]]);
+  });
+
+  it("holds reads that start while it drains until it has written", async () => {
+    const { store, written, finish } = memoryStore({ gated: true });
+    const saver = saving(store, hooks().around);
+    saver.touched(["a"]);
+    let read!: () => void;
+    const image = new Promise<void>((resolve) => (read = resolve));
+    const first = saver.during(() => image);
+    const draining = saver.drain();
+    const seen: number[] = [];
+    const second = saver.during(async () => void seen.push(written.length));
+    read();
+    await first;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen).toEqual([]);
+    await finish();
+    await draining;
+    await second;
+    expect(seen).toEqual([1]);
+  });
+
+  it("says the board is not all on disk when a save fails as it drains", async () => {
+    const { store } = memoryStore({ outcomes: [new Error("the disk is full")] });
+    const { around, failed } = hooks();
+    const saver = saving(store, around);
+    saver.touched(["a"]);
+    expect(await saver.drain()).toBe(false);
+    expect(failed).toEqual(["the disk is full"]);
+  });
+
+  it("drains edits that land during its passes even when a flush comes meanwhile", async () => {
+    const { store, written, finish } = memoryStore({ gated: true });
+    const saver = saving(store, hooks().around);
+    saver.touched(["a"]);
+    const draining = saver.drain();
+    // As the window blurs while the board is left.
+    void saver.flush();
+    saver.touched(["b"]);
+    await finish();
+    saver.touched(["c"]);
+    await finish();
+    await finish();
+    expect(await draining).toBe(true);
+    expect(written).toEqual([["a"], ["b"], ["c"]]);
+  });
+
+  it("drains once a check of the disk under way ends", async () => {
+    const { store, written, finish } = memoryStore({ gated: true });
+    let checked!: (changed: boolean) => void;
+    store.changed = () => new Promise<boolean>((resolve) => (checked = resolve));
+    const saver = saving(store, hooks().around);
+    saver.touched(["a"]);
+    // As the window comes back to the front.
+    const checking = saver.check();
+    const draining = saver.drain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(written).toEqual([]);
+    checked(false);
+    await checking;
+    await finish();
+    expect(await draining).toBe(true);
+    expect(written).toEqual([["a"]]);
+  });
 });
 
 const STICKY = "b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74";

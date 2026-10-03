@@ -184,8 +184,16 @@ export interface Saving {
   store: Store;
   /** Once an edit touched these elements, or the background. */
   touched(ids: string[]): void;
-  /** Saves what is left at once. Whether the board is all on disk afterwards. */
+  /**
+   * Saves what is left at once, though edits made during its last pass wait as a timer's would.
+   * Whether the board is all on disk afterwards.
+   */
   flush(): Promise<boolean>;
+  /**
+   * Saves until nothing is left, once the reads under way end, as the saver is about to go. Whether
+   * the board is all on disk afterwards.
+   */
+  drain(): Promise<boolean>;
   /** Whether changes wait to be written, or failed to be. */
   unwritten(): boolean;
   /** Why the last save failed, until one succeeds. */
@@ -215,6 +223,10 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
   let holding = false;
   /** How many reads of the board's files it waits on, see `during`. */
   let held = 0;
+  /** Woken once no read or check holds it. */
+  let unheld: (() => void)[] = [];
+  /** While a drain runs, which new reads wait for. */
+  let draining: Promise<void> | undefined;
   /** Asked for while saving, and only done once the save ends. */
   let rereading = false;
   let failure: string | undefined;
@@ -278,6 +290,7 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
       then = () => fail(`it changed on disk, and could not be read again: ${message(error)}`);
     } finally {
       holding = false;
+      release();
     }
     if (!stopped) {
       await then?.();
@@ -288,6 +301,14 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
     due = true;
     failure = reason;
     hooks.failed(reason);
+  }
+
+  function release(): void {
+    if (held === 0 && !holding) {
+      const waking = unheld;
+      unheld = [];
+      waking.forEach((wake) => wake());
+    }
   }
 
   /** Once no save runs, as one ending may start another. */
@@ -366,12 +387,34 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
       schedule(Math.max(0, Math.min(delay, since + AT_LATEST - now)));
     },
     async flush() {
-      flushed = passes + 1;
+      // Never below a drain's, which a flush meanwhile would cut short.
+      flushed = Math.max(flushed, passes + 1);
       if (due && !holding && held === 0 && !stopped) {
         start();
       }
       await idle();
       return !due;
+    },
+    async drain() {
+      let drained!: () => void;
+      draining = new Promise((resolve) => (drained = resolve));
+      try {
+        // No read starts meanwhile, though a check may read the board again once it ends.
+        // oxlint-disable-next-line no-unmodified-loop-condition
+        while (held > 0 || holding) {
+          await new Promise<void>((wake) => unheld.push(wake));
+        }
+        flushed = Infinity;
+        if (due && !holding && !stopped) {
+          start();
+        }
+        await idle();
+        return !due;
+      } finally {
+        flushed = passes;
+        draining = undefined;
+        drained();
+      }
     },
     unwritten: () => due || writing,
     failure: () => failure,
@@ -394,6 +437,7 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
         }
       } finally {
         holding = false;
+        release();
       }
       if (stopped) {
         return;
@@ -405,12 +449,18 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
       }
     },
     async during(work) {
+      // Another drain may start as one ends.
+      // oxlint-disable-next-line no-unmodified-loop-condition
+      while (draining) {
+        await draining;
+      }
       held += 1;
       try {
         await idle();
         return await work();
       } finally {
         held -= 1;
+        release();
       }
     },
     async stop() {

@@ -85,12 +85,22 @@ export async function open<T extends Folder>(
     return contents;
   });
   const [editor, parsing] = await timed(() => core.read(read));
+  const opened = { folder, editor, board: core.board(editor), added: new Map<string, Blob>() };
+  // Found before it takes the open board's place, as showing it would fail.
+  const kept = new Set(listed);
+  const missing = [...assetSizes(opened.board).keys()].find(
+    (asset) => !kept.has(core.assetPath(asset)),
+  );
+  if (missing !== undefined) {
+    editor.free();
+    throw new Error(`asset ${missing} is missing`);
+  }
   timings.clear();
   timings.set(`list ${listed.length} files`, milliseconds(listing));
   timings.set(`read ${read.size} files`, milliseconds(reading));
   timings.set("parse", milliseconds(parsing));
   return {
-    opened: { folder, editor, board: core.board(editor), added: new Map() },
+    opened,
     reading: { listed, files: read, stamps },
   };
 }

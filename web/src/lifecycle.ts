@@ -23,7 +23,7 @@ export interface Host {
   >;
   /** The board shown, which `show` replaces. */
   opened(): Opened | undefined;
-  /** Shows a board just read, or throws why it cannot, such as a missing asset. */
+  /** Shows a board just read, or throws why it cannot, such as an image unlike its digest. */
   show(next: Opened, camera?: Camera): Promise<void>;
   camera(): Camera | undefined;
   /** `busy` while what it tells of goes on. */
@@ -274,7 +274,7 @@ export function lifecycle(host: Host): Lifecycle {
 
   /** Whether another board may take the open one's place, which then takes the session back to empty it. */
   async function leave(): Promise<boolean> {
-    await autosave?.flush();
+    await autosave?.drain();
     if (atRisk() && !(await platform.confirm(QUESTION))) {
       return false;
     }
@@ -313,7 +313,12 @@ export function lifecycle(host: Host): Lifecycle {
 
   /** Shows a board just opened, which saves itself in its own place, or else in the session. */
   async function moveIn(read: Read, place: Place | undefined): Promise<void> {
-    await settle(read, place ?? sessionPlace(false), { clear: true, leaving: true });
+    try {
+      await settle(read, place ?? sessionPlace(false), { clear: true, leaving: true });
+    } catch (error) {
+      await replace(read.opened);
+      throw error;
+    }
     await reopenNext(place, read.opened.folder.name);
     if (place === undefined) {
       // A copy, as its files may be gone next time, such as those a browser lets a page read.
@@ -333,7 +338,7 @@ export function lifecycle(host: Host): Lifecycle {
     const store = await place.store(next, reading);
     const old = autosave;
     if (leaving) {
-      await old?.flush();
+      await old?.drain();
     }
     autosave = undefined;
     await old?.stop();
@@ -348,7 +353,16 @@ export function lifecycle(host: Host): Lifecycle {
       throw error;
     }
     autosave = store && autosaving(next, store, place);
-    await host.show(next, camera);
+    try {
+      await host.show(next, camera);
+    } catch (error) {
+      // A board that does not show is not open, so it saves nothing more.
+      const failed = autosave;
+      autosave = undefined;
+      await failed?.stop();
+      failed?.store.free();
+      throw error;
+    }
     const strays = reading.listed.filter(core.isStrayElement);
     if (strays.length > 0) {
       host.say(
@@ -402,12 +416,32 @@ export function lifecycle(host: Host): Lifecycle {
         read.opened.editor.free();
         reloaded = "declined";
       } else if (read) {
-        await settle(read, place, { camera });
+        const { name } = read.opened.folder;
+        try {
+          await settle(read, place, { camera });
+          host.say(`${name} changed on disk, so it was read again`);
+        } catch (error) {
+          if (!(await replace(read.opened))) {
+            throw error;
+          }
+          host.say(`${name} changed on disk, and could not be read again: ${message(error)}`);
+        }
         reloaded = "replaced";
-        host.say(`${read.opened.folder.name} changed on disk, so it was read again`);
       }
     });
     return reloaded;
+  }
+
+  /**
+   * A new board in place of `failed`, if it took the open board's place before failing to show,
+   * as the board it replaced is gone. Whether it did.
+   */
+  async function replace(failed: Opened): Promise<boolean> {
+    if (host.opened() !== failed) {
+      return false;
+    }
+    await begin();
+    return true;
   }
 
   function atRisk(): boolean {
@@ -517,7 +551,7 @@ export function lifecycle(host: Host): Lifecycle {
     showSaved,
     loading: () => loading,
     unsaved: () => unsaved,
-    closing: async () => (autosave ? autosave.flush() : !unwritten),
+    closing: async () => (autosave ? autosave.drain() : !unwritten),
   };
 }
 
