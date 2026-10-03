@@ -51,7 +51,11 @@ const READING_TIME = 40;
  * `groups` of buttons, apart from each other, the last one ending with the button of the menu
  * that `entries` fills.
  */
-export function toolbar(host: HTMLElement, groups: (Button | Family | Zoom)[][], entries: () => Entry[]): Toolbar {
+export function toolbar(
+  host: HTMLElement,
+  groups: (Button | Family | Zoom)[][],
+  entries: () => Entry[],
+): Toolbar {
   // Always there, even empty, as screen readers only follow a live region that already shows.
   const message = document.createElement("p");
   message.id = "message";
@@ -137,7 +141,11 @@ export function toolbar(host: HTMLElement, groups: (Button | Family | Zoom)[][],
       chevron.setAttribute("aria-label", item.label);
       chevron.append(icon("chevron"));
       const tools = () =>
-        item.tools.map(({ command, icon: name, pressed }) => ({ ...command, icon: name, checked: pressed?.() ?? false }));
+        item.tools.map(({ command, icon: name, pressed }) => ({
+          ...command,
+          icon: name,
+          checked: pressed?.() ?? false,
+        }));
       opens(chevron, item.label, tools, { above: button, left: true });
       explain(chevron, () => item.label);
       row.append(chevron);
@@ -157,12 +165,18 @@ export function toolbar(host: HTMLElement, groups: (Button | Family | Zoom)[][],
   stops.push(menuButton);
 
   // One stop for Tab, and the arrow keys between buttons, as the toolbar pattern wants.
-  const stop = (next: HTMLButtonElement) => stops.forEach((button) => (button.tabIndex = button === next ? 0 : -1));
+  const stop = (next: HTMLButtonElement) =>
+    stops.forEach((button) => (button.tabIndex = button === next ? 0 : -1));
   stop(stops[0]!);
   bar.addEventListener("focusin", (event) => stop(event.target as HTMLButtonElement));
   bar.addEventListener("keydown", (event) => {
     const at = stops.indexOf(document.activeElement as HTMLButtonElement);
-    const moves: Record<string, number> = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: -1 };
+    const moves: Record<string, number> = {
+      ArrowRight: at + 1,
+      ArrowLeft: at - 1,
+      Home: 0,
+      End: -1,
+    };
     const to = moves[event.key];
     if (at < 0 || to === undefined) {
       return;
@@ -229,7 +243,10 @@ export function toolbar(host: HTMLElement, groups: (Button | Family | Zoom)[][],
       clearTimeout(fading);
       message.textContent = text;
       if (!busy) {
-        fading = setTimeout(() => (message.textContent = ""), MESSAGE_TIME + READING_TIME * text.length);
+        fading = setTimeout(
+          () => (message.textContent = ""),
+          MESSAGE_TIME + READING_TIME * text.length,
+        );
       }
     },
     unsaved(unsaved) {
@@ -243,7 +260,12 @@ export function toolbar(host: HTMLElement, groups: (Button | Family | Zoom)[][],
 }
 
 /** Opened with the pointer, it leaves the focus to the page once closed, as the other buttons do. */
-function opens(button: HTMLButtonElement, label: string, entries: () => Entry[], place: Place): void {
+function opens(
+  button: HTMLButtonElement,
+  label: string,
+  entries: () => Entry[],
+  place: Place,
+): void {
   button.setAttribute("aria-haspopup", "menu");
   button.setAttribute("aria-expanded", "false");
   const toggle = (byPointer: boolean, fromEnd = false) => {
@@ -278,7 +300,10 @@ function opens(button: HTMLButtonElement, label: string, entries: () => Entry[],
  * vertically, scrolls it too.
  */
 function scrolls(bar: HTMLElement, row: HTMLElement): void {
-  for (const [side, towards] of [["before", -1], ["after", 1]] as const) {
+  for (const [side, towards] of [
+    ["before", -1],
+    ["after", 1],
+  ] as const) {
     const edge = document.createElement("span");
     edge.className = `edge ${side}`;
     edge.append(icon("chevron"));

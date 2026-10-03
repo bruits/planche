@@ -108,7 +108,12 @@ jobs:
         with:
           tool: just,wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
       - run: pnpm --dir web install --frozen-lockfile
+      - run: pnpm --dir web run fmt:check
       - run: just web
+      # Against the core's bindings that `just web` builds.
+      - run: pnpm --dir web run lint
+      - run: pnpm --dir web run typecheck
+      - run: pnpm --dir web test
 
   desktop:
     name: Desktop app (${{ matrix.os }})

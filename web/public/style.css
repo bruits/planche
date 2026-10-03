@@ -33,7 +33,9 @@
 
 :root {
   color-scheme: light;
-  font: 14px/1.4 system-ui, sans-serif;
+  font:
+    14px/1.4 system-ui,
+    sans-serif;
   --board: #f1f1f3;
   --surface: #ffffff;
   --text: #1d1d22;
@@ -205,7 +207,9 @@ body {
   box-sizing: border-box;
   border: 2px solid var(--surface);
   border-radius: 0 calc(var(--pin) / 2) calc(var(--pin) / 2);
-  font: 14px/1.4 system-ui, sans-serif;
+  font:
+    14px/1.4 system-ui,
+    sans-serif;
   color: var(--surface);
   background: var(--accent);
   box-shadow: var(--shadow);
@@ -640,7 +644,9 @@ body {
   box-sizing: border-box;
   padding: 0 10px;
   border-radius: 11px;
-  font: 11px/1 ui-monospace, monospace;
+  font:
+    11px/1 ui-monospace,
+    monospace;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   pointer-events: none;
@@ -817,7 +823,9 @@ body {
   padding: 2px 6px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  font: 11px/1.4 ui-monospace, monospace;
+  font:
+    11px/1.4 ui-monospace,
+    monospace;
   background: var(--surface);
 }
 

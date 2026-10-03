@@ -82,7 +82,10 @@ export function shownAssets(
   for (const id of board.draw_order) {
     const { kind } = board.elements[id]!;
     if (kind.type === "image" && kept(kind.asset) && overlaps(area, kind.frame)) {
-      shown.set(kind.asset, Math.max(shown.get(kind.asset) ?? 0, kind.frame.width * kind.frame.height));
+      shown.set(
+        kind.asset,
+        Math.max(shown.get(kind.asset) ?? 0, kind.frame.width * kind.frame.height),
+      );
     }
   }
   return shown;

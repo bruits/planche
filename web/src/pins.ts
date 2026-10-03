@@ -19,7 +19,9 @@ export interface Pins {
 
 /** The comment whose pin `target` is, or lies in. */
 export function pinned(target: EventTarget | null): string | undefined {
-  return target instanceof Element ? target.closest<HTMLElement>(".comment")?.dataset.comment : undefined;
+  return target instanceof Element
+    ? target.closest<HTMLElement>(".comment")?.dataset.comment
+    : undefined;
 }
 
 /** How much of a comment names its pin, in characters. */
@@ -41,24 +43,34 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
   host.append(layer);
   const stops = () => [...layer.querySelectorAll<HTMLButtonElement>(".pin")];
   const stop = (next: HTMLButtonElement | undefined) =>
-    stops().forEach((pin, at) => (pin.tabIndex = pin === next || (next === undefined && at === 0) ? 0 : -1));
+    stops().forEach(
+      (pin, at) => (pin.tabIndex = pin === next || (next === undefined && at === 0) ? 0 : -1),
+    );
   layer.addEventListener("focusin", (event) => {
     layer.classList.remove("quiet");
     stop(event.target as HTMLButtonElement);
   });
   layer.addEventListener("keydown", (event) => {
-    const pins = stops();
-    const at = pins.indexOf(document.activeElement as HTMLButtonElement);
-    const moves: Record<string, number> = { ArrowRight: at + 1, ArrowDown: at + 1, ArrowLeft: at - 1, ArrowUp: at - 1 };
+    const shown = stops();
+    const at = shown.indexOf(document.activeElement as HTMLButtonElement);
+    const moves: Record<string, number> = {
+      ArrowRight: at + 1,
+      ArrowDown: at + 1,
+      ArrowLeft: at - 1,
+      ArrowUp: at - 1,
+    };
     const to = moves[event.key];
     if (at >= 0 && to !== undefined) {
       event.preventDefault();
-      pins[(to + pins.length) % pins.length]!.focus({ preventScroll: true });
+      shown[(to + shown.length) % shown.length]!.focus({ preventScroll: true });
     }
   });
   // Esc shrinks a pin back until the pointer comes to another, as it may hide what it wants.
   addEventListener("keydown", (event) => event.key === "Escape" && layer.classList.add("quiet"));
-  const shown = new Map<string, { comment: HTMLElement; pin: HTMLElement; text: HTMLElement; at: Point }>();
+  const shown = new Map<
+    string,
+    { comment: HTMLElement; pin: HTMLElement; text: HTMLElement; at: Point }
+  >();
   let camera: Camera | undefined;
   /** The comment whose pin keys pressed, while it is written in. */
   let returning: string | undefined;
@@ -113,7 +125,11 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
       const marked = (id: string) => {
         // Boards are repaired on read, but a cycle would loop forever.
         const seen = new Set<string>();
-        for (let at: string | undefined = id; at !== undefined && !seen.has(at); at = board.elements[at]?.group) {
+        for (
+          let at: string | undefined = id;
+          at !== undefined && !seen.has(at);
+          at = board.elements[at]?.group
+        ) {
           if (chosen.has(at)) {
             return true;
           }
@@ -140,7 +156,10 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
         if (entry.text.textContent !== kind.text || !entry.pin.hasAttribute("aria-label")) {
           entry.text.textContent = kind.text;
           const name = kind.text.trim().split("\n")[0]!;
-          entry.pin.setAttribute("aria-label", `Comment: ${name.length > NAMED ? `${name.slice(0, NAMED)}…` : name}`);
+          entry.pin.setAttribute(
+            "aria-label",
+            `Comment: ${name.length > NAMED ? `${name.slice(0, NAMED)}…` : name}`,
+          );
         }
         entry.comment.classList.toggle("selected", marked(id));
         entry.comment.classList.toggle("writing", id === hidden);
@@ -155,9 +174,11 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
       });
       // Refocused where it was, or on the next pin once its own went.
       if (focusedAt >= 0 && focused !== document.activeElement) {
-        const pins = stops();
+        const remaining = stops();
         const kept = focused instanceof HTMLElement && layer.contains(focused);
-        (kept ? focused : pins[Math.min(focusedAt, pins.length - 1)])?.focus({ preventScroll: true });
+        (kept ? focused : remaining[Math.min(focusedAt, remaining.length - 1)])?.focus({
+          preventScroll: true,
+        });
       }
       if (returning !== undefined && returning !== hidden) {
         shown.get(returning)?.pin.focus({ preventScroll: true });

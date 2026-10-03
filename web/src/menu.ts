@@ -14,7 +14,13 @@ import { icon, type Icon } from "./icons.js";
 export type Entry = Item | "separator";
 
 /** `swatch` shows a colour, as CSS gives it, where an icon would. */
-export type Item = Command & { icon?: Icon; swatch?: string; checked?: boolean; toggle?: boolean; options?: Entry[] };
+export type Item = Command & {
+  icon?: Icon;
+  swatch?: string;
+  checked?: boolean;
+  toggle?: boolean;
+  options?: Entry[];
+};
 
 /** Its top-left corner at a point, or above an element, lined up with its right end or `left`. */
 export type Place = { x: number; y: number } | { above: HTMLElement; left?: boolean };
@@ -50,7 +56,10 @@ export interface Opening {
 }
 
 /** Focus goes back where it was once it closes. */
-export function openMenu(entries: Entry[], { label, place, owner, fromEnd = false, closed }: Opening): void {
+export function openMenu(
+  entries: Entry[],
+  { label, place, owner, fromEnd = false, closed }: Opening,
+): void {
   closeMenu();
   const back = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   let submenu: { menu: HTMLElement; owner: HTMLButtonElement } | undefined;
@@ -98,8 +107,11 @@ export function openMenu(entries: Entry[], { label, place, owner, fromEnd = fals
       submenu = { menu: inner, owner: opener };
     }
     if (entering) {
-      const items = [...submenu!.menu.querySelectorAll("button")];
-      (items.find((item) => item.matches('[role="menuitemradio"][aria-checked="true"]')) ?? items[0])?.focus();
+      const items = [...submenu.menu.querySelectorAll("button")];
+      (
+        items.find((item) => item.matches('[role="menuitemradio"][aria-checked="true"]')) ??
+        items[0]
+      )?.focus();
     }
   };
   const { menu, items, shown } = list(entries, label, activate);
@@ -116,7 +128,11 @@ export function openMenu(entries: Entry[], { label, place, owner, fromEnd = fals
         }
         // The open one lingers here too, as the pointer may be crossing on its way to it.
         stay();
-        leaving = setTimeout(() => (document.activeElement === item ? openSubmenu(entry, item, false) : closeSubmenu()), LINGER);
+        leaving = setTimeout(
+          () =>
+            document.activeElement === item ? openSubmenu(entry, item, false) : closeSubmenu(),
+          LINGER,
+        );
       });
     }
   });
@@ -167,7 +183,9 @@ export function openMenu(entries: Entry[], { label, place, owner, fromEnd = fals
       return;
     }
     open = undefined;
-    listeners.forEach(([target, type, listener]) => target.removeEventListener(type, listener, true));
+    listeners.forEach(([target, type, listener]) =>
+      target.removeEventListener(type, listener, true),
+    );
     menu.remove();
     back?.focus();
     closed?.();
@@ -207,7 +225,11 @@ function list(
  * Up and down its items, round from one end to the other, and Tab closes every menu. `other`
  * takes any other key first, and says whether it did.
  */
-function navigate(menu: HTMLElement, items: HTMLButtonElement[], other: (key: string) => boolean): void {
+function navigate(
+  menu: HTMLElement,
+  items: HTMLButtonElement[],
+  other: (key: string) => boolean,
+): void {
   const focus = (at: number) => items[(at + items.length) % items.length]?.focus();
   menu.addEventListener("keydown", (event) => {
     const at = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -238,7 +260,14 @@ function menuItem(command: Item, activate: (item: HTMLButtonElement) => void): H
   const item = document.createElement("button");
   item.type = "button";
   item.tabIndex = -1;
-  item.setAttribute("role", command.checked === undefined ? "menuitem" : command.toggle ? "menuitemcheckbox" : "menuitemradio");
+  item.setAttribute(
+    "role",
+    command.checked === undefined
+      ? "menuitem"
+      : command.toggle
+        ? "menuitemcheckbox"
+        : "menuitemradio",
+  );
   if (command.checked !== undefined) {
     item.setAttribute("aria-checked", String(command.checked));
   }

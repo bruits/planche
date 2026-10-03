@@ -1,7 +1,8 @@
 // The renderer, on wgpu compiled to WebAssembly.
 
 import type { Camera } from "./camera.js";
-import { gridLevel, type Background, type Bytes, type Point, type Rect, type Size } from "./core.js";
+import * as core from "./core.js";
+import type { Background, Bytes, Point, Rect, Size } from "./core.js";
 import { paints, reader, type Paint, type Paints } from "./paint.js";
 import start, { Animation, create as createWgpu, type Readback } from "./wasm/renderer.js";
 
@@ -24,8 +25,22 @@ export type Placed =
     }
   | { kind: "text"; id: string; frame: Rect; rotation: number; paint: Paint }
   | { kind: "line"; from: Point; to: Point; width: number; paint: Paint; dashed?: boolean }
-  | { kind: "rectangle" | "ellipse" | "cross"; frame: Rect; rotation: number; width: number; paint: Paint; dashed?: boolean }
-  | { kind: "fill"; shape: "rectangle" | "ellipse"; frame: Rect; rotation: number; paint: Paint; opacity: number };
+  | {
+      kind: "rectangle" | "ellipse" | "cross";
+      frame: Rect;
+      rotation: number;
+      width: number;
+      paint: Paint;
+      dashed?: boolean;
+    }
+  | {
+      kind: "fill";
+      shape: "rectangle" | "ellipse";
+      frame: Rect;
+      rotation: number;
+      paint: Paint;
+      opacity: number;
+    };
 
 /** An animated image, whose frames it draws onto its asset's texture. */
 export interface Playing {
@@ -119,11 +134,16 @@ export async function create(host: HTMLElement, width: number, height: number): 
   return on(false, host, width, height);
 }
 
-async function on(webgpu: boolean, host: HTMLElement, width: number, height: number): Promise<Renderer> {
+async function on(
+  webgpu: boolean,
+  host: HTMLElement,
+  width: number,
+  height: number,
+): Promise<Renderer> {
   // Before the renderer exists, which nothing would free if this threw.
   let painted = paints(host);
   let strength = gridStrength(host);
-  const output = canvas(host, width, height);
+  const output = appended(host, width, height);
   // A canvas keeps the first kind of context it gives, so a failed one is no use to the other backend.
   const renderer = await createWgpu(output, webgpu).catch((error: unknown) => {
     if (!webgpu) {
@@ -211,9 +231,22 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
     },
     draw(camera) {
       const { x, y, zoom } = camera;
-      renderer.draw(x, y, zoom * devicePixelRatio, items ?? pack(), grid(background, camera, painted("ink"), strength, devicePixelRatio));
+      renderer.draw(
+        x,
+        y,
+        zoom * devicePixelRatio,
+        items ?? pack(),
+        grid(background, camera, painted("ink"), strength, devicePixelRatio),
+      );
     },
-    async render({ area, size: picture, items: shown, background: behind, images: own, texts: ownTexts }) {
+    async render({
+      area,
+      size: picture,
+      items: shown,
+      background: behind,
+      images: own,
+      texts: ownTexts,
+    }) {
       const staged = new Map<string, number>();
       const stagedTexts = new Map<string, number>();
       let readback: Readback;
@@ -223,12 +256,28 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
         own.forEach((canvas, asset) => staged.set(asset, renderer.uploadCanvas(canvas)));
         ownTexts.forEach((canvas, id) => stagedTexts.set(id, renderer.uploadCanvas(canvas)));
         const zoom = picture.width / area.width;
-        const view = Float32Array.of(area.x, area.y, zoom, picture.width, picture.height, ...reader()(behind));
+        const view = Float32Array.of(
+          area.x,
+          area.y,
+          zoom,
+          picture.width,
+          picture.height,
+          ...reader()(behind),
+        );
         const camera = { x: area.x, y: area.y, zoom };
-        const lookup = [new Map([...images, ...staged]), new Map([...texts, ...stagedTexts])] as const;
-        readback = renderer.render(view, packed(shown, lookup[0], lookup[1], painted), grid(background, camera, painted("ink"), strength, 1));
+        const lookup = [
+          new Map([...images, ...staged]),
+          new Map([...texts, ...stagedTexts]),
+        ] as const;
+        readback = renderer.render(
+          view,
+          packed(shown, lookup[0], lookup[1], painted),
+          grid(background, camera, painted("ink"), strength, 1),
+        );
       } finally {
-        [...staged.values(), ...stagedTexts.values()].forEach((texture) => renderer.release(texture));
+        [...staged.values(), ...stagedTexts.values()].forEach((texture) =>
+          renderer.release(texture),
+        );
       }
       try {
         const until = performance.now() + READBACK_TIME;
@@ -239,13 +288,17 @@ async function on(webgpu: boolean, host: HTMLElement, width: number, height: num
           await turn();
         }
         // Copied out of the module's memory, so never a shared buffer.
-        return new ImageData(readback.pixels() as Uint8ClampedArray<ArrayBuffer>, picture.width, picture.height);
+        return new ImageData(
+          readback.pixels() as Uint8ClampedArray<ArrayBuffer>,
+          picture.width,
+          picture.height,
+        );
       } finally {
         readback.free();
       }
     },
-    resize(width, height) {
-      size(output, width, height);
+    resize(wide, high) {
+      size(output, wide, high);
       renderer.resize(output.width, output.height);
     },
     destroy() {
@@ -267,7 +320,12 @@ function packed(
   painted: Paints,
 ): Float32Array {
   const shown = placed.flatMap((item) => {
-    const texture = item.kind === "image" ? images.get(item.asset) : item.kind === "text" ? texts.get(item.id) : -1;
+    const texture =
+      item.kind === "image"
+        ? images.get(item.asset)
+        : item.kind === "text"
+          ? texts.get(item.id)
+          : -1;
     return texture === undefined ? [] : [floats(item, texture, painted)];
   });
   const items = new Float32Array(shown.length * STRIDE);
@@ -281,6 +339,8 @@ function packed(
  */
 const turns = new MessageChannel();
 const waiting: (() => void)[] = [];
+// Setting the handler starts the port.
+// oxlint-disable-next-line unicorn/prefer-add-event-listener
 turns.port1.onmessage = () => waiting.splice(0).forEach((resolve) => resolve());
 
 function turn(): Promise<void> {
@@ -291,34 +351,39 @@ function turn(): Promise<void> {
 }
 
 /** As the renderer lays out its items: its kind, its texture, then its instance. */
-function floats(item: Placed, texture: number, paints: Paints): number[] {
+function floats(item: Placed, texture: number, colours: Paints): number[] {
   switch (item.kind) {
     case "image": {
       const { frame, texture: shown } = item;
-      return [
-        ...[KINDS.image, texture, frame.x, frame.y, frame.width, frame.height, item.rotation],
-        ...[shown.x, shown.y, shown.width, shown.height, item.greyscale ? 1 : 0, item.elliptical ? 1 : 0],
-      ];
+      const quad = [frame.x, frame.y, frame.width, frame.height, item.rotation];
+      const flags = [item.greyscale ? 1 : 0, item.elliptical ? 1 : 0];
+      return [KINDS.image, texture, ...quad, shown.x, shown.y, shown.width, shown.height, ...flags];
     }
     case "text": {
       const { frame } = item;
       const quad = [frame.x, frame.y, frame.width, frame.height, item.rotation];
-      return [KINDS.text, texture, ...quad, ...paints(item.paint), 0, 0];
+      return [KINDS.text, texture, ...quad, ...colours(item.paint), 0, 0];
     }
     case "line": {
       const { from, to } = item;
       const line = [from.x, from.y, to.x, to.y, 0, stroke(item)];
-      return [KINDS.stroke, -1, SHAPES.line, ...line, ...paints(item.paint)];
+      return [KINDS.stroke, -1, SHAPES.line, ...line, ...colours(item.paint)];
     }
     case "fill": {
       const { frame } = item;
       const fill = [frame.x, frame.y, frame.width, frame.height, item.rotation, item.opacity];
-      return [KINDS.stroke, -1, item.shape === "ellipse" ? SHAPES.ellipseFill : SHAPES.fill, ...fill, ...paints(item.paint)];
+      return [
+        KINDS.stroke,
+        -1,
+        item.shape === "ellipse" ? SHAPES.ellipseFill : SHAPES.fill,
+        ...fill,
+        ...colours(item.paint),
+      ];
     }
     default: {
       const { frame } = item;
       const outline = [frame.x, frame.y, frame.width, frame.height, item.rotation, stroke(item)];
-      return [KINDS.stroke, -1, SHAPES[item.kind], ...outline, ...paints(item.paint)];
+      return [KINDS.stroke, -1, SHAPES[item.kind], ...outline, ...colours(item.paint)];
     }
   }
 }
@@ -339,16 +404,27 @@ function grid(
   if (background === "plain") {
     return new Float32Array();
   }
-  const { spacing, fade, coarse } = gridLevel(zoom);
+  const { spacing, fade, coarse } = core.gridLevel(zoom);
   // Here, where numbers are doubles, as the renderer's floats would lose the lines far out.
   const offset = (value: number) => value - Math.floor(value / coarse) * coarse;
   const { width, alpha } = GRID[background];
   const opacity = Math.min(alpha * strength, 1);
   const dots = background === "dots" ? 1 : 0;
-  return Float32Array.of(offset(x), offset(y), spacing, fade, ...ink, opacity, width * density, dots, coarse / spacing, 0);
+  return Float32Array.of(
+    offset(x),
+    offset(y),
+    spacing,
+    fade,
+    ...ink,
+    opacity,
+    width * density,
+    dots,
+    coarse / spacing,
+    0,
+  );
 }
 
-function canvas(host: HTMLElement, width: number, height: number): HTMLCanvasElement {
+function appended(host: HTMLElement, width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   size(canvas, width, height);
   host.append(canvas);

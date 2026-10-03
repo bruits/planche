@@ -1,7 +1,16 @@
 // The colour each image shows on average, which arranging by colour sorts on. It is read again
 // each time, from a small copy, as the renderer keeps only its textures, and never saved.
 
-import { capped, decode, files, readAsset, release, type Asset, type Decoded, type Opened } from "./board.js";
+import {
+  capped,
+  decode,
+  files,
+  readAsset,
+  release,
+  type Asset,
+  type Decoded,
+  type Opened,
+} from "./board.js";
 import { halved } from "./capture.js";
 import type { Kind, Size } from "./core.js";
 
@@ -31,7 +40,9 @@ export async function meanColours(opened: Opened, ids: string[]): Promise<Record
   }
   const decoded = await decode([...assets.values()], SIDE);
   try {
-    const copies = new Map([...decoded].map(([asset, picture]) => [asset, small(picture, assets.get(asset)!.natural)]));
+    const copies = new Map(
+      [...decoded].map(([asset, picture]) => [asset, small(picture, assets.get(asset)!.natural)]),
+    );
     const colours: Record<string, Colour> = {};
     for (const [id, kind] of images) {
       const pixels = copies.get(kind.asset);
@@ -48,9 +59,12 @@ export async function meanColours(opened: Opened, ids: string[]): Promise<Record
 
 function small(decoded: Decoded, natural: Size): ImageData {
   const { width, height } = capped(natural, SIDE);
-  const context = Object.assign(document.createElement("canvas"), { width, height }).getContext("2d", {
-    willReadFrequently: true,
-  })!;
+  const context = Object.assign(document.createElement("canvas"), { width, height }).getContext(
+    "2d",
+    {
+      willReadFrequently: true,
+    },
+  )!;
   // WebKit averages pixels only from medium on, and a video's first frame comes at its own size.
   context.imageSmoothingQuality = "medium";
   const source =
@@ -61,22 +75,20 @@ function small(decoded: Decoded, natural: Size): ImageData {
   return context.getImageData(0, 0, width, height);
 }
 
-function mean({ data, width, height }: ImageData, { natural_size: natural, edits }: Image): Colour | undefined {
+function mean(
+  { data, width, height }: ImageData,
+  { natural_size: natural, edits }: Image,
+): Colour | undefined {
   const crop = edits.crop ?? { x: 0, y: 0, ...natural };
   const [across, down] = [width / natural.width, height / natural.height];
   const [left, right] = span(crop.x, crop.width, across, width);
   const [top, bottom] = span(crop.y, crop.height, down, height);
-  // How far the nearest point of a pixel lies from the ellipse's centre, in its radius, so that it
-  // keeps the pixels it reaches into, as a crop does. Flips mirror it onto itself.
-  const off = (at: number, start: number, length: number, scale: number) => {
-    const centre = (start + length / 2) * scale;
-    return (Math.min(Math.max(centre, at), at + 1) - centre) / ((length / 2) * scale);
-  };
   const sum: Colour = [0, 0, 0];
   let weight = 0;
   for (let y = top; y < bottom; y++) {
     for (let x = left; x < right; x++) {
-      const outside = off(x, crop.x, crop.width, across) ** 2 + off(y, crop.y, crop.height, down) ** 2 > 1;
+      const outside =
+        off(x, crop.x, crop.width, across) ** 2 + off(y, crop.y, crop.height, down) ** 2 > 1;
       if (edits.crop_shape === "ellipse" && outside) {
         continue;
       }
@@ -89,6 +101,15 @@ function mean({ data, width, height }: ImageData, { natural_size: natural, edits
     }
   }
   return weight === 0 ? undefined : (sum.map((channel) => Math.round(channel / weight)) as Colour);
+}
+
+/**
+ * How far the nearest point of a pixel lies from the ellipse's centre, in its radius, so that it
+ * keeps the pixels it reaches into, as a crop does. Flips mirror it onto itself.
+ */
+function off(at: number, start: number, length: number, scale: number): number {
+  const centre = (start + length / 2) * scale;
+  return (Math.min(Math.max(centre, at), at + 1) - centre) / ((length / 2) * scale);
 }
 
 function span(start: number, length: number, scale: number, size: number): [number, number] {

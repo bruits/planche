@@ -23,7 +23,8 @@ export function writer(board: HTMLElement): Writer {
   field.hidden = true;
   document.body.append(field);
   const style = (properties: Record<string, string>) => {
-    for (const name of [...field.style]) {
+    // A copy, as the style's list shrinks as each property goes.
+    for (const name of Array.from(field.style)) {
       field.style.removeProperty(name);
     }
     for (const [name, value] of Object.entries(properties)) {
@@ -54,7 +55,9 @@ export function writer(board: HTMLElement): Writer {
   // Unless the window lost the focus, which gives it back to the field on return.
   field.addEventListener("blur", () => document.hasFocus() && close());
   // Before the board hears of the press, which may edit it.
-  document.addEventListener("pointerdown", (event) => event.target !== field && close(), { capture: true });
+  document.addEventListener("pointerdown", (event) => event.target !== field && close(), {
+    capture: true,
+  });
   return {
     open(content, input, done) {
       close();

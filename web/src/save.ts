@@ -5,6 +5,7 @@
 import * as core from "./core.js";
 import type { Bytes, Files, Snapshot } from "./core.js";
 import type { Reading } from "./board.js";
+import { message } from "./errors.js";
 import type { Folder, Home, ZipHome } from "./platform.js";
 import { writeZip, zipFolder } from "./zip.js";
 
@@ -35,7 +36,11 @@ export interface Store {
 }
 
 /** The board in `home`, as read from it, or none yet. */
-export async function folderStore(home: Home, reading: Reading | undefined, session: boolean): Promise<Store> {
+export async function folderStore(
+  home: Home,
+  reading: Reading | undefined,
+  session: boolean,
+): Promise<Store> {
   let known = reading ? core.known(reading.listed, reading.files) : new core.Known();
   // By path, as the app last read or wrote them.
   let stamps = new Map(session ? [] : reading?.stamps);
@@ -118,7 +123,11 @@ export async function folderStore(home: Home, reading: Reading | undefined, sess
         return false;
       }
       const listed = (await home.list(core.fileDepth())).filter(core.isBoardFile);
-      return listed.length !== stamps.size || listed.some((path) => !stamps.has(path)) || changedAny(listed);
+      return (
+        listed.length !== stamps.size ||
+        listed.some((path) => !stamps.has(path)) ||
+        changedAny(listed)
+      );
     },
     free: () => known.free(),
   };
@@ -245,7 +254,7 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
    */
   async function reread(clean: boolean): Promise<void> {
     holding = true;
-    let then: () => Promise<void> | void = () => {};
+    let then: (() => Promise<void> | void) | undefined;
     try {
       const reloaded = await hooks.reload(() => !clean || !due);
       if (reloaded === "replaced") {
@@ -266,13 +275,12 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
         };
       }
     } catch (error) {
-      then = () =>
-        fail(`it changed on disk, and could not be read again: ${error instanceof Error ? error.message : String(error)}`);
+      then = () => fail(`it changed on disk, and could not be read again: ${message(error)}`);
     } finally {
       holding = false;
     }
     if (!stopped) {
-      await then();
+      await then?.();
     }
   }
 
@@ -282,7 +290,18 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
     hooks.failed(reason);
   }
 
+  /** Once no save runs, as one ending may start another. */
+  async function idle(): Promise<void> {
+    // `start` sets it, and each run clears it as it ends.
+    // oxlint-disable-next-line no-unmodified-loop-condition
+    while (running) {
+      await running;
+    }
+  }
+
   async function run(): Promise<void> {
+    // Edits and `stop` set these while a save is awaited.
+    // oxlint-disable-next-line no-unmodified-loop-condition
     while (due && !stopped) {
       due = false;
       passes += 1;
@@ -318,7 +337,7 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
         // Tried again once edited or flushed, as trying on its own could ask again and again.
         keep();
         writing = false;
-        failure = error instanceof Error ? error.message : String(error);
+        failure = message(error);
         hooks.failed(failure);
         return;
       } finally {
@@ -351,9 +370,7 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
       if (due && !holding && held === 0 && !stopped) {
         start();
       }
-      while (running) {
-        await running;
-      }
+      await idle();
       return !due;
     },
     unwritten: () => due || writing,
@@ -390,9 +407,7 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
     async during(work) {
       held += 1;
       try {
-        while (running) {
-          await running;
-        }
+        await idle();
         return await work();
       } finally {
         held -= 1;
@@ -401,9 +416,7 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
     async stop() {
       stopped = true;
       clearTimeout(timer);
-      while (running) {
-        await running;
-      }
+      await idle();
     },
   };
 }

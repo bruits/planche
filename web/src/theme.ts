@@ -21,7 +21,8 @@ export function theme(changed: () => void): Theme {
   const more = matchMedia("(prefers-contrast: more)");
   const storedScheme = recall(SCHEME);
   const storedContrast = recall(CONTRAST);
-  let scheme: Scheme = storedScheme === "light" || storedScheme === "dark" ? storedScheme : "system";
+  let scheme: Scheme =
+    storedScheme === "light" || storedScheme === "dark" ? storedScheme : "system";
   /** `undefined` to follow the system's. */
   let contrast = storedContrast === "high" ? true : storedContrast === "normal" ? false : undefined;
   const highContrast = () => contrast ?? more.matches;

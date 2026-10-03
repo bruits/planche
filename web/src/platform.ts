@@ -29,7 +29,7 @@ export interface Home extends Folder {
   /** The stamps of those of `paths` that are in the folder, which change whenever a program writes one. */
   stamps(paths: string[]): Promise<Map<string, string>>;
   /** Reopened at launch, until another board opens. Missing for the session. */
-  remember?(): Promise<void>;
+  remember?: (() => Promise<void>) | undefined;
 }
 
 /** The app's own folder for the board being edited while it has no folder of its own. */
@@ -111,7 +111,7 @@ export interface Platform {
   /** Missing where the app has no window of its own. */
   titleBar?: TitleBar;
   /** Why saving into a folder is impossible here, if it is. */
-  cannotSave?: string;
+  cannotSave?: string | undefined;
   /** A home where the board can save itself. `null` when the user cancels. */
   open(): Promise<Folder | Home | null>;
   /** `null` when the user cancels. Throws when the folder is not empty. */
@@ -140,8 +140,14 @@ export interface Platform {
    * addresses of images from a web page, with where on the page.
    */
   watchDrops(
-    dropped: (read: () => Promise<Incoming[]>, addresses: string[], at: { clientX: number; clientY: number }) => void,
+    dropped: (
+      read: () => Promise<Incoming[]>,
+      addresses: string[],
+      at: { clientX: number; clientY: number },
+    ) => void,
   ): void;
 }
 
+// Tauri's own name for its API.
+// oxlint-disable-next-line no-underscore-dangle
 export const platform: Platform = window.__TAURI__ ? tauri(window.__TAURI__) : browser;

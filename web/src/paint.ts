@@ -29,7 +29,8 @@ export function paints(host: HTMLElement): Paints {
     }
     return rgb;
   };
-  return (paint) => (typeof paint === "string" ? resolve(paint) : readable(resolve(paint.on), resolve("sticky-ink")));
+  return (paint) =>
+    typeof paint === "string" ? resolve(paint) : readable(resolve(paint.on), resolve("sticky-ink"));
 }
 
 /** As CSS writes it, following the theme where the palette's colours do. */
@@ -38,7 +39,9 @@ export function css(paint: Paint, host: HTMLElement): string {
     const [red, green, blue] = paints(host)(paint).map((channel) => Math.round(channel * 255));
     return `rgb(${red} ${green} ${blue})`;
   }
-  return paint.startsWith("#") && !forced() ? paint : `var(--${paint.startsWith("#") ? "ink" : paint})`;
+  return paint.startsWith("#") && !forced()
+    ? paint
+    : `var(--${paint.startsWith("#") ? "ink" : paint})`;
 }
 
 function resolved(paint: Exclude<Paint, { on: Colour }>, style: CSSStyleDeclaration): string {
@@ -54,7 +57,9 @@ function forced(): boolean {
 
 /** The sticky notes' ink, or white where that would not show. */
 function readable(on: number[], ink: number[]): number[] {
-  const linear = on.map((channel) => (channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4));
+  const linear = on.map((channel) =>
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+  );
   const luminance = 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
   // Where black and white contrast alike with it.
   return luminance > 0.18 ? ink : [1, 1, 1];
@@ -73,7 +78,11 @@ export function reader(): (colour: string) => number[] {
     context.clearRect(0, 0, 1, 1);
     context.fillStyle = colour;
     context.fillRect(0, 0, 1, 1);
-    return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)].map((channel) => channel / 255);
+    // Mapped out of the clamped array, which would round the fractions back to bytes.
+    return Array.from(
+      context.getImageData(0, 0, 1, 1).data.slice(0, 3),
+      (channel) => channel / 255,
+    );
   };
   return read;
 }

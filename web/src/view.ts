@@ -127,8 +127,8 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
       if (event.ctrlKey || event.metaKey) {
         // Safari may report its pinch both ways.
         if (pinching === undefined) {
-          const step = Math.max(-LARGEST_ZOOM_STEP, Math.min(dy, LARGEST_ZOOM_STEP));
-          zoomAt(Math.exp(-step * ZOOM_SPEED), event.clientX, event.clientY);
+          const notch = Math.max(-LARGEST_ZOOM_STEP, Math.min(dy, LARGEST_ZOOM_STEP));
+          zoomAt(Math.exp(-notch * ZOOM_SPEED), event.clientX, event.clientY);
         }
         return;
       }
@@ -143,7 +143,9 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
     { passive: false },
   );
   // Pinching or Ctrl-scrolling anywhere else, over the toolbar say, would zoom the whole page.
-  document.addEventListener("wheel", (event) => event.ctrlKey && event.preventDefault(), { passive: false });
+  document.addEventListener("wheel", (event) => event.ctrlKey && event.preventDefault(), {
+    passive: false,
+  });
   document.addEventListener("gesturestart", (event) => {
     event.preventDefault();
     pinching = 1;
@@ -273,6 +275,11 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
 
 /** How far a wheel scrolls, in CSS pixels, as some browsers count in lines, or in pages `page` long. */
 export function scrolled(event: WheelEvent, page: number): [number, number] {
-  const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? LINE : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? page : 1;
+  const unit =
+    event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? LINE
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? page
+        : 1;
   return [event.deltaX * unit, event.deltaY * unit];
 }

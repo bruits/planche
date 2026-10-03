@@ -32,8 +32,8 @@ export async function picture(bytes: Bytes, natural: Size): Promise<Picture> {
 function dataUrl(blob: Blob): Promise<string> {
   const reader = new FileReader();
   return new Promise((resolve, reject) => {
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
+    reader.addEventListener("load", () => resolve(reader.result as string));
+    reader.addEventListener("error", () => reject(reader.error));
     reader.readAsDataURL(blob);
   });
 }
@@ -66,9 +66,9 @@ export function vectors(again: () => void): Vectors {
   const canvas = document.createElement("canvas");
   const settle = settling(again);
   return {
-    keep(asset, picture) {
+    keep(asset, drawing) {
       if (!pictures.has(asset)) {
-        pictures.set(asset, picture);
+        pictures.set(asset, drawing);
       }
     },
     update(board, renderer, camera, viewport) {
@@ -98,7 +98,11 @@ export function vectors(again: () => void): Vectors {
         const longest = Math.max(natural.width, natural.height);
         const inView = visible.has(asset);
         // Out of view, an asset drops to a density that costs little, so that memory follows what shows.
-        const density = Math.min(rounded(here), inView ? Infinity : FAR / longest, LONGEST_SIDE / longest);
+        const density = Math.min(
+          rounded(here),
+          inView ? Infinity : FAR / longest,
+          LONGEST_SIDE / longest,
+        );
         const done = rasterised.get(asset);
         if (done !== undefined && (done === density || !settle.settled(inView))) {
           continue;
@@ -113,13 +117,13 @@ export function vectors(again: () => void): Vectors {
       }
     },
     drawn(asset, density) {
-      const picture = pictures.get(asset);
-      if (picture === undefined) {
+      const drawing = pictures.get(asset);
+      if (drawing === undefined) {
         return undefined;
       }
       const own = document.createElement("canvas");
-      const longest = Math.max(picture.natural.width, picture.natural.height);
-      rasterise(own, picture, Math.min(density, LONGEST_SIDE / longest));
+      const longest = Math.max(drawing.natural.width, drawing.natural.height);
+      rasterise(own, drawing, Math.min(density, LONGEST_SIDE / longest));
       return own;
     },
     reset() {

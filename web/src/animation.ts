@@ -19,7 +19,7 @@ export interface Moving {
 
 export interface Animations {
   /** Plays those that move from now on, unless one already does, or its texture is smaller than it. */
-  keep(images: Iterable<{ asset: string; natural: Size; moving?: Moving }>): void;
+  keep(images: Iterable<{ asset: string; natural: Size; moving?: Moving | undefined }>): void;
   /** Draws the frames due of those that show, and asks for a frame once the next one is. */
   update(board: Board, renderer: Renderer, camera: Camera, viewport: Viewport): void;
   holds(asset: string): boolean;
@@ -39,7 +39,7 @@ interface Clip {
   /** Played or paused by the user, or played through, which motion being reduced leaves as it is. */
   chosen: boolean;
   /** While it shows, from when it plays. */
-  run?: { frames: Playing; played: number; due: number };
+  run?: { frames: Playing; played: number; due: number } | undefined;
 }
 
 /** `again` asks for another frame, and `changed` tells that one stopped on its own. */
@@ -94,7 +94,11 @@ export function animations(again: () => void, changed: () => void): Animations {
   return {
     keep(images) {
       for (const { asset, natural, moving } of images) {
-        if (moving && !clips.has(asset) && Math.max(natural.width, natural.height) <= LONGEST_SIDE) {
+        if (
+          moving &&
+          !clips.has(asset) &&
+          Math.max(natural.width, natural.height) <= LONGEST_SIDE
+        ) {
           clips.set(asset, { moving, paused: reduced, chosen: false });
         }
       }
@@ -107,7 +111,9 @@ export function animations(again: () => void, changed: () => void): Animations {
       const now = performance.now();
       let next = Infinity;
       // The most overdue first, so that one a frame had no time left for goes first in the next.
-      const queue = [...clips].sort(([, a], [, b]) => (a.run?.due ?? now) - (b.run?.due ?? now));
+      const queue = [...clips].toSorted(
+        ([, a], [, b]) => (a.run?.due ?? now) - (b.run?.due ?? now),
+      );
       for (const [asset, clip] of queue) {
         if (!shown.has(asset)) {
           stop(clip);

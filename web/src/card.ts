@@ -8,6 +8,7 @@ import { among, type Opened } from "./board.js";
 import { ariaKeys, describe, type Command, type Shortcut } from "./commands.js";
 import type { Colour, CropShape, Kind, Point } from "./core.js";
 import type { Reading } from "./edit.js";
+import { message } from "./errors.js";
 import { icon, type Icon } from "./icons.js";
 import { css, type Paint } from "./paint.js";
 import { defaultAlignment, holdsText } from "./text.js";
@@ -31,7 +32,7 @@ interface Choice<S extends Setting> {
   value: Style[S];
   label: string;
   look: () => Node;
-  command?: Command;
+  command?: Command | undefined;
 }
 
 const STROKES: { [S in "weight" | "heads" | "dash" | "fill"]: Choice<S>[] } = {
@@ -158,7 +159,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
 
   let open = false;
   /** What the card shows, so that it only builds again once that changed, and at which zoom, as sizes go by it. */
-  let shown = "";
+  let built = "";
   let filledAt: number | undefined;
   /** With whether the alignment it holds is only the one its holder takes by default. */
   let copied: { style: Style; natural: boolean } | undefined;
@@ -180,7 +181,11 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   const common = (): Setting[] => {
     const all = styled();
     const [first] = all;
-    return first ? settings(first.kind).filter((setting) => all.every(({ kind }) => settings(kind).includes(setting))) : [];
+    return first
+      ? settings(first.kind).filter((setting) =>
+          all.every(({ kind }) => settings(kind).includes(setting)),
+        )
+      : [];
   };
   const images = () => {
     const all = targets();
@@ -199,7 +204,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     try {
       host.apply(work);
     } catch (error) {
-      host.say(String(error instanceof Error ? error.message : error));
+      host.say(message(error));
     }
   };
   /** Each element selected in `style`, or the style `each` gives it, as one edit. */
@@ -237,7 +242,11 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     name: string,
     content: Node,
     press: (event: MouseEvent) => void,
-    { pressed, shortcut, hint }: { pressed?: boolean; shortcut?: Shortcut; hint?: string } = {},
+    {
+      pressed,
+      shortcut,
+      hint,
+    }: { pressed?: boolean; shortcut?: Shortcut | undefined; hint?: string } = {},
   ) => {
     const made = document.createElement("button");
     made.type = "button";
@@ -260,16 +269,14 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       press(event);
       // Back to the board, as the toolbar's buttons give it back, unless the keys pressed it, even
       // from the button built again in its place, which took its focus over.
-      if (event.detail > 0 && document.activeElement instanceof HTMLElement && panel.contains(document.activeElement)) {
+      if (
+        event.detail > 0 &&
+        document.activeElement instanceof HTMLElement &&
+        panel.contains(document.activeElement)
+      ) {
         document.activeElement.blur();
       }
     });
-    return made;
-  };
-  const swatch = (paint: Paint, kind: "palette" | "own" | "paper") => {
-    const made = document.createElement("span");
-    made.className = `swatch ${kind}`;
-    made.style.setProperty("--swatch", css(paint, made));
     return made;
   };
   /** The buttons of one setting, which press each other off. */
@@ -282,24 +289,21 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       }),
     );
   };
-  const toggle = (setting: "bold" | "italic" | "strike", label: string, name: Icon, command: Command) =>
-    button(label, icon(name), (event) => set({ [setting]: value(setting) !== true }, event.altKey), {
-      pressed: value(setting) === true,
-      shortcut: command.keys?.[0],
-    });
-  const row = (label: string, ...groups: HTMLElement[][]) => {
-    const made = document.createElement("div");
-    made.className = "row";
-    made.setAttribute("role", "group");
-    made.setAttribute("aria-label", label);
-    groups.forEach((group, at) => {
-      if (at > 0) {
-        made.append(separator());
-      }
-      made.append(...group);
-    });
-    return made;
-  };
+  const toggle = (
+    setting: "bold" | "italic" | "strike",
+    label: string,
+    name: Icon,
+    command: Command,
+  ) =>
+    button(
+      label,
+      icon(name),
+      (event) => set({ [setting]: value(setting) !== true }, event.altKey),
+      {
+        pressed: value(setting) === true,
+        shortcut: command.keys?.[0],
+      },
+    );
 
   /** One row per kind of setting, of those that apply to all. */
   const build = (): HTMLElement[] => {
@@ -352,26 +356,41 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     if (images()) {
       const grey = targets().every(({ kind }) => kind.type === "image" && kind.edits.greyscale);
       const shaped = (shape: CropShape) =>
-        targets().every(({ kind }) => kind.type === "image" && (kind.edits.crop_shape ?? "rectangle") === shape);
+        targets().every(
+          ({ kind }) => kind.type === "image" && (kind.edits.crop_shape ?? "rectangle") === shape,
+        );
       const crops = commands.crop.unavailable?.() === undefined;
       rows.push(
         row(
           "Image",
           [
             button("Greyscale", icon("contrast"), () => greyscale(), { pressed: grey }),
-            button("Flip horizontally", icon("flipHorizontally"), () => commands.flipHorizontally.run(), {
-              shortcut: commands.flipHorizontally.keys?.[0],
-            }),
+            button(
+              "Flip horizontally",
+              icon("flipHorizontally"),
+              () => commands.flipHorizontally.run(),
+              {
+                shortcut: commands.flipHorizontally.keys?.[0],
+              },
+            ),
             button("Flip vertically", icon("flipVertically"), () => commands.flipVertically.run(), {
               shortcut: commands.flipVertically.keys?.[0],
             }),
-            ...(crops ? [button("Crop", icon("crop"), () => commands.crop.run(), { shortcut: commands.crop.keys?.[0] })] : []),
+            ...(crops
+              ? [
+                  button("Crop", icon("crop"), () => commands.crop.run(), {
+                    shortcut: commands.crop.keys?.[0],
+                  }),
+                ]
+              : []),
           ],
           [
             button("Rectangular crop", icon("square"), () => commands.rectangularCrop.run(), {
               pressed: shaped("rectangle"),
             }),
-            button("Elliptical crop", icon("circle"), () => commands.ellipticalCrop.run(), { pressed: shaped("ellipse") }),
+            button("Elliptical crop", icon("circle"), () => commands.ellipticalCrop.run(), {
+              pressed: shaped("ellipse"),
+            }),
           ],
         ),
       );
@@ -403,14 +422,20 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     const own = store.picked().slice(0, RECENT);
     own.forEach((colour, at) =>
       place(
-        button(colour, swatch(colour, "own"), (event) => set({ colour }, event.altKey), { pressed: current === colour }),
+        button(colour, swatch(colour, "own"), (event) => set({ colour }, event.altKey), {
+          pressed: current === colour,
+        }),
         2,
         at + 1,
       ),
     );
     place(separator(), 1, 7);
     const hint = "Pick a colour from the board · hold S";
-    place(button("Pick a colour from the board", icon("pipette"), () => host.pick(), { hint }), 1, 8);
+    place(
+      button("Pick a colour from the board", icon("pipette"), () => host.pick(), { hint }),
+      1,
+      8,
+    );
     // Under the pipette, or beside it while there are none of one's own to leave room for.
     if (own.length > 0) {
       place(separator(), 2, 7);
@@ -438,7 +463,12 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     edit((editor, touched) => {
       for (const { id, kind } of all) {
         if (kind.type === "image") {
-          touched.push(...editor.update(id, JSON.stringify({ ...kind, edits: { ...kind.edits, greyscale: grey } })));
+          touched.push(
+            ...editor.update(
+              id,
+              JSON.stringify({ ...kind, edits: { ...kind.edits, greyscale: grey } }),
+            ),
+          );
         }
       }
     });
@@ -449,13 +479,17 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     filledAt = host.zoom();
     const rows = build();
     const signature = rows.map((made) => made.outerHTML).join("");
-    if (signature === shown) {
+    if (signature === built) {
       return;
     }
-    const focused = panel.contains(document.activeElement) ? document.activeElement?.getAttribute("aria-label") : null;
+    const focused = panel.contains(document.activeElement)
+      ? document.activeElement?.getAttribute("aria-label")
+      : null;
     // Gone without the pointer leaving them, they would leave their hint behind.
-    panel.querySelectorAll("button, .custom").forEach((old) => old.dispatchEvent(new PointerEvent("pointerleave")));
-    shown = signature;
+    panel
+      .querySelectorAll("button, .custom")
+      .forEach((old) => old.dispatchEvent(new PointerEvent("pointerleave")));
+    built = signature;
     panel.replaceChildren(...rows.flatMap((made, at) => (at > 0 ? [rule(), made] : [made])));
     if (focused) {
       const again = [...panel.querySelectorAll<HTMLElement>("[aria-label]")];
@@ -503,7 +537,11 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     const ys = corners.map((corner) => corner!.clientY);
     const { width, height } = shown.getBoundingClientRect();
     const floor = Math.min(innerHeight, host.floor());
-    const left = clamp((Math.min(...xs) + Math.max(...xs)) / 2 - width / 2, MARGIN, innerWidth - width - MARGIN);
+    const left = clamp(
+      (Math.min(...xs) + Math.max(...xs)) / 2 - width / 2,
+      MARGIN,
+      innerWidth - width - MARGIN,
+    );
     const below = Math.max(...ys) + GAP;
     const top = below + height <= floor - MARGIN ? below : Math.min(...ys) - GAP - height;
     shown.style.setProperty("left", `${left}px`);
@@ -548,15 +586,19 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       if (zoom === undefined || all.length === 0) {
         return;
       }
-      const sizes = all.map(({ kind }) => stepped(Number(valueOf(kind, "size", zoom)), larger));
+      const sized = all.map(({ id, kind }) => ({
+        id,
+        kind,
+        size: stepped(Number(valueOf(kind, "size", zoom)), larger),
+      }));
       edit((editor, touched) => {
-        all.forEach(({ id, kind }, at) => {
-          touched.push(...editor.update(id, JSON.stringify(restyled(kind, { size: sizes[at] }, zoom))));
-        });
+        for (const { id, kind, size } of sized) {
+          touched.push(...editor.update(id, JSON.stringify(restyled(kind, { size }, zoom))));
+        }
       });
       store.learn(
         all.map(({ kind }) => kind),
-        { size: sizes[0] },
+        { size: sized[0]!.size },
       );
     },
     images,
@@ -567,18 +609,44 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       if (first && zoom !== undefined && settings(first.kind).length > 0) {
         const { kind } = first;
         const style = styleOf(kind, zoom);
-        copied = { style, natural: style.align !== undefined && holdsText(kind) && kind.text.align === undefined };
+        copied = {
+          style,
+          natural: style.align !== undefined && holdsText(kind) && kind.text.align === undefined,
+        };
       }
     },
     paste() {
       if (copied) {
         const { style, natural } = copied;
         // Each takes the alignment its own holder chooses, as a note's is not a shape's.
-        restyle(style, (kind) => (natural && holdsText(kind) ? { ...style, align: defaultAlignment(kind) } : style));
+        restyle(style, (kind) =>
+          natural && holdsText(kind) ? { ...style, align: defaultAlignment(kind) } : style,
+        );
       }
     },
     canPaste: () => copied !== undefined,
   };
+}
+
+function swatch(paint: Paint, kind: "palette" | "own" | "paper"): HTMLSpanElement {
+  const made = document.createElement("span");
+  made.className = `swatch ${kind}`;
+  made.style.setProperty("--swatch", css(paint, made));
+  return made;
+}
+
+function row(label: string, ...groups: HTMLElement[][]): HTMLDivElement {
+  const made = document.createElement("div");
+  made.className = "row";
+  made.setAttribute("role", "group");
+  made.setAttribute("aria-label", label);
+  groups.forEach((group, at) => {
+    if (at > 0) {
+      made.append(separator());
+    }
+    made.append(...group);
+  });
+  return made;
 }
 
 function separator(): HTMLElement {

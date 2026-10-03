@@ -97,7 +97,13 @@ export type Kind =
       natural_size: Size;
       frame: Rect;
       rotation: number;
-      edits: { crop: Rect | null; flip_horizontal: boolean; flip_vertical: boolean; greyscale: boolean; crop_shape?: CropShape };
+      edits: {
+        crop: Rect | null;
+        flip_horizontal: boolean;
+        flip_vertical: boolean;
+        greyscale: boolean;
+        crop_shape?: CropShape;
+      };
       source?: string;
       filename?: string;
       caption?: string;
@@ -222,8 +228,8 @@ export function background(editor: Editor): Background {
   return JSON.parse(editor.background()) as Background;
 }
 
-export function setBackground(editor: Editor, background: Background): void {
-  editor.setBackground(JSON.stringify(background));
+export function setBackground(editor: Editor, to: Background): void {
+  editor.setBackground(JSON.stringify(to));
 }
 
 export function setCropShape(editor: Editor, ids: string[], shape: CropShape): string[] {
@@ -261,8 +267,8 @@ export function animationPlays(bytes: Bytes): number | undefined {
 }
 
 /** The type of the blob a video plays from, `undefined` when the bytes do not start as one. */
-export function videoType(start: Bytes): string | undefined {
-  return containerType(start.subarray(0, VIDEO_START));
+export function videoType(bytes: Bytes): string | undefined {
+  return containerType(bytes.subarray(0, VIDEO_START));
 }
 
 /** The SVG with its root sized to `natural`, for every host to draw it at that size. */
@@ -282,7 +288,12 @@ export function snapToGrid(values: number[], zoom: number): number | undefined {
  * The factor near `factor` that scales `corner` around `origin` onto a line of the grid that
  * shows at `zoom`, `undefined` when none is near enough.
  */
-export function snapScaleToGrid(origin: Point, corner: Point, factor: number, zoom: number): number | undefined {
+export function snapScaleToGrid(
+  origin: Point,
+  corner: Point,
+  factor: number,
+  zoom: number,
+): number | undefined {
   return snapScale(origin.x, origin.y, corner.x, corner.y, factor, zoom);
 }
 
@@ -302,8 +313,8 @@ export function stick(editor: Editor, at: Point, tolerance: number): Stuck | und
 
 /** What the elements draw over, their groups' elements included, `undefined` when nothing. */
 export function bounds(editor: Editor, ids: string[]): Rect | undefined {
-  const bounds = editor.bounds(ids);
-  return bounds && { x: bounds[0]!, y: bounds[1]!, width: bounds[2]!, height: bounds[3]! };
+  const box = editor.bounds(ids);
+  return box && { x: box[0]!, y: box[1]!, width: box[2]!, height: box[3]! };
 }
 
 /** The pixel of the image `id` at `at`, as displayed, `undefined` when it is no image. */

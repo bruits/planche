@@ -31,17 +31,30 @@ const paths = {
     "M18 13.3l-6.3 -6.3",
   ],
   arrow: ["M5 12l14 0", "M15 16l4 -4", "M15 8l4 4"],
-  line: ["M4 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0", "M16 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0", "M7.5 16.5l9 -9"],
+  line: [
+    "M4 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
+    "M16 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
+    "M7.5 16.5l9 -9",
+  ],
   square: ["M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14"],
   circle: ["M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"],
   cross: ["M18 6l-12 12", "M6 6l12 12"],
-  typography: ["M4 20l3 0", "M14 20l7 0", "M6.9 15l6.9 0", "M10.2 6.3l5.8 13.7", "M5 20l6 -16l2 0l7 16"],
+  typography: [
+    "M4 20l3 0",
+    "M14 20l7 0",
+    "M6.9 15l6.9 0",
+    "M10.2 6.3l5.8 13.7",
+    "M5 20l6 -16l2 0l7 16",
+  ],
   message: [
     "M8 9h8",
     "M8 13h6",
     "M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1 -3 3h-5l-5 3v-3h-2a3 3 0 0 1 -3 -3v-8a3 3 0 0 1 3 -3h12",
   ],
-  note: ["M13 20l7 -7", "M13 20v-6a1 1 0 0 1 1 -1h6v-7a2 2 0 0 0 -2 -2h-12a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7"],
+  note: [
+    "M13 20l7 -7",
+    "M13 20v-6a1 1 0 0 1 1 -1h6v-7a2 2 0 0 0 -2 -2h-12a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7",
+  ],
   photo: [
     "M15 8h.01",
     "M3 6a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v12a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3v-12",
@@ -49,7 +62,11 @@ const paths = {
     "M14 14l1 -1c.928 -.893 2.072 -.893 3 0l3 3",
   ],
   chevron: ["M6 9l6 6l6 -6"],
-  window: ["M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2z", "M6 8h.01", "M9 8h.01"],
+  window: [
+    "M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2z",
+    "M6 8h.01",
+    "M9 8h.01",
+  ],
   undo: ["M9 14l-4 -4l4 -4", "M5 10h11a4 4 0 1 1 0 8h-1"],
   redo: ["M15 14l4 -4l-4 -4", "M19 10h-11a4 4 0 1 0 0 8h1"],
   menu: [
@@ -62,7 +79,10 @@ const paths = {
     "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
     "M18 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
   ],
-  pipette: ["M11 7l6 6", "M4 16l11.7 -11.7a1 1 0 0 1 1.4 0l2.6 2.6a1 1 0 0 1 0 1.4l-11.7 11.7h-4v-4z"],
+  pipette: [
+    "M11 7l6 6",
+    "M4 16l11.7 -11.7a1 1 0 0 1 1.4 0l2.6 2.6a1 1 0 0 1 0 1.4l-11.7 11.7h-4v-4z",
+  ],
   plus: ["M12 5l0 14", "M5 12l14 0"],
   stroke: ["M5 12l14 0"],
   arrows: ["M7 8l-4 4l4 4", "M17 8l4 4l-4 4", "M3 12l18 0"],
@@ -86,7 +106,10 @@ const paths = {
 export type Icon = keyof typeof paths;
 
 /** Hidden from assistive technologies, which read its button's label. `fill` is from 0 to 1. */
-export function icon(name: Icon, { stroke = 1.75, fill = 0 }: { stroke?: number; fill?: number } = {}): SVGSVGElement {
+export function icon(
+  name: Icon,
+  { stroke = 1.75, fill = 0 }: { stroke?: number; fill?: number } = {},
+): SVGSVGElement {
   const svg = document.createElementNS(SVG, "svg");
   const attributes = {
     viewBox: "0 0 24 24",
@@ -98,8 +121,8 @@ export function icon(name: Icon, { stroke = 1.75, fill = 0 }: { stroke?: number;
     "stroke-linejoin": "round",
     "aria-hidden": "true",
   };
-  for (const [name, value] of Object.entries(attributes)) {
-    svg.setAttribute(name, value);
+  for (const [attribute, value] of Object.entries(attributes)) {
+    svg.setAttribute(attribute, value);
   }
   for (const d of paths[name]) {
     const path = document.createElementNS(SVG, "path");

@@ -1,15 +1,25 @@
 {
+  // Checks the app and its tests. tsconfig.build.json compiles the app alone.
   "compilerOptions": {
     "target": "es2023",
     "module": "nodenext",
     "lib": ["es2023", "esnext.disposable", "dom", "dom.iterable", "dom.asynciterable"],
-    "types": [],
+    "types": ["node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
-    "rootDir": "src",
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
     // wasm-bindgen writes the core's bindings next to the compiled JS, in public/js/wasm.
     "rootDirs": ["src", "public/js"],
-    "outDir": "public/js"
+    "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src", "test", "vitest.config.ts", "vitest.setup.ts"]
 }

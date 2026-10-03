@@ -3,7 +3,12 @@
 import { opensMenu, type Command } from "./commands.js";
 import { dress, explanation } from "./toolbar.js";
 
-export function handle(host: HTMLElement, board: HTMLElement, drag: () => void, leave: Command): void {
+export function handle(
+  host: HTMLElement,
+  board: HTMLElement,
+  drag: () => void,
+  leave: Command,
+): void {
   const button = document.createElement("button");
   button.type = "button";
   dress(button, { command: leave, icon: "window" });
@@ -22,5 +27,7 @@ export function handle(host: HTMLElement, board: HTMLElement, drag: () => void, 
   host.addEventListener("wheel", (event) => board.dispatchEvent(new WheelEvent(event.type, event)));
   // While the drop is under way, as its files are only readable until then.
   host.addEventListener("drop", (event) => board.dispatchEvent(new DragEvent(event.type, event)));
-  host.addEventListener("contextmenu", (event) => board.dispatchEvent(new MouseEvent(event.type, event)));
+  host.addEventListener("contextmenu", (event) =>
+    board.dispatchEvent(new MouseEvent(event.type, event)),
+  );
 }

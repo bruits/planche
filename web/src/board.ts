@@ -31,11 +31,11 @@ export interface Added {
   asset: string;
   bytes: Blob;
   natural: Size;
-  decoded?: Decoded;
-  moving?: Moving;
+  decoded?: Decoded | undefined;
+  moving?: Moving | undefined;
   /** Typed, to play from. */
   video?: Blob;
-  filename?: string;
+  filename?: string | undefined;
 }
 
 /** An asset that images show, still encoded. */
@@ -44,7 +44,7 @@ export interface Asset {
   blob: Blob;
   natural: Size;
   vector: boolean;
-  moving?: Moving;
+  moving?: Moving | undefined;
   /** The blob, when a video. */
   video?: Blob;
 }
@@ -73,20 +73,26 @@ export async function open<T extends Folder>(
   const [listed, listing] = await timed(() => folder.list(core.fileDepth()));
   const board = listed.filter(core.isBoardFile);
   // Before reading, so that what another program writes meanwhile tells by its stamp.
-  const stamps = "stamps" in folder ? await (folder as unknown as Home).stamps(board) : new Map<string, string>();
-  const [files, reading] = await timed(async () => {
-    const files: Files = new Map();
+  const stamps =
+    "stamps" in folder
+      ? await (folder as unknown as Home).stamps(board)
+      : new Map<string, string>();
+  const [read, reading] = await timed(async () => {
+    const contents: Files = new Map();
     for (const path of board) {
-      files.set(path, await folder.read(path));
+      contents.set(path, await folder.read(path));
     }
-    return files;
+    return contents;
   });
-  const [editor, parsing] = await timed(() => core.read(files));
+  const [editor, parsing] = await timed(() => core.read(read));
   timings.clear();
   timings.set(`list ${listed.length} files`, milliseconds(listing));
-  timings.set(`read ${files.size} files`, milliseconds(reading));
+  timings.set(`read ${read.size} files`, milliseconds(reading));
   timings.set("parse", milliseconds(parsing));
-  return { opened: { folder, editor, board: core.board(editor), added: new Map() }, reading: { listed, files, stamps } };
+  return {
+    opened: { folder, editor, board: core.board(editor), added: new Map() },
+    reading: { listed, files: read, stamps },
+  };
 }
 
 /** A new board, which has no folder yet. */
@@ -108,7 +114,7 @@ export function files({ folder, added }: Opened): Folder {
     ...folder,
     read: async (path) => {
       const blob = added.get(path);
-      return blob ? (new Uint8Array(await blob.arrayBuffer()) as Bytes) : folder.read(path);
+      return blob ? new Uint8Array(await blob.arrayBuffer()) : folder.read(path);
     },
   };
 }
@@ -155,7 +161,11 @@ export async function prepare(
 /** One video's bytes at a time, as each is held twice while it is hashed, up to `VIDEO_LIMIT`. */
 let hashingVideo: Promise<unknown> = Promise.resolve();
 
-async function prepareVideo(bytes: Blob, type: string, held: (asset: string) => Size | undefined): Promise<Added> {
+async function prepareVideo(
+  bytes: Blob,
+  type: string,
+  held: (asset: string) => Size | undefined,
+): Promise<Added> {
   if (bytes.size > VIDEO_LIMIT) {
     throw new Error(`it is over the ${VIDEO_LIMIT / 1e6} MB limit for videos`);
   }
@@ -174,7 +184,10 @@ async function prepareVideo(bytes: Blob, type: string, held: (asset: string) => 
 /** Only a GIF, a PNG, or a WebP may move, and only their bytes are worth copying into the core. */
 function moves(bytes: Bytes): Moving | undefined {
   const head = String.fromCharCode(...bytes.subarray(0, 12));
-  const may = head.startsWith("GIF8") || head.startsWith("\x89PNG") || (head.startsWith("RIFF") && head.endsWith("WEBP"));
+  const may =
+    head.startsWith("GIF8") ||
+    head.startsWith("\x89PNG") ||
+    (head.startsWith("RIFF") && head.endsWith("WEBP"));
   const plays = may ? core.animationPlays(bytes) : undefined;
   return plays === undefined ? undefined : { bytes, plays };
 }
@@ -214,7 +227,9 @@ export function newId(): string {
  * which every shell's webview is, and the core otherwise, as for a page served over plain HTTP.
  */
 export async function digest(bytes: Bytes): Promise<string> {
-  return crypto.subtle ? hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))) : core.assetId(bytes);
+  return crypto.subtle
+    ? hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
+    : core.assetId(bytes);
 }
 
 function hex(bytes: Uint8Array): string {
@@ -225,10 +240,28 @@ export function imageKind(
   asset: string,
   natural: Size,
   frame: Rect,
-  about: { filename?: string; source?: string; caption?: string } = {},
+  {
+    filename,
+    source,
+    caption,
+  }: {
+    filename?: string | undefined;
+    source?: string | undefined;
+    caption?: string | undefined;
+  } = {},
 ): Kind {
   const edits = { crop: null, flip_horizontal: false, flip_vertical: false, greyscale: false };
-  return { type: "image", asset, natural_size: natural, frame, rotation: 0, edits, ...about };
+  return {
+    type: "image",
+    asset,
+    natural_size: natural,
+    frame,
+    rotation: 0,
+    edits,
+    ...(filename !== undefined && { filename }),
+    ...(source !== undefined && { source }),
+    ...(caption !== undefined && { caption }),
+  };
 }
 
 /** Side by side around `at`, shrunk as one and moved to fit within `area` when given. */
@@ -245,7 +278,12 @@ export function row(sizes: Size[], at: Point, area?: Rect): Rect[] {
     : at;
   let x = centre.x - wide / 2;
   return sizes.map(({ width, height }) => {
-    const frame = { x, y: centre.y - (height * scale) / 2, width: width * scale, height: height * scale };
+    const frame = {
+      x,
+      y: centre.y - (height * scale) / 2,
+      width: width * scale,
+      height: height * scale,
+    };
     x += frame.width;
     return frame;
   });
@@ -263,7 +301,9 @@ export function refresh({ editor, board }: Opened, touched: string[]): void {
       board.elements[id] = element;
     }
     reordered ||=
-      (before === undefined) !== (element === undefined) || before?.z !== element?.z || before?.group !== element?.group;
+      (before === undefined) !== (element === undefined) ||
+      before?.z !== element?.z ||
+      before?.group !== element?.group;
   }
   if (reordered) {
     board.draw_order = editor.drawOrder();
@@ -311,7 +351,13 @@ export function placed(
       case "note":
         return written;
       case "sticky": {
-        const paper = { kind: "fill", shape: "rectangle", frame: kind.frame, rotation: kind.rotation, opacity: 1 } as const;
+        const paper = {
+          kind: "fill",
+          shape: "rectangle",
+          frame: kind.frame,
+          rotation: kind.rotation,
+          opacity: 1,
+        } as const;
         return [{ ...paper, paint: `paper-${kind.paper ?? "yellow"}` }, ...written];
       }
       case "shape":
@@ -338,13 +384,28 @@ function image(kind: Extract<Kind, { type: "image" }>): Placed {
   }
   const texture = { x, y, width: across, height: down };
   const elliptical = crop_shape === "ellipse";
-  return { kind: "image", asset: kind.asset, frame: kind.frame, rotation: kind.rotation, texture, greyscale, elliptical };
+  return {
+    kind: "image",
+    asset: kind.asset,
+    frame: kind.frame,
+    rotation: kind.rotation,
+    texture,
+    greyscale,
+    elliptical,
+  };
 }
 
 function line(kind: Extract<Kind, { type: "arrow" | "line" }>): Extract<Placed, { kind: "line" }> {
   const width = core.strokeWidth(kind.weight);
   const { from, to } = kind;
-  return { kind: "line", from, to, width, paint: kind.colour ?? "ink", dashed: kind.dash === "dashed" };
+  return {
+    kind: "line",
+    from,
+    to,
+    width,
+    paint: kind.colour ?? "ink",
+    dashed: kind.dash === "dashed",
+  };
 }
 
 /** Its line, and the two solid strokes of an open head at each end that draws one. */
@@ -362,7 +423,10 @@ function arrow(kind: Extract<Kind, { type: "arrow" }>): Placed[] {
     const side = (angle: number) => ({
       ...drawn,
       from: tip,
-      to: { x: tip.x + Math.cos(back + angle) * length, y: tip.y + Math.sin(back + angle) * length },
+      to: {
+        x: tip.x + Math.cos(back + angle) * length,
+        y: tip.y + Math.sin(back + angle) * length,
+      },
       dashed: false,
     });
     return [side(HEAD_ANGLE), side(-HEAD_ANGLE)];
@@ -374,7 +438,14 @@ function shape(kind: Extract<Kind, { type: "shape" }>): Placed[] {
   const { frame, rotation } = kind;
   const paint = kind.colour ?? "ink";
   const width = core.strokeWidth(kind.weight);
-  const outline: Placed = { kind: kind.shape, frame, rotation, width, paint, dashed: kind.dash === "dashed" };
+  const outline: Placed = {
+    kind: kind.shape,
+    frame,
+    rotation,
+    width,
+    paint,
+    dashed: kind.dash === "dashed",
+  };
   const fill = kind.fill ?? "hollow";
   if (kind.shape === "cross" || fill === "hollow") {
     return [outline];
@@ -392,7 +463,10 @@ export function extent({ editor, board }: Opened, ids = board.draw_order): Rect 
     return kind.type === "comment" && among(board, id, chosen) ? [kind.at] : [];
   });
   if (drawn) {
-    points.push({ x: drawn.x, y: drawn.y }, { x: drawn.x + drawn.width, y: drawn.y + drawn.height });
+    points.push(
+      { x: drawn.x, y: drawn.y },
+      { x: drawn.x + drawn.width, y: drawn.y + drawn.height },
+    );
   }
   if (points.length === 0) {
     return undefined;
@@ -434,7 +508,10 @@ const AT_ONCE = 4;
  * Runs `work` on each item `next` hands out, `AT_ONCE` at a time, until it hands out none. Once
  * one throws, it hands out no more, and throws that once the items under way are done.
  */
-export async function pool<T>(next: () => T | undefined, work: (item: T) => Promise<void>): Promise<void> {
+export async function pool<T>(
+  next: () => T | undefined,
+  work: (item: T) => Promise<void>,
+): Promise<void> {
   let failure: { reason: unknown } | undefined;
   const worker = async () => {
     while (failure === undefined) {
@@ -500,7 +577,10 @@ export async function decode(assets: Asset[], cap: number): Promise<Map<string, 
  * own size, as its frames go onto the same texture. Throws when this machine cannot decode it or
  * play it.
  */
-export async function decodeAsset({ blob, natural, vector, video }: Asset, cap: number): Promise<Decoded> {
+export async function decodeAsset(
+  { blob, natural, vector, video }: Asset,
+  cap: number,
+): Promise<Decoded> {
   if (video) {
     return (await firstFrame(video)).bitmap;
   }
@@ -523,5 +603,8 @@ export function capped(size: Size, cap: number): Size {
 
 /** A pixel a side at least, as a thin image would round to none. */
 export function scaled({ width, height }: Size, scale: number): Size {
-  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
 }

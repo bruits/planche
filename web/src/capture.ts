@@ -24,7 +24,10 @@ export interface Capture {
  */
 export function density(area: Size, side = MOST_SIDE): number {
   const longest = Math.max(area.width, area.height);
-  return Math.min(Math.min(side, MOST_SIDE) / longest, Math.sqrt(MOST_AREA / (area.width * area.height)));
+  return Math.min(
+    Math.min(side, MOST_SIDE) / longest,
+    Math.sqrt(MOST_AREA / (area.width * area.height)),
+  );
 }
 
 export function capture(source: CanvasImageSource, size: Size, background: string): Capture {

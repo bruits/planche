@@ -68,7 +68,9 @@ export function settings(kind: Kind): Setting[] {
     case "shape": {
       // Fitting a blank shape to its text would grow it.
       const text = isBlank(kind) ? [] : TEXT;
-      return kind.shape === "cross" ? ["colour", "weight", "dash", ...text] : ["colour", "weight", "dash", "fill", ...text];
+      return kind.shape === "cross"
+        ? ["colour", "weight", "dash", ...text]
+        : ["colour", "weight", "dash", "fill", ...text];
     }
     case "arrow":
       return ["colour", "weight", "dash", "heads"];
@@ -118,7 +120,9 @@ function stroked(kind: Kind): kind is Extract<Kind, { type: "shape" | "arrow" | 
 export function restyled(kind: Kind, style: Style, zoom: number): Kind {
   const allowed = settings(kind);
   const set = Object.fromEntries(
-    Object.entries(style).filter(([setting, value]) => value !== undefined && allowed.includes(setting as Setting)),
+    Object.entries(style).filter(
+      ([setting, value]) => value !== undefined && allowed.includes(setting as Setting),
+    ),
   ) as Style;
   if (Object.keys(set).length === 0) {
     return kind;
@@ -132,7 +136,11 @@ export function restyled(kind: Kind, style: Style, zoom: number): Kind {
 }
 
 /** With the text part of `style` set, at `zoom` CSS pixels per board unit for its size. */
-function textStyled<T extends Holder>(kind: T, { size, bold, italic, strike, align }: Style, zoom: number): T {
+function textStyled<T extends Holder>(
+  kind: T,
+  { size, bold, italic, strike, align }: Style,
+  zoom: number,
+): T {
   const text = { ...kind.text, ...defined({ bold, italic, strike, align }) };
   // Left out where it is as what holds it would choose, so that choosing it writes nothing.
   if (text.align === defaultAlignment(kind)) {
@@ -146,7 +154,9 @@ function textStyled<T extends Holder>(kind: T, { size, bold, italic, strike, ali
 
 /** The style `kind` has, of what applies to it, as copying it takes it. */
 export function styleOf(kind: Kind, zoom: number): Style {
-  return Object.fromEntries(settings(kind).map((setting) => [setting, valueOf(kind, setting, zoom)]));
+  return Object.fromEntries(
+    settings(kind).map((setting) => [setting, valueOf(kind, setting, zoom)]),
+  );
 }
 
 /** Of the next size up or down from `pixels` on screen, past the sizes when out of them. */
@@ -205,7 +215,10 @@ export function styles(): Styles {
         const tool = toolOf(kind);
         if (tool !== undefined) {
           const applying = settings(kind).filter((setting) => style[setting] !== undefined);
-          byTool[tool] = { ...byTool[tool], ...Object.fromEntries(applying.map((setting) => [setting, style[setting]])) };
+          byTool[tool] = {
+            ...byTool[tool],
+            ...Object.fromEntries(applying.map((setting) => [setting, style[setting]])),
+          };
         }
       }
       remember(STYLES, JSON.stringify(byTool));
@@ -228,24 +241,31 @@ function recalled(): Partial<Record<Draw, Style>> {
   return Object.fromEntries(
     tools.flatMap((tool) => {
       const style = stored?.[tool];
-      return style && typeof style === "object" ? [[tool, valid(style as Record<string, unknown>)]] : [];
+      return style && typeof style === "object"
+        ? [[tool, valid(style as Record<string, unknown>)]]
+        : [];
     }),
   );
 }
 
 function recalledColours(): Colour[] {
   const stored = parsed(recall(PICKED));
-  return Array.isArray(stored) ? stored.filter(isColour).filter((colour) => colour.startsWith("#")).slice(0, RECENT) : [];
+  return Array.isArray(stored)
+    ? stored
+        .filter(isColour)
+        .filter((colour) => colour.startsWith("#"))
+        .slice(0, RECENT)
+    : [];
 }
 
 function valid(style: Record<string, unknown>): Style {
-  const oneOf = <T extends string>(value: unknown, options: T[]): T | undefined =>
-    options.includes(value as T) ? (value as T) : undefined;
-  const flag = (value: unknown) => (typeof value === "boolean" ? value : undefined);
   const { colour, paper, weight, dash, heads, fill, size, bold, italic, strike, align } = style;
   return defined({
     colour: isColour(colour) ? colour : undefined,
-    paper: oneOf(paper, PAPERS.map(({ paper }) => paper)),
+    paper: oneOf(
+      paper,
+      PAPERS.map((choice) => choice.paper),
+    ),
     weight: oneOf(weight, ["thin", "medium", "thick"]),
     dash: oneOf(dash, ["solid", "dashed"]),
     heads: oneOf(heads, ["end", "both"]),
@@ -256,6 +276,14 @@ function valid(style: Record<string, unknown>): Style {
     strike: flag(strike),
     align: oneOf(align, ["left", "centre", "right"]),
   });
+}
+
+function oneOf<T extends string>(value: unknown, options: T[]): T | undefined {
+  return options.includes(value as T) ? (value as T) : undefined;
+}
+
+function flag(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 export function isColour(value: unknown): value is Colour {
@@ -273,6 +301,8 @@ function parsed(text: string | null): unknown {
   }
 }
 
-function defined<T extends object>(values: T): Partial<T> {
-  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as Partial<T>;
+function defined<T extends object>(values: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as {
+    [K in keyof T]?: Exclude<T[K], undefined>;
+  };
 }

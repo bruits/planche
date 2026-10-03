@@ -1,7 +1,9 @@
 // The desktop shell, which picks folders and works in them through commands of its own. It
 // checks every file access itself, since it cannot trust the page.
 
+import type { Incoming } from "./add.js";
 import { typed } from "./commands.js";
+import { message } from "./errors.js";
 import type { AgentCall, Home, Platform, Slices } from "./platform.js";
 
 const LOSING = "Close, and lose the changes to this board?";
@@ -10,29 +12,33 @@ export function tauri({ core, event }: TauriApi): Platform {
   let unsaved = false;
   // Reloading would lose the changes without asking, as the webview never does before. With or
   // without Shift, as WebView2 reloads either way.
-  addEventListener("keydown", (event) => {
-    const reload = event.key === "F5" || ((event.ctrlKey || event.metaKey) && typed(event) === "r");
+  addEventListener("keydown", (pressed) => {
+    const reload =
+      pressed.key === "F5" || ((pressed.ctrlKey || pressed.metaKey) && typed(pressed) === "r");
     if (reload && unsaved) {
-      event.preventDefault();
+      pressed.preventDefault();
     }
   });
   const folder = (root: string): Home => ({
     name: basename(root),
     list: (depth) => core.invoke<string[]>("list_files", { root, depth }),
-    read: async (path) => new Uint8Array(await core.invoke<ArrayBuffer>("read_file", { root, path })),
+    read: async (path) =>
+      new Uint8Array(await core.invoke<ArrayBuffer>("read_file", { root, path })),
     write(path, bytes) {
       // Headers only carry ASCII, and paths may not.
       const headers = { root: encodeURIComponent(root), path: encodeURIComponent(path) };
       return core.invoke<string>("write_file", bytes, { headers });
     },
     remove: (path) => core.invoke("remove_file", { root, path }),
-    stamps: async (paths) => new Map(await core.invoke<[string, string][]>("stamp_files", { root, paths })),
+    stamps: async (paths) =>
+      new Map(await core.invoke<[string, string][]>("stamp_files", { root, paths })),
     remember: () => core.invoke("remember_board", { path: root, zip: false }),
   });
   const zip = (path: string, size: number): Slices => ({
     name: basename(path),
     size,
-    read: async (start, end) => new Uint8Array(await core.invoke<ArrayBuffer>("read_zip", { path, start, end })),
+    read: async (start, end) =>
+      new Uint8Array(await core.invoke<ArrayBuffer>("read_zip", { path, start, end })),
     home: {
       async rewrite(over) {
         if (!(await core.invoke<boolean>("rewrite_zip", { path, over }))) {
@@ -56,6 +62,16 @@ export function tauri({ core, event }: TauriApi): Platform {
       remember: () => core.invoke("remember_board", { path, zip: true }),
     },
   });
+  const readDropped = async (path: string): Promise<Incoming> => {
+    // Linux paths, where a backslash may be part of a name.
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    try {
+      const bytes = await core.invoke<ArrayBuffer>("read_dropped", { path });
+      return { name, filename: name, bytes: new Blob([bytes]) };
+    } catch (error) {
+      return { name, failure: String(error) };
+    }
+  };
   return {
     name: "desktop",
 
@@ -63,16 +79,21 @@ export function tauri({ core, event }: TauriApi): Platform {
       allow: (on) => core.invoke("agent_allow", { on }),
       async serve(answer) {
         const channel = new core.Channel<AgentCall>();
+        // A channel of Tauri's, which takes no listeners.
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener
         channel.onmessage = async (call) => {
           let reply;
           try {
             reply = { id: call.id, result: await answer(call) };
           } catch (error) {
-            reply = { id: call.id, error: error instanceof Error ? error.message : String(error) };
+            reply = { id: call.id, error: message(error) };
           }
           // An answer the shell cannot read fails the call at once.
           core.invoke("agent_reply", { reply }).catch((error: unknown) => {
-            const failure = { id: call.id, error: `Planche could not send its answer: ${String(error)}` };
+            const failure = {
+              id: call.id,
+              error: `Planche could not send its answer: ${String(error)}`,
+            };
             void core.invoke("agent_reply", { reply: failure });
           });
         };
@@ -99,7 +120,9 @@ export function tauri({ core, event }: TauriApi): Platform {
 
     async session() {
       const root = await core.invoke<string | null>("session");
-      return root === null ? null : { ...folder(root), remember: undefined, clear: () => core.invoke("clear_session") };
+      return root === null
+        ? null
+        : { ...folder(root), remember: undefined, clear: () => core.invoke("clear_session") };
     },
 
     async reopen() {
@@ -159,17 +182,7 @@ export function tauri({ core, event }: TauriApi): Platform {
     watchDrops(dropped) {
       type Dropped = [string[], string[], number, number];
       void event.listen<Dropped>("dropped", ({ payload: [paths, addresses, clientX, clientY] }) => {
-        const readOne = async (path: string) => {
-          // Linux paths, where a backslash may be part of a name.
-          const name = path.slice(path.lastIndexOf("/") + 1);
-          try {
-            const bytes = await core.invoke<ArrayBuffer>("read_dropped", { path });
-            return { name, filename: name, bytes: new Blob([bytes]) };
-          } catch (error) {
-            return { name, failure: String(error) };
-          }
-        };
-        dropped(() => Promise.all(paths.map(readOne)), addresses, { clientX, clientY });
+        dropped(() => Promise.all(paths.map(readDropped)), addresses, { clientX, clientY });
       });
     },
   };

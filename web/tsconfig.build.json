@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The app runs in a browser, where Node's types would let a mistake through.
+    "types": [],
+    "rootDir": "src",
+    "outDir": "public/js",
+    "noEmit": false,
+    // Checked by `typecheck` and oxlint, so that a stray import while iterating still builds.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "allowUnreachableCode": true,
+    "allowUnusedLabels": true
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}

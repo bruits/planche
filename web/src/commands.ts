@@ -31,7 +31,7 @@ export interface Command {
   /** Read each time it shows, when it follows what it toggles. */
   label: string | (() => string);
   /** The first one is the one shown. */
-  keys?: Shortcut[];
+  keys?: Shortcut[] | undefined;
   /** Why it cannot run now, `undefined` when it can. */
   unavailable?(): string | undefined;
   run(): void;
@@ -42,19 +42,23 @@ export function named({ label }: Command): string {
 }
 
 function pressed(commands: Command[], event: KeyboardEvent): Command | undefined {
-  const command = event.metaKey || event.ctrlKey;
+  const modified = event.metaKey || event.ctrlKey;
   const held = (shortcut: Shortcut) =>
-    Boolean(shortcut.command || shortcut.ctrl) === command &&
+    Boolean(shortcut.command || shortcut.ctrl) === modified &&
     (shortcut.ctrl !== true || event.ctrlKey) &&
     Boolean(shortcut.shift) === event.shiftKey &&
     Boolean(shortcut.alt) === event.altKey;
   // Commands may share a key, which goes to whichever can run.
   const find = (hit: (shortcut: Shortcut) => boolean) => {
-    const matching = commands.filter(({ keys }) => keys?.some((shortcut) => held(shortcut) && hit(shortcut)));
+    const matching = commands.filter(({ keys }) =>
+      keys?.some((shortcut) => held(shortcut) && hit(shortcut)),
+    );
     return matching.find((command) => command.unavailable?.() === undefined) ?? matching[0];
   };
   const key = typed(event);
-  return find((shortcut) => shortcut.key === key) ?? find((shortcut) => shortcut.code === event.code);
+  return (
+    find((shortcut) => shortcut.key === key) ?? find((shortcut) => shortcut.code === event.code)
+  );
 }
 
 /**
@@ -70,10 +74,19 @@ export function typed(event: KeyboardEvent): string {
 export function describe(shortcut: Shortcut): string {
   const name = keyName(shortcut);
   if (mac) {
-    const modifiers = [shortcut.ctrl && "⌃", shortcut.alt && "⌥", shortcut.shift && "⇧", shortcut.command && "⌘"];
+    const modifiers = [
+      shortcut.ctrl && "⌃",
+      shortcut.alt && "⌥",
+      shortcut.shift && "⇧",
+      shortcut.command && "⌘",
+    ];
     return `${modifiers.filter(Boolean).join("")}${name}`;
   }
-  const modifiers = [(shortcut.command || shortcut.ctrl) && "Ctrl", shortcut.shift && "Shift", shortcut.alt && "Alt"];
+  const modifiers = [
+    (shortcut.command || shortcut.ctrl) && "Ctrl",
+    shortcut.shift && "Shift",
+    shortcut.alt && "Alt",
+  ];
   return [...modifiers.filter(Boolean), name].join("+");
 }
 
@@ -86,7 +99,10 @@ export function ariaKeys(shortcut: Shortcut): string {
     shortcut.shift && "Shift",
   ];
   const key = shortcut.key ?? keyName(shortcut);
-  return [...modifiers.filter(Boolean), key.length === 1 ? key.toUpperCase() : capitalise(key)].join("+");
+  return [
+    ...modifiers.filter(Boolean),
+    key.length === 1 ? key.toUpperCase() : capitalise(key),
+  ].join("+");
 }
 
 function keyName({ key, code }: Shortcut): string {
@@ -115,10 +131,15 @@ function capitalise(word: string): string {
  * A command that cannot run, or that `listening` holds back, still takes its keys, so that they
  * never fall through to the host, such as ⌘A selecting the page's text or ⌘+ zooming it.
  */
-export function listen(commands: Command[], listening: (command: Command) => boolean): void {
-  addEventListener("keydown", (event) => {
+export function listen(commands: Command[], listening: (command: Command) => boolean): () => void {
+  const pressedKey = (event: KeyboardEvent) => {
     // 229 is what a key composing text, such as an accent, reports in some browsers.
-    if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || typing(event.target)) {
+    if (
+      event.defaultPrevented ||
+      event.isComposing ||
+      event.keyCode === 229 ||
+      typing(event.target)
+    ) {
       return;
     }
     // A focused button takes Enter to press itself.
@@ -137,7 +158,9 @@ export function listen(commands: Command[], listening: (command: Command) => boo
     if (listening(command) && command.unavailable?.() === undefined) {
       command.run();
     }
-  });
+  };
+  addEventListener("keydown", pressedKey);
+  return () => removeEventListener("keydown", pressedKey);
 }
 
 /** Whether keys pressed on `target` type text into it. */
@@ -145,9 +168,23 @@ export function typing(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
   }
-  if (target.isContentEditable || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) {
+  if (
+    target.isContentEditable ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  ) {
     return true;
   }
-  const buttons = ["button", "checkbox", "radio", "range", "color", "file", "submit", "reset", "image"];
+  const buttons = [
+    "button",
+    "checkbox",
+    "radio",
+    "range",
+    "color",
+    "file",
+    "submit",
+    "reset",
+    "image",
+  ];
   return target instanceof HTMLInputElement && !buttons.includes(target.type);
 }

@@ -19,7 +19,11 @@
         const [scheme, contrast] = [recall("planche.theme"), recall("planche.contrast")];
         const root = document.documentElement;
         root.dataset.theme =
-          scheme === "light" || scheme === "dark" ? scheme : system("(prefers-color-scheme: dark)") ? "dark" : "light";
+          scheme === "light" || scheme === "dark"
+            ? scheme
+            : system("(prefers-color-scheme: dark)")
+              ? "dark"
+              : "light";
         if (contrast === "high" || (contrast !== "normal" && system("(prefers-contrast: more)"))) {
           root.dataset.contrast = "high";
         }

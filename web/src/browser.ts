@@ -18,11 +18,13 @@ addEventListener("beforeunload", (event) => {
   }
 });
 
+const CANNOT_SAVE = window.showDirectoryPicker
+  ? undefined
+  : "This browser cannot write to a folder: export a ZIP file, or try a Chromium-based browser or the desktop app.";
+
 export const browser: Platform = {
   name: "browser",
-  cannotSave: window.showDirectoryPicker
-    ? undefined
-    : "This browser cannot write to a folder: export a ZIP file, or try a Chromium-based browser or the desktop app.",
+  cannotSave: CANNOT_SAVE,
 
   async open() {
     if (!window.showDirectoryPicker) {
@@ -35,7 +37,7 @@ export const browser: Platform = {
   async pickTarget() {
     const picker = window.showDirectoryPicker;
     if (!picker) {
-      throw new Error(this.cannotSave);
+      throw new Error(CANNOT_SAVE);
     }
     const root = await cancellable(picker({ mode: "readwrite" }));
     if (root === null) {
@@ -89,11 +91,15 @@ export const browser: Platform = {
 
   async session() {
     // Safari writes there only from a worker before version 26.
-    const writable = typeof FileSystemFileHandle !== "undefined" && "createWritable" in FileSystemFileHandle.prototype;
+    const writable =
+      typeof FileSystemFileHandle !== "undefined" &&
+      "createWritable" in FileSystemFileHandle.prototype;
     if (!navigator.storage?.getDirectory || !writable || !(await holdSession())) {
       return null;
     }
-    const root = await (await navigator.storage.getDirectory()).getDirectoryHandle("session", { create: true });
+    const root = await (
+      await navigator.storage.getDirectory()
+    ).getDirectoryHandle("session", { create: true });
     const session = home(root, false);
     let persisting = false;
     return {
@@ -116,7 +122,9 @@ export const browser: Platform = {
 
   async reopen() {
     try {
-      const root = await handles<FileSystemDirectoryHandle | undefined>("readonly", (store) => store.get(BOARD));
+      const root = await handles<FileSystemDirectoryHandle | undefined>("readonly", (store) =>
+        store.get(BOARD),
+      );
       if (root === undefined) {
         return null;
       }
@@ -130,7 +138,8 @@ export const browser: Platform = {
       }
       return {
         name: root.name,
-        ask: async () => ((await root.requestPermission?.({ mode: "readwrite" })) === "granted" ? folder : null),
+        ask: async () =>
+          (await root.requestPermission?.({ mode: "readwrite" })) === "granted" ? folder : null,
       };
     } catch {
       // Storage the browser keeps from the page, as in a private window.
@@ -172,7 +181,7 @@ function holdSession(): Promise<boolean> {
 function home(root: FileSystemDirectoryHandle, remembered: boolean): Home {
   return {
     name: root.name,
-    list: async (depth) => (await walk(root, "", depth)).sort(),
+    list: async (depth) => (await walk(root, "", depth)).toSorted(),
     read: async (path) => {
       const [folder, name] = await locate(root, path, false);
       return bytesOf(await (await folder.getFileHandle(name)).getFile());
@@ -218,7 +227,11 @@ function home(root: FileSystemDirectoryHandle, remembered: boolean): Home {
       return stamps;
     },
     remember: remembered
-      ? () => handles("readwrite", (store) => store.put(root, BOARD)).then(() => {}, () => {})
+      ? () =>
+          handles("readwrite", (store) => store.put(root, BOARD)).then(
+            () => undefined,
+            () => undefined,
+          )
       : undefined,
   };
 }
@@ -228,25 +241,32 @@ function stamp(file: File): string {
 }
 
 /** One request on the handles the page keeps. */
-async function handles<T>(mode: IDBTransactionMode, ask: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+async function handles<T>(
+  mode: IDBTransactionMode,
+  ask: (store: IDBObjectStore) => IDBRequest<T>,
+): Promise<T> {
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
     const opening = indexedDB.open(DATABASE, 1);
-    opening.onupgradeneeded = () => opening.result.createObjectStore(HANDLES);
-    opening.onsuccess = () => resolve(opening.result);
-    opening.onerror = () => reject(opening.error);
+    opening.addEventListener("upgradeneeded", () => opening.result.createObjectStore(HANDLES));
+    opening.addEventListener("success", () => resolve(opening.result));
+    opening.addEventListener("error", () => reject(opening.error));
   });
   try {
     return await new Promise<T>((resolve, reject) => {
       const request = ask(database.transaction(HANDLES, mode).objectStore(HANDLES));
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      request.addEventListener("success", () => resolve(request.result));
+      request.addEventListener("error", () => reject(request.error));
     });
   } finally {
     database.close();
   }
 }
 
-async function walk(folder: FileSystemDirectoryHandle, prefix: string, depth: number): Promise<string[]> {
+async function walk(
+  folder: FileSystemDirectoryHandle,
+  prefix: string,
+  depth: number,
+): Promise<string[]> {
   const paths: string[] = [];
   for await (const [name, handle] of folder) {
     if (name.startsWith(".")) {
@@ -309,7 +329,8 @@ async function pickWithInput(): Promise<Folder | null> {
   return {
     name: root,
     // The browser listed the whole folder before handing it over.
-    list: async (depth) => [...files.keys()].filter((path) => path.split("/").length <= depth).sort(),
+    list: async (depth) =>
+      [...files.keys()].filter((path) => path.split("/").length <= depth).toSorted(),
     read: async (path) => {
       const file = files.get(path);
       if (file === undefined) {

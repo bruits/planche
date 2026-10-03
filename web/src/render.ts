@@ -32,7 +32,10 @@ export interface Scene {
 }
 
 /** Throws what the agent reads when there is nothing to draw. */
-export async function render({ opened, renderer, drawings, crossedOut, background }: Scene, request: Request): Promise<Rendered> {
+export async function render(
+  { opened, renderer, drawings, crossedOut, background }: Scene,
+  request: Request,
+): Promise<Rendered> {
   const { board } = opened;
   const chosen = request.ids && new Set(request.ids);
   const ids = chosen ? board.draw_order.filter((id) => among(board, id, chosen)) : board.draw_order;
@@ -67,7 +70,12 @@ export async function render({ opened, renderer, drawings, crossedOut, backgroun
       images.set(asset, canvas);
     }
   }
-  const items = placed({ ...board, draw_order: ids }, { placed: (id) => lettering.get(id) }, undefined, crossedOut);
+  const items = placed(
+    { ...board, draw_order: ids },
+    { placed: (id) => lettering.get(id) },
+    undefined,
+    crossedOut,
+  );
   const pixels = await renderer.render({ area, size, items, background, images, texts });
   const canvas = Object.assign(document.createElement("canvas"), size);
   canvas.getContext("2d")!.putImageData(pixels, 0, 0);
@@ -78,11 +86,13 @@ export async function render({ opened, renderer, drawings, crossedOut, backgroun
 function framed({ board, editor }: Opened, ids: string[], chosen: string[]): Rect {
   const bounds = core.bounds(editor, chosen);
   if (bounds === undefined) {
-    throw new Error(chosen.length === 0 ? "Give an area or some ids" : "Those elements draw nothing to show");
+    throw new Error(
+      chosen.length === 0 ? "Give an area or some ids" : "Those elements draw nothing to show",
+    );
   }
   // The core bounds an arrow by its ends, past which the strokes of its head reach.
-  const reached = placed({ ...board, draw_order: ids }, { placed: () => undefined }).flatMap((item) =>
-    item.kind === "line" ? [item.to] : [],
+  const reached = placed({ ...board, draw_order: ids }, { placed: () => undefined }).flatMap(
+    (item) => (item.kind === "line" ? [item.to] : []),
   );
   const xs = [bounds.x, bounds.x + bounds.width, ...reached.map(({ x }) => x)];
   const ys = [bounds.y, bounds.y + bounds.height, ...reached.map(({ y }) => y)];

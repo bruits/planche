@@ -16,7 +16,6 @@ import {
   holdsImage,
   imageKind,
   placed,
-  open,
   pool,
   prepare,
   readAsset,
@@ -24,32 +23,40 @@ import {
   refresh,
   release,
   row,
-  untitled,
   type Added,
   type Decoded,
   type Opened,
-  type Reading,
 } from "./board.js";
 import { fit, type Camera } from "./camera.js";
 import { card } from "./card.js";
 import { meanColours } from "./colour.js";
-import { describe, listen, mac, named, typed, typing, type Command, type Shortcut } from "./commands.js";
+import {
+  describe,
+  listen,
+  mac,
+  named,
+  typed,
+  typing,
+  type Command,
+  type Shortcut,
+} from "./commands.js";
 import { edits, type Draw, type Restack } from "./edit.js";
+import { message } from "./errors.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
+import { lifecycle } from "./lifecycle.js";
 import { menuOpen, openMenu, type Entry, type Item } from "./menu.js";
 import { heapInUse, megabytes, milliseconds, percentile, rate, timed } from "./metrics.js";
 import { overlay } from "./overlay.js";
 import { css, type Paint } from "./paint.js";
 import { testPhotos } from "./photos.js";
 import { pinned, pins } from "./pins.js";
-import { platform, type Folder, type Home, type Reopening, type Session, type ZipHome } from "./platform.js";
+import { platform } from "./platform.js";
 import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE, onScreen, shownAssets } from "./raster.js";
 import { render } from "./render.js";
 import { create, type Renderer } from "./renderer.js";
 import { ACROSS, sampler } from "./sampler.js";
-import { folderStore, saving, zipStore, type Reloaded, type Saving, type Store } from "./save.js";
 import { PALETTE, PAPERS, styles } from "./style.js";
 import { loadFont, texts } from "./text.js";
 import { theme, type Scheme } from "./theme.js";
@@ -57,7 +64,7 @@ import { toolbar, type Button } from "./toolbar.js";
 import { vectors } from "./vector.js";
 import { videos } from "./video.js";
 import { view } from "./view.js";
-import { writeZip, zipFolder } from "./zip.js";
+import { writeZip } from "./zip.js";
 
 /** Where the browser remembers that hints are hidden. */
 const HINTS = "planche.hints";
@@ -67,8 +74,6 @@ const AGENT = "planche.agent";
 const ON_TOP = "planche.ontop";
 /** Where the browser remembers that videos play only while the pointer is on them. */
 const HOVER_PLAY = "planche.hoverplay";
-/** Where the browser remembers the name of the board in the session, and whether it is saved elsewhere. */
-const SESSION = "planche.session";
 const ZOOM_STEP = 1.25;
 /** What the zoom's menu zooms to at once. */
 const ZOOMS = [0.25, 0.5, 1, 2, 4];
@@ -90,12 +95,12 @@ const draws = rate((perSecond) => {
   drawRate = perSecond;
   showMetrics();
 });
-const shown = overlay(byId("viewport"));
+const overlaid = overlay(byId("viewport"));
 const viewport = view(byId("viewport"), {
   advance: () => editing.catchUp(),
   frame(camera, size) {
     bar.zoomed();
-    shown.frame(camera, size);
+    overlaid.frame(camera, size);
     comments.frame(camera);
     editing.follow();
     styleCard.frame();
@@ -120,13 +125,16 @@ const viewport = view(byId("viewport"), {
 });
 const lettering = texts(() => viewport.redraw());
 const drawings = vectors(() => viewport.redraw());
-const animated = animations(() => viewport.redraw(), () => refreshBar());
+const animated = animations(
+  () => viewport.redraw(),
+  () => refreshBar(),
+);
 const films = videos(
   () => viewport.redraw(),
   () => refreshBar(),
   () => bar.say("A video cannot play here"),
 );
-const editing = edits(viewport, shown, () => opened, {
+const editing = edits(viewport, overlaid, () => opened, {
   changed,
   selectionChanged() {
     refreshBar();
@@ -151,29 +159,34 @@ const editing = edits(viewport, shown, () => opened, {
   },
   stepped(steps, moves) {
     const [p50, p90] = [percentile(steps, 0.5), percentile(steps, 0.9)];
-    details.set("drag step", `p50 ${milliseconds(p50)}, p90 ${milliseconds(p90)}, ${steps.length} for ${moves} moves`);
+    details.set(
+      "drag step",
+      `p50 ${milliseconds(p50)}, p90 ${milliseconds(p90)}, ${steps.length} for ${moves} moves`,
+    );
   },
 });
-const comments = pins(byId("viewport"), { choose: (id) => editing.choose(id), write: (id) => editing.write(id) });
+const comments = pins(byId("viewport"), {
+  choose: (id) => editing.choose(id),
+  write: (id) => editing.write(id),
+});
 const appearance = theme(restyle);
+
+const life = lifecycle({
+  platform,
+  opened: () => opened,
+  show,
+  camera: () => viewport.camera(),
+  say: (...said) => bar.say(...said),
+  loadingChanged: () => refreshBar(),
+  titleChanged() {
+    bar.unsaved(life.unsaved());
+    showTitle();
+  },
+  timings: details,
+});
 
 let opened: Opened | undefined;
 let renderer: Renderer | undefined;
-/** Where the open board saves itself, `undefined` when nowhere. */
-let autosave: Saving | undefined;
-/** Where a board without a folder or a file of its own is kept, `null` when nowhere. */
-let session: Session | null = null;
-/** The session held, whose board could not be read, until the user leaves the open one. */
-let unreadable: Session | null = null;
-/** Whether the board holds changes that leaving it would lose. */
-let unsaved = false;
-/** Whether it holds changes not yet on disk, so that closing the app first writes them. */
-let unwritten = false;
-/**
- * Two boards opening at once would free each other's editor. The first one opens once the core
- * starts, which nothing may use before.
- */
-let loading = true;
 let halfDrawn = false;
 /** On the desktop, a second export to the same file would take over the first one's draft. */
 let exporting = false;
@@ -197,7 +210,7 @@ let arranging = false;
 
 type Ordering = (opened: Opened, ids: string[]) => Order | Promise<Order>;
 
-const loadingBoard = () => (loading ? "A board is opening" : undefined);
+const loadingBoard = () => (life.loading() ? "A board is opening" : undefined);
 const noBoard = () => (opened === undefined ? "No board is open yet" : undefined);
 const noneSelected = () => (editing.selection().length === 0 ? "Nothing is selected" : undefined);
 // Images within a selected group do not count, as arranging leaves groups where they are.
@@ -209,7 +222,11 @@ const fewImages = () =>
 const selectedKinds = (): Kind[] => {
   const board = opened?.board;
   const chosen = new Set(editing.selection());
-  return board ? Object.entries(board.elements).flatMap(([id, { kind }]) => (among(board, id, chosen) ? [kind] : [])) : [];
+  return board
+    ? Object.entries(board.elements).flatMap(([id, { kind }]) =>
+        among(board, id, chosen) ? [kind] : [],
+      )
+    : [];
 };
 const selectedImages = () => selectedKinds().filter((kind) => kind.type === "image");
 const greyed = () => {
@@ -218,11 +235,14 @@ const greyed = () => {
 };
 const shapedAs = (shape: CropShape) => {
   const images = selectedImages();
-  return images.length > 0 && images.every((kind) => (kind.edits.crop_shape ?? "rectangle") === shape);
+  return (
+    images.length > 0 && images.every((kind) => (kind.edits.crop_shape ?? "rectangle") === shape)
+  );
 };
 const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet" : undefined);
 const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection()) : []);
-const selectedMoving = () => selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
+const selectedMoving = () =>
+  selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
 const moving = (asset: string) => animated.playing(asset) || films.playing(asset);
 const restack = (label: string, to: Restack, shortcut: Shortcut): Command => ({
   label,
@@ -233,21 +253,28 @@ const restack = (label: string, to: Restack, shortcut: Shortcut): Command => ({
 const cropShape = (label: string, shape: CropShape): Command => ({
   label,
   unavailable: () =>
-    noneSelected() ?? (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images are cropped"),
+    noneSelected() ??
+    (opened && holdsImage(opened.board, editing.selection())
+      ? undefined
+      : "Only images are cropped"),
   run: () => editing.cropShape(shape),
 });
 const flip = (label: string, key: string, horizontally: boolean): Command => ({
   label,
   keys: [{ key, shift: true }],
   unavailable: () =>
-    noneSelected() ?? (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images flip"),
+    noneSelected() ??
+    (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images flip"),
   run: () => editing.flip(horizontally),
 });
 const turn = (label: string, degrees: number, key: string): Command => ({
   label,
   keys: [{ key, shift: true }],
   unavailable: () =>
-    noneSelected() ?? (opened && core.bounds(opened.editor, editing.selection()) ? undefined : "Comments do not turn"),
+    noneSelected() ??
+    (opened && core.bounds(opened.editor, editing.selection())
+      ? undefined
+      : "Comments do not turn"),
   run: () => editing.rotate(degrees),
 });
 const arrangement = (label: string, order: Ordering): Command => ({
@@ -266,31 +293,50 @@ const zoomTo = (label: string, zoom: number, keys?: Shortcut[]): Command => ({
   unavailable: noneShown,
   run: () => viewport.zoomBy(zoom / viewport.zoom()!),
 });
-const palette = (label: string, to: Scheme): Command => ({ label, run: () => appearance.choose(to) });
+const palette = (label: string, to: Scheme): Command => ({
+  label,
+  run: () => appearance.choose(to),
+});
 /** The palette's colour, or a sticky note's paper, at `at`. */
-const colour = (at: number): Command => ({
-  label: () => (styleCard.common().includes("paper") ? PAPERS[at]?.label : undefined) ?? PALETTE[at]!.label,
+const colourCommand = (at: number): Command => ({
+  label: () =>
+    (styleCard.common().includes("paper") ? PAPERS[at]?.label : undefined) ?? PALETTE[at]!.label,
   keys: [{ key: String(at + 1), code: `Digit${at + 1}` }],
   unavailable() {
     const can = styleCard.common();
     if (can.includes("paper")) {
       return PAPERS[at] ? undefined : `Sticky notes come in ${PAPERS.length} papers`;
     }
-    return noneSelected() ?? (can.includes("colour") ? undefined : "Not everything selected takes a colour");
+    return (
+      noneSelected() ??
+      (can.includes("colour") ? undefined : "Not everything selected takes a colour")
+    );
   },
   run: () =>
-    styleCard.set(styleCard.common().includes("paper") ? { paper: PAPERS[at]!.paper } : { colour: PALETTE[at]!.colour }),
+    styleCard.set(
+      styleCard.common().includes("paper")
+        ? { paper: PAPERS[at]!.paper }
+        : { colour: PALETTE[at]!.colour },
+    ),
 });
-const textStyle = (label: string, setting: "bold" | "italic" | "strike", shortcut: Shortcut): Command => ({
+const textStyle = (
+  label: string,
+  setting: "bold" | "italic" | "strike",
+  shortcut: Shortcut,
+): Command => ({
   label,
   keys: [shortcut],
-  unavailable: () => noneSelected() ?? (styleCard.common().includes(setting) ? undefined : "Not everything selected is text"),
+  unavailable: () =>
+    noneSelected() ??
+    (styleCard.common().includes(setting) ? undefined : "Not everything selected is text"),
   run: () => styleCard.set({ [setting]: styleCard.value(setting) !== true }),
 });
 const resize = (label: string, larger: boolean, keys: Shortcut[]): Command => ({
   label,
   keys,
-  unavailable: () => noneSelected() ?? (styleCard.common().includes("size") ? undefined : "Not everything selected is text"),
+  unavailable: () =>
+    noneSelected() ??
+    (styleCard.common().includes("size") ? undefined : "Not everything selected is text"),
   run: () => styleCard.resize(larger),
 });
 const backspace: Shortcut = { key: "backspace" };
@@ -301,25 +347,72 @@ const ctrlY: Shortcut = { key: "y", ctrl: true };
 const commands = {
   select: { label: "Select", keys: [{ key: "v" }], run: () => useTool("select") },
   hand: { label: "Hand", keys: [{ key: "h" }], run: () => useTool("hand") },
-  eraser: { label: "Eraser", keys: [{ key: "e" }], unavailable: noneShown, run: () => useTool("eraser") },
-  arrow: { label: "Arrow", keys: [{ key: "a" }], unavailable: noneShown, run: () => useTool("arrow") },
+  eraser: {
+    label: "Eraser",
+    keys: [{ key: "e" }],
+    unavailable: noneShown,
+    run: () => useTool("eraser"),
+  },
+  arrow: {
+    label: "Arrow",
+    keys: [{ key: "a" }],
+    unavailable: noneShown,
+    run: () => useTool("arrow"),
+  },
   line: { label: "Line", keys: [{ key: "l" }], unavailable: noneShown, run: () => useTool("line") },
-  rectangle: { label: "Rectangle", keys: [{ key: "r" }], unavailable: noneShown, run: () => useTool("rectangle") },
-  ellipse: { label: "Ellipse", keys: [{ key: "o" }], unavailable: noneShown, run: () => useTool("ellipse") },
-  cross: { label: "Cross", keys: [{ key: "x" }], unavailable: noneShown, run: () => useTool("cross") },
+  rectangle: {
+    label: "Rectangle",
+    keys: [{ key: "r" }],
+    unavailable: noneShown,
+    run: () => useTool("rectangle"),
+  },
+  ellipse: {
+    label: "Ellipse",
+    keys: [{ key: "o" }],
+    unavailable: noneShown,
+    run: () => useTool("ellipse"),
+  },
+  cross: {
+    label: "Cross",
+    keys: [{ key: "x" }],
+    unavailable: noneShown,
+    run: () => useTool("cross"),
+  },
   note: { label: "Text", keys: [{ key: "t" }], unavailable: noneShown, run: () => useTool("note") },
-  sticky: { label: "Sticky note", keys: [{ key: "n" }], unavailable: noneShown, run: () => useTool("sticky") },
-  comment: { label: "Comment", keys: [{ key: "c" }], unavailable: noneShown, run: () => useTool("comment") },
+  sticky: {
+    label: "Sticky note",
+    keys: [{ key: "n" }],
+    unavailable: noneShown,
+    run: () => useTool("sticky"),
+  },
+  comment: {
+    label: "Comment",
+    keys: [{ key: "c" }],
+    unavailable: noneShown,
+    run: () => useTool("comment"),
+  },
   addImages: {
     label: "Add images…",
     keys: [{ key: "i" }],
     unavailable: noneShown,
     run: () => addPicked(viewport.centre()),
   },
-  newBoard: { label: "New board", unavailable: loadingBoard, run: () => report(newBoard()) },
-  open: { label: "Open a board…", unavailable: loadingBoard, run: () => report(openBoard(openFolder)) },
-  openZip: { label: "Open a ZIP file…", unavailable: loadingBoard, run: () => report(openBoard(openZip)) },
-  saveAs: { label: "Save as…", unavailable: () => platform.cannotSave ?? noBoard(), run: () => report(saveAs()) },
+  newBoard: { label: "New board", unavailable: loadingBoard, run: () => report(life.newBoard()) },
+  open: {
+    label: "Open a board…",
+    unavailable: loadingBoard,
+    run: () => report(life.openFolder()),
+  },
+  openZip: {
+    label: "Open a ZIP file…",
+    unavailable: loadingBoard,
+    run: () => report(life.openZip()),
+  },
+  saveAs: {
+    label: "Save as…",
+    unavailable: () => platform.cannotSave ?? noBoard(),
+    run: () => report(life.saveAs()),
+  },
   exportZip: {
     label: "Export a ZIP file…",
     unavailable: () => (exporting ? "An export is under way" : noBoard()),
@@ -341,7 +434,8 @@ const commands = {
     label: "Select all",
     keys: [{ key: "a", command: true }],
     // Not before the board shows, which would select what nobody sees yet.
-    unavailable: () => noneShown() ?? (opened?.board.draw_order.length ? undefined : "The board is empty"),
+    unavailable: () =>
+      noneShown() ?? (opened?.board.draw_order.length ? undefined : "The board is empty"),
     run: () => editing.selectAll(),
   },
   escape: { label: "Go back up, or deselect", keys: [{ key: "escape" }], run: escape },
@@ -367,7 +461,11 @@ const commands = {
     by: "random",
     seed: crypto.getRandomValues(new Uint32Array(1))[0]!,
   })),
-  sameHeight: { label: "Same height", unavailable: fewImages, run: () => editing.normalize("height") },
+  sameHeight: {
+    label: "Same height",
+    unavailable: fewImages,
+    run: () => editing.normalize("height"),
+  },
   sameWidth: { label: "Same width", unavailable: fewImages, run: () => editing.normalize("width") },
   rotateLeft: turn("Rotate left", -90, "l"),
   rotateRight: turn("Rotate right", 90, "r"),
@@ -376,7 +474,9 @@ const commands = {
     keys: [{ key: "r", alt: true }],
     unavailable: () =>
       noneSelected() ??
-      (selectedKinds().some((kind) => "rotation" in kind && kind.rotation !== 0) ? undefined : "Nothing selected is turned"),
+      (selectedKinds().some((kind) => "rotation" in kind && kind.rotation !== 0)
+        ? undefined
+        : "Nothing selected is turned"),
     run: () => editing.straighten(),
   },
   flipHorizontally: flip("Flip horizontally", "h", true),
@@ -412,14 +512,18 @@ const commands = {
     label: "Greyscale",
     keys: [{ key: "g", alt: true }],
     unavailable: () =>
-      noneSelected() ?? (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images turn grey"),
+      noneSelected() ??
+      (opened && holdsImage(opened.board, editing.selection())
+        ? undefined
+        : "Only images turn grey"),
     run: () => editing.greyscale(!greyed()),
   },
   play: {
     label: () => (selectedMoving().some(moving) ? "Pause" : "Play"),
     keys: [{ key: "p" }],
     unavailable: () =>
-      noneSelected() ?? (selectedMoving().length > 0 ? undefined : "Only animated images and videos play"),
+      noneSelected() ??
+      (selectedMoving().length > 0 ? undefined : "Only animated images and videos play"),
     run: () => {
       const assets = selectedMoving();
       const playing = !assets.some(moving);
@@ -431,7 +535,8 @@ const commands = {
   sound: {
     label: () => (selectedAssets().some(films.sounding) ? "Turn sound off" : "Turn sound on"),
     keys: [{ key: "m" }],
-    unavailable: () => noneSelected() ?? (selectedAssets().some(films.holds) ? undefined : "Only videos have sound"),
+    unavailable: () =>
+      noneSelected() ?? (selectedAssets().some(films.holds) ? undefined : "Only videos have sound"),
     run: () => {
       const assets = selectedAssets().filter(films.holds);
       films.sound(assets, !assets.some(films.sounding));
@@ -453,13 +558,15 @@ const commands = {
   goInside: {
     label: "Go inside",
     keys: [{ key: "enter" }],
-    unavailable: () => (editing.selection().length === 1 && selectsGroup() ? undefined : "Select one group"),
+    unavailable: () =>
+      editing.selection().length === 1 && selectsGroup() ? undefined : "Select one group",
     run: () => editing.goInside(),
   },
   write: {
     label: "Edit text",
     keys: [{ key: "enter" }],
-    unavailable: () => (editing.writable() ? undefined : "Select one text, sticky note, shape, or comment"),
+    unavailable: () =>
+      editing.writable() ? undefined : "Select one text, sticky note, shape, or comment",
     run: () => editing.write(),
   },
   zoomIn: {
@@ -507,7 +614,8 @@ const commands = {
   compact: {
     label: "Compact mode",
     keys: [{ key: "\\", code: "Backslash", command: true }],
-    unavailable: () => (platform.titleBar ? undefined : "Only the desktop app has a window of its own"),
+    unavailable: () =>
+      platform.titleBar ? undefined : "Only the desktop app has a window of its own",
     run: () => report(useCompact(!compact)),
   },
   plain: backdrop("No grid", "plain"),
@@ -556,15 +664,18 @@ const commands = {
     label: () => (styleCard.isOpen() ? "Hide style" : "Show style"),
     keys: [{ key: "s", shift: true }],
     unavailable: () =>
-      noneSelected() ?? (styleCard.common().length > 0 || styleCard.images() ? undefined : "Comments and groups have no style"),
+      noneSelected() ??
+      (styleCard.common().length > 0 || styleCard.images()
+        ? undefined
+        : "Comments and groups have no style"),
     run: () => (styleCard.isOpen() ? styleCard.close() : styleCard.open(true)),
   },
-  colour1: colour(0),
-  colour2: colour(1),
-  colour3: colour(2),
-  colour4: colour(3),
-  colour5: colour(4),
-  colour6: colour(5),
+  colour1: colourCommand(0),
+  colour2: colourCommand(1),
+  colour3: colourCommand(2),
+  colour4: colourCommand(3),
+  colour5: colourCommand(4),
+  colour6: colourCommand(5),
   bold: textStyle("Bold", "bold", { key: "b", command: true }),
   italic: textStyle("Italic", "italic", { key: "i", command: true }),
   strike: textStyle("Strikethrough", "strike", { key: "x", command: true, shift: true }),
@@ -583,7 +694,10 @@ const commands = {
     label: "Copy style",
     keys: [{ key: "c", code: "KeyC", command: true, alt: true }],
     unavailable: () =>
-      noneSelected() ?? (styleCard.common().length > 0 ? undefined : "Only arrows, lines, shapes, and text have a style"),
+      noneSelected() ??
+      (styleCard.common().length > 0
+        ? undefined
+        : "Only arrows, lines, shapes, and text have a style"),
     run: () => styleCard.copy(),
   },
   pasteStyle: {
@@ -630,7 +744,11 @@ const bar = toolbar(
       },
       {
         label: "Text, sticky notes, and comments",
-        tools: [drawing("note", "typography"), drawing("sticky", "note"), drawing("comment", "message")],
+        tools: [
+          drawing("note", "typography"),
+          drawing("sticky", "note"),
+          drawing("comment", "message"),
+        ],
       },
       { command: commands.addImages, icon: "photo" },
     ],
@@ -673,8 +791,8 @@ const styleCard = card(
     floor: () => bar.top(),
     apply: (work) => editing.apply(work),
     pick: () => picker.start(false),
-    explain: (element, text) => bar.explain(element, text),
-    say: (message) => bar.say(message),
+    explain: (element, explanation) => bar.explain(element, explanation),
+    say: (said) => bar.say(said),
   },
   look,
   {
@@ -714,11 +832,19 @@ if (platform.titleBar) {
 }
 listen(
   Object.values(commands),
-  (command) => !menuOpen() && (!busy() || (command === commands.resetCrop && editing.cropping() !== undefined)),
+  (command) =>
+    !menuOpen() &&
+    (!busy() || (command === commands.resetCrop && editing.cropping() !== undefined)),
 );
 addEventListener("keydown", (event) => {
   // A focused button takes Space to press itself.
-  if (event.key !== " " || spaceHeld || menuOpen() || typing(event.target) || event.target instanceof HTMLButtonElement) {
+  if (
+    event.key !== " " ||
+    spaceHeld ||
+    menuOpen() ||
+    typing(event.target) ||
+    event.target instanceof HTMLButtonElement
+  ) {
     return;
   }
   event.preventDefault();
@@ -727,13 +853,24 @@ addEventListener("keydown", (event) => {
 addEventListener("keyup", (event) => event.key === " " && holdSpace(false));
 addEventListener("keydown", (event) => {
   const plain = !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey;
-  if (typed(event) !== "s" || !plain || event.repeat || menuOpen() || busy() || typing(event.target) || noneShown()) {
+  if (
+    typed(event) !== "s" ||
+    !plain ||
+    event.repeat ||
+    menuOpen() ||
+    busy() ||
+    typing(event.target) ||
+    noneShown()
+  ) {
     return;
   }
   event.preventDefault();
   picker.start(true);
 });
-addEventListener("keyup", (event) => typed(event) === "s" && picker.sampling() === "holding" && picker.end());
+addEventListener(
+  "keyup",
+  (event) => typed(event) === "s" && picker.sampling() === "holding" && picker.end(),
+);
 addEventListener("blur", () => holdSpace(false));
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 animated.reduce(reducedMotion.matches);
@@ -744,14 +881,16 @@ reducedMotion.addEventListener("change", () => {
   films.reduce(reducedMotion.matches);
   refreshBar();
 });
-addEventListener("blur", () => void autosave?.flush());
-addEventListener("pagehide", () => void autosave?.flush());
-addEventListener("beforeunload", () => void autosave?.flush());
-addEventListener("focus", () => report(autosave?.check() ?? Promise.resolve()));
+addEventListener("blur", () => void life.saver()?.flush());
+addEventListener("pagehide", () => void life.saver()?.flush());
+addEventListener("beforeunload", () => void life.saver()?.flush());
+addEventListener("focus", () => report(life.saver()?.check() ?? Promise.resolve()));
 document.addEventListener("visibilitychange", () =>
-  document.visibilityState === "hidden" ? void autosave?.flush() : report(autosave?.check() ?? Promise.resolve()),
+  document.visibilityState === "hidden"
+    ? void life.saver()?.flush()
+    : report(life.saver()?.check() ?? Promise.resolve()),
 );
-platform.whenClosing?.(async () => (autosave ? autosave.flush() : !unwritten));
+platform.whenClosing?.(() => life.closing());
 document.addEventListener("contextmenu", (event) => {
   // The field's own menu offers to paste.
   if (typing(event.target)) {
@@ -779,7 +918,7 @@ await Promise.all([core.start(), loadFont()]);
 receive(viewport, (incoming, at) => report(addImages(incoming, at)));
 report(serveAgents());
 // Something to drop images on from the start.
-report(opening(start));
+report(life.start());
 
 /** A drag under way, which a command or a menu would cut across. */
 function busy(): boolean {
@@ -793,7 +932,10 @@ function drawing(draw: Draw, name: Icon): Button {
 /** For its button, which keeps its state while a gesture or writing holds undo and redo back. */
 function steady(command: Command): Command {
   let reason = command.unavailable?.();
-  return { ...command, unavailable: () => (editing.busy() ? reason : (reason = command.unavailable?.())) };
+  return {
+    ...command,
+    unavailable: () => (editing.busy() ? reason : (reason = command.unavailable?.())),
+  };
 }
 
 function drawTool(): Draw | undefined {
@@ -847,7 +989,10 @@ function grids(): Entry {
   return {
     ...commands.nextBackground,
     options: [
-      ...BACKGROUNDS.map((background) => ({ ...commands[background], checked: background === current })),
+      ...BACKGROUNDS.map((background) => ({
+        ...commands[background],
+        checked: background === current,
+      })),
       "separator",
       { ...commands.snap, checked: snapping, toggle: true },
     ],
@@ -890,7 +1035,8 @@ function testPhotosItem(count: number): Item {
 
 /** Whether the board saves itself into a folder or a ZIP file, rather than in the session or nowhere. */
 function savesToFiles(): boolean {
-  return autosave !== undefined && !autosave.store.session;
+  const saver = life.saver();
+  return saver !== undefined && !saver.store.session;
 }
 
 function settings(): Entry {
@@ -912,7 +1058,7 @@ async function serveAgents(): Promise<void> {
   await agent.serve((call) =>
     answer(call, {
       opened: () => opened,
-      unsaved: () => unsaved,
+      unsaved: () => life.unsaved(),
       selection: () => editing.selection(),
       entered: () => editing.entered(),
       writing: () => editing.writing(),
@@ -930,7 +1076,7 @@ async function serveAgents(): Promise<void> {
         return render({ opened, renderer, drawings, crossedOut, background }, request);
       },
       background: () => getComputedStyle(document.body).backgroundColor,
-      loading: () => loading,
+      loading: () => life.loading(),
       busy: () => editing.busy(),
       idle: () => editing.idle(),
       apply: (work) => editing.apply(work),
@@ -949,7 +1095,9 @@ async function allowAgents(on: boolean): Promise<void> {
   try {
     await platform.agent?.allow(on);
   } catch (error) {
-    throw new Error(on ? `Agent access stays off, as ${String(error)}` : String(error));
+    throw new Error(on ? `Agent access stays off, as ${String(error)}` : String(error), {
+      cause: error,
+    });
   }
   agentsAllowed = on;
   remember(AGENT, on ? "on" : undefined);
@@ -970,7 +1118,9 @@ async function useCompact(on: boolean): Promise<void> {
   compact = on;
   document.documentElement.toggleAttribute("data-compact", on);
   if (on) {
-    bar.say(`Compact mode: drag the top edge to move, ${describe(commands.compact.keys[0]!)} or right-click to leave`);
+    bar.say(
+      `Compact mode: drag the top edge to move, ${describe(commands.compact.keys[0]!)} or right-click to leave`,
+    );
   }
 }
 
@@ -980,13 +1130,18 @@ function submenu(label: string, options: Entry[]): Item {
 }
 
 function sectioned(sections: Entry[][]): Entry[] {
-  return sections.filter((section) => section.length > 0).flatMap((section, at) => (at > 0 ? ["separator", ...section] : section));
+  return sections
+    .filter((section) => section.length > 0)
+    .flatMap((section, at) => (at > 0 ? ["separator", ...section] : section));
 }
 
 /** Of the options that apply to the selection, and left out of it when none does. */
 function relevantSubmenu(label: string, options: Entry[]): Item {
   const shown = relevant(options);
-  return { ...submenu(label, shown), unavailable: () => (shown.length > 0 ? undefined : "None applies") };
+  return {
+    ...submenu(label, shown),
+    unavailable: () => (shown.length > 0 ? undefined : "None applies"),
+  };
 }
 
 /** Strokes and text draw in the theme's colours. */
@@ -1035,7 +1190,11 @@ async function arrange(label: string, order: Ordering): Promise<void> {
     const chosen = await working;
     await editing.idle();
     const selection = new Set(editing.selection());
-    if (opened !== target || selection.size !== ids.length || ids.some((id) => !selection.has(id))) {
+    if (
+      opened !== target ||
+      selection.size !== ids.length ||
+      ids.some((id) => !selection.has(id))
+    ) {
       bar.say("Not arranged, as the selection changed");
     } else {
       editing.arrange(chosen);
@@ -1065,7 +1224,9 @@ function refreshBar(): void {
 
 function hint(): string {
   // As the menus name them.
-  const [escapeKey, insideKey] = [commands.escape, commands.goInside].map(({ keys }) => describe(keys[0]!));
+  const [escapeKey, insideKey] = [commands.escape, commands.goInside].map(({ keys }) =>
+    describe(keys[0]!),
+  );
   const [freeKey, centreKey, stepKey] = mac ? ["⌘", "⌥", "⇧"] : ["Ctrl", "Alt", "Shift"];
   const picking = picker.sampling();
   if (picking !== undefined) {
@@ -1078,7 +1239,10 @@ function hint(): string {
     const resetKey = describe(commands.resetCrop.keys[0]!);
     return `Drag an edge or a corner to crop, or the inside to move the crop · ${resetKey} to start over · ${insideKey} or click away to crop · ${escapeKey} to leave it as it was`;
   }
-  const styles = commands.style.unavailable() === undefined ? `${describe(commands.style.keys[0]!)} to style · ` : "";
+  const styling =
+    commands.style.unavailable() === undefined
+      ? `${describe(commands.style.keys[0]!)} to style · `
+      : "";
   if (tool === "hand") {
     return `Drag to move around · ${escapeKey} to select again`;
   }
@@ -1120,17 +1284,18 @@ function hint(): string {
     return `Drag to move · double-click or ${insideKey} to go inside · right-click for more`;
   }
   if (editing.writable()) {
-    return `Drag to move · double-click or ${insideKey} to edit the text · ${styles}right-click for more`;
+    return `Drag to move · double-click or ${insideKey} to edit the text · ${styling}right-click for more`;
   }
   if (editing.loneSegment()) {
-    return `Drag to move · drag an end to move it, holding ${stepKey} to keep to steps of 45° or ${freeKey} to keep it from sticking · ${styles}right-click for more`;
+    return `Drag to move · drag an end to move it, holding ${stepKey} to keep to steps of 45° or ${freeKey} to keep it from sticking · ${styling}right-click for more`;
   }
   if (editing.selection().length > 0) {
-    const crops = commands.crop.unavailable() === undefined ? `double-click or ${insideKey} to crop · ` : "";
+    const crops =
+      commands.crop.unavailable() === undefined ? `double-click or ${insideKey} to crop · ` : "";
     const keys = [commands.resetCrop, commands.play, commands.sound]
       .filter((command) => command.unavailable() === undefined)
       .map((command) => `${describe(command.keys[0]!)} to ${named(command).toLowerCase()} · `);
-    return `Drag to move · corners scale · turn from outside a corner · ${crops}${keys.join("")}${styles}right-click for more`;
+    return `Drag to move · corners scale · turn from outside a corner · ${crops}${keys.join("")}${styling}right-click for more`;
   }
   return "Drop or paste images · scroll to move around · right-click for more";
 }
@@ -1145,7 +1310,12 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.write,
         styleMenu(),
         "separator",
-        relevantSubmenu("Order", [commands.front, commands.forward, commands.backward, commands.back]),
+        relevantSubmenu("Order", [
+          commands.front,
+          commands.forward,
+          commands.backward,
+          commands.back,
+        ]),
         {
           ...submenu("Arrange", [
             commands.arrangeByName,
@@ -1242,7 +1412,13 @@ function styleMenu(): Entry {
       }))
     : [];
   const sizes: Entry[] = can.has("size") ? [commands.larger, commands.smaller] : [];
-  const sections = [[commands.style], colours, text, sizes, [commands.copyStyle, commands.pasteStyle]];
+  const sections = [
+    [commands.style],
+    colours,
+    text,
+    sizes,
+    [commands.copyStyle, commands.pasteStyle],
+  ];
   return submenu("Style", sectioned(sections));
 }
 
@@ -1258,9 +1434,16 @@ async function readBoard(at: { clientX: number; clientY: number }): Promise<Imag
   const origin = viewport.host.getBoundingClientRect();
   const scale = camera.zoom * devicePixelRatio;
   const half = Math.floor(ACROSS / 2);
-  const [x, y] = [at.clientX - origin.left, at.clientY - origin.top].map((offset) => Math.floor(offset * devicePixelRatio) - half);
+  const [x, y] = [at.clientX - origin.left, at.clientY - origin.top].map(
+    (offset) => Math.floor(offset * devicePixelRatio) - half,
+  );
   return renderer.render({
-    area: { x: camera.x + x! / scale, y: camera.y + y! / scale, width: ACROSS / scale, height: ACROSS / scale },
+    area: {
+      x: camera.x + x! / scale,
+      y: camera.y + y! / scale,
+      width: ACROSS / scale,
+      height: ACROSS / scale,
+    },
     size: { width: ACROSS, height: ACROSS },
     items: placed(opened.board, lettering, editing.writing(), crossedOut),
     background: getComputedStyle(document.body).backgroundColor,
@@ -1286,376 +1469,6 @@ function addPicked(at: Point | undefined): void {
   }
 }
 
-/** A board picked to open, and where it saves itself, unless in the session. */
-interface Picked {
-  folder: Folder;
-  place?: Place;
-}
-
-/** Where a board saves itself, and reads from again. */
-interface Place {
-  store(next: Opened, reading: Reading): Promise<Store | undefined>;
-  /** Missing for the session, which no other program writes. */
-  again?(): Promise<Folder>;
-  /** Reopened at launch from then on. */
-  remember?(): Promise<void>;
-}
-
-/** A board just read, before it shows. */
-interface Read {
-  opened: Opened;
-  reading: Reading;
-}
-
-function homePlace(home: Home): Place {
-  return {
-    store: (_, reading) => folderStore(home, reading, false),
-    again: async () => home,
-    remember: home.remember,
-  };
-}
-
-function zipPlace(zip: ZipHome): Place {
-  return {
-    async store(next) {
-      // As read again, should another program have changed it.
-      await zip.adopt();
-      return zipStore(zip, (folder) => {
-        next.folder = folder;
-      });
-    },
-    again: async () => zipFolder(await zip.reread()),
-    remember: () => zip.remember(),
-  };
-}
-
-/** `restored` when the board was read from it. */
-function sessionPlace(restored: boolean): Place {
-  return {
-    store: async (_, reading) => (session ? folderStore(session, restored ? reading : undefined, true) : undefined),
-  };
-}
-
-async function openFolder(): Promise<Picked | null> {
-  const folder = await platform.open();
-  return folder && { folder, place: "write" in folder ? homePlace(folder) : undefined };
-}
-
-async function openZip(): Promise<Picked | null> {
-  const file = await platform.openZip();
-  return file && { folder: await zipFolder(file), place: file.home && zipPlace(file.home) };
-}
-
-async function opening(work: () => Promise<void>): Promise<void> {
-  loading = true;
-  refreshBar();
-  try {
-    await work();
-  } finally {
-    loading = false;
-    refreshBar();
-  }
-}
-
-/** The board the app left, where it was saved, or else the one the session kept. */
-async function start(): Promise<void> {
-  session = await platform.session().catch((error: unknown) => {
-    fail(error);
-    return null;
-  });
-  const last = await platform.reopen().catch(() => null);
-  // A board saved nowhere else comes first, as the one remembered stays on disk.
-  let kept = session !== null && recallSession().unsaved ? await restore(session) : undefined;
-  if (kept === undefined || kept === "none") {
-    if (last !== null && "folder" in last && (await resume(() => last.folder, homePlace(last.folder)))) {
-      return;
-    }
-    if (last !== null && "zip" in last && (await resume(() => zipFolder(last.zip), zipPlace(last.zip.home!)))) {
-      return;
-    }
-    kept = session === null ? undefined : await restore(session);
-  }
-  if (kept !== "restored") {
-    if (kept instanceof Error) {
-      // Left as it was, as it is the board's only copy.
-      unreadable = session;
-      session = null;
-    }
-    // Remembered still, should the user not click this time.
-    await begin(last !== null && "ask" in last);
-  }
-  if (kept instanceof Error) {
-    bar.say(
-      `The board kept from last time could not be read, and stays as it was until another board opens or a new one starts: ${kept.message}`,
-    );
-  } else if (session === null) {
-    bar.say("This window keeps no board for next time, as another one does or the browser cannot");
-  }
-  if (last !== null && "ask" in last) {
-    offer(last);
-  }
-}
-
-/** Whether the board remembered opened, which is forgotten otherwise. */
-async function resume(folder: () => Promise<Folder> | Folder, place: Place): Promise<boolean> {
-  try {
-    const read = await open(async () => folder(), details);
-    if (read !== null) {
-      await settle(read, place);
-      return true;
-    }
-  } catch (error) {
-    bar.say(`Planche could not open the last board again: ${message(error)}`);
-  }
-  if (session !== null) {
-    await platform.forget();
-  }
-  return false;
-}
-
-/** The board the session kept, opened as it was left, or why it could not open. */
-async function restore(from: Session): Promise<"restored" | "none" | Error> {
-  const kept = recallSession();
-  try {
-    if (!(await from.list(1)).some(core.isBoardFile)) {
-      return "none";
-    }
-    const read = await open(async () => ({ ...from, name: kept.name }), details);
-    if (read === null) {
-      return "none";
-    }
-    if (kept.unsaved) {
-      // Against an empty board, as its changes are saved nowhere else.
-      const empty = new core.Editor();
-      const snapshot = empty.snapshot();
-      read.opened.editor.markSaved(snapshot);
-      snapshot.free();
-      empty.free();
-    }
-    await settle(read, sessionPlace(true));
-    return "restored";
-  } catch (error) {
-    return error instanceof Error ? error : new Error(String(error));
-  }
-}
-
-/** A new board, kept in the session, which the next launch opens unless `keepLast`. */
-async function begin(keepLast = false): Promise<void> {
-  const blank = untitled();
-  const reading = { listed: [], files: new Map(), stamps: new Map() };
-  await settle({ opened: blank, reading }, sessionPlace(false), { clear: true, leaving: true });
-  await reopenNext(keepLast ? null : undefined, blank.folder.name);
-}
-
-/**
- * What the next launch opens, `place`, or else the session, which only the window holding the
- * session decides. `null` keeps the board remembered as it is.
- */
-async function reopenNext(place: Place | null | undefined, name: string): Promise<void> {
-  if (session !== null) {
-    rememberSession({ name, unsaved: false });
-    if (place !== null) {
-      await (place?.remember ?? platform.forget)();
-    }
-  }
-}
-
-/** The remembered folder, which the browser only lets the page write to again after a click. */
-function offer(last: Extract<Reopening, { ask(): unknown }>): void {
-  bar.say(`Click anywhere to open ${last.name} again`, true);
-  addEventListener(
-    "pointerdown",
-    // Asked within the click, before anything awaits.
-    () =>
-      report(
-        opening(async () => {
-          const home = await last.ask();
-          bar.say("");
-          if (home !== null && (await leave())) {
-            const read = await open(async () => home, details);
-            if (read !== null) {
-              await moveIn(read, homePlace(home));
-            }
-          }
-        }),
-      ),
-    { once: true, capture: true },
-  );
-}
-
-const question = "This board isn't saved to a file yet. Leave it anyway?";
-
-/** Whether another board may take the open one's place, which then takes the session back to empty it. */
-async function leave(): Promise<boolean> {
-  await autosave?.flush();
-  if (atRisk() && !(await platform.confirm(question))) {
-    return false;
-  }
-  if (unreadable !== null) {
-    session = unreadable;
-    unreadable = null;
-  }
-  return true;
-}
-
-async function newBoard(): Promise<void> {
-  await opening(async () => {
-    if (await leave()) {
-      await begin();
-    }
-  });
-}
-
-async function openBoard(pick: () => Promise<Picked | null>): Promise<void> {
-  await opening(async () => {
-    let place: Place | undefined;
-    // Asked once picked, since a browser only opens a picker right after a click.
-    const read = await open(async () => {
-      const picked = await pick();
-      if (picked === null || !(await leave())) {
-        return null;
-      }
-      place = picked.place;
-      return picked.folder;
-    }, details);
-    if (read !== null) {
-      await moveIn(read, place);
-    }
-  });
-}
-
-/** Shows a board just opened, which saves itself in its own place, or else in the session. */
-async function moveIn(read: Read, place: Place | undefined): Promise<void> {
-  await settle(read, place ?? sessionPlace(false), { clear: true, leaving: true });
-  await reopenNext(place, read.opened.folder.name);
-  if (place === undefined) {
-    // A copy, as its files may be gone next time, such as those a browser lets a page read.
-    autosave?.touched(Object.keys(read.opened.board.elements));
-  }
-}
-
-interface Settling {
-  camera?: Camera;
-  /** Whether the session lets go of the board it held. */
-  clear?: boolean;
-  /** Whether the user left the open board, which first saves edits made since. */
-  leaving?: boolean;
-}
-
-/**
- * Shows a board just read, which saves itself into `place` from then on. The board it replaces
- * saves itself on until then.
- */
-async function settle(
-  { opened: next, reading }: Read,
-  place: Place,
-  { camera, clear, leaving }: Settling = {},
-): Promise<void> {
-  const store = await place.store(next, reading);
-  const old = autosave;
-  if (leaving) {
-    await old?.flush();
-  }
-  autosave = undefined;
-  await old?.stop();
-  old?.store.free();
-  try {
-    if (clear) {
-      await session?.clear();
-    }
-  } catch (error) {
-    store?.free();
-    showSaved();
-    throw error;
-  }
-  autosave = store && autosaving(next, store, place);
-  await show(next, camera);
-  const strays = reading.listed.filter(core.isStrayElement);
-  if (strays.length > 0) {
-    bar.say(`Left out ${strays.join(", ")}, which no element owns, such as a sync tool's conflicted copy`);
-  }
-}
-
-function autosaving(next: Opened, store: Store, place: Place): Saving {
-  const { editor } = next;
-  const current = () => opened?.editor === editor;
-  return saving(store, {
-    snapshot: () => editor.snapshot(),
-    // As it stands, as rewriting a ZIP file moves where its images lie.
-    source: () => files(next),
-    saved(snapshot) {
-      if (current()) {
-        // The session keeps the board, but it is still saved nowhere else.
-        if (!store.session) {
-          editor.markSaved(snapshot);
-        }
-        showSaved();
-      }
-    },
-    failed(reason) {
-      if (current()) {
-        bar.say(`Not saved into ${next.folder.name}: ${reason}`);
-        showSaved();
-      }
-    },
-    conflict: () =>
-      platform.confirm(
-        `${next.folder.name} changed on disk. Read it again, and lose the changes made here? Otherwise they are written over it.`,
-        ["Read it again", "Keep mine"],
-      ),
-    // Not while another board opens, which takes its place anyway.
-    reload: async (may) => (current() && !loading ? reload(place, may) : "refused"),
-  });
-}
-
-/**
- * The board as another program changed it, as the camera left it, if it still `may` take the
- * open one's place once read.
- */
-async function reload(place: Place, may: () => boolean): Promise<Reloaded> {
-  let reloaded: Reloaded = "refused";
-  await opening(async () => {
-    const camera = viewport.camera();
-    const read = place.again && (await open(() => place.again!(), details));
-    if (read && !may()) {
-      read.opened.editor.free();
-      reloaded = "declined";
-    } else if (read) {
-      await settle(read, place, { camera });
-      reloaded = "replaced";
-      bar.say(`${read.opened.folder.name} changed on disk, so it was read again`);
-    }
-  });
-  return reloaded;
-}
-
-/** Whether the board holds changes that leaving it would lose. */
-function atRisk(): boolean {
-  if (opened === undefined) {
-    return false;
-  }
-  return autosave === undefined || autosave.store.session ? !opened.editor.isSaved() : autosave.unwritten();
-}
-
-/** What the session keeps besides the board. */
-interface Kept {
-  name: string;
-  unsaved: boolean;
-}
-
-function recallSession(): Kept {
-  try {
-    const kept = JSON.parse(recall(SESSION) ?? "") as Partial<Kept>;
-    return { name: typeof kept.name === "string" ? kept.name : "Untitled", unsaved: kept.unsaved === true };
-  } catch {
-    return { name: "Untitled", unsaved: false };
-  }
-}
-
-function rememberSession(kept: Kept): void {
-  remember(SESSION, JSON.stringify(kept));
-}
-
 async function show(next: Opened, camera?: Camera): Promise<void> {
   halfDrawn = true;
   try {
@@ -1679,7 +1492,7 @@ async function present(next: Opened, camera?: Camera): Promise<void> {
   crossedOut = new Set();
   loaded.clear();
   comments.clear();
-  showSaved();
+  life.showSaved();
   showTitle();
   editing.reset();
   const summary = summarise(next);
@@ -1703,6 +1516,8 @@ async function present(next: Opened, camera?: Camera): Promise<void> {
     details.set("renderer", created.backend);
     renderer = created;
     created.place(placed(next.board, lettering, editing.writing(), crossedOut));
+    // The rule takes `next` for a callback.
+    // oxlint-disable-next-line promise/no-callback-in-promise
     viewport.show(created, camera ?? fit(extent(next), viewport.size()));
     editing.rehover();
     refreshBar();
@@ -1710,8 +1525,8 @@ async function present(next: Opened, camera?: Camera): Promise<void> {
   });
   // Handled at once, as the images may fail the opening before anything awaits the renderer.
   const settled = ready.catch(() => undefined);
-  // Its own, as a Save as or another board may replace `autosave` meanwhile.
-  const saving = autosave;
+  // Its own, as a Save as or another board may replace it meanwhile.
+  const saving = life.saver();
   const pending = assetSizes(next.board);
   const total = pending.size;
   const visible = new Set(shownAssets(next.board, firstCamera, size, () => true).keys());
@@ -1721,7 +1536,12 @@ async function present(next: Opened, camera?: Camera): Promise<void> {
   let done = 0;
   // The largest of those that show first, as the camera moves meanwhile, then as they draw.
   const nextAsset = () => {
-    const areas = shownAssets(next.board, viewport.camera() ?? firstCamera, viewport.size(), (asset) => pending.has(asset));
+    const areas = shownAssets(
+      next.board,
+      viewport.camera() ?? firstCamera,
+      viewport.size(),
+      (asset) => pending.has(asset),
+    );
     let asset = pending.keys().next().value;
     let largest = -1;
     for (const [candidate, area] of areas) {
@@ -1807,8 +1627,12 @@ async function present(next: Opened, camera?: Camera): Promise<void> {
     untilDrawn.set("last image", start);
   }
   const crossed = [
-    ...(undecodable > 0 ? [`${undecodable === 1 ? "an image" : `${undecodable} images`} this machine cannot decode`] : []),
-    ...(unplayable > 0 ? [`${unplayable === 1 ? "a video" : `${unplayable} videos`} this machine cannot play`] : []),
+    ...(undecodable > 0
+      ? [`${undecodable === 1 ? "an image" : `${undecodable} images`} this machine cannot decode`]
+      : []),
+    ...(unplayable > 0
+      ? [`${unplayable === 1 ? "a video" : `${unplayable} videos`} this machine cannot play`]
+      : []),
   ];
   if (crossed.length > 0) {
     bar.say(`${summary}, ${crossed.join(", and ")}`);
@@ -1845,7 +1669,10 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
           failures[index] = `${image.name}: ${image.failure}`;
           return;
         }
-        const one: Added = { ...(await prepare(image.bytes, LONGEST_SIDE, heldSize)), filename: image.filename };
+        const one: Added = {
+          ...(await prepare(image.bytes, LONGEST_SIDE, heldSize)),
+          filename: image.filename,
+        };
         // At once, so that their bitmaps do not pile up.
         if (one.decoded && into && target === opened && into === renderer) {
           load(into, new Map([[one.asset, one.decoded]]));
@@ -1853,8 +1680,7 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
         }
         prepared[index] = one;
       } catch (error) {
-        const reason = error instanceof Error && error.message ? error.message : String(error);
-        failures[index] = `${image.name}: this app cannot open it here (${reason})`;
+        failures[index] = `${image.name}: this app cannot open it here (${message(error)})`;
       } finally {
         done += 1;
         if (images.length > 1) {
@@ -1877,8 +1703,14 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
     // Into the group gone into, where they stay selected.
     const group = editing.entered();
     editing.apply((editor, touched) =>
-      added.forEach(({ asset, natural, filename }, at) => {
-        touched.push(...editor.add(ids[at]!, group, JSON.stringify(imageKind(asset, natural, frames[at]!, { filename }))));
+      added.forEach(({ asset, natural, filename }, index) => {
+        touched.push(
+          ...editor.add(
+            ids[index]!,
+            group,
+            JSON.stringify(imageKind(asset, natural, frames[index]!, { filename })),
+          ),
+        );
       }),
     );
     editing.select(ids);
@@ -1895,7 +1727,9 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
 }
 
 function heldSize(asset: string): Size | undefined {
-  return opened && loaded.has(asset) && !crossedOut.has(asset) ? assetSizes(opened.board).get(asset) : undefined;
+  return opened && loaded.has(asset) && !crossedOut.has(asset)
+    ? assetSizes(opened.board).get(asset)
+    : undefined;
 }
 
 /**
@@ -1907,7 +1741,9 @@ async function addTestPhotos(count: number): Promise<void> {
   if (at === undefined) {
     return;
   }
-  const photos = testPhotos(count, (done) => bar.say(`Making test photos, ${done} of ${count}…`, true));
+  const photos = testPhotos(count, (done) =>
+    bar.say(`Making test photos, ${done} of ${count}…`, true),
+  );
   await addImages(
     photos.then((made) => {
       if (!savesToFiles()) {
@@ -1929,17 +1765,28 @@ function room(): Rect | undefined {
   const { width, height } = viewport.size();
   // A press on the handle drags the window instead. It measures 0 while hidden.
   const top = byId("handle").getBoundingClientRect().bottom;
-  const shown = onScreen({ ...camera, y: camera.y + top / camera.zoom }, { width, height: Math.min(height, bar.top()) - top });
+  const shown = onScreen(
+    { ...camera, y: camera.y + top / camera.zoom },
+    { width, height: Math.min(height, bar.top()) - top },
+  );
   if (shown.width <= 0 || shown.height <= 0) {
     return undefined;
   }
   const margin = Math.min(ADDED_MARGIN / camera.zoom, Math.min(shown.width, shown.height) / 10);
-  return { x: shown.x + margin, y: shown.y + margin, width: shown.width - 2 * margin, height: shown.height - 2 * margin };
+  return {
+    x: shown.x + margin,
+    y: shown.y + margin,
+    width: shown.width - 2 * margin,
+    height: shown.height - 2 * margin,
+  };
 }
 
 function keep(target: Opened, added: Added[]): void {
   if (renderer !== undefined) {
-    load(renderer, new Map(added.flatMap(({ asset, decoded }) => (decoded ? [[asset, decoded] as const] : []))));
+    load(
+      renderer,
+      new Map(added.flatMap(({ asset, decoded }) => (decoded ? [[asset, decoded] as const] : []))),
+    );
   }
   animated.keep(added);
   films.keep(added);
@@ -1967,73 +1814,17 @@ function summarise({ folder, board }: Opened): string {
 }
 
 function changed(touched: string[]): void {
-  if (opened === undefined || (touched.length === 0 && core.background(opened.editor) === opened.board.background)) {
+  if (
+    opened === undefined ||
+    (touched.length === 0 && core.background(opened.editor) === opened.board.background)
+  ) {
     return;
   }
   refresh(opened, touched);
   renderer?.backdrop(opened.board.background);
   renderer?.place(placed(opened.board, lettering, editing.writing(), crossedOut));
-  autosave?.touched(touched);
-  showSaved();
+  life.touched(touched);
   viewport.redraw();
-}
-
-/** Into an empty folder, where the board saves itself from then on. */
-async function saveAs(): Promise<void> {
-  if (opened === undefined) {
-    return;
-  }
-  const current = opened;
-  const { editor } = current;
-  // Before anything awaits, as a browser only opens a picker right after a click.
-  const target = await platform.pickTarget();
-  if (target === null) {
-    return;
-  }
-  await autosave?.flush();
-  const store = await folderStore(target, undefined, false);
-  // Editing goes on while the files are written, and another board may even open.
-  const snapshot = editor.snapshot();
-  const written = Object.keys(current.board.elements);
-  try {
-    const write = async () => {
-      for (const [path, bytes] of core.newFiles()) {
-        await target.write(path, bytes);
-      }
-      if (!(await store.save(snapshot, written, () => files(current)))) {
-        throw new Error(`${target.name} is no longer empty`);
-      }
-    };
-    const [, writing] = await timed(() => (autosave ? autosave.during(write) : write()));
-    details.set("save as", milliseconds(writing));
-    if (opened !== current) {
-      store.free();
-      return;
-    }
-    const old = autosave;
-    autosave = undefined;
-    await old?.stop();
-    old?.store.free();
-    current.folder = target;
-    const place = homePlace(target);
-    autosave = autosaving(current, store, place);
-    saved(editor, snapshot);
-    // Edits made while it was written, deletions included.
-    autosave.touched([...written, ...Object.keys(current.board.elements)]);
-    showTitle();
-    bar.say(`Saved as ${target.name}, where it saves itself from now on`);
-    await reopenNext(place, target.name);
-    if (old?.store.session) {
-      await session?.clear();
-    }
-  } catch (error) {
-    if (autosave?.store !== store) {
-      store.free();
-    }
-    throw error;
-  } finally {
-    snapshot.free();
-  }
 }
 
 async function exportZip(): Promise<void> {
@@ -2052,45 +1843,22 @@ async function exportZip(): Promise<void> {
     bar.say(`Exporting ${sink.name}…`, true);
     // Its images from where they lie once no save moves them.
     const write = () => writeZip(snapshot, files(current), sink);
-    const [count, writing] = await timed(() => (autosave ? autosave.during(write) : write()));
+    const saver = life.saver();
+    const [count, writing] = await timed(() => (saver ? saver.during(write) : write()));
     details.set(`export ${count} files`, milliseconds(writing));
     bar.say(`Exported ${sink.name}`);
-    saved(editor, snapshot);
+    life.saved(editor, snapshot);
   } finally {
     snapshot.free();
     exporting = false;
   }
 }
 
-/** Unless another board opened meanwhile, which freed `editor`. */
-function saved(editor: core.Editor, snapshot: core.Snapshot): void {
-  if (opened?.editor === editor) {
-    editor.markSaved(snapshot);
-    showSaved();
-  }
-}
-
-/** Edits come at every pointer move, but the host only hears when these change. */
-function showSaved(): void {
-  const risk = atRisk();
-  if (risk !== unsaved) {
-    unsaved = risk;
-    bar.unsaved(unsaved);
-    showTitle();
-    if (autosave?.store.session) {
-      rememberSession({ ...recallSession(), unsaved });
-    }
-  }
-  const waiting = opened !== undefined && (autosave ? autosave.unwritten() : !opened.editor.isSaved());
-  if (waiting !== unwritten) {
-    unwritten = waiting;
-    platform.markUnsaved(unwritten);
-  }
-}
-
 /** The desktop window keeps its own title, so there only the menu's button marks changes. */
 function showTitle(): void {
-  document.title = opened ? `${unsaved ? "• " : ""}${opened.folder.name} — Planche` : "Planche";
+  document.title = opened
+    ? `${life.unsaved() ? "• " : ""}${opened.folder.name} — Planche`
+    : "Planche";
 }
 
 function showMetrics(): void {
@@ -2112,7 +1880,7 @@ function showMetrics(): void {
     ...details,
   ]);
   byId("metrics").replaceChildren(
-    ...[...lines].flatMap(([name, value]) => [text("dt", name), text("dd", value)]),
+    ...[...lines].flatMap(([name, value]) => [withText("dt", name), withText("dd", value)]),
   );
 }
 
@@ -2124,16 +1892,15 @@ function fail(error: unknown): void {
   bar.say(message(error));
 }
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function text<K extends keyof HTMLElementTagNameMap>(tag: K, content: string): HTMLElementTagNameMap[K] {
+function withText<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  content: string,
+): HTMLElementTagNameMap[K] {
   const element = document.createElement(tag);
   element.textContent = content;
   return element;
 }
 
-function byId<T extends HTMLElement = HTMLElement>(id: string): T {
-  return document.getElementById(id) as T;
+function byId(id: string): HTMLElement {
+  return document.getElementById(id) as HTMLElement;
 }

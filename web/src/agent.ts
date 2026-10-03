@@ -6,6 +6,7 @@ import { decodeAsset, files, readAsset, release, type Opened } from "./board.js"
 import { MOST_SIDE, capture, type Capture } from "./capture.js";
 import * as core from "./core.js";
 import type { Element, Kind, Rect } from "./core.js";
+import { message } from "./errors.js";
 import type { AgentCall } from "./platform.js";
 import type { Rendered, Request } from "./render.js";
 
@@ -33,7 +34,10 @@ const MOST_TEXT = 280;
 const SMALLEST_VECTOR = 512;
 
 /** Rejects with what the agent reads when there is no answer. */
-export async function answer({ tool, args, deadline }: AgentCall, page: Reading & Writing): Promise<unknown> {
+export async function answer(
+  { tool, args, deadline }: AgentCall,
+  page: Reading & Writing,
+): Promise<unknown> {
   const reading: Reading = page;
   const opened = reading.opened();
   if (opened === undefined) {
@@ -58,7 +62,7 @@ export async function answer({ tool, args, deadline }: AgentCall, page: Reading 
         writing: reading.writing() ?? null,
       };
     case "image":
-      return { board, ...(await image(opened, given.id, reading.background())) };
+      return { board, ...(await picture(opened, given.id, reading.background())) };
     case "screenshot":
       return { board, ...screenshot(reading) };
     case "render":
@@ -97,18 +101,26 @@ function entry(opened: Opened, id: string) {
     type: kind.type,
     group,
     // A comment covers nothing, so it is where it is pinned.
-    bounds: kind.type === "comment" ? { ...kind.at, width: 0, height: 0 } : core.bounds(opened.editor, [id]),
+    bounds:
+      kind.type === "comment"
+        ? { ...kind.at, width: 0, height: 0 }
+        : core.bounds(opened.editor, [id]),
     rotation: "rotation" in kind ? kind.rotation : undefined,
-    text: cut(text(kind)),
+    text: cut(textOf(kind)),
     targets: targets(kind),
     image:
       kind.type === "image"
-        ? { filename: kind.filename, source: kind.source, caption: kind.caption, natural_size: kind.natural_size }
+        ? {
+            filename: kind.filename,
+            source: kind.source,
+            caption: kind.caption,
+            natural_size: kind.natural_size,
+          }
         : undefined,
   };
 }
 
-function text(kind: Kind): string | undefined {
+function textOf(kind: Kind): string | undefined {
   if (kind.type === "comment") {
     return kind.text;
   }
@@ -135,7 +147,7 @@ function targets(kind: Kind): string[] | undefined {
 }
 
 /** Read again, as the renderer keeps only its textures. */
-async function image(opened: Opened, id: unknown, background: string) {
+async function picture(opened: Opened, id: unknown, background: string) {
   if (typeof id !== "string" || !Object.hasOwn(opened.board.elements, id)) {
     throw new Error(`${opened.folder.name} has no element ${String(id)}`);
   }
@@ -145,8 +157,7 @@ async function image(opened: Opened, id: unknown, background: string) {
   }
   const { natural_size: natural, frame, rotation, edits, filename, source, caption } = kind;
   const unreadable = (error: unknown) => {
-    const reason = error instanceof Error ? error.message : String(error);
-    return new Error(`Planche cannot read the picture of ${id} (${reason})`);
+    return new Error(`Planche cannot read the picture of ${id} (${message(error)})`);
   };
   const asset = await readAsset(files(opened), kind.asset, natural).catch((error: unknown) => {
     throw unreadable(error);
@@ -164,13 +175,32 @@ async function image(opened: Opened, id: unknown, background: string) {
       image = capture(decoded, { width: decoded.width, height: decoded.height }, background);
     } else {
       const scale = Math.max(1, SMALLEST_VECTOR / Math.max(natural.width, natural.height));
-      image = capture(decoded.image, { width: natural.width * scale, height: natural.height * scale }, background);
+      image = capture(
+        decoded.image,
+        { width: natural.width * scale, height: natural.height * scale },
+        background,
+      );
     }
   } finally {
     release(decoded);
   }
-  const still = asset.video ? "the video's first frame" : asset.moving ? "the first frame" : undefined;
-  return { id, filename, source, caption, natural_size: natural, frame, rotation, edits, still, image };
+  const still = asset.video
+    ? "the video's first frame"
+    : asset.moving
+      ? "the first frame"
+      : undefined;
+  return {
+    id,
+    filename,
+    source,
+    caption,
+    natural_size: natural,
+    frame,
+    rotation,
+    edits,
+    still,
+    image,
+  };
 }
 
 /** Drawn and read in this task, as a canvas holds its drawing no longer. */
@@ -183,12 +213,20 @@ function screenshot(reading: Reading) {
   if (canvas === undefined || view === undefined || canvas.width === 0 || canvas.height === 0) {
     throw new Error("Planche shows no board yet");
   }
-  const image = capture(canvas, { width: canvas.width, height: canvas.height }, reading.background());
+  const image = capture(
+    canvas,
+    { width: canvas.width, height: canvas.height },
+    reading.background(),
+  );
   return { view, pixels_per_unit: image.width / view.width, image };
 }
 
 /** Drawn at the size asked, so that `capture` has nothing to scale. */
-async function render(reading: Reading, opened: Opened, { area, ids, size }: Record<string, unknown>) {
+async function render(
+  reading: Reading,
+  opened: Opened,
+  { area, ids, size }: Record<string, unknown>,
+) {
   if (reading.halfDrawn()) {
     throw new Error("A board is opening in Planche");
   }
@@ -198,7 +236,7 @@ async function render(reading: Reading, opened: Opened, { area, ids, size }: Rec
   if (size != null && !(typeof size === "number" && Number.isFinite(size) && size >= 1)) {
     throw new Error("size must be a number of pixels");
   }
-  const request: Request = { size: size == null ? undefined : (size as number) };
+  const request: Request = size == null ? {} : { size };
   if (area != null) {
     const { x, y, width, height } = area as Rect;
     if (![x, y, width, height].every(Number.isFinite) || !(width > 0 && height > 0)) {
@@ -210,7 +248,11 @@ async function render(reading: Reading, opened: Opened, { area, ids, size }: Rec
     request.ids = ids as string[];
   }
   const { area: covered, canvas } = await reading.render(request);
-  const image = capture(canvas, { width: canvas.width, height: canvas.height }, reading.background());
+  const image = capture(
+    canvas,
+    { width: canvas.width, height: canvas.height },
+    reading.background(),
+  );
   return { area: covered, pixels_per_unit: image.width / covered.width, image };
 }
 

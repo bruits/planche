@@ -2,7 +2,9 @@
 
 interface Window {
   /** Chromium only. */
-  showDirectoryPicker?(options?: { mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle>;
+  showDirectoryPicker?(options?: {
+    mode?: "read" | "readwrite";
+  }): Promise<FileSystemDirectoryHandle>;
   /** The desktop shell's API, which `withGlobalTauri` exposes. */
   __TAURI__?: TauriApi;
 }

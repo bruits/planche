@@ -61,12 +61,17 @@ function loaded(element: HTMLVideoElement): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const arm = () => {
       clearTimeout(timer);
-      timer = document.hidden ? undefined : setTimeout(() => done("this machine cannot play it"), PATIENCE);
+      timer = document.hidden
+        ? undefined
+        : setTimeout(() => done("this machine cannot play it"), PATIENCE);
     };
+    const shown = () => done(element.videoWidth > 0 ? undefined : "it holds no picture");
+    const failed = () => done("this machine cannot play it");
     const done = (failure?: string) => {
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", arm);
-      element.onloadeddata = element.onerror = null;
+      element.removeEventListener("loadeddata", shown);
+      element.removeEventListener("error", failed);
       if (failure === undefined) {
         resolve();
       } else {
@@ -75,8 +80,8 @@ function loaded(element: HTMLVideoElement): Promise<void> {
     };
     arm();
     document.addEventListener("visibilitychange", arm);
-    element.onloadeddata = () => done(element.videoWidth > 0 ? undefined : "it holds no picture");
-    element.onerror = () => done("this machine cannot play it");
+    element.addEventListener("loadeddata", shown);
+    element.addEventListener("error", failed);
   });
 }
 
@@ -112,7 +117,7 @@ interface Clip {
   /** Where it got to, in seconds. */
   time: number;
   /** While it shows and plays. */
-  run?: Run;
+  run?: Run | undefined;
 }
 
 interface Run {
@@ -200,7 +205,9 @@ export function videos(again: () => void, changed: () => void, failed: () => voi
     return run;
   };
   // A hidden window draws no frame, so its frame hook would not stop what plays, sound included.
-  document.addEventListener("visibilitychange", () => (document.hidden ? clips.forEach(stop) : again()));
+  document.addEventListener("visibilitychange", () =>
+    document.hidden ? clips.forEach(stop) : again(),
+  );
   return {
     keep(images) {
       for (const { asset, video } of images) {
@@ -214,7 +221,7 @@ export function videos(again: () => void, changed: () => void, failed: () => voi
         return;
       }
       const shown = shownAssets(board, camera, viewport, runs);
-      const largest = [...shown].sort(([, a], [, b]) => b - a).slice(0, MOST_PLAYING);
+      const largest = [...shown].toSorted(([, a], [, b]) => b - a).slice(0, MOST_PLAYING);
       const playing = new Set(largest.map(([asset]) => asset));
       const now = performance.now();
       let polled = false;
@@ -275,7 +282,8 @@ export function videos(again: () => void, changed: () => void, failed: () => voi
       again();
     },
     hover(asset) {
-      const moved = asset !== hovered && [hovered, asset].some((one) => one !== undefined && clips.has(one));
+      const moved =
+        asset !== hovered && [hovered, asset].some((one) => one !== undefined && clips.has(one));
       hovered = asset;
       if (onHover && moved) {
         changed();

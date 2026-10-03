@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "promise", "vitest"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error"
+  },
+  "options": {
+    "typeAware": true,
+    "denyWarnings": true,
+    "reportUnusedDisableDirectives": "error"
+  },
+  "rules": {
+    "no-unused-vars": ["error", { "ignoreRestSiblings": true }],
+    "typescript/no-explicit-any": "error",
+    // No method of ours reads `this`, and of the browser's, only Window's are taken off their
+    // object, which need none.
+    "typescript/unbound-method": "off",
+    // Casts sit where values enter, at the core's JSON, which its contract tests check, the DOM's
+    // event targets, and agents' arguments once checked.
+    "typescript/no-unsafe-type-assertion": "off",
+    // `noImplicitReturns` checks it, knowing which switches are exhaustive.
+    "typescript/consistent-return": "off"
+  },
+  "overrides": [
+    {
+      // Tauri's API, typed as each call expects.
+      "files": ["src/global.d.ts"],
+      "rules": { "typescript/no-unnecessary-type-parameters": "off" }
+    }
+  ]
+}

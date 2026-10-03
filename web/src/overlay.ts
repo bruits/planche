@@ -169,11 +169,19 @@ export function overlay(host: HTMLElement): Overlay {
   };
   const placePivot = () => {
     const size = PIVOT / zoom;
-    pivot.setAttribute("d", centre ? `M${centre.x - size} ${centre.y}h${2 * size}M${centre.x} ${centre.y - size}v${2 * size}` : "");
+    pivot.setAttribute(
+      "d",
+      centre
+        ? `M${centre.x - size} ${centre.y}h${2 * size}M${centre.x} ${centre.y - size}v${2 * size}`
+        : "",
+    );
   };
   return {
     frame(camera, { width, height }) {
-      svg.setAttribute("viewBox", `${camera.x} ${camera.y} ${width / camera.zoom} ${height / camera.zoom}`);
+      svg.setAttribute(
+        "viewBox",
+        `${camera.x} ${camera.y} ${width / camera.zoom} ${height / camera.zoom}`,
+      );
       if (camera.zoom !== zoom) {
         zoom = camera.zoom;
         place();
@@ -222,12 +230,12 @@ export function overlay(host: HTMLElement): Overlay {
       marquee.setAttribute("height", String(height));
       marquee.removeAttribute("display");
     },
-    entered(corners) {
-      if (corners === undefined) {
+    entered(around) {
+      if (around === undefined) {
         entered.setAttribute("display", "none");
         return;
       }
-      entered.setAttribute("points", corners.flatMap(({ x, y }) => [x, y]).join(" "));
+      entered.setAttribute("points", around.flatMap(({ x, y }) => [x, y]).join(" "));
       entered.removeAttribute("display");
     },
     targets(outlines) {
@@ -240,8 +248,7 @@ export function overlay(host: HTMLElement): Overlay {
         cropping.setAttribute("display", "none");
         return;
       }
-      const path = (points: Point[]) => `M${points.map(({ x, y }) => `${x} ${y}`).join("L")}Z`;
-      shade.setAttribute("d", path(shown.image) + path(shown.kept));
+      shade.setAttribute("d", closed(shown.image) + closed(shown.kept));
       kept.setAttribute("points", shown.kept.flatMap(({ x, y }) => [x, y]).join(" "));
       cropping.removeAttribute("display");
     },
@@ -253,13 +260,17 @@ function traced(outlines: Float64Array[]): string {
   return outlines
     .filter((points) => points.length > 0)
     .map((points) => {
-      let path = `M${points[0]} ${points[1]}`;
+      let d = `M${points[0]} ${points[1]}`;
       for (let at = 2; at < points.length; at += 2) {
-        path += `L${points[at]} ${points[at + 1]}`;
+        d += `L${points[at]} ${points[at + 1]}`;
       }
-      return points.length > 4 ? `${path}Z` : path;
+      return points.length > 4 ? `${d}Z` : d;
     })
     .join("");
+}
+
+function closed(points: Point[]): string {
+  return `M${points.map(({ x, y }) => `${x} ${y}`).join("L")}Z`;
 }
 
 function shapes(outlines: Float64Array[]): SVGElement[] {
@@ -274,23 +285,23 @@ function shapes(outlines: Float64Array[]): SVGElement[] {
 }
 
 function circle({ x, y }: Point, radius: number, name?: string): SVGElement {
-  const circle = document.createElementNS(SVG, "circle");
-  circle.setAttribute("cx", String(x));
-  circle.setAttribute("cy", String(y));
-  circle.setAttribute("r", String(radius));
+  const element = document.createElementNS(SVG, "circle");
+  element.setAttribute("cx", String(x));
+  element.setAttribute("cy", String(y));
+  element.setAttribute("r", String(radius));
   if (name) {
-    circle.classList.add(name);
+    element.classList.add(name);
   }
-  return circle;
+  return element;
 }
 
 function square({ x, y }: Point, size: number): SVGElement {
-  const square = document.createElementNS(SVG, "rect");
-  square.setAttribute("x", String(x - size / 2));
-  square.setAttribute("y", String(y - size / 2));
-  square.setAttribute("width", String(size));
-  square.setAttribute("height", String(size));
-  return square;
+  const element = document.createElementNS(SVG, "rect");
+  element.setAttribute("x", String(x - size / 2));
+  element.setAttribute("y", String(y - size / 2));
+  element.setAttribute("width", String(size));
+  element.setAttribute("height", String(size));
+  return element;
 }
 
 function segment(from: Point, to: Point, name: string): SVGElement {
@@ -304,10 +315,10 @@ function segment(from: Point, to: Point, name: string): SVGElement {
 }
 
 function path(d: string, name: string): SVGElement {
-  const path = document.createElementNS(SVG, "path");
-  path.setAttribute("d", d);
-  path.classList.add(name);
-  return path;
+  const element = document.createElementNS(SVG, "path");
+  element.setAttribute("d", d);
+  element.classList.add(name);
+  return element;
 }
 
 /** A quarter of a circle around the corner `at` of `box`, from one of its sides drawn on to the other. */
@@ -317,7 +328,10 @@ function arc(box: Point[], at: number, radius: number): string {
     const length = distance(corner, from);
     return length === 0
       ? corner
-      : { x: corner.x + ((corner.x - from.x) / length) * radius, y: corner.y + ((corner.y - from.y) / length) * radius };
+      : {
+          x: corner.x + ((corner.x - from.x) / length) * radius,
+          y: corner.y + ((corner.y - from.y) / length) * radius,
+        };
   };
   const [start, end] = [beyond(box[(at + 1) % 4]!), beyond(box[(at + 3) % 4]!)];
   // Clockwise, as the box runs.

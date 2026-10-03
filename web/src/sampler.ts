@@ -78,8 +78,24 @@ export function sampler(host: SamplerHost, board: HTMLElement): Sampler {
     const { width, height } = loupe.getBoundingClientRect();
     const right = pointer.clientX + OFFSET + width <= innerWidth;
     const above = pointer.clientY - OFFSET - height >= 0;
-    loupe.style.setProperty("left", `${right ? pointer.clientX + OFFSET : pointer.clientX - OFFSET - width}px`);
-    loupe.style.setProperty("top", `${above ? pointer.clientY - OFFSET - height : pointer.clientY + OFFSET}px`);
+    loupe.style.setProperty(
+      "left",
+      `${right ? pointer.clientX + OFFSET : pointer.clientX - OFFSET - width}px`,
+    );
+    loupe.style.setProperty(
+      "top",
+      `${above ? pointer.clientY - OFFSET - height : pointer.clientY + OFFSET}px`,
+    );
+  };
+  const show = (image: ImageData | undefined) => {
+    if (image && mode) {
+      context.putImageData(image, 0, 0);
+      const middle = (Math.floor(ACROSS / 2) * ACROSS + Math.floor(ACROSS / 2)) * 4;
+      const [red, green, blue] = image.data.slice(middle, middle + 3);
+      colour = `#${[red!, green!, blue!].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+      hex.textContent = colour;
+      loupe.style.setProperty("--picked", colour);
+    }
   };
   const read = () => {
     if (reading) {
@@ -93,16 +109,7 @@ export function sampler(host: SamplerHost, board: HTMLElement): Sampler {
     reading = true;
     host
       .read(at)
-      .then((image) => {
-        if (image && mode) {
-          context.putImageData(image, 0, 0);
-          const middle = (Math.floor(ACROSS / 2) * ACROSS + Math.floor(ACROSS / 2)) * 4;
-          const [red, green, blue] = image.data.slice(middle, middle + 3);
-          colour = `#${[red!, green!, blue!].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
-          hex.textContent = colour;
-          loupe.style.setProperty("--picked", colour);
-        }
-      })
+      .then(show)
       .catch(() => undefined)
       .finally(() => {
         reading = false;

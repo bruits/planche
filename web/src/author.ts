@@ -3,10 +3,21 @@
 // in one step, as an edit made during a gesture would join it.
 
 import { fromBase64 } from "./add.js";
-import { extent, holdsImage, imageKind, newId, prepare, release, row, type Added, type Opened } from "./board.js";
+import {
+  extent,
+  holdsImage,
+  imageKind,
+  newId,
+  prepare,
+  release,
+  row,
+  type Added,
+  type Opened,
+} from "./board.js";
 import * as core from "./core.js";
 import type { CropShape, Editor, Kind, Point, Rect, Size } from "./core.js";
 import { FONT_SIZE, NOTE_WIDTH, PLACED_SIZE, STICKY_SIZE, type Restack } from "./edit.js";
+import { message } from "./errors.js";
 import { LONGEST_SIDE } from "./raster.js";
 import { isColour, restyled, settings, TEXT, type Style } from "./style.js";
 import { fitted, holdsText, isBlank } from "./text.js";
@@ -46,7 +57,12 @@ interface Clock {
 type Args = Record<string, unknown>;
 
 /** Throws what the agent reads when nothing changed. */
-export async function write(tool: string, args: Args, page: Writing, deadline: number): Promise<unknown> {
+export async function write(
+  tool: string,
+  args: Args,
+  page: Writing,
+  deadline: number,
+): Promise<unknown> {
   const clock = { started: performance.now(), deadline };
   const target = page.opened()!;
   switch (tool) {
@@ -61,24 +77,38 @@ export async function write(tool: string, args: Args, page: Writing, deadline: n
     case "restack": {
       await ready(page, target, clock);
       const ids = known(target, args.ids);
-      return { touched: page.apply((editor, touched) => touched.push(...editor.restack(ids, args.to as Restack))) };
+      return {
+        touched: page.apply((editor, touched) =>
+          touched.push(...editor.restack(ids, args.to as Restack)),
+        ),
+      };
     }
     case "group": {
       await ready(page, target, clock);
       const ids = known(target, args.ids);
       const group = newId();
-      return { group, touched: page.apply((editor, touched) => touched.push(...editor.group(group, ids))) };
+      return {
+        group,
+        touched: page.apply((editor, touched) => touched.push(...editor.group(group, ids))),
+      };
     }
     case "ungroup": {
       await ready(page, target, clock);
       const ids = known(target, args.ids);
-      return { touched: page.apply((editor, touched) => ids.forEach((id) => touched.push(...editor.ungroup(id)))) };
+      return {
+        touched: page.apply((editor, touched) =>
+          ids.forEach((id) => touched.push(...editor.ungroup(id))),
+        ),
+      };
     }
     case "remove": {
       await ready(page, target, clock);
       const ids = known(target, args.ids);
-      const touched = page.apply((editor, touched) => touched.push(...editor.remove(ids)));
-      return { touched, removed: touched.filter((id) => !Object.hasOwn(target.board.elements, id)) };
+      const changed = page.apply((editor, touched) => touched.push(...editor.remove(ids)));
+      return {
+        touched: changed,
+        removed: changed.filter((id) => !Object.hasOwn(target.board.elements, id)),
+      };
     }
     case "select": {
       // A selection that changes under a press breaks it.
@@ -99,7 +129,9 @@ async function ready(page: Writing, target: Opened, { started, deadline }: Clock
   const until = started + IDLE_WAIT;
   while (page.busy()) {
     const left = until - performance.now();
-    const waited = left > 0 && (await Promise.race([page.idle().then(() => true), delay(left).then(() => false)]));
+    const waited =
+      left > 0 &&
+      (await Promise.race([page.idle().then(() => true), delay(left).then(() => false)]));
     if (!waited) {
       throw new Error(
         "The user is editing in Planche, dragging, writing a text, or cropping an image, so nothing changed: try again",
@@ -156,16 +188,24 @@ async function addImages(page: Writing, target: Opened, clock: Clock, images: Ne
     for (const [at, image] of images.entries()) {
       const name = image.filename ?? `image ${at + 1}`;
       try {
-        added.push({ ...(await prepare(fromBase64(image.data), LONGEST_SIDE)), filename: image.filename });
+        added.push({
+          ...(await prepare(fromBase64(image.data), LONGEST_SIDE)),
+          filename: image.filename,
+        });
       } catch (error) {
-        throw new Error(`${name} cannot be opened here (${reason(error)}), so nothing changed`);
+        throw new Error(`${name} cannot be opened here (${message(error)}), so nothing changed`, {
+          cause: error,
+        });
       }
     }
     frames = placed(page, images, added);
     await ready(page, target, clock);
     // The images would stay kept otherwise, though none showed them.
     for (const { group } of images) {
-      const kind = group !== undefined && Object.hasOwn(target.board.elements, group) ? target.board.elements[group]!.kind : undefined;
+      const kind =
+        group !== undefined && Object.hasOwn(target.board.elements, group)
+          ? target.board.elements[group]!.kind
+          : undefined;
       if (group !== undefined && kind?.type !== "group") {
         throw new Error(`${target.folder.name} has no group ${group}, so nothing changed`);
       }
@@ -176,14 +216,21 @@ async function addImages(page: Writing, target: Opened, clock: Clock, images: Ne
   }
   page.keep(target, added);
   const ids = added.map(() => newId());
-  const touched = page.apply((editor, touched) =>
+  const changed = page.apply((editor, touched) =>
     added.forEach(({ asset, natural, filename }, at) => {
       const { source, caption, group } = images[at]!;
-      const kind = imageKind(asset, natural, frames[at]!, { filename, source: filled(source), caption: filled(caption) });
+      const kind = imageKind(asset, natural, frames[at]!, {
+        filename,
+        source: filled(source),
+        caption: filled(caption),
+      });
       touched.push(...editor.add(ids[at]!, group, JSON.stringify(kind)));
     }),
   );
-  return { touched, added: ids.map((id, at) => ({ id, filename: added[at]!.filename, frame: frames[at] })) };
+  return {
+    touched: changed,
+    added: ids.map((id, at) => ({ id, filename: added[at]!.filename, frame: frames[at] })),
+  };
 }
 
 function placed(page: Writing, images: NewImage[], added: Added[]): Rect[] {
@@ -192,7 +239,9 @@ function placed(page: Writing, images: NewImage[], added: Added[]): Rect[] {
     const scale = width === undefined ? 1 : positive(width, "width") / natural.width;
     return { width: natural.width * scale, height: natural.height * scale };
   });
-  const unplaced = sizes.filter((_, at) => images[at]!.x === undefined || images[at]!.y === undefined);
+  const unplaced = sizes.filter(
+    (_, at) => images[at]!.x === undefined || images[at]!.y === undefined,
+  );
   const lined = row(unplaced, page.centre() ?? { x: 0, y: 0 });
   return sizes.map((size, at) => {
     const { x, y } = images[at]!;
@@ -204,17 +253,41 @@ function filled(text: string | undefined): string | undefined {
   return text?.trim() ? text : undefined;
 }
 
-function reason(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : String(error);
+function fillField(
+  kind: Extract<Kind, { type: "image" }>,
+  field: "caption" | "source",
+  text: string,
+): void {
+  const written = filled(text);
+  if (written === undefined) {
+    delete kind[field];
+  } else {
+    kind[field] = written;
+  }
 }
 
 /** What agents set of a style, a colour in either case. */
 type Styling = Omit<Style, "size" | "colour"> & { colour?: string };
 
-const SETTABLE = ["colour", "paper", "weight", "dash", "heads", "fill", "bold", "italic", "strike", "align"] as const;
+const SETTABLE = [
+  "colour",
+  "paper",
+  "weight",
+  "dash",
+  "heads",
+  "fill",
+  "bold",
+  "italic",
+  "strike",
+  "align",
+] as const;
 
 /** In what `given` sets of its style, each where the style card would offer it, or `refuse` throws. */
-function styled(kind: Kind, given: Styling, refuse: (field: string, blank: boolean) => Error): Kind {
+function styled(
+  kind: Kind,
+  given: Styling,
+  refuse: (field: string, blank: boolean) => Error,
+): Kind {
   const style: Style = {};
   for (const field of SETTABLE) {
     const value = given[field];
@@ -227,7 +300,9 @@ function styled(kind: Kind, given: Styling, refuse: (field: string, blank: boole
     if (field === "colour") {
       const colour = String(value).toLowerCase();
       if (!isColour(colour)) {
-        throw new Error(`\`${colour}\` is not a colour, which is ink, red, orange, green, blue, violet, or #rrggbb`);
+        throw new Error(
+          `\`${colour}\` is not a colour, which is ink, red, orange, green, blue, violet, or #rrggbb`,
+        );
       }
       style.colour = colour;
     } else {
@@ -243,32 +318,43 @@ function named(kind: Kind): string {
   return kind.type === "shape" && kind.shape === "cross" ? "cross" : kind.type;
 }
 
-type New = { group?: string } & Styling & (
-  | { type: "note"; x: number; y: number; width?: number; text: string; font_size?: number; rotation?: number }
-  | {
-      type: "sticky" | "shape";
-      x: number;
-      y: number;
-      width?: number;
-      height?: number;
-      text?: string;
-      font_size?: number;
-      shape?: "rectangle" | "ellipse" | "cross";
-      rotation?: number;
-    }
-  | { type: "arrow" | "line"; from: Point; to: Point }
-  | { type: "comment"; at: Point; text: string }
-);
+type New = { group?: string } & Styling &
+  (
+    | {
+        type: "note";
+        x: number;
+        y: number;
+        width?: number;
+        text: string;
+        font_size?: number;
+        rotation?: number;
+      }
+    | {
+        type: "sticky" | "shape";
+        x: number;
+        y: number;
+        width?: number;
+        height?: number;
+        text?: string;
+        font_size?: number;
+        shape?: "rectangle" | "ellipse" | "cross";
+        rotation?: number;
+      }
+    | { type: "arrow" | "line"; from: Point; to: Point }
+    | { type: "comment"; at: Point; text: string }
+  );
 
 async function add(page: Writing, target: Opened, clock: Clock, elements: New[], stick: boolean) {
   await ready(page, target, clock);
   // The size a click places, which reads as well as the board around it in the view.
   const zoom = page.zoom() ?? 1;
   const ids = elements.map(() => newId());
-  const touched = page.apply((editor, touched) =>
+  const changed = page.apply((editor, touched) =>
     elements.forEach((element, at) => {
       const id = ids[at]!;
-      touched.push(...editor.add(id, element.group, JSON.stringify(kindOf(editor, element, zoom, stick))));
+      touched.push(
+        ...editor.add(id, element.group, JSON.stringify(kindOf(editor, element, zoom, stick))),
+      );
       if ("rotation" in element && element.rotation) {
         const { x, y, width, height } = core.bounds(editor, [id])!;
         touched.push(...editor.rotate([id], x + width / 2, y + height / 2, element.rotation));
@@ -279,7 +365,10 @@ async function add(page: Writing, target: Opened, clock: Clock, elements: New[],
     }),
   );
   const bounds = (id: string) => core.bounds(target.editor, [id]) ?? null;
-  return { touched, added: ids.map((id, at) => ({ id, type: elements[at]!.type, bounds: bounds(id) })) };
+  return {
+    touched: changed,
+    added: ids.map((id, at) => ({ id, type: elements[at]!.type, bounds: bounds(id) })),
+  };
 }
 
 function kindOf(editor: Editor, element: New, zoom: number, stick: boolean): Kind {
@@ -292,19 +381,34 @@ function kindOf(editor: Editor, element: New, zoom: number, stick: boolean): Kin
         throw new Error("A note needs some text");
       }
       const side = element.type === "sticky" ? STICKY_SIZE : PLACED_SIZE;
-      const width = positive(element.width ?? (element.type === "note" ? NOTE_WIDTH : side) / zoom, "width");
-      const height = "height" in element && element.height !== undefined ? positive(element.height, "height") : side / zoom;
+      const width = positive(
+        element.width ?? (element.type === "note" ? NOTE_WIDTH : side) / zoom,
+        "width",
+      );
+      const height =
+        "height" in element && element.height !== undefined
+          ? positive(element.height, "height")
+          : side / zoom;
       const font_size = positive(element.font_size ?? FONT_SIZE / zoom, "font_size");
       const frame = { x: element.x, y: element.y, width, height };
       const content = { content: text, font_size };
       const kind: Kind =
         element.type === "shape"
-          ? { type: "shape", frame, rotation: 0, shape: element.shape ?? "rectangle", text: content }
+          ? {
+              type: "shape",
+              frame,
+              rotation: 0,
+              shape: element.shape ?? "rectangle",
+              text: content,
+            }
           : { type: element.type, frame, rotation: 0, text: content };
       const dressed = styled(
         kind,
         element,
-        (field, blank) => new Error(`A new ${named(kind)} ${blank ? `needs some text before its ${field}` : `takes no ${field}`}`),
+        (field, blank) =>
+          new Error(
+            `A new ${named(kind)} ${blank ? `needs some text before its ${field}` : `takes no ${field}`}`,
+          ),
       );
       return holdsText(dressed) ? fitted(dressed) : dressed;
     }
@@ -313,9 +417,16 @@ function kindOf(editor: Editor, element: New, zoom: number, stick: boolean): Kin
       if (element.from.x === element.to.x && element.from.y === element.to.y) {
         throw new Error(`An ${element.type === "arrow" ? "arrow" : "line"} needs two ends apart`);
       }
-      const end = (point: Point): { at: Point; target?: string } => (stick ? core.stick(editor, point, 0) : undefined) ?? { at: point };
+      const end = (point: Point): { at: Point; target?: string } =>
+        (stick ? core.stick(editor, point, 0) : undefined) ?? { at: point };
       const [from, to] = [end(element.from), end(element.to)];
-      const kind: Kind = { type: element.type, from: from.at, to: to.at, from_target: from.target, to_target: to.target };
+      const kind: Kind = {
+        type: element.type,
+        from: from.at,
+        to: to.at,
+        ...(from.target !== undefined && { from_target: from.target }),
+        ...(to.target !== undefined && { to_target: to.target }),
+      };
       return styled(kind, element, (field) => new Error(`A new ${element.type} takes no ${field}`));
     }
     case "comment":
@@ -345,7 +456,7 @@ async function update(page: Writing, target: Opened, clock: Clock, changes: Chan
     target,
     changes.map(({ id }) => id),
   );
-  const touched = page.apply((editor, touched) =>
+  const changed = page.apply((editor, touched) =>
     changes.forEach((change) => {
       touched.push(...editor.update(change.id, JSON.stringify(patched(editor, change))));
       const { crop } = change;
@@ -354,7 +465,7 @@ async function update(page: Writing, target: Opened, clock: Clock, changes: Chan
       }
     }),
   );
-  return { touched };
+  return { touched: changed };
 }
 
 /** From the core, as earlier changes of the call left it, but for the crop, which the core makes. */
@@ -405,10 +516,10 @@ function patched(editor: Editor, change: Change): Kind {
       throw refuse(imageField);
     }
     if (caption !== undefined) {
-      kind.caption = filled(caption);
+      fillField(kind, "caption", caption);
     }
     if (source !== undefined) {
-      kind.source = filled(source);
+      fillField(kind, "source", source);
     }
     if (greyscale !== undefined) {
       kind.edits.greyscale = greyscale;
@@ -451,11 +562,12 @@ async function transform(page: Writing, target: Opened, clock: Clock, given: Tra
     throw new Error("Only images flip, and these hold none");
   }
   const about = given.about ?? { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-  const touched = page.apply((editor, touched) => {
+  const changed = page.apply((editor, touched) => {
     if (given.flip !== undefined) {
       touched.push(...editor.flip(ids, given.flip === "horizontal"));
     }
-    const factor = given.width === undefined ? given.scale : positive(given.width, "width") / bounds.width;
+    const factor =
+      given.width === undefined ? given.scale : positive(given.width, "width") / bounds.width;
     if (factor !== undefined) {
       touched.push(...editor.scale(ids, about.x, about.y, positive(factor, "scale")));
     }
@@ -471,7 +583,7 @@ async function transform(page: Writing, target: Opened, clock: Clock, given: Tra
       touched.push(...(given.stick === false ? editor.unstick(ids) : editor.land(ids)));
     }
   });
-  return { touched };
+  return { touched: changed };
 }
 
 /** From where the elements are now, as earlier steps of the call moved them. */

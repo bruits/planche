@@ -11,7 +11,9 @@ import type { View } from "./view.js";
  * An image to add, still encoded, or why it cannot be. `name` tells the user which one failed,
  * `filename` names the file it was picked or dropped as.
  */
-export type Incoming = { name: string; filename?: string; bytes: Blob } | { name: string; failure: string };
+export type Incoming =
+  | { name: string; filename?: string | undefined; bytes: Blob }
+  | { name: string; failure: string };
 
 /**
  * Image and video files the user picks, none when they cancel. The macOS webview offers every file,
@@ -26,7 +28,10 @@ export async function pick(): Promise<Incoming[]> {
 }
 
 /** Hands each drop or paste over with where it goes: under the pointer, or at the view's centre. */
-export function receive(view: View, received: (incoming: Promise<Incoming[]>, at: Point) => void): void {
+export function receive(
+  view: View,
+  received: (incoming: Promise<Incoming[]>, at: Point) => void,
+): void {
   // A drop anywhere else would leave the app for the file.
   for (const type of ["dragover", "drop"] as const) {
     addEventListener(type, (event) => event.preventDefault());
@@ -44,7 +49,10 @@ export function receive(view: View, received: (incoming: Promise<Incoming[]>, at
     const at = left <= x && x < right && top <= y && y < bottom ? view.at(point) : undefined;
     if (at) {
       const downloads = addresses.map(async (address) => [await download(address)]);
-      received(Promise.all([read(), ...downloads]).then((lists) => lists.flat()), at);
+      received(
+        Promise.all([read(), ...downloads]).then((lists) => lists.flat()),
+        at,
+      );
     }
   });
   document.addEventListener("paste", (event) => {
@@ -59,7 +67,10 @@ export function receive(view: View, received: (incoming: Promise<Incoming[]>, at
   });
   // WebKit enables its Paste menu item, which Cmd+V goes through, only for editable content,
   // unless this is cancelled.
-  document.addEventListener("beforepaste", (event) => typing(event.target) || event.preventDefault());
+  document.addEventListener(
+    "beforepaste",
+    (event) => typing(event.target) || event.preventDefault(),
+  );
 }
 
 /**
@@ -84,11 +95,15 @@ function fromFile(file: File): Incoming {
 /** The `<img>` of a page's HTML, which keeps it when the image is a link, or else its URL. */
 function source(transfer: DataTransfer): string | undefined {
   const html = transfer.getData("text/html");
-  const image = html && new DOMParser().parseFromString(html, "text/html").querySelector("img[src]");
+  const image =
+    html && new DOMParser().parseFromString(html, "text/html").querySelector("img[src]");
   if (image) {
     return image.getAttribute("src")!;
   }
-  const lines = [...transfer.getData("text/uri-list").split(/\r?\n/), transfer.getData("text/plain").trim()];
+  const lines = [
+    ...transfer.getData("text/uri-list").split(/\r?\n/),
+    transfer.getData("text/plain").trim(),
+  ];
   return lines.find((line) => /^(https?|data):/i.test(line));
 }
 
@@ -126,8 +141,10 @@ export function fromBase64(text: string): Blob {
 async function readClipboard(): Promise<Incoming[]> {
   const items = await navigator.clipboard.read().catch(() => []);
   const images = items.flatMap((item) => {
-    const type = item.types.find((type) => type.startsWith("image/"));
+    const type = item.types.find((listed) => listed.startsWith("image/"));
     return type ? [item.getType(type)] : [];
   });
-  return Promise.all(images.map(async (bytes) => ({ name: "the pasted image", bytes: await bytes })));
+  return Promise.all(
+    images.map(async (bytes) => ({ name: "the pasted image", bytes: await bytes })),
+  );
 }

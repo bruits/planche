@@ -28,7 +28,8 @@ const STRIKE = 0.06;
  * Up to where a line may break: past spaces and tabs, a hyphen, en dash, or zero-width space
  * before more, and before and after em dashes, but not between two.
  */
-const BREAKS = /[ \t]*(?:\u2014+[ \t]*|[^ \t]+?(?:[-\u2010\u2013\u200b]+(?=[^ \t])|(?=\u2014)|[ \t]+|$))|[ \t]+/g;
+const BREAKS =
+  /[ \t]*(?:\u2014+[ \t]*|[^ \t]+?(?:[-\u2010\u2013\u200b]+(?=[^ \t])|(?=\u2014)|[ \t]+|$))|[ \t]+/g;
 
 export type Holder = Extract<Kind, { type: "note" | "sticky" | "shape" }>;
 
@@ -57,8 +58,10 @@ export interface Face {
 
 /** Nothing may measure text before they resolve, or it would measure another font. */
 export async function loadFont(): Promise<void> {
-  const faces = [false, true].flatMap((bold) => [false, true].map((italic) => font({ bold, italic }, REFERENCE)));
-  await Promise.all(faces.map((face) => document.fonts.load(face).catch(() => [])));
+  const faces = [false, true].flatMap((bold) =>
+    [false, true].map((italic) => font({ bold, italic }, REFERENCE)),
+  );
+  await Promise.all(faces.map((css) => document.fonts.load(css).catch(() => [])));
 }
 
 /** As CSS and the canvas write a font. */
@@ -83,12 +86,15 @@ export function paint(kind: Holder): Paint {
     return "sticky-ink";
   }
   const colour = kind.colour ?? "ink";
-  return kind.type === "shape" && kind.shape !== "cross" && kind.fill === "solid" ? { on: colour } : colour;
+  return kind.type === "shape" && kind.shape !== "cross" && kind.fill === "solid"
+    ? { on: colour }
+    : colour;
 }
 
 export function layout(kind: Holder): Layout {
   const { width, height } = inEms(kind);
-  const padding = kind.type === "note" ? 0 : kind.type === "sticky" ? STICKY_PADDING : SHAPE_PADDING;
+  const padding =
+    kind.type === "note" ? 0 : kind.type === "sticky" ? STICKY_PADDING : SHAPE_PADDING;
   // The largest rectangle of the ellipse's proportions that it holds.
   const share = kind.type === "shape" && kind.shape === "ellipse" ? Math.SQRT1_2 : 1;
   const area = {
@@ -99,7 +105,8 @@ export function layout(kind: Holder): Layout {
   };
   const measured = metrics(face(kind));
   const lines = wrap(kind.text.content, area.width, (text) => measured.width(text));
-  const top = kind.type === "shape" ? area.y + (area.height - lines.length * LINE_HEIGHT) / 2 : area.y;
+  const top =
+    kind.type === "shape" ? area.y + (area.height - lines.length * LINE_HEIGHT) / 2 : area.y;
   return { area, align: alignment(kind), lines, top };
 }
 
@@ -126,9 +133,20 @@ export function needed(kind: Holder): number {
 }
 
 /** Resized to `size`, as turned, around the point that lies `across` its width and `down` its height, in parts of them. */
-export function anchored(frame: Rect, rotation: number, { width, height }: Size, [across, down]: [number, number]): Rect {
-  const shift = turn({ x: (width - frame.width) * (0.5 - across), y: (height - frame.height) * (0.5 - down) }, rotation);
-  const centre = { x: frame.x + frame.width / 2 + shift.x, y: frame.y + frame.height / 2 + shift.y };
+export function anchored(
+  frame: Rect,
+  rotation: number,
+  { width, height }: Size,
+  [across, down]: [number, number],
+): Rect {
+  const shift = turn(
+    { x: (width - frame.width) * (0.5 - across), y: (height - frame.height) * (0.5 - down) },
+    rotation,
+  );
+  const centre = {
+    x: frame.x + frame.width / 2 + shift.x,
+    y: frame.y + frame.height / 2 + shift.y,
+  };
   return { x: centre.x - width / 2, y: centre.y - height / 2, width, height };
 }
 
@@ -170,7 +188,10 @@ function hang(line: string): string {
 function split(line: string, width: number, measure: (text: string) => number): [string, string] {
   const graphemes = [...new Intl.Segmenter().segment(line)].map(({ segment }) => segment);
   let count = 1;
-  while (count < graphemes.length && measure(hang(graphemes.slice(0, count + 1).join(""))) <= width) {
+  while (
+    count < graphemes.length &&
+    measure(hang(graphemes.slice(0, count + 1).join(""))) <= width
+  ) {
     count += 1;
   }
   return [graphemes.slice(0, count).join(""), graphemes.slice(count).join("")];
@@ -183,7 +204,13 @@ export interface Texts {
    * Rasterises the texts that changed, but `hidden`, and those that show at a zoom they were
    * not rasterised for. Whether any did.
    */
-  update(board: Board, renderer: Renderer, camera: Camera, viewport: Viewport, hidden?: string): boolean;
+  update(
+    board: Board,
+    renderer: Renderer,
+    camera: Camera,
+    viewport: Viewport,
+    hidden?: string,
+  ): boolean;
   /** Forgets them all, as their renderer is gone. */
   reset(): void;
   count(): number;
@@ -206,7 +233,9 @@ export function texts(again: () => void): Texts {
   return {
     placed(id, kind) {
       const done = rasterised.get(id);
-      return done && sameLayout(done.kind, kind) && !isBlank(kind) ? framed(id, kind, done.covers) : undefined;
+      return done && sameLayout(done.kind, kind) && !isBlank(kind)
+        ? framed(id, kind, done.covers)
+        : undefined;
     },
     update(board, renderer, camera, viewport, hidden) {
       const shown = settle.follow(camera, viewport);
@@ -229,7 +258,11 @@ export function texts(again: () => void): Texts {
         const visible = overlaps(shown, kind.frame);
         // Out of view, a text drops to a density that costs little, so that memory follows what shows.
         const density = Math.min(rounded(Math.max(wanted, 1)), visible ? Infinity : FAR);
-        if (done && sameLayout(done.kind, kind) && (done.density === density || !settle.settled(visible))) {
+        if (
+          done &&
+          sameLayout(done.kind, kind) &&
+          (done.density === density || !settle.settled(visible))
+        ) {
           continue;
         }
         const covers = rasterise(canvas, kind, density);
@@ -256,7 +289,12 @@ function framed(id: string, kind: Holder, covers: Rect): Placed {
   const size = kind.text.font_size;
   const { frame, rotation } = kind;
   const { x, y, width, height } = covers;
-  const placed = { x: frame.x + x * size, y: frame.y + y * size, width: width * size, height: height * size };
+  const placed = {
+    x: frame.x + x * size,
+    y: frame.y + y * size,
+    width: width * size,
+    height: height * size,
+  };
   // Turned around the frame's centre, where the renderer turns it around its own.
   const own = { x: placed.x + placed.width / 2, y: placed.y + placed.height / 2 };
   const centre = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 };
@@ -290,7 +328,11 @@ function rasterise(canvas: HTMLCanvasElement, kind: Holder, density: number): Re
  * A text on a canvas of its own, at `density` pixels per font size, with what draws it. Nothing is
  * kept. `undefined` when there is nothing to show.
  */
-export function lettered(id: string, kind: Holder, density: number): { canvas: HTMLCanvasElement; placed: Placed } | undefined {
+export function lettered(
+  id: string,
+  kind: Holder,
+  density: number,
+): { canvas: HTMLCanvasElement; placed: Placed } | undefined {
   if (isBlank(kind)) {
     return undefined;
   }
@@ -300,7 +342,14 @@ export function lettered(id: string, kind: Holder, density: number): { canvas: H
 }
 
 /** White, as only its coverage counts. */
-function draw(canvas: HTMLCanvasElement, laid: Layout, look: Face, strike: boolean, covers: Rect, density: number): void {
+function draw(
+  canvas: HTMLCanvasElement,
+  laid: Layout,
+  look: Face,
+  strike: boolean,
+  covers: Rect,
+  density: number,
+): void {
   canvas.width = Math.max(Math.ceil(covers.width * density), 1);
   canvas.height = Math.max(Math.ceil(covers.height * density), 1);
   const context = canvas.getContext("2d")!;
@@ -319,7 +368,12 @@ function draw(canvas: HTMLCanvasElement, laid: Layout, look: Face, strike: boole
     context.fillText(shown, (x - covers.x) * density, (y - covers.y) * density);
     if (strike && shown !== "") {
       const through = y - middle - STRIKE / 2;
-      context.fillRect((x - covers.x) * density, (through - covers.y) * density, width * density, Math.max(STRIKE * density, 1));
+      context.fillRect(
+        (x - covers.x) * density,
+        (through - covers.y) * density,
+        width * density,
+        Math.max(STRIKE * density, 1),
+      );
     }
   });
 }
@@ -330,7 +384,6 @@ function sameLayout(a: Holder, b: Holder): boolean {
     return true;
   }
   const [one, other] = [inEms(a), inEms(b)];
-  const close = (x: number, y: number) => Math.abs(x - y) <= 1e-9 * Math.max(Math.abs(x), Math.abs(y), 1);
   const [lookA, lookB] = [face(a), face(b)];
   return (
     a.type === b.type &&
@@ -344,6 +397,10 @@ function sameLayout(a: Holder, b: Holder): boolean {
     close(one.width, other.width) &&
     close(one.height, other.height)
   );
+}
+
+function close(x: number, y: number): boolean {
+  return Math.abs(x - y) <= 1e-9 * Math.max(Math.abs(x), Math.abs(y), 1);
 }
 
 /** Its frame's size in font sizes. */
@@ -379,7 +436,8 @@ function metrics(look: Face): Metrics {
   const context = document.createElement("canvas").getContext("2d")!;
   context.font = key;
   const widths = new Map<string, number>();
-  const { fontBoundingBoxAscent, fontBoundingBoxDescent, actualBoundingBoxAscent } = context.measureText("x");
+  const { fontBoundingBoxAscent, fontBoundingBoxDescent, actualBoundingBoxAscent } =
+    context.measureText("x");
   const made: Metrics = {
     width(text) {
       let width = widths.get(text);
