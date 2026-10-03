@@ -18,6 +18,7 @@ import init, {
   isAssetFile,
   isBoardFile,
   isStrayElement,
+  keeping as keep,
   locateZipDirectory,
   media as told,
   mediaStart,
@@ -37,6 +38,7 @@ import type {
   Background,
   Board,
   Colour,
+  Copied,
   CropShape,
   Dash,
   Element,
@@ -85,6 +87,7 @@ export type {
   Background,
   Board,
   Colour,
+  Copied,
   CropShape,
   Dash,
   Element,
@@ -248,6 +251,38 @@ export function extent(editor: Editor, ids: string[]): Rect | undefined {
 
 function rect(box: Float64Array | undefined): Rect | undefined {
   return box && { x: box[0]!, y: box[1]!, width: box[2]!, height: box[3]! };
+}
+
+/** The elements, with all that their groups hold, as `paste` takes them. */
+export function copy(editor: Editor, ids: string[]): Copied {
+  return JSON.parse(editor.copy(ids)) as Copied;
+}
+
+/** On top of `group`, or of the top level, each element of `copied` under the id `ids` maps its own to. */
+export function paste(
+  editor: Editor,
+  copied: Copied,
+  ids: Record<string, string>,
+  group: string | undefined,
+): string[] {
+  return editor.paste(JSON.stringify(copied), JSON.stringify(ids), group);
+}
+
+/** Of the elements that `ids` names, those that a paste into `group` laid there. */
+export function outermost(
+  editor: Editor,
+  ids: Record<string, string>,
+  group: string | undefined,
+): string[] {
+  return Object.values(ids).filter((id) => {
+    const pasted = element(editor, id);
+    return pasted !== undefined && pasted.group === group;
+  });
+}
+
+/** Without the images whose assets are not among `assets`, nor the groups that empties. */
+export function keeping(copied: Copied, assets: string[]): Copied {
+  return JSON.parse(keep(JSON.stringify(copied), assets)) as Copied;
 }
 
 /** Each optional field of `T`, which JSON leaves out when `undefined`. */

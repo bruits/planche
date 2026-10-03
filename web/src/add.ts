@@ -2,7 +2,6 @@
 // images from a web page, which may give only their address.
 
 import { choose } from "./browser.js";
-import { typing } from "./commands.js";
 import type { Point } from "./core.js";
 import { platform } from "./platform.js";
 import type { View } from "./view.js";
@@ -27,7 +26,7 @@ export async function pick(): Promise<Incoming[]> {
   return (files ?? []).map(fromFile);
 }
 
-/** Hands each drop or paste over with where it goes: under the pointer, or at the view's centre. */
+/** Hands each drop over with where it goes, under the pointer. */
 export function receive(
   view: View,
   received: (incoming: Promise<Incoming[]>, at: Point) => void,
@@ -55,22 +54,11 @@ export function receive(
       );
     }
   });
-  document.addEventListener("paste", (event) => {
-    const at = view.centre();
-    if (!at || !event.clipboardData || typing(event.target)) {
-      return;
-    }
-    event.preventDefault();
-    // WebKitGTK hands a paste nothing, though the clipboard may hold an image.
-    const empty = event.clipboardData.types.length === 0;
-    received(empty ? readClipboard() : gather(event.clipboardData, false), at);
-  });
-  // WebKit enables its Paste menu item, which Cmd+V goes through, only for editable content,
-  // unless this is cancelled.
-  document.addEventListener(
-    "beforepaste",
-    (event) => typing(event.target) || event.preventDefault(),
-  );
+}
+
+/** The images that a paste brings. Reads what it needs before returning. */
+export function pasted(transfer: DataTransfer): Promise<Incoming[]> {
+  return gather(transfer, false);
 }
 
 /**
@@ -138,8 +126,7 @@ export function fromBase64(text: string): Blob {
   return new Blob([Uint8Array.from(bytes, (char) => char.charCodeAt(0))]);
 }
 
-async function readClipboard(): Promise<Incoming[]> {
-  const items = await navigator.clipboard.read().catch(() => []);
+export function fromClipboard(items: ClipboardItem[]): Promise<Incoming[]> {
   const images = items.flatMap((item) => {
     const type = item.types.find((listed) => listed.startsWith("image/"));
     return type ? [item.getType(type)] : [];

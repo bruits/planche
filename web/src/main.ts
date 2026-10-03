@@ -2,7 +2,17 @@
 // to it and edit it, which it saves as it goes, and save it elsewhere or export it.
 
 import * as core from "./core.js";
-import type { Background, CropShape, Kind, Order, Point, Rect, Restack, Size } from "./core.js";
+import type {
+  Background,
+  Copied,
+  CropShape,
+  Kind,
+  Order,
+  Point,
+  Rect,
+  Restack,
+  Size,
+} from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
 import { animations } from "./animation.js";
@@ -10,6 +20,9 @@ import {
   among,
   assetSizes,
   assetsOf,
+  centring,
+  copiedAssets,
+  duplicateOffset,
   decodeAsset,
   extent,
   files,
@@ -19,8 +32,10 @@ import {
   pool,
   prepare,
   newId,
+  reader,
   refresh,
   release,
+  renamed,
   row,
   type Added,
   type Decoded,
@@ -28,6 +43,7 @@ import {
 } from "./board.js";
 import { fit, type Camera } from "./camera.js";
 import { card } from "./card.js";
+import { clipboard, type Pasted } from "./clipboard.js";
 import { meanColours } from "./colour.js";
 import {
   describe,
@@ -54,6 +70,7 @@ import { platform } from "./platform.js";
 import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE, onScreen } from "./raster.js";
 import { render } from "./render.js";
+import type { Saving } from "./save.js";
 import { create, type Renderer } from "./renderer.js";
 import { ACROSS, sampler } from "./sampler.js";
 import { showing } from "./showing.js";
@@ -79,6 +96,8 @@ const ZOOM_STEP = 1.25;
 const ZOOMS = [0.25, 0.5, 1, 2, 4];
 /** Left around images added, in CSS pixels, past the zones outside their corners that turn them. */
 const ADDED_MARGIN = 48;
+/** How far right and down a duplicate lies from what it copies, at least, in CSS pixels. */
+const DUPLICATE_OFFSET = 16;
 /** In the order the key goes through them. */
 const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
 const SCHEMES: Scheme[] = ["light", "dark", "system"];
@@ -508,6 +527,30 @@ const commands = {
     run: () => editing.selectAll(),
   },
   escape: { label: "Go back up, or deselect", keys: [{ key: "escape" }], run: escape },
+  cut: {
+    label: "Cut",
+    keys: [{ key: "x", command: true }],
+    unavailable: noneSelected,
+    run: () => clip.copy(true),
+  },
+  copy: {
+    label: "Copy",
+    keys: [{ key: "c", command: true }],
+    unavailable: noneSelected,
+    run: () => clip.copy(false),
+  },
+  paste: {
+    label: "Paste",
+    keys: [{ key: "v", command: true }],
+    unavailable: noneShown,
+    run: () => pasteAt(viewport.centre()),
+  },
+  duplicate: {
+    label: "Duplicate",
+    keys: [{ key: "d", command: true }],
+    unavailable: noneSelected,
+    run: duplicate,
+  },
   remove: {
     label: "Delete",
     keys: mac ? [backspace, deleteKey] : [deleteKey, backspace],
@@ -899,8 +942,10 @@ refreshBar();
 if (platform.titleBar) {
   handle(byId("handle"), viewport.host, platform.titleBar.drag, leaveCompact);
 }
+// The page's own copy, cut, and paste events run these, which handling their keys would cancel.
+const native = new Set<Command>([commands.cut, commands.copy, commands.paste]);
 listen(
-  Object.values(commands),
+  Object.values(commands).filter((command) => !native.has(command)),
   (command) =>
     !menuOpen() &&
     (!busy() || (command === commands.resetCrop && editing.cropping() !== undefined)),
@@ -985,6 +1030,21 @@ if (platform.titleBar) {
 }
 await Promise.all([core.start(), loadFont()]);
 receive(viewport, (incoming, at) => report(addImages(incoming, at)));
+const clip = clipboard(viewport, {
+  copy(cut) {
+    const ids = editing.selection();
+    if (opened === undefined || ids.length === 0 || (cut && busy())) {
+      return undefined;
+    }
+    return core.copy(opened.editor, ids);
+  },
+  copyable: () => editing.selection().length > 0,
+  bytes: (copied) =>
+    opened ? reader(opened, copiedAssets(copied), fleeting()) : async () => new Map(),
+  cut: () => editing.remove(),
+  pasted: (pasted, at) => report(pasteElements(pasted, at)),
+  received: (incoming, at) => report(addImages(incoming, at)),
+});
 report(serveAgents());
 // Something to drop images on from the start.
 report(life.start());
@@ -1364,15 +1424,21 @@ function hint(): string {
     const keys = [commands.resetCrop, commands.play, commands.sound]
       .filter((command) => command.unavailable() === undefined)
       .map((command) => `${describe(command.keys[0]!)} to ${named(command).toLowerCase()} · `);
-    return `Drag to move · corners scale · turn from outside a corner · ${crops}${keys.join("")}${styling}right-click for more`;
+    return `Drag to move, holding ${centreKey} to copy · corners scale · turn from outside a corner · ${crops}${keys.join("")}${styling}right-click for more`;
   }
   return "Drop or paste images · scroll to move around · right-click for more";
 }
 
 /** About the selection, or else the board, with its images landing where it opens. */
 function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: number }): void {
+  const paste = { ...commands.paste, run: () => pasteAt(at) };
   const entries: Entry[] = onSelection
     ? [
+        commands.cut,
+        commands.copy,
+        paste,
+        commands.duplicate,
+        "separator",
         commands.group,
         commands.ungroup,
         commands.goInside,
@@ -1421,6 +1487,7 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
       ]
     : [
         { ...commands.addImages, run: () => addPicked(at) },
+        paste,
         commands.selectAll,
         "separator",
         commands.fit,
@@ -1538,6 +1605,105 @@ function addPicked(at: Point | undefined): void {
   }
 }
 
+/** What the clipboard holds, centred on `at`, as the menus paste. */
+function pasteAt(at: Point | undefined): void {
+  if (at !== undefined) {
+    const key = describe(commands.paste.keys[0]!);
+    report(
+      clip.paste(at).catch(() => {
+        throw new Error(`The browser lets only ${key} paste here`);
+      }),
+    );
+  }
+}
+
+/** The selection again, right and down of it, as one edit that selects it. */
+function duplicate(): void {
+  const zoom = viewport.zoom();
+  if (opened === undefined || zoom === undefined) {
+    return;
+  }
+  const by = duplicateOffset(zoom, DUPLICATE_OFFSET);
+  placeCopy(core.copy(opened.editor, editing.selection()), () => ({ x: by, y: by }));
+}
+
+/**
+ * Centred on `at` by whole steps of the grid, as one edit that selects them. Images whose assets the
+ * board lacks take them from the bytes copied, or are left out without them, as when copied in
+ * another window.
+ */
+async function pasteElements({ copied, assets }: Pasted, at: Point): Promise<void> {
+  const target = opened;
+  const into = renderer;
+  if (target === undefined) {
+    return;
+  }
+  const shown = assetSizes(target.board);
+  const lacking = copiedAssets(copied).filter((asset) => !shown.has(asset));
+  const bytes = lacking.length > 0 ? await assets(lacking) : new Map<string, Blob>();
+  const prepared: Added[] = [];
+  const pending = lacking.values();
+  await pool(
+    () => pending.next().value,
+    async (asset) => {
+      const blob = bytes.get(asset);
+      const one = blob && (await prepare(blob, LONGEST_SIDE, heldSize).catch(() => undefined));
+      if (one?.asset === asset) {
+        loadAtOnce(one, target, into);
+        prepared.push(one);
+      } else {
+        release(one?.decoded);
+      }
+    },
+  );
+  await editing.idle();
+  const zoom = viewport.zoom();
+  if (target !== opened || renderer === undefined || zoom === undefined) {
+    prepared.forEach(({ decoded }) => release(decoded));
+    return;
+  }
+  keep(target, prepared);
+  const kept = [...assetSizes(target.board).keys(), ...prepared.map(({ asset }) => asset)];
+  const pasting = core.keeping(copied, kept);
+  if (Object.keys(pasting.elements).length > 0) {
+    placeCopy(pasting, (area) => centring(area, at, zoom));
+  }
+  if (Object.keys(pasting.elements).length < Object.keys(copied.elements).length) {
+    bar.say("Not pasted, the images whose files are out of reach here");
+  }
+}
+
+/** Into the group gone into, moved by what `by` gives for its extent, as one edit that selects it. */
+function placeCopy(copied: Copied, by: (extent: Rect) => Point): void {
+  const group = editing.entered();
+  let pasted: string[] = [];
+  editing.apply((editor, touched) => {
+    const ids = renamed(copied);
+    touched.push(...core.paste(editor, copied, ids, group));
+    pasted = core.outermost(editor, ids, group);
+    const area = core.extent(editor, pasted);
+    if (area) {
+      touched.push(...core.transform(editor, pasted, { place: { by: by(area) } }));
+    }
+  });
+  editing.select(pasted);
+}
+
+/**
+ * The open board's saver when the files of its images may be gone by the time a paste reads them,
+ * the session's own, which leaving the board clears, or a ZIP file's, whose saves drop what the
+ * board no longer shows.
+ */
+function fleeting(): Saving | undefined {
+  const saver = life.saver();
+  if (opened === undefined || saver === undefined) {
+    return undefined;
+  }
+  // The session also saves boards read from elsewhere, whose files it leaves alone.
+  const ownFiles = "write" in opened.folder;
+  return (saver.store.session ? ownFiles : !ownFiles) ? saver : undefined;
+}
+
 async function show(next: Opened, camera?: Camera): Promise<void> {
   halfDrawn = true;
   try {
@@ -1579,11 +1745,7 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
           ...(await prepare(image.bytes, LONGEST_SIDE, heldSize)),
           filename: image.filename,
         };
-        // At once, so that their bitmaps do not pile up.
-        if (one.decoded && into && target === opened && into === renderer) {
-          load(into, new Map([[one.asset, one.decoded]]));
-          one.decoded = undefined;
-        }
+        loadAtOnce(one, target, into);
         prepared[index] = one;
       } catch (error) {
         failures[index] = `${image.name}: this app cannot open it here (${message(error)})`;
@@ -1629,6 +1791,14 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
     bar.say(`Not added, ${failed.join("; ")}`);
   } else if (images.length > 1) {
     bar.say("");
+  }
+}
+
+/** At once, so that bitmaps do not pile up. */
+function loadAtOnce(one: Added, target: Opened | undefined, into: Renderer | undefined): void {
+  if (one.decoded && into && target === opened && into === renderer) {
+    load(into, new Map([[one.asset, one.decoded]]));
+    one.decoded = undefined;
   }
 }
 

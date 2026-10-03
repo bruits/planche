@@ -208,6 +208,24 @@ describe("the core", () => {
     }
   });
 
+  it("a paste lays out the outermost of its copy where it goes, under new ids", () => {
+    const editor = new core.Editor();
+    try {
+      editor.add(A, undefined, JSON.stringify(note()));
+      editor.add(B, undefined, JSON.stringify(arrow()));
+      editor.group(G, [A, B]);
+      const copied = core.copy(editor, [G]);
+      const atTop = { [A]: "d".repeat(32), [B]: "e".repeat(32), [G]: "f".repeat(32) };
+      core.paste(editor, copied, atTop, undefined);
+      expect(core.outermost(editor, atTop, undefined)).toEqual([atTop[G]]);
+      const inside = { [A]: "1".repeat(32) };
+      core.paste(editor, core.copy(editor, [A]), inside, G);
+      expect(core.outermost(editor, inside, G)).toEqual([inside[A]]);
+    } finally {
+      editor.free();
+    }
+  });
+
   it.each(["plain", "grid", "dots"] satisfies Background[])(
     "the %s background reads back as set",
     (background) => {

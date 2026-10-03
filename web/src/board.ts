@@ -3,10 +3,11 @@
 
 import type { Moving } from "./animation.js";
 import * as core from "./core.js";
-import type { Board, Bytes, Editor, Files, Kind, Point, Rect, Size } from "./core.js";
+import type { Board, Bytes, Copied, Editor, Files, Kind, Point, Rect, Size } from "./core.js";
 import { milliseconds, timed } from "./metrics.js";
 import type { Folder, Home } from "./platform.js";
 import type { Placed } from "./renderer.js";
+import type { Saving } from "./save.js";
 import { holdsText, type Texts } from "./text.js";
 import { picture, type Picture } from "./vector.js";
 import { VIDEO_LIMIT, firstFrame } from "./video.js";
@@ -210,6 +211,10 @@ export function newId(): string {
   return hex(crypto.getRandomValues(new Uint8Array(16)));
 }
 
+export function renamed({ elements }: Copied): Record<string, string> {
+  return Object.fromEntries(Object.keys(elements).map((id) => [id, newId()]));
+}
+
 /**
  * The asset id of `bytes`, which the host hashes without holding the page up in a secure context,
  * which every shell's webview is, and the core otherwise, as for a page served over plain HTTP.
@@ -275,6 +280,25 @@ export function row(sizes: Size[], at: Point, area?: Rect): Rect[] {
     x += frame.width;
     return frame;
   });
+}
+
+/**
+ * How far right and down a duplicate lies from what it copies, at least `least` CSS pixels at
+ * `zoom`, by whole steps of the grid that shows then, so that what lies on its lines stays on them.
+ */
+export function duplicateOffset(zoom: number, least: number): number {
+  const step = core.gridLevel(zoom).spacing;
+  return Math.ceil(least / (step * zoom)) * step;
+}
+
+/** How far to move `area` for its centre to come to `at`, by whole steps of the grid that shows at `zoom`. */
+export function centring(area: Rect, at: Point, zoom: number): Point {
+  const step = core.gridLevel(zoom).spacing;
+  const whole = (length: number) => Math.round(length / step) * step;
+  return {
+    x: whole(at.x - area.x - area.width / 2),
+    y: whole(at.y - area.y - area.height / 2),
+  };
 }
 
 export function refresh({ editor, board }: Opened, touched: string[]): void {
@@ -458,6 +482,64 @@ export function assetsOf(board: Board, ids: string[]): string[] {
   const chosen = new Set(ids);
   const assets = Object.entries(board.elements).flatMap(([id, { kind }]) =>
     kind.type === "image" && among(board, id, chosen) ? [kind.asset] : [],
+  );
+  return [...new Set(assets)];
+}
+
+/** The bytes of those of a board's assets that are asked for, by asset, each left out where unread. */
+export type Reader = (assets: string[]) => Promise<Map<string, Blob>>;
+
+/**
+ * Reads those of `assets` that a paste asks for from `from`, once it asks, or all of them at once
+ * when `saver` is given, while it writes nothing, as the board's files may be gone by then.
+ */
+export function reader(from: Opened, assets: string[], saver?: Pick<Saving, "during">): Reader {
+  const held = new Map(
+    assets.flatMap((asset) => {
+      const blob = from.added.get(core.assetPath(asset));
+      return blob ? [[asset, blob] as const] : [];
+    }),
+  );
+  // What it returns is made out of this scope, which would keep the board.
+  if (saver === undefined) {
+    return later(from.folder, held);
+  }
+  // From the folder as the save under way leaves it, which may move the board's files.
+  return picking(saver.during(() => readAssets(from.folder, held, assets)));
+}
+
+function later(folder: Folder, held: Map<string, Blob>): Reader {
+  return (wanted) => readAssets(folder, held, wanted);
+}
+
+function picking(read: Promise<Map<string, Blob>>): Reader {
+  return async (wanted) => {
+    const bytes = await read;
+    return new Map(
+      wanted.flatMap((asset) => (bytes.has(asset) ? [[asset, bytes.get(asset)!]] : [])),
+    );
+  };
+}
+
+async function readAssets(
+  folder: Folder,
+  held: Map<string, Blob>,
+  wanted: string[],
+): Promise<Map<string, Blob>> {
+  const bytes = new Map<string, Blob>();
+  for (const asset of wanted) {
+    try {
+      bytes.set(asset, held.get(asset) ?? new Blob([await folder.read(core.assetPath(asset))]));
+    } catch {
+      // As on a board that lacks it.
+    }
+  }
+  return bytes;
+}
+
+export function copiedAssets({ elements }: Copied): string[] {
+  const assets = Object.values(elements).flatMap(({ kind }) =>
+    kind.type === "image" ? [kind.asset] : [],
   );
   return [...new Set(assets)];
 }

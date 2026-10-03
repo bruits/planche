@@ -59,7 +59,7 @@ const LINE = 16;
 
 /**
  * Scrolling pans, and zooms with Ctrl or ⌘ held, which is how browsers report pinching a
- * trackpad. The middle button pans, and so does the main one with Alt or the hand tool.
+ * trackpad. The middle button pans, and so does the main one with the hand tool.
  */
 export function view(host: HTMLElement, { advance, frame, painted, failed }: Drawing): View {
   let shown: { renderer: Renderer; camera: Camera } | undefined;
@@ -162,7 +162,7 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
     pinching = undefined;
   });
   const pans = (event: MouseEvent) =>
-    event.button === 1 || (event.button === 0 && !opensMenu(event) && (event.altKey || hand));
+    event.button === 1 || (event.button === 0 && !opensMenu(event) && hand);
   host.addEventListener("pointerdown", (event) => {
     if (panning === undefined && pans(event)) {
       // Middle-clicking would otherwise scroll on some platforms.

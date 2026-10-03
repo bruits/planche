@@ -57,12 +57,18 @@ function page(more: [string, Kind][] = [], { drawing }: Partial<Pick<Hooks, "dra
     stepped() {},
   };
   editing = edits(viewport, overlay(host), () => opened, hooks);
-  const pointer = (type: string, clientX: number, clientY: number, shiftKey = false) =>
+  const pointer = (
+    type: string,
+    clientX: number,
+    clientY: number,
+    { shiftKey = false, altKey = false } = {},
+  ) =>
     host.dispatchEvent(
       new PointerEvent(type, {
         clientX,
         clientY,
         shiftKey,
+        altKey,
         button: 0,
         pointerId: 1,
         bubbles: true,
@@ -119,6 +125,25 @@ describe("edits", () => {
     expect(at()).toEqual({ x: 40, y: 20 });
   });
 
+  it("moves a copy instead when the drag begins with Alt held, and undoes it in one step", async () => {
+    const { opened, editing, pointer, at } = page();
+    pointer("pointerdown", 50, 50, { altKey: true });
+    for (const x of [60, 70, 80]) {
+      pointer("pointermove", x, 50, { altKey: true });
+      await nextFrame();
+    }
+    pointer("pointerup", 80, 50);
+    expect(at()).toEqual({ x: 0, y: 0 });
+    const [copy] = editing.selection();
+    expect(new Set(Object.keys(opened.board.elements))).toEqual(new Set([STICKY, copy]));
+    expect(core.element(opened.editor, copy!)?.kind).toMatchObject({
+      type: "sticky",
+      frame: { x: 30, y: 0 },
+    });
+    editing.undo();
+    expect(Object.keys(opened.board.elements)).toEqual([STICKY]);
+  });
+
   it("undoes in one step an edit applied from outside, as an agent's", () => {
     const { editing, at } = page();
     editing.apply((editor, touched) => {
@@ -155,9 +180,9 @@ describe("edits", () => {
   it("keeps an arrow drawn with Shift held at a multiple of 45°", async () => {
     const { opened, pointer } = page([], { drawing: () => "arrow" });
     pointer("pointerdown", 200, 0);
-    pointer("pointermove", 300, 90, true);
+    pointer("pointermove", 300, 90, { shiftKey: true });
     await nextFrame();
-    pointer("pointerup", 300, 90, true);
+    pointer("pointerup", 300, 90, { shiftKey: true });
     const [from, to] = Object.values(opened.board.elements).flatMap(({ kind }) =>
       kind.type === "arrow" ? [kind.from, kind.to] : [],
     );

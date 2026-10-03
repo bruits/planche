@@ -1,9 +1,23 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, it, expect } from "vitest";
-import { open, placed, prepare, readAsset, row } from "./board.js";
+import { describe, it, expect, vi } from "vitest";
+import {
+  centring,
+  copiedAssets,
+  duplicateOffset,
+  files as filesOf,
+  open,
+  placed,
+  prepare,
+  reader,
+  readAsset,
+  row,
+} from "./board.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Kind } from "./core.js";
+import type { Slices, ZipHome } from "./platform.js";
+import { saving, zipStore } from "./save.js";
+import { zipFolder } from "./zip.js";
 import { memoryHome, sample, SAMPLES } from "../test/folders.js";
 
 const bytes = (text: string): Bytes => new TextEncoder().encode(text);
@@ -162,5 +176,125 @@ describe("row", () => {
     ]);
     expect(frames[0]!.x).toBe(0);
     expect(frames[1]!.x + frames[1]!.width).toBe(150);
+  });
+});
+
+describe("duplicateOffset", () => {
+  it("steps by whole steps of the grid that shows, as few as span the least", () => {
+    for (const zoom of [0.05, 0.37, 1, 3, 12]) {
+      const step = core.gridLevel(zoom).spacing;
+      const offset = duplicateOffset(zoom, 16);
+      expect(Number.isInteger(offset / step)).toBe(true);
+      expect(offset * zoom).toBeGreaterThanOrEqual(16);
+      expect((offset - step) * zoom).toBeLessThan(16);
+    }
+  });
+});
+
+describe("centring", () => {
+  it("brings an area's centre to within half a step of the grid of a point", () => {
+    const area = { x: 3, y: 7, width: 40, height: 10 };
+    const at = { x: 113, y: -52 };
+    const by = centring(area, at, 1);
+    expect(by).toEqual({ x: 100, y: -60 });
+    expect(Math.abs(area.x + area.width / 2 + by.x - at.x)).toBeLessThanOrEqual(10);
+    expect(Math.abs(area.y + area.height / 2 + by.y - at.y)).toBeLessThanOrEqual(10);
+  });
+});
+
+/**
+ * A ZIP file in memory read as the desktop reads one, at its path as it stands, so that a folder
+ * indexed before a rewrite reads the new file at old offsets. `hold` holds the next read back.
+ */
+function zipInPlace(initial: Bytes) {
+  let file = initial;
+  let gate: Promise<void> | undefined;
+  const slices = (): Slices => ({
+    name: "demo.zip",
+    size: file.length,
+    async read(start, end) {
+      const waiting = gate;
+      gate = undefined;
+      await waiting;
+      return file.slice(start, end);
+    },
+  });
+  const home: ZipHome = {
+    async rewrite() {
+      const parts: Bytes[] = [];
+      let closed = false;
+      return {
+        sink: {
+          name: "demo.zip",
+          append: async (part) => void parts.push(part.slice()),
+          close: async () => {
+            file = new Uint8Array(Buffer.concat(parts));
+            closed = true;
+          },
+          discard: async () => void (parts.length = 0),
+        },
+        written: () => (closed ? slices() : null),
+      };
+    },
+    changed: async () => false,
+    reread: async () => slices(),
+    adopt: async () => {},
+    remember: async () => {},
+  };
+  const hold = () => {
+    let release!: () => void;
+    gate = new Promise((resolve) => (release = resolve));
+    return release;
+  };
+  return { home, hold };
+}
+
+describe("reader", () => {
+  it("reads only what a paste asks for, once it asks", async () => {
+    const { home } = memoryHome("demo", sample("demo"));
+    const { opened } = (await open(async () => home, new Map()))!;
+    const read = vi.spyOn(home, "read");
+    const assets = reader(opened, [ASSET]);
+    expect(read).not.toHaveBeenCalled();
+    expect(await assets([])).toEqual(new Map());
+    const got = await assets([ASSET, "0".repeat(64)]);
+    expect([...got.keys()]).toEqual([ASSET]);
+    expect(got.get(ASSET)!.size).toBe(readFileSync(join(SAMPLES, "demo/assets", ASSET)).length);
+  });
+
+  it("reads at once the images of a ZIP file saved in place, which a save meanwhile keeps", async () => {
+    const zip = zipInPlace(new Uint8Array(readFileSync(join(SAMPLES, "demo.zip"))));
+    const { opened } = (await open(async () => zipFolder(await zip.home.reread()), new Map()))!;
+    const saver = saving(
+      zipStore(zip.home, (folder) => (opened.folder = folder)),
+      {
+        snapshot: () => opened.editor.snapshot(),
+        source: () => filesOf(opened),
+        saved: () => {},
+        failed: (reason) => {
+          throw new Error(reason);
+        },
+        conflict: async () => false,
+        reload: async () => "refused",
+      },
+    );
+    const images = Object.entries(opened.board.elements).flatMap(([id, { kind }]) =>
+      kind.type === "image" ? [id] : [],
+    );
+    const assets = copiedAssets(core.copy(opened.editor, images));
+    const release = zip.hold();
+    const read = reader(opened, assets, saver);
+    // As a cut does, which the save after it would leave out of the file.
+    opened.editor.beginGesture();
+    saver.touched(opened.editor.remove(images));
+    opened.editor.endGesture();
+    // Not before the reads end.
+    expect(await saver.flush()).toBe(false);
+    release();
+    const got = await read(assets);
+    expect([...got.keys()].toSorted()).toEqual(assets.toSorted());
+    expect(await saver.flush()).toBe(true);
+    expect(await opened.folder.list(3)).not.toContain(`assets/${assets[0]}`);
+    await saver.stop();
   });
 });

@@ -6,6 +6,7 @@
 
 mod animation;
 mod arrange;
+mod copy;
 mod crop;
 mod edit;
 mod geometry;
@@ -28,6 +29,7 @@ use sha2::{Digest, Sha256};
 
 pub use animation::frame_delay;
 pub use arrange::{Order, Side};
+pub use copy::Copied;
 pub use edit::{Editor, Flip, Placement, Restack, Scaling, Sticking, Transform};
 pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
 pub use media::{MEDIA_START, Media, media};
@@ -78,6 +80,8 @@ pub enum Error {
     },
     #[error("`{0}` is not a colour")]
     InvalidColour(String),
+    #[error("element {0} of the copy has no new id")]
+    Unnamed(ElementId),
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -214,6 +218,31 @@ impl Board {
             }
         }
         found
+    }
+}
+
+/// `removed` with the groups that removing it would empty, and those that removing them would,
+/// and so on up.
+pub(crate) fn with_emptied(
+    elements: &BTreeMap<ElementId, Element>,
+    mut removed: BTreeSet<ElementId>,
+) -> BTreeSet<ElementId> {
+    loop {
+        let emptied: BTreeSet<ElementId> = removed
+            .iter()
+            .filter_map(|id| elements.get(id)?.group)
+            .filter(|group| !removed.contains(group))
+            .filter(|group| {
+                elements
+                    .iter()
+                    .filter(|(_, element)| element.group == Some(*group))
+                    .all(|(id, _)| removed.contains(id))
+            })
+            .collect();
+        if emptied.is_empty() {
+            return removed;
+        }
+        removed.extend(emptied);
     }
 }
 

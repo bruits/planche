@@ -1,33 +1,35 @@
 // Edits: draw, write, select, move, scale, and rotate by pointer, and flip, turn, restack, group,
 // delete, undo, and redo for the commands to run. A click selects the element under it, or the
-// outermost group holding it, and a drag from where nothing is draws a rectangle that selects
-// what it touches, and the comments pinned in it. Double-clicking a group goes into it, where
-// clicks select its own elements instead, and double-clicking a note, a sticky note, a shape, or
-// a comment writes in it. The dots on the selection's corners scale it around the opposite one,
-// or around its centre while ⌥, or Alt elsewhere than macOS, is held once under way, as pressing
-// with it pans. The sides of a lone note, sticky note, or shape stretch it, its text keeping its
-// size, and a drag from just outside a corner turns the selection around its centre, by steps of
-// 15° while ⇧ is held, and onto an upright or a quarter turn near it while snapping. Hovering
-// shows what a press would take, and the ends of a lone arrow or line move on their own. The ends
-// of an arrow or a line, as drawn or moved, stick to the image, note, sticky note, or shape they
-// land on, onto its outline when near it, and follow it from then on. While ⇧ is held, the end
-// being drawn or moved keeps to a multiple of 45° around the other one, the grid pulling it along
-// its way, and it sticks only to what it lies on. A note, a sticky note, a shape, or a comment
-// drawn, placed, moved, scaled, or turned whole onto an image, a note, a sticky note, or a shape
-// filled or holding text sticks to it and follows it too. While snapping, what moves, scales, or
-// is drawn lands on the grid's lines where near them otherwise. Holding ⌘, or Ctrl elsewhere than
-// macOS, keeps things from sticking and the grid from pulling, but for a move only once under
-// way, as pressing an element with it toggles the element instead. The eraser removes what a
-// click would select, or all that a drag passes over but what it starts within, in one edit.
-// Cropping shows an image whole, what its crop leaves out dimmed, and its edges and corners drag
-// the crop, or its inside moves it, until Enter or a press elsewhere crops it, or Escape leaves
-// it as it was. Resetting the crop meanwhile starts it over from the whole image.
+// outermost group holding it, and a drag from where nothing is draws a rectangle that selects what
+// it touches, and the comments pinned in it. Double-clicking a group goes into it, where clicks
+// select its own elements instead, and double-clicking a note, a sticky note, a shape, or a
+// comment writes in it. A drag begun with ⌥, or Alt elsewhere than macOS, held moves a copy of the
+// selection instead, which it selects. The dots on the selection's corners scale it around the
+// opposite one, or around its centre while ⌥ is held. The sides of a lone note, sticky note, or
+// shape stretch it, its text keeping its size, and a drag from just outside a corner turns the
+// selection around its centre, by steps of 15° while ⇧ is held, and onto an upright or a quarter
+// turn near it while snapping. Hovering shows what a press would take, and the ends of a lone
+// arrow or line move on their own. The ends of an arrow or a line, as drawn or moved, stick to the
+// image, note, sticky note, or shape they land on, onto its outline when near it, and follow it
+// from then on. While ⇧ is held, the end being drawn or moved keeps to a multiple of 45° around
+// the other one, the grid pulling it along its way, and it sticks only to what it lies on. A note,
+// a sticky note, a shape, or a comment drawn, placed, moved, scaled, or turned whole onto an
+// image, a note, a sticky note, or a shape filled or holding text sticks to it and follows it too.
+// While snapping, what moves, scales, or is drawn lands on the grid's lines where near them
+// otherwise. Holding ⌘, or Ctrl elsewhere than macOS, keeps things from sticking and the grid from
+// pulling, but for a move only once under way, as pressing an element with it toggles the element
+// instead. The eraser removes what a click would select, or all that a drag passes over but what
+// it starts within, in one edit. Cropping shows an image whole, what its crop leaves out dimmed,
+// and its edges and corners drag the crop, or its inside moves it, until Enter or a press
+// elsewhere crops it, or Escape leaves it as it was. Resetting the crop meanwhile starts it over
+// from the whole image.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
 import type {
   Background,
   Board,
+  Copied,
   CropShape,
   Editor,
   Kind,
@@ -38,7 +40,7 @@ import type {
   Side,
   Size,
 } from "./core.js";
-import { among, newId } from "./board.js";
+import { among, newId, renamed } from "./board.js";
 import { cursor, dotted, type Crop, type Grab, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
 import { anchored, fitted, holdsText, LINE_HEIGHT, needed, type Holder } from "./text.js";
@@ -233,7 +235,8 @@ export interface Edits {
 type Press =
   /**
    * `through` a press on nothing but the selection's box, which a click lets go of. `bounds` as
-   * they were when the drag began.
+   * they were when the drag began. `copy` what it moves instead of the selection, when the drag
+   * began with ⌥ held, `pasted` its outermost elements, the same at every step.
    */
   | {
       kind: "move";
@@ -243,6 +246,12 @@ type Press =
       clicked?: string | undefined;
       through?: true;
       bounds?: Rect | undefined;
+      copy?: {
+        copied: Copied;
+        ids: Record<string, string>;
+        group: string | undefined;
+        pasted?: string[];
+      };
     }
   | { kind: "marquee"; pointer: number; start: Point; dragging: boolean; kept: Set<string> }
   /**
@@ -546,7 +555,7 @@ export function edits(
     }
   };
   const hoverable = (event: PointerEvent) =>
-    hovers(event) && !keys?.altKey && selecting() && !underway() && !view.panning();
+    hovers(event) && selecting() && !underway() && !view.panning();
   /** What a press would take where the pointer last was, and what a click there would select. */
   const hover = () => {
     hovering = false;
@@ -978,9 +987,13 @@ export function edits(
           }
           press.dragging = true;
           press.bounds = bounding(box(editor, ids));
+          if (held.altKey) {
+            const copied = core.copy(editor, ids);
+            press.copy = { copied, ids: renamed(copied), group: entered };
+          }
           editor.beginGesture();
         }
-        const { start, bounds } = press;
+        const { start, bounds, copy } = press;
         const [dx, dy] = [at.x - start.x, at.y - start.y];
         const [nx, ny] =
           pulling && bounds
@@ -991,8 +1004,17 @@ export function edits(
             : [];
         const snapped = nx !== undefined || ny !== undefined;
         const by = { x: dx + (nx ?? 0), y: dy + (ny ?? 0) };
-        again(() => setDown(editor, ids, { place: { by }, settle: snapped }));
-        showTargets(editor, editor.targetsOf(ids));
+        again(() => {
+          if (copy === undefined) {
+            return setDown(editor, ids, { place: { by }, settle: snapped });
+          }
+          // Anew at each step, which starts from before the copy.
+          const touched = core.paste(editor, copy.copied, copy.ids, copy.group);
+          copy.pasted ??= core.outermost(editor, copy.ids, copy.group);
+          selected = new Set(copy.pasted);
+          return [...touched, ...setDown(editor, copy.pasted, { place: { by }, settle: snapped })];
+        });
+        showTargets(editor, editor.targetsOf([...selected]));
         return;
       }
       case "scale": {

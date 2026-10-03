@@ -14,8 +14,8 @@ use crate::crop::cropped;
 use crate::grid::settled;
 use crate::stick::{Landing, Motion, lands_on};
 use crate::{
-    Background, Board, CropShape, Element, ElementId, ElementKind, Error, Point, Rect, Result,
-    ZIndex, angle,
+    Background, Board, Copied, CropShape, Element, ElementId, ElementKind, Error, Point, Rect,
+    Result, ZIndex, angle, with_emptied,
 };
 
 /// Where an element moves among the elements of its group.
@@ -175,22 +175,71 @@ impl Editor {
         self.record(step)
     }
 
+    /// On top of the elements of `group`, or of the top level, stacked as they were, each under
+    /// the id `ids` gives it. What a copy made elsewhere would break, it mends as
+    /// [`Board::repair`] does.
+    pub fn paste(
+        &mut self,
+        copied: &Copied,
+        ids: &BTreeMap<ElementId, ElementId>,
+        group: Option<ElementId>,
+    ) -> Result<Vec<ElementId>> {
+        if let Some(group) = group {
+            self.existing_group(group)?;
+        }
+        let mut renamed = BTreeMap::new();
+        let mut taken = BTreeSet::new();
+        for old in copied.elements.keys() {
+            let id = *ids.get(old).ok_or(Error::Unnamed(*old))?;
+            if self.board.elements.contains_key(&id) || !taken.insert(id) {
+                return Err(Error::TakenId(id));
+            }
+            renamed.insert(*old, id);
+        }
+        let mut pasted = Board::default();
+        for (old, element) in &copied.elements {
+            let id = renamed[old];
+            let mut kind = element.kind.clone().canonical();
+            check_valid(id, &kind)?;
+            for target in kind.targets_mut() {
+                *target = target.and_then(|target| renamed.get(&target).copied());
+            }
+            let group = element.group.and_then(|group| renamed.get(&group).copied());
+            let z = element.z.clone();
+            pasted.elements.insert(id, Element { group, z, kind });
+        }
+        pasted.repair();
+        let outermost: Vec<ElementId> = pasted
+            .draw_order()
+            .into_iter()
+            .filter(|id| pasted.elements[id].group.is_none())
+            .collect();
+        let siblings = self.siblings(group, &BTreeSet::new());
+        let mut keys = place(&siblings, siblings.len(), &outermost);
+        let lifted = keys.split_off(outermost.len());
+        let mut step = self.rekey(lifted);
+        for (id, z) in keys {
+            let element = pasted.elements.get_mut(&id).expect("pasted");
+            element.group = group;
+            element.z = z;
+        }
+        for (id, element) in pasted.elements {
+            let after = Some(element);
+            step.insert(
+                id,
+                Change {
+                    before: None,
+                    after,
+                },
+            );
+        }
+        self.record(step)
+    }
+
     /// With the elements of the removed groups, and the groups that the removal empties. What
     /// sticks to them comes free where it is.
     pub fn remove(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
-        let mut removed = self.with_descendants(ids)?;
-        loop {
-            let emptied: BTreeSet<ElementId> = removed
-                .iter()
-                .filter_map(|id| self.board.elements[id].group)
-                .filter(|group| !removed.contains(group))
-                .filter(|group| self.board.members(*group).all(|id| removed.contains(&id)))
-                .collect();
-            if emptied.is_empty() {
-                break;
-            }
-            removed.extend(emptied);
-        }
+        let removed = with_emptied(&self.board.elements, self.with_descendants(ids)?);
         let mut step: Changes = removed
             .iter()
             .map(|id| (*id, self.change(*id, |_| None)))
@@ -1292,6 +1341,139 @@ mod tests {
         editor.add(id(6), None, note(0.0)).unwrap();
         editor.add(id(7), Some(id(1)), arrow()).unwrap();
         assert_eq!(order(&editor), ids([1, 2, 3, 7, 4, 5, 6]));
+    }
+
+    fn renamed(copied: &Copied, first: u128) -> BTreeMap<ElementId, ElementId> {
+        copied
+            .elements
+            .keys()
+            .copied()
+            .zip(ids_from(first))
+            .collect()
+    }
+
+    fn ids_from(first: u128) -> impl Iterator<Item = ElementId> {
+        (first..).map(id)
+    }
+
+    #[test]
+    fn a_paste_stacks_new_elements_on_top_of_its_group_linked_as_their_copies_were() {
+        let mut editor = editor();
+        editor
+            .update(id(5), stuck((0.0, 0.0), Some(2), (20.0, 0.0), Some(4)))
+            .unwrap();
+        let before = editor.board().clone();
+        let copied = editor.board().copy(&ids([5, 1]));
+        let touched = editor.paste(&copied, &renamed(&copied, 10), None).unwrap();
+        assert_eq!(touched, ids([10, 11, 12, 13]));
+        assert_eq!(order(&editor), ids([1, 2, 3, 4, 5, 10, 11, 12, 13]));
+        let pasted = |bits| &editor.board().elements[&id(bits)];
+        assert_eq!(
+            [10, 11, 12, 13].map(|bits| pasted(bits).group),
+            [None, Some(id(10)), Some(id(10)), None]
+        );
+        assert_eq!(
+            pasted(13).kind,
+            stuck((0.0, 0.0), Some(11), (20.0, 0.0), None)
+        );
+        assert_sound(&editor);
+        editor.undo();
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn a_paste_stacks_elements_that_shared_a_key_as_they_were_whatever_their_new_ids() {
+        let mut tied = editor().board().clone();
+        tied.elements.get_mut(&id(3)).unwrap().z = tied.elements[&id(2)].z.clone();
+        let mut editor = Editor::new(tied);
+        let copied = editor.board().copy(&ids([1]));
+        let renamed = [(1, 10), (2, 12), (3, 11)].map(|(old, new)| (id(old), id(new)));
+        editor
+            .paste(&copied, &BTreeMap::from(renamed), None)
+            .unwrap();
+        assert_eq!(order(&editor)[5..], ids([10, 12, 11]));
+    }
+
+    #[test]
+    fn a_paste_into_a_group_lands_on_top_of_its_elements() {
+        let mut editor = editor();
+        let mut kind = note(20.0);
+        *kind.target_mut().unwrap() = Some(id(2));
+        editor.update(id(4), kind).unwrap();
+        let copied = editor.board().copy(&ids([4]));
+        editor
+            .paste(&copied, &renamed(&copied, 6), Some(id(1)))
+            .unwrap();
+        assert_eq!(order(&editor), ids([1, 2, 3, 6, 4, 5]));
+        assert_eq!(editor.board().elements[&id(6)].group, Some(id(1)));
+        assert_eq!(editor.board().elements[&id(6)].kind.target(), None);
+    }
+
+    #[test]
+    fn a_paste_mends_what_a_copy_made_elsewhere_breaks() {
+        let mut editor = editor();
+        let arrow = stuck((0.0, 0.0), Some(3), (0.0, 0.0), Some(1));
+        let mut circular = note(0.0);
+        *circular.target_mut().unwrap() = Some(id(6));
+        let mut back = note(0.0);
+        *back.target_mut().unwrap() = Some(id(5));
+        let copied = Copied {
+            elements: board([
+                (1, element(Some(2), "a0", ElementKind::Group)),
+                (2, element(Some(1), "a0", ElementKind::Group)),
+                (3, element(Some(9), "a1", note(0.0))),
+                (4, element(None, "a2", arrow)),
+                (5, element(None, "a3", circular)),
+                (6, element(None, "a4", back)),
+            ])
+            .elements,
+        };
+        editor.paste(&copied, &renamed(&copied, 11), None).unwrap();
+        assert_sound(&editor);
+        let pasted = |bits| &editor.board().elements[&id(bits)];
+        assert_eq!(pasted(13).group, None);
+        assert_eq!(
+            pasted(14).kind.ends().unwrap().map(|(_, target)| target),
+            [Some(id(13)), None]
+        );
+        assert_eq!(
+            [15, 16].map(|bits| pasted(bits).kind.target()),
+            [None, Some(id(15))]
+        );
+    }
+
+    #[test]
+    fn a_refused_paste_changes_nothing() {
+        let mut editor = editor();
+        let copied = editor.board().copy(&ids([1, 4]));
+        let before = editor.board().clone();
+        let mut twice = renamed(&copied, 10);
+        twice.insert(id(4), id(10));
+        let mut broken = copied.clone();
+        broken.elements.get_mut(&id(4)).unwrap().kind = note(f64::NAN);
+        let refused = [
+            editor.paste(&copied, &renamed(&copied, 4), None),
+            editor.paste(&copied, &twice, None),
+            editor.paste(
+                &copied,
+                &ids([1, 2, 3]).into_iter().zip(ids_from(10)).collect(),
+                None,
+            ),
+            editor.paste(&broken, &renamed(&broken, 10), None),
+            editor.paste(&copied, &renamed(&copied, 10), Some(id(4))),
+        ];
+        assert_eq!(
+            refused.map(|result| result.unwrap_err()),
+            [
+                Error::TakenId(id(4)),
+                Error::TakenId(id(10)),
+                Error::Unnamed(id(4)),
+                Error::Invalid(id(13)),
+                Error::NotAGroup(id(4)),
+            ]
+        );
+        assert_eq!(editor.board(), &before);
+        assert!(!editor.can_undo());
     }
 
     #[test]

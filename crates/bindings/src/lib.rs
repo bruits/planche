@@ -3,11 +3,12 @@
 //! shells do the I/O. Bytes named as an asset or checksummed for a ZIP file cross in slices, as
 //! the core's memory never shrinks.
 
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 use board::{
-    AssetId, Board, Colour, ElementId, ElementKind, GRID_STEP, GridLevel, Order, Point, Rect,
-    Restack, Side, Size, Style, Transform, Weight,
+    AssetId, Board, Colour, Copied, ElementId, ElementKind, GRID_STEP, GridLevel, Order, Point,
+    Rect, Restack, Side, Size, Style, Transform, Weight,
 };
 use format::{save, zip};
 use js_sys::{Map, Uint8Array};
@@ -116,6 +117,25 @@ impl Editor {
         let kind: ElementKind = serde_json::from_str(kind)?;
         let group = group.map(|group| group.parse()).transpose()?;
         Ok(strings(self.0.add(id.parse()?, group, kind)?))
+    }
+
+    /// The elements, with all that their groups hold, as JSON for `paste`.
+    pub fn copy(&self, ids: Vec<String>) -> Result<String, JsError> {
+        Ok(serde_json::to_string(&self.0.board().copy(&parse(ids)?))?)
+    }
+
+    /// On top of `group`, or of the top level, `copied` as `copy` gives it, each element under
+    /// the id that `ids`, as JSON, maps its own to.
+    pub fn paste(
+        &mut self,
+        copied: &str,
+        ids: &str,
+        group: Option<String>,
+    ) -> Result<Vec<String>, JsError> {
+        let copied: Copied = serde_json::from_str(copied)?;
+        let ids: BTreeMap<ElementId, ElementId> = serde_json::from_str(ids)?;
+        let group = group.map(|group| group.parse()).transpose()?;
+        Ok(strings(self.0.paste(&copied, &ids, group)?))
     }
 
     /// `kind` as JSON, of the kind the element has.
@@ -520,6 +540,18 @@ pub fn style_settings(kind: &str) -> Result<String, JsError> {
 pub fn plain_style(kind: &str) -> Result<String, JsError> {
     let kind: ElementKind = serde_json::from_str(kind)?;
     Ok(serde_json::to_string(&kind.plain_style())?)
+}
+
+/// `copied` as `Editor::copy` gives it, without the images whose assets `assets` leaves out, nor
+/// the groups that empties, as JSON.
+#[wasm_bindgen]
+pub fn keeping(copied: &str, assets: Vec<String>) -> Result<String, JsError> {
+    let copied: Copied = serde_json::from_str(copied)?;
+    let assets = assets
+        .iter()
+        .map(|asset| asset.parse())
+        .collect::<board::Result<_>>()?;
+    Ok(serde_json::to_string(&copied.keeping(&assets))?)
 }
 
 /// `kind` with each part of `style` that it takes, both as JSON, as it writes.
