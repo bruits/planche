@@ -82,16 +82,8 @@ function outline(opened: Opened, { offset, limit, area }: Record<string, unknown
   return { total: ids.length, offset: from, next, elements: page.map((id) => entry(opened, id)) };
 }
 
-function within(opened: Opened, { x, y, width, height }: Rect): string[] {
-  const touching = new Set(opened.editor.touching(x, y, width, height));
-  return opened.board.draw_order.filter((id) => {
-    const { kind } = opened.board.elements[id]!;
-    if (kind.type !== "comment") {
-      return touching.has(id);
-    }
-    const { at } = kind;
-    return x <= at.x && at.x <= x + width && y <= at.y && at.y <= y + height;
-  });
+function within({ editor }: Opened, { x, y, width, height }: Rect): string[] {
+  return editor.touching(x, y, width, height);
 }
 
 function entry(opened: Opened, id: string) {
@@ -100,11 +92,7 @@ function entry(opened: Opened, id: string) {
     id,
     type: kind.type,
     group,
-    // A comment covers nothing, so it is where it is pinned.
-    bounds:
-      kind.type === "comment"
-        ? { ...kind.at, width: 0, height: 0 }
-        : core.bounds(opened.editor, [id]),
+    bounds: core.extent(opened.editor, [id]),
     rotation: "rotation" in kind ? kind.rotation : undefined,
     text: cut(textOf(kind)),
     targets: targets(kind),

@@ -101,9 +101,30 @@ fn after_sub_blocks(mut bytes: &[u8]) -> Option<&[u8]> {
     }
 }
 
-/// An APNG says how it plays before its image data.
+/// As [`animation`] tells from the start of an image's bytes, `None` while it takes more of them,
+/// as a GIF's frames, and an animated WebP's, do.
+pub(crate) fn from_start(bytes: &[u8]) -> Option<Option<Animation>> {
+    if bytes.starts_with(b"GIF8") {
+        None
+    } else if let Some(chunks) = bytes.strip_prefix(PNG) {
+        png_chunks(chunks)
+    } else if bytes.get(..4) == Some(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        // Only the extended format animates, which its first chunk says.
+        let animated = bytes.get(12..16)? == b"VP8X" && bytes.get(20)? & 0x02 != 0;
+        (!animated).then_some(None)
+    } else {
+        Some(None)
+    }
+}
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
+
 fn png(bytes: &[u8]) -> Option<Animation> {
-    let mut rest = bytes.strip_prefix(b"\x89PNG\r\n\x1a\n")?;
+    png_chunks(bytes.strip_prefix(PNG)?).flatten()
+}
+
+/// An APNG says how it plays before its image data. `None` when the chunks stop before that.
+fn png_chunks(mut rest: &[u8]) -> Option<Option<Animation>> {
     loop {
         let length = usize::try_from(u32::from_be_bytes(rest.get(..4)?.try_into().ok()?)).ok()?;
         let end = length.checked_add(8)?;
@@ -112,9 +133,9 @@ fn png(bytes: &[u8]) -> Option<Animation> {
                 let data = rest.get(8..end)?;
                 let frames = u32::from_be_bytes(data.get(..4)?.try_into().ok()?);
                 let times = u32::from_be_bytes(data.get(4..8)?.try_into().ok()?);
-                return (frames > 1).then(|| plays(times));
+                return Some((frames > 1).then(|| plays(times)));
             }
-            b"IDAT" => return None,
+            b"IDAT" => return Some(None),
             // Past its checksum.
             _ => rest = rest.get(end.checked_add(4)?..)?,
         }
@@ -321,6 +342,24 @@ mod tests {
             Some(Animation::Forever)
         );
         assert_eq!(animation(&whole[..whole.len() - 30]), None);
+    }
+
+    #[test]
+    fn the_start_of_an_image_tells_whether_it_moves_but_for_a_gif_or_an_animated_webp() {
+        let data = png_chunk(b"IDAT", &[0; 3]);
+        let moving = png(&[animation_control(2, 4), data.clone()]);
+        assert_eq!(from_start(&moving[..60]), Some(times(4)));
+        assert_eq!(
+            from_start(&png(std::slice::from_ref(&data))[..45]),
+            Some(None)
+        );
+        // Its first chunks run past the start.
+        let colour = png_chunk(b"iCCP", &[0; 100]);
+        assert_eq!(from_start(&png(&[colour, data])[..60]), None);
+        assert_eq!(from_start(&gif(Some(0), 1)), None);
+        assert_eq!(from_start(&webp(true, 0, 3)[..30]), None);
+        assert_eq!(from_start(&webp(false, 0, 3)[..30]), Some(None));
+        assert_eq!(from_start(b"\xFF\xD8\xFF\xE0\x00\x10JFIF"), Some(None));
     }
 
     #[test]

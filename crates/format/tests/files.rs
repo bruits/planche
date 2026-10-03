@@ -1356,3 +1356,18 @@ fn bytes_of_another_size_are_refused_even_with_their_checksum() {
         );
     }
 }
+
+#[test]
+fn a_board_missing_an_asset_its_images_show_is_refused() {
+    let board = sample();
+    let asset = format::asset_path(AssetId::of(IMAGE));
+    let listed = ["board.json", "assets/0000", asset.as_str()];
+    format::check_assets(&board, listed).unwrap();
+    let error = format::check_assets(&board, ["board.json", "assets/0000"]).unwrap_err();
+    assert!(matches!(error, Error::MissingAsset(missing) if missing == AssetId::of(IMAGE)));
+    assert_eq!(
+        error.to_string(),
+        format!("asset {} is missing", AssetId::of(IMAGE))
+    );
+    format::check_assets(&Board::default(), []).unwrap();
+}

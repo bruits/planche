@@ -2,10 +2,11 @@
 // What a change sets for the selection becomes the style of what the same tool draws next too, as
 // the browser remembers it.
 
+import * as core from "./core.js";
 import type { Align, Colour, Dash, Fill, Heads, Kind, Paper, Weight } from "./core.js";
 import type { Draw } from "./edit.js";
 import { recall, remember } from "./preferences.js";
-import { alignment, defaultAlignment, fitted, holdsText, isBlank, type Holder } from "./text.js";
+import { fitted, holdsText, isBlank } from "./text.js";
 
 /** Where the browser remembers each tool's style, and the colours picked lately. */
 const STYLES = "planche.styles";
@@ -59,58 +60,47 @@ export type Setting = keyof Style;
 
 export const TEXT: Setting[] = ["size", "bold", "italic", "strike", "align"];
 
+/** As the core takes them, but for the text of a blank shape, which fitting to its text would grow. */
 export function settings(kind: Kind): Setting[] {
-  switch (kind.type) {
-    case "note":
-      return ["colour", ...TEXT];
-    case "sticky":
-      return ["paper", ...TEXT];
-    case "shape": {
-      // Fitting a blank shape to its text would grow it.
-      const text = isBlank(kind) ? [] : TEXT;
-      return kind.shape === "cross"
-        ? ["colour", "weight", "dash", ...text]
-        : ["colour", "weight", "dash", "fill", ...text];
-    }
-    case "arrow":
-      return ["colour", "weight", "dash", "heads"];
-    case "line":
-      return ["colour", "weight", "dash"];
-    default:
-      return [];
-  }
+  const taken = core.settings(kind).map((setting) => (setting === "font_size" ? "size" : setting));
+  return kind.type === "shape" && isBlank(kind)
+    ? taken.filter((setting) => !TEXT.includes(setting))
+    : taken;
 }
 
-/** As `kind` is drawn, at `zoom` CSS pixels per board unit for its size. */
+/**
+ * As `kind` is drawn, at `zoom` CSS pixels per board unit for its size, `undefined` where it takes
+ * no such part.
+ */
 export function valueOf(kind: Kind, setting: Setting, zoom: number): Style[Setting] {
+  const plain = core.plain(kind);
   const text = holdsText(kind) ? kind.text : undefined;
   switch (setting) {
-    // Left out when as they come, as the core writes them.
     case "colour":
-      return kind.type === "note" || stroked(kind) ? (kind.colour ?? "ink") : undefined;
+      return drawn(plain.colour, "colour" in kind ? kind.colour : undefined);
     case "paper":
-      return kind.type === "sticky" ? (kind.paper ?? "yellow") : undefined;
+      return drawn(plain.paper, "paper" in kind ? kind.paper : undefined);
     case "weight":
-      return stroked(kind) ? (kind.weight ?? "medium") : undefined;
+      return drawn(plain.weight, "weight" in kind ? kind.weight : undefined);
     case "dash":
-      return stroked(kind) ? (kind.dash ?? "solid") : undefined;
+      return drawn(plain.dash, "dash" in kind ? kind.dash : undefined);
     case "heads":
-      return kind.type === "arrow" ? (kind.heads ?? "end") : undefined;
+      return drawn(plain.heads, "heads" in kind ? kind.heads : undefined);
     case "fill":
-      return kind.type === "shape" ? (kind.fill ?? "hollow") : undefined;
+      return drawn(plain.fill, "fill" in kind ? kind.fill : undefined);
     case "size":
       return text && text.font_size * zoom;
     case "bold":
     case "italic":
     case "strike":
-      return text && (text[setting] ?? false);
     case "align":
-      return holdsText(kind) ? alignment(kind) : undefined;
+      return drawn(plain[setting], text?.[setting]);
   }
 }
 
-function stroked(kind: Kind): kind is Extract<Kind, { type: "shape" | "arrow" | "line" }> {
-  return kind.type === "shape" || kind.type === "arrow" || kind.type === "line";
+/** None where the plain style leaves the part out, which the element then takes none of. */
+function drawn<T>(plain: T | undefined, own: T | undefined): T | undefined {
+  return plain === undefined ? undefined : (own ?? plain);
 }
 
 /**
@@ -127,29 +117,13 @@ export function restyled(kind: Kind, style: Style, zoom: number): Kind {
   if (Object.keys(set).length === 0) {
     return kind;
   }
-  const { size, bold, italic, strike, align, ...rest } = set;
-  const next = { ...kind, ...rest } as Kind;
-  if (!holdsText(next) || !TEXT.some((setting) => setting in set)) {
-    return next;
-  }
-  return fitted(textStyled(next, set, zoom));
+  const next = core.withStyle(kind, inBoard(set, zoom));
+  return holdsText(next) && TEXT.some((setting) => setting in set) ? fitted(next) : next;
 }
 
-/** With the text part of `style` set, at `zoom` CSS pixels per board unit for its size. */
-function textStyled<T extends Holder>(
-  kind: T,
-  { size, bold, italic, strike, align }: Style,
-  zoom: number,
-): T {
-  const text = { ...kind.text, ...defined({ bold, italic, strike, align }) };
-  // Left out where it is as what holds it would choose, so that choosing it writes nothing.
-  if (text.align === defaultAlignment(kind)) {
-    delete text.align;
-  }
-  if (size !== undefined) {
-    text.font_size = size / zoom;
-  }
-  return { ...kind, text };
+/** As the core takes it, at `zoom` CSS pixels per board unit for its size. */
+function inBoard({ size, ...style }: Style, zoom: number): core.Style {
+  return size === undefined ? style : { ...style, font_size: size / zoom };
 }
 
 /** The style `kind` has, of what applies to it, as copying it takes it. */
@@ -203,12 +177,10 @@ export function styles(): Styles {
       if (!style) {
         return kind;
       }
-      const dressed = restyled(kind, style, zoom);
       // A shape is drawn blank, which takes no text style yet, though what is written in it then will.
-      if (dressed.type === "shape" && isBlank(dressed)) {
-        return textStyled(dressed, style, zoom);
-      }
-      return dressed;
+      return kind.type === "shape" && isBlank(kind)
+        ? core.withStyle(kind, inBoard(style, zoom))
+        : restyled(kind, style, zoom);
     },
     learn(kinds, style) {
       for (const kind of kinds) {
@@ -240,10 +212,8 @@ function recalled(): Partial<Record<Draw, Style>> {
   const stored = parsed(recall(STYLES)) as Partial<Record<Draw, unknown>> | undefined;
   return Object.fromEntries(
     tools.flatMap((tool) => {
-      const style = stored?.[tool];
-      return style && typeof style === "object"
-        ? [[tool, valid(style as Record<string, unknown>)]]
-        : [];
+      const style = valid(stored?.[tool]);
+      return style ? [[tool, style]] : [];
     }),
   );
 }
@@ -252,45 +222,25 @@ function recalledColours(): Colour[] {
   const stored = parsed(recall(PICKED));
   return Array.isArray(stored)
     ? stored
-        .filter(isColour)
+        .flatMap((colour) => core.colour(colour) ?? [])
         .filter((colour) => colour.startsWith("#"))
         .slice(0, RECENT)
     : [];
 }
 
-function valid(style: Record<string, unknown>): Style {
-  const { colour, paper, weight, dash, heads, fill, size, bold, italic, strike, align } = style;
-  return defined({
-    colour: isColour(colour) ? colour : undefined,
-    paper: oneOf(
-      paper,
-      PAPERS.map((choice) => choice.paper),
-    ),
-    weight: oneOf(weight, ["thin", "medium", "thick"]),
-    dash: oneOf(dash, ["solid", "dashed"]),
-    heads: oneOf(heads, ["end", "both"]),
-    fill: oneOf(fill, ["hollow", "tint", "solid"]),
-    size: typeof size === "number" && size > 0 && Number.isFinite(size) ? size : undefined,
-    bold: flag(bold),
-    italic: flag(italic),
-    strike: flag(strike),
-    align: oneOf(align, ["left", "centre", "right"]),
-  });
-}
-
-function oneOf<T extends string>(value: unknown, options: T[]): T | undefined {
-  return options.includes(value as T) ? (value as T) : undefined;
-}
-
-function flag(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-export function isColour(value: unknown): value is Colour {
-  return (
-    typeof value === "string" &&
-    (PALETTE.some(({ colour }) => colour === value) || /^#[0-9a-f]{6}$/.test(value))
-  );
+/** A size on screen, and parts of a style as the core spells them, but none in board units. */
+function valid(stored: unknown): Style | undefined {
+  if (typeof stored !== "object" || stored === null || "font_size" in stored) {
+    return undefined;
+  }
+  const { size, ...parts } = stored as Record<string, unknown>;
+  const style = core.checked(parts);
+  if (size === undefined || style === undefined) {
+    return style;
+  }
+  return typeof size === "number" && size > 0 && Number.isFinite(size)
+    ? { ...style, size }
+    : undefined;
 }
 
 function parsed(text: string | null): unknown {
@@ -299,10 +249,4 @@ function parsed(text: string | null): unknown {
   } catch {
     return undefined;
   }
-}
-
-function defined<T extends object>(values: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
-  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as {
-    [K in keyof T]?: Exclude<T[K], undefined>;
-  };
 }

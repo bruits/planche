@@ -15,6 +15,7 @@ use crate::{Board, ElementId, ElementKind, GRID_SPACING, Point, Rect};
 /// tell apart keep the order they read in, from the top.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "by", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Order {
     /// By the name of the file each was added from, as people read names, case aside and numbers
     /// by their value. Those without one go last.
@@ -24,6 +25,7 @@ pub enum Order {
     /// Around the colour wheel from red, then greys from light to dark, then those without a
     /// colour. `colours` holds the mean colour that each image shows, in sRGB.
     Hue {
+        #[cfg_attr(feature = "ts", ts(type = "Record<string, [number, number, number]>"))]
         colours: BTreeMap<ElementId, [u8; 3]>,
     },
     /// Shuffled alike for the same seed and images, wherever they lie.
@@ -31,7 +33,9 @@ pub enum Order {
 }
 
 /// Which side of what they cover [`crate::Editor::normalize`] makes alike.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Side {
     Height,
     Width,

@@ -16,10 +16,12 @@ const sticky: Kind = {
   text: { content: "", font_size: 20 },
 };
 
-/** A board holding a sticky note, shown at 1:1 from the origin. */
-function page() {
+/** A board holding a sticky note, and `more`, shown at 1:1 from the origin. */
+function page(more: [string, Kind][] = [], { drawing }: Partial<Pick<Hooks, "drawing">> = {}) {
   const opened = untitled();
-  opened.editor.add(STICKY, undefined, JSON.stringify(sticky));
+  for (const [id, kind] of [[STICKY, sticky] as const, ...more]) {
+    opened.editor.add(id, undefined, JSON.stringify(kind));
+  }
   opened.board = core.board(opened.editor);
   const host = document.body.appendChild(document.createElement("div"));
   let editing: Edits | undefined;
@@ -44,7 +46,7 @@ function page() {
     selectionChanged() {},
     settled() {},
     snapping: () => false,
-    drawing: () => undefined,
+    drawing: drawing ?? (() => undefined),
     erasing: () => false,
     sampling: () => false,
     drawn() {},
@@ -55,15 +57,22 @@ function page() {
     stepped() {},
   };
   editing = edits(viewport, overlay(host), () => opened, hooks);
-  const pointer = (type: string, clientX: number, clientY: number) =>
+  const pointer = (type: string, clientX: number, clientY: number, shiftKey = false) =>
     host.dispatchEvent(
-      new PointerEvent(type, { clientX, clientY, button: 0, pointerId: 1, bubbles: true }),
+      new PointerEvent(type, {
+        clientX,
+        clientY,
+        shiftKey,
+        button: 0,
+        pointerId: 1,
+        bubbles: true,
+      }),
     );
   const at = () => {
     const kind = core.element(opened.editor, STICKY)?.kind;
     return kind?.type === "sticky" ? { x: kind.frame.x, y: kind.frame.y } : undefined;
   };
-  return { editing, hooks, pointer, at };
+  return { opened, editing, hooks, pointer, at };
 }
 
 function nextFrame(): Promise<number> {
@@ -130,5 +139,30 @@ describe("edits", () => {
     ).toThrow("Someone is editing in Planche");
     pointer("pointerup", 90, 50);
     expect(at()).toEqual({ x: 40, y: 0 });
+  });
+
+  it("selects the comments pinned within a marquee", async () => {
+    const pinned: Kind = { type: "comment", at: { x: 150, y: 150 }, text: "Why here?" };
+    const COMMENT = "b".repeat(32);
+    const { editing, pointer } = page([[COMMENT, pinned]]);
+    pointer("pointerdown", 130, 130);
+    pointer("pointermove", 170, 170);
+    await nextFrame();
+    pointer("pointerup", 170, 170);
+    expect(editing.selection()).toEqual([COMMENT]);
+  });
+
+  it("keeps an arrow drawn with Shift held at a multiple of 45°", async () => {
+    const { opened, pointer } = page([], { drawing: () => "arrow" });
+    pointer("pointerdown", 200, 0);
+    pointer("pointermove", 300, 90, true);
+    await nextFrame();
+    pointer("pointerup", 300, 90, true);
+    const [from, to] = Object.values(opened.board.elements).flatMap(({ kind }) =>
+      kind.type === "arrow" ? [kind.from, kind.to] : [],
+    );
+    expect(from).toEqual({ x: 200, y: 0 });
+    expect(to!.x - from!.x).toBeCloseTo(to!.y - from!.y, 9);
+    expect(to!.x - from!.x).toBeCloseTo(Math.hypot(100, 90) * Math.SQRT1_2, 9);
   });
 });

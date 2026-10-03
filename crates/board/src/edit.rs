@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::mem;
 
+use serde::Deserialize;
+
 use crate::arrange::{Order, Side, arrangement, normalization};
 use crate::crop::cropped;
 use crate::grid::settled;
@@ -17,12 +19,78 @@ use crate::{
 };
 
 /// Where an element moves among the elements of its group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Restack {
     Forward,
     Backward,
     Front,
     Back,
+}
+
+/// A flip, a scale, a turn, and a move at once, in that order, which sets down what sticks whole
+/// among the elements as the user's moves do.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Transform {
+    /// Of the images among the elements, each in its place.
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub flip: Option<Flip>,
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub scale: Option<Scaling>,
+    /// Clockwise, in degrees.
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub rotate: Option<f64>,
+    /// What the elements scale and turn around, the middle of their extent unless given.
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub about: Option<Point>,
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub place: Option<Placement>,
+    /// Puts back on the grid's lines what the move or the scale left a hair off them.
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub settle: bool,
+    /// Unless given, what moved, scaled, or turned lands where it is, and the rest stays.
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub sticking: Option<Sticking>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum Flip {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum Scaling {
+    By(f64),
+    /// As wide as their extent is then.
+    ToWidth(f64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum Placement {
+    By(Point),
+    /// The top-left corner of their extent there, once flipped, scaled, and turned.
+    To(Point),
+}
+
+/// What becomes of the notes, sticky notes, shapes, and comments set down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum Sticking {
+    /// Onto what they lie on whole, as [`Editor::land`] does.
+    Land,
+    /// From what they stick to, as [`Editor::unstick`] does.
+    Free,
 }
 
 /// A board, and the history of the edits made through it. Every edit, undo, and redo returns
@@ -89,6 +157,7 @@ impl Editor {
         if let Some(group) = group {
             self.existing_group(group)?;
         }
+        let kind = kind.canonical();
         check_valid(id, &kind)?;
         self.check_targets(id, &kind)?;
         let siblings = self.siblings(group, &BTreeSet::new());
@@ -152,6 +221,7 @@ impl Editor {
         if mem::discriminant(&self.get(id)?.kind) != mem::discriminant(&kind) {
             return Err(Error::KindChanged(id));
         }
+        let kind = kind.canonical();
         check_valid(id, &kind)?;
         self.check_targets(id, &kind)?;
         let mut step = Changes::from([(
@@ -170,6 +240,7 @@ impl Editor {
         if mem::discriminant(before) != mem::discriminant(&kind) {
             return Err(Error::KindChanged(id));
         }
+        let kind = kind.canonical();
         check_valid(id, &kind)?;
         self.check_targets(id, &kind)?;
         let moved = Motion::stretch(before, &kind).map(|motion| (id, motion));
@@ -214,6 +285,76 @@ impl Editor {
     /// With the elements of the moved groups.
     pub fn translate(&mut self, ids: &[ElementId], dx: f64, dy: f64) -> Result<Vec<ElementId>> {
         self.reshape(ids, |kind| shift(kind, dx, dy))
+    }
+
+    /// With the elements of the groups among them, as one edit, refused as a whole when any part
+    /// of it is.
+    pub fn transform(
+        &mut self,
+        ids: &[ElementId],
+        transform: &Transform,
+    ) -> Result<Vec<ElementId>> {
+        let Transform {
+            flip,
+            scale,
+            rotate,
+            about,
+            place,
+            settle,
+            sticking,
+        } = *transform;
+        // Before measuring them, which leaves unknown ones out.
+        for id in ids {
+            self.get(*id)?;
+        }
+        let room = |board: &Board| board.extent(ids).ok_or(Error::NoRoom);
+        let factor = match scale {
+            Some(Scaling::By(factor)) => Some(factor),
+            Some(Scaling::ToWidth(width)) => Some(width / room(&self.board)?.width),
+            None => None,
+        };
+        let turn = rotate.filter(|degrees| *degrees != 0.0);
+        let pivot = match about {
+            _ if factor.is_none() && turn.is_none() => None,
+            Some(about) => Some(about),
+            None => Some(room(&self.board)?.centre()),
+        };
+        let moved = factor.is_some() || turn.is_some() || place.is_some();
+        let sticking = sticking.or(moved.then_some(Sticking::Land));
+        self.composed(|editor| {
+            if let Some(flip) = flip {
+                editor.flip(ids, flip == Flip::Horizontal)?;
+            }
+            if let (Some(factor), Some(pivot)) = (factor, pivot) {
+                editor.scale(ids, pivot, factor)?;
+            }
+            if let (Some(degrees), Some(pivot)) = (turn, pivot) {
+                editor.rotate(ids, pivot, degrees)?;
+            }
+            let by = match place {
+                Some(Placement::By(by)) => Some(by),
+                Some(Placement::To(to)) => {
+                    let now = room(&editor.board)?;
+                    Some(Point {
+                        x: to.x - now.x,
+                        y: to.y - now.y,
+                    })
+                }
+                None => None,
+            };
+            if let Some(by) = by {
+                editor.translate(ids, by.x, by.y)?;
+            }
+            if settle {
+                editor.settle_on_grid(ids)?;
+            }
+            match sticking {
+                Some(Sticking::Land) => editor.land(ids)?,
+                Some(Sticking::Free) => editor.unstick(ids)?,
+                None => Vec::new(),
+            };
+            Ok(())
+        })
     }
 
     /// Packs the images among the elements into rows, each keeping its size and turn. The other
@@ -723,6 +864,29 @@ impl Editor {
             }
         }
         touched
+    }
+
+    /// The edits `edits` makes, as one step, or as part of the open gesture, all taken back when
+    /// one of them is refused.
+    fn composed(&mut self, edits: impl FnOnce(&mut Self) -> Result<()>) -> Result<Vec<ElementId>> {
+        let outer = self.gesture.replace(Step::default());
+        let done = edits(self);
+        let mut step = mem::replace(&mut self.gesture, outer).expect("composing");
+        if let Err(error) = done {
+            step.put(&mut self.board, false);
+            return Err(error);
+        }
+        step.prune();
+        let touched = step.elements.keys().copied().collect();
+        match &mut self.gesture {
+            Some(gesture) => gesture.merge(step),
+            None if step.is_empty() => {}
+            None => {
+                self.undo.push(step);
+                self.redo.clear();
+            }
+        }
+        Ok(touched)
     }
 
     /// Each element as `kinds` has it, in one step that what sticks to them follows.
@@ -2244,9 +2408,13 @@ mod tests {
                 ),
             ),
         ]));
+        let on = Point { x: 30.0, y: 100.0 };
         assert_eq!(
-            editor.board().stick(Point { x: 30.0, y: 100.0 }, 3.0),
-            Some((id(1), Point { x: 30.0, y: 100.0 }))
+            editor.board().land_end(on, None, Some(3.0), None),
+            crate::End {
+                at: on,
+                target: Some(id(1))
+            }
         );
 
         assert_eq!(
@@ -2392,6 +2560,283 @@ mod tests {
             "{placed:?} is not {expected:?}"
         );
         assert_eq!(sticks_to, Some(id(target)));
+    }
+
+    fn point(x: f64, y: f64) -> Point {
+        Point { x, y }
+    }
+
+    #[test]
+    fn an_edit_writes_a_style_chosen_as_it_comes_as_nothing() {
+        let aligned = |align| {
+            let mut kind = framed(0.0, 0.0, 10.0, 10.0);
+            if let ElementKind::Note { text, .. } = &mut kind {
+                text.align = align;
+            }
+            kind
+        };
+        let left = aligned(Some(crate::Align::Left));
+        let right = aligned(Some(crate::Align::Right));
+        let before = board([(1, element(None, "a0", left.clone()))]);
+        let mut editor = Editor::new(before.clone());
+        // Written as it reads, until edited.
+        assert_eq!(editor.board().elements[&id(1)].kind, left);
+        editor.update(id(1), right.clone()).unwrap();
+        assert_eq!(editor.board().elements[&id(1)].kind, right);
+        editor.update(id(1), left.clone()).unwrap();
+        assert_eq!(editor.board().elements[&id(1)].kind, aligned(None));
+        editor.undo();
+        editor.undo();
+        assert_eq!(editor.board(), &before);
+        editor.add(id(2), None, left.clone()).unwrap();
+        assert_eq!(editor.board().elements[&id(2)].kind, aligned(None));
+        editor.stretch(id(1), left).unwrap();
+        assert_eq!(editor.board().elements[&id(1)].kind, aligned(None));
+        // As it was, which records nothing.
+        let mut editor = Editor::new(board([(1, element(None, "a0", aligned(None)))]));
+        assert_eq!(
+            editor.update(id(1), aligned(Some(crate::Align::Left))),
+            Ok(Vec::new())
+        );
+        assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn a_shape_turned_into_a_cross_fills_nothing() {
+        let filled = ElementKind::Shape {
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            rotation: 0.0,
+            shape: crate::Shape::Rectangle,
+            text: Text::new(String::new(), 2.0),
+            target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
+            fill: Fill::Solid,
+        };
+        let mut editor = Editor::new(board([(1, element(None, "a0", filled.clone()))]));
+        let mut cross = filled;
+        if let ElementKind::Shape { shape, .. } = &mut cross {
+            *shape = crate::Shape::Cross;
+        }
+        editor.update(id(1), cross).unwrap();
+        let ElementKind::Shape { fill, .. } = editor.board().elements[&id(1)].kind else {
+            unreachable!()
+        };
+        assert_eq!(fill, Fill::Hollow);
+    }
+
+    #[test]
+    fn a_transform_makes_its_edits_one_after_another_and_undoes_as_one() {
+        let before = board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (
+                2,
+                element(None, "a1", on(framed(40.0, 40.0, 20.0, 10.0), 1)),
+            ),
+            (3, element(None, "a2", framed(300.0, 0.0, 10.0, 10.0))),
+            (
+                4,
+                element(
+                    None,
+                    "a3",
+                    stuck((0.0, 0.0), Some(1), (300.0, 5.0), Some(3)),
+                ),
+            ),
+        ]);
+        let ids = ids([1, 3]);
+        let about = point(20.0, 0.0);
+        let mut by_hand = Editor::new(before.clone());
+        by_hand.scale(&ids, about, 0.5).unwrap();
+        by_hand.rotate(&ids, about, 30.0).unwrap();
+        by_hand.translate(&ids, 5.0, -5.0).unwrap();
+        by_hand.settle_on_grid(&ids).unwrap();
+        by_hand.land(&ids).unwrap();
+
+        let mut editor = Editor::new(before.clone());
+        let touched = editor
+            .transform(
+                &ids,
+                &Transform {
+                    scale: Some(Scaling::By(0.5)),
+                    rotate: Some(30.0),
+                    about: Some(about),
+                    place: Some(Placement::By(point(5.0, -5.0))),
+                    settle: true,
+                    ..Transform::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(editor.board(), by_hand.board());
+        assert_eq!(touched, self::ids([1, 2, 3, 4]));
+        assert_eq!(editor.undo(), self::ids([1, 2, 3, 4]));
+        assert_eq!(editor.board(), &before);
+        assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn a_transform_measures_what_it_needs_from_the_extent_of_the_elements() {
+        let comment = ElementKind::Comment {
+            at: point(300.0, 100.0),
+            text: "Here".to_owned(),
+            target: None,
+        };
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (2, element(None, "a1", comment)),
+        ]));
+        // Half as wide, around the middle of the extent, then its top-left at (10, 20).
+        editor
+            .transform(
+                &ids([1, 2]),
+                &Transform {
+                    scale: Some(Scaling::ToWidth(150.0)),
+                    place: Some(Placement::To(point(10.0, 20.0))),
+                    ..Transform::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            editor.board().extent(&ids([1, 2])),
+            Some(Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 150.0,
+                height: 100.0
+            })
+        );
+        assert_eq!(
+            editor.board().bounds(&ids([1])),
+            Some(Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 100.0
+            })
+        );
+    }
+
+    #[test]
+    fn a_transform_refuses_unknown_ids_before_measuring_them() {
+        let mut editor = editor();
+        let before = editor.board().clone();
+        let turn = Transform {
+            rotate: Some(90.0),
+            ..Transform::default()
+        };
+        let wide = Transform {
+            scale: Some(Scaling::ToWidth(10.0)),
+            ..Transform::default()
+        };
+        let to = Transform {
+            place: Some(Placement::To(point(0.0, 0.0))),
+            ..Transform::default()
+        };
+        for transform in [&turn, &wide, &to, &Transform::default()] {
+            assert_eq!(
+                editor.transform(&ids([9]), transform),
+                Err(Error::UnknownElement(id(9)))
+            );
+            assert_eq!(
+                editor.transform(&ids([4, 9]), transform),
+                Err(Error::UnknownElement(id(9)))
+            );
+        }
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn a_refused_transform_changes_nothing_even_within_a_gesture() {
+        let mut editor = editor();
+        editor.add(id(6), None, ElementKind::Group).unwrap();
+        let before = editor.board().clone();
+        editor.begin_gesture();
+        editor.translate(&ids([4]), 1.0, 0.0).unwrap();
+        let moved = editor.board().clone();
+        let off = Transform {
+            scale: Some(Scaling::By(2.0)),
+            about: Some(point(0.0, 0.0)),
+            place: Some(Placement::By(point(f64::INFINITY, 0.0))),
+            ..Transform::default()
+        };
+        let turn = Transform {
+            rotate: Some(90.0),
+            ..Transform::default()
+        };
+        let flat = Transform {
+            scale: Some(Scaling::ToWidth(0.0)),
+            ..Transform::default()
+        };
+        assert_eq!(
+            editor.transform(&ids([4]), &off),
+            Err(Error::Invalid(id(4)))
+        );
+        assert_eq!(
+            editor.transform(&ids([4, 9]), &turn),
+            Err(Error::UnknownElement(id(9)))
+        );
+        assert_eq!(editor.transform(&ids([6]), &turn), Err(Error::NoRoom));
+        assert_eq!(editor.transform(&ids([4]), &flat), Err(Error::NotAScale));
+        assert_eq!(editor.board(), &moved);
+        editor.end_gesture();
+        editor.undo();
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn a_transform_sets_down_what_it_moves_unless_told_otherwise() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (
+                2,
+                element(None, "a1", on(framed(40.0, 40.0, 20.0, 10.0), 1)),
+            ),
+            (3, element(None, "a2", framed(100.0, 100.0, 10.0, 10.0))),
+        ]));
+        let target = |editor: &Editor, bits| editor.board().elements[&id(bits)].kind.target();
+        // A flip moves nothing, so sets nothing down.
+        let flip = Transform {
+            flip: Some(Flip::Horizontal),
+            ..Transform::default()
+        };
+        editor.transform(&ids([1, 3]), &flip).unwrap();
+        assert_eq!(target(&editor, 3), None);
+        let nudge = Transform {
+            place: Some(Placement::By(point(1.0, 1.0))),
+            ..Transform::default()
+        };
+        editor.transform(&ids([3]), &nudge).unwrap();
+        assert_eq!(target(&editor, 3), Some(id(1)));
+        let freed = Transform {
+            sticking: Some(Sticking::Free),
+            ..nudge
+        };
+        editor.transform(&ids([2]), &freed).unwrap();
+        assert_eq!(target(&editor, 2), None);
+        let landed = Transform {
+            sticking: Some(Sticking::Land),
+            ..Transform::default()
+        };
+        assert_eq!(editor.transform(&ids([2]), &landed), Ok(ids([2])));
+        assert_eq!(target(&editor, 2), Some(id(1)));
+    }
+
+    #[test]
+    fn a_transform_that_changes_nothing_keeps_what_can_be_redone() {
+        let mut editor = editor();
+        editor.translate(&ids([4]), 1.0, 0.0).unwrap();
+        editor.undo();
+        let still = Transform {
+            place: Some(Placement::By(point(0.0, 0.0))),
+            ..Transform::default()
+        };
+        assert_eq!(editor.transform(&ids([4]), &still), Ok(Vec::new()));
+        assert!(editor.can_redo());
     }
 
     #[test]

@@ -15,7 +15,7 @@
 pub mod save;
 pub mod zip;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use board::{AssetId, Background, Board, Element, ElementId};
 use serde::de::DeserializeOwned;
@@ -48,6 +48,8 @@ pub enum Error {
         "asset {0} does not match its digest; if the board lives in Git, is Git LFS installed?"
     )]
     CorruptAsset(AssetId),
+    #[error("asset {0} is missing")]
+    MissingAsset(AssetId),
     #[error("`{0}` is not a path inside a board")]
     UnsafePath(String),
     #[error("this is not a ZIP file")]
@@ -183,6 +185,18 @@ pub fn git_attributes() -> (&'static str, Vec<u8>) {
 
 pub fn asset_path(asset: AssetId) -> String {
     format!("{ASSETS}{asset}")
+}
+
+/// Refuses a board missing an asset its images show, the first of them in draw order, as `listed`,
+/// the paths of its folder, has them, since showing or saving it would fail.
+pub fn check_assets<'a>(board: &Board, listed: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    let listed: BTreeSet<&str> = listed.into_iter().collect();
+    let missing = board
+        .draw_order()
+        .into_iter()
+        .filter_map(|id| board.elements[&id].kind.asset())
+        .find(|asset| !listed.contains(asset_path(*asset).as_str()));
+    missing.map_or(Ok(()), |asset| Err(Error::MissingAsset(asset)))
 }
 
 pub fn verify_asset(asset: AssetId, found: AssetId) -> Result<()> {

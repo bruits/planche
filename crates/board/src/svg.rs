@@ -28,8 +28,8 @@ pub fn svg_size(bytes: &[u8]) -> Option<Size> {
 
 /// The SVG with its root's `width` and `height` set to `size`, and the rest as it was, so that
 /// every engine draws it at that size. `size` is the natural size its images hold, so that they
-/// draw as they did whatever rule [`svg_size`] follows, as long as the images of one asset hold
-/// one size. `None` when the bytes do not start as an SVG document.
+/// draw as they did whatever rule [`crate::media`] reads it by, as long as the images of one
+/// asset hold one size. `None` when the bytes do not start as an SVG document.
 pub fn sized_svg(bytes: &[u8], size: Size) -> Option<Vec<u8>> {
     let root = svg_root(bytes)?;
     let Size { width, height } = size;

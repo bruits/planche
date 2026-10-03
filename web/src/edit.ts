@@ -1,27 +1,27 @@
 // Edits: draw, write, select, move, scale, and rotate by pointer, and flip, turn, restack, group,
 // delete, undo, and redo for the commands to run. A click selects the element under it, or the
 // outermost group holding it, and a drag from where nothing is draws a rectangle that selects
-// what it touches. Double-clicking a group goes into it, where clicks select its own elements
-// instead, and double-clicking a note, a sticky note, a shape, or a comment writes in it. The dots
-// on the selection's corners scale it around the opposite one, or around its centre while ⌥, or
-// Alt elsewhere than macOS, is held once under way, as pressing with it pans. The sides of a lone
-// note, sticky note, or shape stretch it, its text keeping its size, and a drag from just outside
-// a corner turns the selection around its centre, by steps of 15° while ⇧ is held, and onto an
-// upright or a quarter turn near it while snapping. Hovering shows what a press would take, and
-// the ends of a lone arrow or line move on their own. The ends of an arrow or a line, as drawn or
-// moved, stick to the image, note, sticky note, or shape they land on, onto its outline when near
-// it, and follow it from then on. While ⇧ is held, the end being drawn or moved keeps to a
-// multiple of 45° around the other one, the grid pulling it along its way, and it sticks only to
-// what it lies on. A note, a sticky note, a shape, or a comment drawn, placed, moved, scaled, or
-// turned whole onto an image, a note, a sticky note, or a shape filled or holding text sticks to
-// it and follows it too. While snapping, what moves, scales, or is drawn lands on the grid's lines
-// where near them otherwise. Holding ⌘, or Ctrl elsewhere than macOS, keeps things from sticking
-// and the grid from pulling, but for a move only once under way, as pressing an element with it
-// toggles the element instead. The eraser removes what a click would select, or all that a drag
-// passes over but what it starts within, in one edit. Cropping shows an image whole, what its crop
-// leaves out dimmed, and its edges and corners drag the crop, or its inside moves it, until Enter
-// or a press elsewhere crops it, or Escape leaves it as it was. Resetting the crop meanwhile starts
-// it over from the whole image.
+// what it touches, and the comments pinned in it. Double-clicking a group goes into it, where
+// clicks select its own elements instead, and double-clicking a note, a sticky note, a shape, or
+// a comment writes in it. The dots on the selection's corners scale it around the opposite one,
+// or around its centre while ⌥, or Alt elsewhere than macOS, is held once under way, as pressing
+// with it pans. The sides of a lone note, sticky note, or shape stretch it, its text keeping its
+// size, and a drag from just outside a corner turns the selection around its centre, by steps of
+// 15° while ⇧ is held, and onto an upright or a quarter turn near it while snapping. Hovering
+// shows what a press would take, and the ends of a lone arrow or line move on their own. The ends
+// of an arrow or a line, as drawn or moved, stick to the image, note, sticky note, or shape they
+// land on, onto its outline when near it, and follow it from then on. While ⇧ is held, the end
+// being drawn or moved keeps to a multiple of 45° around the other one, the grid pulling it along
+// its way, and it sticks only to what it lies on. A note, a sticky note, a shape, or a comment
+// drawn, placed, moved, scaled, or turned whole onto an image, a note, a sticky note, or a shape
+// filled or holding text sticks to it and follows it too. While snapping, what moves, scales, or
+// is drawn lands on the grid's lines where near them otherwise. Holding ⌘, or Ctrl elsewhere than
+// macOS, keeps things from sticking and the grid from pulling, but for a move only once under
+// way, as pressing an element with it toggles the element instead. The eraser removes what a
+// click would select, or all that a drag passes over but what it starts within, in one edit.
+// Cropping shows an image whole, what its crop leaves out dimmed, and its edges and corners drag
+// the crop, or its inside moves it, until Enter or a press elsewhere crops it, or Escape leaves
+// it as it was. Resetting the crop meanwhile starts it over from the whole image.
 
 import { mac, opensMenu } from "./commands.js";
 import * as core from "./core.js";
@@ -34,6 +34,7 @@ import type {
   Order,
   Point,
   Rect,
+  Restack,
   Side,
   Size,
 } from "./core.js";
@@ -75,8 +76,6 @@ export interface Editing {
   editor: Editor;
   board: Board;
 }
-
-export type Restack = "forward" | "backward" | "front" | "back";
 
 /** What a press draws, while a tool to draw is in use. */
 export type Draw =
@@ -151,17 +150,6 @@ const CURVE: [number, number][] = Array.from({ length: 128 }, (_, at) => {
   const angle = (at / 128) * 2 * Math.PI;
   return [0.5 + Math.cos(angle) / 2, 0.5 + Math.sin(angle) / 2];
 });
-/** Across, then by 45° each, clockwise as the board's y runs down, with no hair off an axis. */
-const DIRECTIONS: [number, number][] = [
-  [1, 0],
-  [Math.SQRT1_2, Math.SQRT1_2],
-  [0, 1],
-  [-Math.SQRT1_2, Math.SQRT1_2],
-  [-1, 0],
-  [-Math.SQRT1_2, -Math.SQRT1_2],
-  [0, -1],
-  [Math.SQRT1_2, -Math.SQRT1_2],
-];
 
 export interface Edits {
   /** Carries a press on to where the pointer last moved, before the frame that shows it. */
@@ -415,42 +403,17 @@ export function edits(
     resolve();
   };
   const field = writer(view.host);
-  const pulled = (point: Point, zoom: number): Point =>
-    pulling
-      ? {
-          x: point.x + (core.snapToGrid([point.x], zoom) ?? 0),
-          y: point.y + (core.snapToGrid([point.y], zoom) ?? 0),
-        }
-      : point;
-  const landed = (
-    editor: Editor,
-    point: Point,
-    zoom: number,
-    sticks = true,
-    around?: Point,
-  ): { at: Point; target?: string | undefined } => {
-    if (around === undefined) {
-      return (
-        (sticks && sticking ? core.stick(editor, point, STICK / zoom) : undefined) ?? {
-          at: pulled(point, zoom),
-        }
-      );
-    }
-    // Onto what it lies on, as moving it onto an outline would turn it off its angle.
-    const stuckTo = (at: Point) =>
-      sticks && sticking ? core.stick(editor, at, 0)?.target : undefined;
-    const at = angled(point, around);
-    const target = stuckTo(at);
-    if (target !== undefined || !pulling) {
-      return { at, target };
-    }
-    const pulledTo = pulledAlong(at, around, zoom);
-    return { at: pulledTo, target: stuckTo(pulledTo) };
-  };
+  const landed = (editor: Editor, point: Point, zoom: number, sticks = true, around?: Point) =>
+    core.landEnd(editor, point, {
+      around,
+      reach: sticks && sticking ? STICK / zoom : undefined,
+      pull: pulling ? zoom : undefined,
+    });
   const showTargets = (editor: Editor, ids: (string | undefined)[]) =>
     overlay.targets(ids.flatMap((id) => (id === undefined ? [] : [editor.outline(id)])));
-  const setDown = (editor: Editor, ids: string[]) =>
-    sticking ? editor.land(ids) : editor.unstick(ids);
+  /** With what it moves setting down where it lands, or coming free when freed. */
+  const setDown = (editor: Editor, ids: string[], how: Omit<core.Transform, "sticking"> = {}) =>
+    core.transform(editor, ids, { ...how, sticking: sticking ? "land" : "free" });
   /** As moving it would pull it. */
   const aligned = (kind: Kind, zoom: number): Kind => {
     if (!pulling || !("frame" in kind)) {
@@ -998,14 +961,12 @@ export function edits(
     // From where the gesture began, so that coming back there changes nothing.
     const again = (edited: () => string[]) =>
       edit(editing, [...editor.rewindGesture(), ...edited()]);
-    const onGrid = (touched: string[], snapped: boolean) =>
-      snapped ? [...touched, ...editor.settleOnGrid(ids)] : touched;
     switch (press.kind) {
       case "marquee": {
         press.dragging ||= distance(at, press.start) * zoom >= DRAG;
         const area = rect(press.start, at);
-        const touched = editor.touching(area.x, area.y, area.width, area.height);
-        selected = new Set([...press.kept, ...touched.flatMap((id) => editor.topLevel(id) ?? [])]);
+        const touched = editor.touchingTopLevel(area.x, area.y, area.width, area.height);
+        selected = new Set([...press.kept, ...touched]);
         overlay.marquee(area);
         show();
         return;
@@ -1029,11 +990,9 @@ export function edits(
               ]
             : [];
         const snapped = nx !== undefined || ny !== undefined;
-        again(() => [
-          ...onGrid(editor.translate(ids, dx + (nx ?? 0), dy + (ny ?? 0)), snapped),
-          ...setDown(editor, ids),
-        ]);
-        showTargets(editor, holders(editing, ids));
+        const by = { x: dx + (nx ?? 0), y: dy + (ny ?? 0) };
+        again(() => setDown(editor, ids, { place: { by }, settle: snapped }));
+        showTargets(editor, editor.targetsOf(ids));
         return;
       }
       case "scale": {
@@ -1052,11 +1011,9 @@ export function edits(
         const gridded =
           pulling && press.upright ? core.snapScaleToGrid(origin, corner, factor, zoom) : undefined;
         const snapped = gridded !== undefined && gridded >= SMALLEST_SCALE;
-        again(() => [
-          ...onGrid(editor.scale(ids, origin.x, origin.y, snapped ? gridded : factor), snapped),
-          ...setDown(editor, ids),
-        ]);
-        showTargets(editor, holders(editing, ids));
+        const scale = { by: snapped ? gridded : factor };
+        again(() => setDown(editor, ids, { scale, about: origin, settle: snapped }));
+        showTargets(editor, editor.targetsOf(ids));
         return;
       }
       case "stretch": {
@@ -1080,10 +1037,10 @@ export function edits(
         }
         const next = extended(from, side, by, Math.max(SMALLEST_SIDE / zoom, from.text.font_size));
         again(() => [
-          ...onGrid(editor.stretch(id, JSON.stringify(next)), snapped),
-          ...setDown(editor, ids),
+          ...editor.stretch(id, JSON.stringify(next)),
+          ...setDown(editor, ids, { settle: snapped }),
         ]);
-        showTargets(editor, holders(editing, ids));
+        showTargets(editor, editor.targetsOf(ids));
         return;
       }
       case "rotate": {
@@ -1092,8 +1049,8 @@ export function edits(
         // A lone element snaps its own angle, and several the angle they turn by.
         [press.turned, press.snapped] = turning(angle ?? 0, turned, held.shiftKey, pulling);
         const by = press.turned;
-        again(() => [...editor.rotate(ids, pivot.x, pivot.y, by), ...setDown(editor, ids)]);
-        showTargets(editor, holders(editing, ids));
+        again(() => setDown(editor, ids, { rotate: by, about: pivot }));
+        showTargets(editor, editor.targetsOf(ids));
         return;
       }
       case "draw": {
@@ -1129,7 +1086,7 @@ export function edits(
           showTargets(editor, [start.target, end.target]);
         } else {
           again(() => [...editor.add(id, entered, JSON.stringify(kind)), ...setDown(editor, [id])]);
-          showTargets(editor, holders(editing, [id]));
+          showTargets(editor, editor.targetsOf([id]));
         }
         return;
       }
@@ -1440,12 +1397,12 @@ export function edits(
       edited(editing, [...selected]);
     }
   };
-  /** Turned or straightened, with what it turns setting down where it lands. */
-  const turn = (editing: Editing, turned: () => string[]) => {
+  /** Straightened, with what it turns setting down where it lands. */
+  const straighten = (editing: Editing, ids: string[]) => {
     const touched: string[] = [];
     editing.editor.beginGesture();
     try {
-      touched.push(...turned(), ...editing.editor.land([...selected]));
+      touched.push(...editing.editor.straighten(ids), ...editing.editor.land(ids));
     } finally {
       editing.editor.endGesture();
       edit(editing, touched);
@@ -1520,8 +1477,8 @@ export function edits(
     selectAll() {
       const editing = current();
       if (editing) {
-        const { editor, board } = editing;
-        selected = new Set(board.draw_order.flatMap((id) => level(editor, id) ?? []));
+        const { board } = editing;
+        selected = new Set(board.draw_order.filter((id) => board.elements[id]!.group === entered));
         show();
       }
     },
@@ -1569,13 +1526,8 @@ export function edits(
     },
     centre() {
       const editing = current();
-      const [id] = selected;
-      const kind = selected.size === 1 ? editing?.board.elements[id!]?.kind : undefined;
-      if (kind?.type === "comment") {
-        return kind.at;
-      }
-      const corners = editing && selected.size > 0 ? box(editing.editor, [...selected]) : undefined;
-      return corners && middle(corners);
+      const area = editing && core.extent(editing.editor, [...selected]);
+      return area && { x: area.x + area.width / 2, y: area.y + area.height / 2 };
     },
     box() {
       const editing = current();
@@ -1588,11 +1540,11 @@ export function edits(
       run((editing, ids) => {
         const corners = box(editing.editor, ids);
         if (corners) {
-          const pivot = middle(corners);
-          turn(editing, () => editing.editor.rotate(ids, pivot.x, pivot.y, degrees));
+          const how = { rotate: degrees, about: middle(corners), sticking: "land" } as const;
+          edit(editing, core.transform(editing.editor, ids, how));
         }
       }),
-    straighten: () => run((editing, ids) => turn(editing, () => editing.editor.straighten(ids))),
+    straighten: () => run(straighten),
     greyscale: (on) => run((editing, ids) => edit(editing, editing.editor.setGreyscale(ids, on))),
     crop: () =>
       run((editing, ids) => {
@@ -1709,14 +1661,6 @@ export function edits(
   };
 }
 
-/** What the elements among `ids` are stuck to. */
-function holders({ board }: Editing, ids: string[]): string[] {
-  const chosen = new Set(ids);
-  return Object.entries(board.elements).flatMap(([id, { kind }]) =>
-    "target" in kind && among(board, id, chosen) ? [kind.target] : [],
-  );
-}
-
 function hovers(event: PointerEvent): boolean {
   return event.pointerType !== "touch" && pinned(event.target) === undefined;
 }
@@ -1806,43 +1750,6 @@ function turning(from: number, by: number, steps: boolean, pulled: boolean): [nu
   }
   const quarter = Math.round(to / 90) * 90;
   return pulled && Math.abs(to - quarter) <= MAGNET ? [quarter - from, true] : [by, false];
-}
-
-/** `point` turned around `around` onto the nearest multiple of 45°, as far from it. */
-function angled(point: Point, around: Point): Point {
-  const [dx, dy] = [point.x - around.x, point.y - around.y];
-  const length = Math.hypot(dx, dy);
-  if (length === 0) {
-    return point;
-  }
-  const [x, y] = DIRECTIONS[(Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) + 8) % 8]!;
-  return { x: around.x + x * length, y: around.y + y * length };
-}
-
-/**
- * `at`, at a multiple of 45° around `around`, moved along its way exactly onto the nearest line of
- * the grid that pulls, short of `around`'s own, and kept exactly at its angle.
- */
-function pulledAlong(at: Point, around: Point, zoom: number): Point {
-  const [sx, sy] = [Math.sign(at.x - around.x), Math.sign(at.y - around.y)];
-  const [nx, ny] = (
-    [
-      [at.x, around.x, sx],
-      [at.y, around.y, sy],
-    ] as const
-  ).map(([value, from, sign]) => {
-    const nudge = sign === 0 ? undefined : core.snapToGrid([value], zoom);
-    return nudge !== undefined && (value + nudge - from) * sign > 0 ? nudge : undefined;
-  });
-  if (nx !== undefined && (ny === undefined || Math.abs(nx) <= Math.abs(ny))) {
-    const x = at.x + nx;
-    return { x, y: sy === 0 ? at.y : around.y + sy * Math.abs(x - around.x) };
-  }
-  if (ny !== undefined) {
-    const y = at.y + ny;
-    return { x: sx === 0 ? at.x : around.x + sx * Math.abs(y - around.y), y };
-  }
-  return at;
 }
 
 /** Within half a turn either way, to the degree, with a minus sign. */

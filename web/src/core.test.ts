@@ -77,10 +77,11 @@ const kinds: [string, Kind][] = [
     `${style} text`,
     note({ text: { ...text, [style]: true } }),
   ]),
-  ...(["left", "centre", "right"] as const).map((align): [string, Kind] => [
+  ...(["centre", "right"] as const).map((align): [string, Kind] => [
     `text aligned ${align}`,
     note({ text: { ...text, align } }),
   ]),
+  ["a shape's text aligned left", shape({ text: { ...text, align: "left" } })],
   ...colours.flatMap((colour): [string, Kind][] => [
     [`a ${colour} note`, note({ colour })],
     [`a ${colour} shape`, shape({ colour })],
@@ -133,6 +134,9 @@ const defaults: [string, Kind, Kind][] = [
   ["a solid arrow", arrow({ dash: "solid" }), arrow()],
   ["an arrow headed at its end", arrow({ heads: "end" }), arrow()],
   ["a hollow shape", shape({ fill: "hollow" }), shape()],
+  ["a note's text aligned left", note({ text: { ...text, align: "left" } }), note()],
+  ["a shape's text centred", shape({ text: { ...text, align: "centre" } }), shape()],
+  ["a cross filled", shape({ shape: "cross", fill: "solid" }), shape({ shape: "cross" })],
   [
     "an image cropped to a rectangle",
     image({
@@ -151,6 +155,26 @@ const defaults: [string, Kind, Kind][] = [
 ];
 
 describe("the core", () => {
+  it("tells how each part of a style comes, by the type of what takes it", () => {
+    const parts = { colour: "ink", weight: "medium", dash: "solid" };
+    const written = { bold: false, italic: false, strike: false };
+    expect(core.plain(note())).toEqual({
+      colour: "ink",
+      ...written,
+      align: "left",
+    });
+    expect(core.plain(sticky())).toEqual({ paper: "yellow", ...written, align: "left" });
+    expect(core.plain(shape())).toEqual({ ...parts, fill: "hollow", ...written, align: "centre" });
+    expect(core.plain(shape({ shape: "cross" }))).toEqual({
+      ...parts,
+      ...written,
+      align: "centre",
+    });
+    expect(core.plain(arrow())).toEqual({ ...parts, heads: "end" });
+    expect(core.plain(line())).toEqual(parts);
+    expect(core.plain(image())).toEqual({});
+  });
+
   it.each(kinds)("%s reads back as the shells sent it", (_, kind) => {
     const editor = new core.Editor();
     try {

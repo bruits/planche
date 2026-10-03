@@ -76,6 +76,57 @@ pub fn snap_scale_to_grid(origin: Point, corner: Point, factor: f64, zoom: f64) 
         .min_by(|a, b| (a - factor).abs().total_cmp(&(b - factor).abs()))
 }
 
+/// `point` with each coordinate on a line of the grid that shows at `zoom`, when one is near
+/// enough.
+pub(crate) fn pulled(point: Point, zoom: f64) -> Point {
+    let onto = |value: f64| value + snap_to_grid(&[value], zoom).unwrap_or(0.0);
+    Point {
+        x: onto(point.x),
+        y: onto(point.y),
+    }
+}
+
+/// `at`, at a multiple of 45° around `around`, moved along its way exactly onto the nearest line
+/// of the grid that shows at `zoom`, short of `around`'s own lines, and kept exactly at its
+/// angle.
+pub(crate) fn pulled_along(at: Point, around: Point, zoom: f64) -> Point {
+    let (way_x, way_y) = (sign(at.x - around.x), sign(at.y - around.y));
+    let nudge = |value: f64, from: f64, way: f64| {
+        snap_to_grid(&[value], zoom)
+            .filter(|nudge| way != 0.0 && (value + nudge - from) * way > 0.0)
+    };
+    match (nudge(at.x, around.x, way_x), nudge(at.y, around.y, way_y)) {
+        (Some(x), y) if y.is_none_or(|y| x.abs() <= y.abs()) => {
+            let x = at.x + x;
+            Point {
+                x,
+                y: if way_y == 0.0 {
+                    at.y
+                } else {
+                    around.y + way_y * (x - around.x).abs()
+                },
+            }
+        }
+        (_, Some(y)) => {
+            let y = at.y + y;
+            Point {
+                x: if way_x == 0.0 {
+                    at.x
+                } else {
+                    around.x + way_x * (y - around.y).abs()
+                },
+                y,
+            }
+        }
+        _ => at,
+    }
+}
+
+/// -1, 0, or 1, where [`f64::signum`] gives 1 for 0.
+fn sign(value: f64) -> f64 {
+    if value == 0.0 { 0.0 } else { value.signum() }
+}
+
 /// How far apart the lines that pull at `zoom` are, and how far they reach, in board units.
 fn pull(zoom: f64) -> (f64, f64) {
     let GridLevel { spacing, fade } = GridLevel::at(zoom);

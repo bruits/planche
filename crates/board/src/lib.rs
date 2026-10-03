@@ -10,8 +10,12 @@ mod crop;
 mod edit;
 mod geometry;
 mod grid;
+mod media;
 mod stick;
+mod style;
 mod svg;
+#[cfg(feature = "ts")]
+mod typescript;
 mod video;
 mod z_index;
 
@@ -22,12 +26,18 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
-pub use animation::{Animation, animation, frame_delay};
+pub use animation::frame_delay;
 pub use arrange::{Order, Side};
-pub use edit::{Editor, Restack};
+pub use edit::{Editor, Flip, Placement, Restack, Scaling, Sticking, Transform};
 pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
-pub use svg::{sized_svg, svg_size};
-pub use video::{Video, video};
+pub use media::{MEDIA_START, Media, media};
+pub use stick::End;
+pub use style::{Setting, Style};
+pub use svg::sized_svg;
+pub(crate) use svg::svg_size;
+#[cfg(feature = "ts")]
+pub use typescript::typescript;
+pub(crate) use video::video;
 pub use z_index::ZIndex;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -56,6 +66,8 @@ pub enum Error {
     CannotGroup,
     #[error("elements only scale by a positive factor")]
     NotAScale,
+    #[error("the elements take no room on the board")]
+    NoRoom,
     #[error("element {0} is not an image")]
     NotAnImage(ElementId),
     #[error("a crop of image {id} must lie within its {width} by {height} pixels and show some")]
@@ -205,9 +217,32 @@ impl Board {
     }
 }
 
+/// A board as the web app holds it.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "Board"))]
+pub struct BoardView<'a> {
+    #[cfg_attr(feature = "ts", ts(type = "Record<string, Element>"))]
+    pub elements: &'a BTreeMap<ElementId, Element>,
+    /// Back to front.
+    pub draw_order: Vec<ElementId>,
+    pub background: Background,
+}
+
+impl Board {
+    pub fn view(&self) -> BoardView<'_> {
+        BoardView {
+            elements: &self.elements,
+            draw_order: self.draw_order(),
+            background: self.background,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Element {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub group: Option<ElementId>,
     pub z: ZIndex,
     pub kind: ElementKind,
@@ -215,12 +250,13 @@ pub struct Element {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum ElementKind {
     /// Draws its asset as displayed, with the asset's EXIF orientation applied, then crops
     /// it, flips it within the crop, stretches it to fill `frame`, and rotates it.
     Image {
         asset: AssetId,
-        /// In pixels, as displayed, or as [`svg_size`] reads them for an SVG.
+        /// In pixels, as displayed, or as [`media`] reads them for an SVG.
         natural_size: Size,
         frame: Rect,
         #[serde(serialize_with = "without_negative_zero")]
@@ -228,12 +264,15 @@ pub enum ElementKind {
         edits: ImageEdits,
         /// Where the image came from, such as the address of a page, as whoever set it wrote it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         source: Option<String>,
         /// The name of the file it was added from. Shells keep the name alone, as its path
         /// would say too much about the disk of whoever added it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         filename: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         caption: Option<String>,
     },
     /// Text alone.
@@ -243,6 +282,7 @@ pub enum ElementKind {
         rotation: f64,
         text: Text,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "is_default")]
         colour: Colour,
@@ -254,6 +294,7 @@ pub enum ElementKind {
         rotation: f64,
         text: Text,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "is_default")]
         paper: Paper,
@@ -266,6 +307,7 @@ pub enum ElementKind {
         shape: Shape,
         text: Text,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "is_default")]
         colour: Colour,
@@ -281,8 +323,10 @@ pub enum ElementKind {
         from: Point,
         to: Point,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         from_target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         to_target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "is_default")]
         colour: Colour,
@@ -297,8 +341,10 @@ pub enum ElementKind {
         from: Point,
         to: Point,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         from_target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         to_target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "is_default")]
         colour: Colour,
@@ -313,6 +359,7 @@ pub enum ElementKind {
         at: Point,
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         target: Option<ElementId>,
     },
     /// Draws nothing itself. Its elements are those whose `group` it is.
@@ -508,6 +555,7 @@ impl ElementKind {
 
 /// Applied when drawing. The asset's bytes never change.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ImageEdits {
     /// In the asset's pixels, as displayed.
     pub crop: Option<Rect>,
@@ -534,6 +582,7 @@ impl ImageEdits {
 /// What an image shows of its crop, the whole of it or the ellipse that fills it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum CropShape {
     #[default]
     Rectangle,
@@ -542,6 +591,7 @@ pub enum CropShape {
 
 /// Wraps to the width of what holds it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Text {
     pub content: String,
     /// In board units, which scaling what holds it scales too.
@@ -555,6 +605,7 @@ pub struct Text {
     pub strike: bool,
     /// `None` for what holds it to choose, centred in a shape and to the left elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub align: Option<Align>,
 }
 
@@ -591,6 +642,7 @@ impl Text {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Align {
     Left,
     Centre,
@@ -600,6 +652,11 @@ pub enum Align {
 /// A colour of the palette, which each theme draws its own way, or one of its own, which draws
 /// alike in every theme. Written as the palette's name, or as `#rrggbb` in lowercase.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(type = r#""ink" | "red" | "orange" | "green" | "blue" | "violet" | `#${string}`"#)
+)]
 pub enum Colour {
     /// The colour of text.
     #[default]
@@ -672,6 +729,7 @@ impl<'de> Deserialize<'de> for Colour {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Paper {
     #[default]
     Yellow,
@@ -683,6 +741,7 @@ pub enum Paper {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Weight {
     Thin,
     #[default]
@@ -705,6 +764,7 @@ impl Weight {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Dash {
     #[default]
     Solid,
@@ -714,6 +774,7 @@ pub enum Dash {
 /// Which ends of an arrow draw a head, at least one, as one without is a line.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Heads {
     /// At `to`.
     #[default]
@@ -724,6 +785,7 @@ pub enum Heads {
 /// What a rectangle or an ellipse draws within its outline, in its colour.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Fill {
     #[default]
     Hollow,
@@ -746,6 +808,7 @@ pub(crate) fn angle(degrees: f64) -> f64 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Shape {
     Rectangle,
     Ellipse,
@@ -755,6 +818,7 @@ pub enum Shape {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Background {
     #[default]
     Plain,
@@ -771,6 +835,7 @@ impl Background {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Point {
     #[serde(serialize_with = "without_negative_zero")]
     pub x: f64,
@@ -786,12 +851,14 @@ impl Point {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Size {
     pub width: u32,
     pub height: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Rect {
     #[serde(serialize_with = "without_negative_zero")]
     pub x: f64,
@@ -817,6 +884,8 @@ impl Rect {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "string"))]
 pub struct ElementId(Hex<16>);
 
 impl ElementId {
@@ -841,6 +910,8 @@ impl FromStr for ElementId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "string"))]
 pub struct AssetId(Hex<32>);
 
 impl AssetId {

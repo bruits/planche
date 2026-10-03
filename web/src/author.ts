@@ -3,8 +3,8 @@
 // in one step, as an edit made during a gesture would join it.
 
 import { fromBase64 } from "./add.js";
+import type { NewElement, NewImage, TransformArguments, Update } from "./arguments.js";
 import {
-  extent,
   holdsImage,
   imageKind,
   newId,
@@ -15,11 +15,11 @@ import {
   type Opened,
 } from "./board.js";
 import * as core from "./core.js";
-import type { CropShape, Editor, Kind, Point, Rect, Size } from "./core.js";
-import { FONT_SIZE, NOTE_WIDTH, PLACED_SIZE, STICKY_SIZE, type Restack } from "./edit.js";
+import type { Editor, Kind, Point, Rect, Restack, Size } from "./core.js";
+import { FONT_SIZE, NOTE_WIDTH, PLACED_SIZE, STICKY_SIZE } from "./edit.js";
 import { message } from "./errors.js";
 import { LONGEST_SIDE } from "./raster.js";
-import { isColour, restyled, settings, TEXT, type Style } from "./style.js";
+import { restyled, settings, TEXT, type Style } from "./style.js";
 import { fitted, holdsText, isBlank } from "./text.js";
 
 /** The page's state that agents change. */
@@ -67,13 +67,13 @@ export async function write(
   const target = page.opened()!;
   switch (tool) {
     case "add_images":
-      return addImages(page, target, clock, args.images as NewImage[]);
+      return addImages(page, target, clock, args.images as ReadImage[]);
     case "add":
-      return add(page, target, clock, args.elements as New[], args.stick !== false);
+      return add(page, target, clock, args.elements as NewElement[], args.stick !== false);
     case "update":
-      return update(page, target, clock, args.updates as Change[]);
+      return update(page, target, clock, args.updates as Update[]);
     case "transform":
-      return transform(page, target, clock, args as unknown as Transform);
+      return transform(page, target, clock, args as unknown as TransformArguments);
     case "restack": {
       await ready(page, target, clock);
       const ids = known(target, args.ids);
@@ -169,19 +169,10 @@ function positive(value: number, what: string): number {
   return value;
 }
 
-interface NewImage {
-  /** In base64, which the shell reads from a path. */
-  data: string;
-  filename?: string;
-  x?: number;
-  y?: number;
-  width?: number;
-  source?: string;
-  caption?: string;
-  group?: string;
-}
+/** As the shell passes it on, its file read. */
+type ReadImage = NewImage & { data: string };
 
-async function addImages(page: Writing, target: Opened, clock: Clock, images: NewImage[]) {
+async function addImages(page: Writing, target: Opened, clock: Clock, images: ReadImage[]) {
   const added: Added[] = [];
   let frames: Rect[];
   try {
@@ -298,10 +289,11 @@ function styled(
       throw refuse(field, holdsText(kind) && isBlank(kind) && TEXT.includes(field));
     }
     if (field === "colour") {
-      const colour = String(value).toLowerCase();
-      if (!isColour(colour)) {
+      const written = String(value).toLowerCase();
+      const colour = core.colour(written);
+      if (colour === undefined) {
         throw new Error(
-          `\`${colour}\` is not a colour, which is ink, red, orange, green, blue, violet, or #rrggbb`,
+          `\`${written}\` is not a colour, which is ink, red, orange, green, blue, violet, or #rrggbb`,
         );
       }
       style.colour = colour;
@@ -318,33 +310,13 @@ function named(kind: Kind): string {
   return kind.type === "shape" && kind.shape === "cross" ? "cross" : kind.type;
 }
 
-type New = { group?: string } & Styling &
-  (
-    | {
-        type: "note";
-        x: number;
-        y: number;
-        width?: number;
-        text: string;
-        font_size?: number;
-        rotation?: number;
-      }
-    | {
-        type: "sticky" | "shape";
-        x: number;
-        y: number;
-        width?: number;
-        height?: number;
-        text?: string;
-        font_size?: number;
-        shape?: "rectangle" | "ellipse" | "cross";
-        rotation?: number;
-      }
-    | { type: "arrow" | "line"; from: Point; to: Point }
-    | { type: "comment"; at: Point; text: string }
-  );
-
-async function add(page: Writing, target: Opened, clock: Clock, elements: New[], stick: boolean) {
+async function add(
+  page: Writing,
+  target: Opened,
+  clock: Clock,
+  elements: NewElement[],
+  stick: boolean,
+) {
   await ready(page, target, clock);
   // The size a click places, which reads as well as the board around it in the view.
   const zoom = page.zoom() ?? 1;
@@ -354,24 +326,21 @@ async function add(page: Writing, target: Opened, clock: Clock, elements: New[],
       const id = ids[at]!;
       touched.push(
         ...editor.add(id, element.group, JSON.stringify(kindOf(editor, element, zoom, stick))),
+        ...core.transform(editor, [id], {
+          rotate: "rotation" in element ? element.rotation : undefined,
+          sticking: stick ? "land" : "free",
+        }),
       );
-      if ("rotation" in element && element.rotation) {
-        const { x, y, width, height } = core.bounds(editor, [id])!;
-        touched.push(...editor.rotate([id], x + width / 2, y + height / 2, element.rotation));
-      }
-      if (element.type !== "arrow" && element.type !== "line") {
-        touched.push(...(stick ? editor.land([id]) : editor.unstick([id])));
-      }
     }),
   );
-  const bounds = (id: string) => core.bounds(target.editor, [id]) ?? null;
+  const bounds = (id: string) => core.extent(target.editor, [id]) ?? null;
   return {
     touched: changed,
     added: ids.map((id, at) => ({ id, type: elements[at]!.type, bounds: bounds(id) })),
   };
 }
 
-function kindOf(editor: Editor, element: New, zoom: number, stick: boolean): Kind {
+function kindOf(editor: Editor, element: NewElement, zoom: number, stick: boolean): Kind {
   switch (element.type) {
     case "note":
     case "sticky":
@@ -417,8 +386,7 @@ function kindOf(editor: Editor, element: New, zoom: number, stick: boolean): Kin
       if (element.from.x === element.to.x && element.from.y === element.to.y) {
         throw new Error(`An ${element.type === "arrow" ? "arrow" : "line"} needs two ends apart`);
       }
-      const end = (point: Point): { at: Point; target?: string } =>
-        (stick ? core.stick(editor, point, 0) : undefined) ?? { at: point };
+      const end = (point: Point) => core.landEnd(editor, point, { reach: stick ? 0 : undefined });
       const [from, to] = [end(element.from), end(element.to)];
       const kind: Kind = {
         type: element.type,
@@ -437,20 +405,7 @@ function kindOf(editor: Editor, element: New, zoom: number, stick: boolean): Kin
   }
 }
 
-interface Change extends Styling {
-  id: string;
-  text?: string;
-  font_size?: number;
-  shape?: "rectangle" | "ellipse" | "cross";
-  caption?: string;
-  source?: string;
-  greyscale?: boolean;
-  /** In the image's pixels, all of them for none. */
-  crop?: Rect;
-  crop_shape?: CropShape;
-}
-
-async function update(page: Writing, target: Opened, clock: Clock, changes: Change[]) {
+async function update(page: Writing, target: Opened, clock: Clock, changes: Update[]) {
   await ready(page, target, clock);
   known(
     target,
@@ -469,7 +424,7 @@ async function update(page: Writing, target: Opened, clock: Clock, changes: Chan
 }
 
 /** From the core, as earlier changes of the call left it, but for the crop, which the core makes. */
-function patched(editor: Editor, change: Change): Kind {
+function patched(editor: Editor, change: Update): Kind {
   const { id, text, font_size, shape, caption, source, greyscale, crop, crop_shape } = change;
   const kind = core.element(editor, id)!.kind;
   const refuse = (field: string, blank = false) =>
@@ -533,19 +488,7 @@ function patched(editor: Editor, change: Change): Kind {
   return holdsText(dressed) ? fitted(dressed) : dressed;
 }
 
-interface Transform {
-  ids: string[];
-  flip?: "horizontal" | "vertical";
-  scale?: number;
-  width?: number;
-  about?: Point;
-  rotate?: number;
-  translate?: Point;
-  move_to?: Point;
-  stick?: boolean;
-}
-
-async function transform(page: Writing, target: Opened, clock: Clock, given: Transform) {
+async function transform(page: Writing, target: Opened, clock: Clock, given: TransformArguments) {
   if (given.scale !== undefined && given.width !== undefined) {
     throw new Error("Give scale or width, not both");
   }
@@ -554,40 +497,30 @@ async function transform(page: Writing, target: Opened, clock: Clock, given: Tra
   }
   await ready(page, target, clock);
   const ids = known(target, given.ids);
-  const bounds = extent(target, ids);
-  if (bounds === undefined) {
-    throw new Error("These elements take no room on the board");
-  }
   if (given.flip !== undefined && !holdsImage(target.board, ids)) {
     throw new Error("Only images flip, and these hold none");
   }
-  const about = given.about ?? { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-  const changed = page.apply((editor, touched) => {
-    if (given.flip !== undefined) {
-      touched.push(...editor.flip(ids, given.flip === "horizontal"));
-    }
-    const factor =
-      given.width === undefined ? given.scale : positive(given.width, "width") / bounds.width;
-    if (factor !== undefined) {
-      touched.push(...editor.scale(ids, about.x, about.y, positive(factor, "scale")));
-    }
-    if (given.rotate) {
-      touched.push(...editor.rotate(ids, about.x, about.y, given.rotate));
-    }
-    const moved = given.translate ?? (given.move_to && offset(target, editor, ids, given.move_to));
-    if (moved !== undefined) {
-      touched.push(...editor.translate(ids, moved.x, moved.y));
-    }
-    // As the user's moves set down what they move, and a flip sets nothing down.
-    if (factor !== undefined || given.rotate || moved !== undefined || given.stick !== undefined) {
-      touched.push(...(given.stick === false ? editor.unstick(ids) : editor.land(ids)));
-    }
-  });
+  const scale =
+    given.width === undefined
+      ? given.scale === undefined
+        ? undefined
+        : { by: positive(given.scale, "scale") }
+      : { to_width: positive(given.width, "width") };
+  const place =
+    given.translate === undefined
+      ? given.move_to && { to: given.move_to }
+      : { by: given.translate };
+  const changed = page.apply((editor, touched) =>
+    touched.push(
+      ...core.transform(editor, ids, {
+        flip: given.flip,
+        scale,
+        rotate: given.rotate,
+        about: given.about,
+        place,
+        sticking: given.stick === undefined ? undefined : given.stick ? "land" : "free",
+      }),
+    ),
+  );
   return { touched: changed };
-}
-
-/** From where the elements are now, as earlier steps of the call moved them. */
-function offset(target: Opened, editor: Editor, ids: string[], to: Point): Point {
-  const now = extent({ ...target, board: core.board(editor) }, ids)!;
-  return { x: to.x - now.x, y: to.y - now.y };
 }

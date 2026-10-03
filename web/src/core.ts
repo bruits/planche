@@ -9,8 +9,9 @@ import init, {
   Snapshot,
   ZipIndex,
   ZipWriter,
-  animationPlays as plays,
   assetPath,
+  checkedColour,
+  checkedStyle,
   fileDepth,
   frameDelay,
   gridLevel as level,
@@ -18,15 +19,44 @@ import init, {
   isBoardFile,
   isStrayElement,
   locateZipDirectory,
+  media as told,
+  mediaStart,
   newBoardFiles,
   snapScaleToGrid as snapScale,
   snapToGrid as snap,
   sizedSvg as sized,
   strokeWidth as width,
-  svgSize as vectorSize,
+  plainStyle,
+  styleSettings,
   verifyAsset as verify,
-  videoType as containerType,
+  withStyle as styled,
   zipTailLength,
+} from "./wasm/bindings.js";
+import type {
+  Align,
+  Background,
+  Board,
+  Colour,
+  CropShape,
+  Dash,
+  Element,
+  ElementKind as Kind,
+  End,
+  Fill,
+  Heads,
+  Media,
+  Order,
+  Paper,
+  Point,
+  Rect,
+  Restack,
+  Setting,
+  Side,
+  Size,
+  Style,
+  Text,
+  Transform,
+  Weight,
 } from "./wasm/bindings.js";
 
 export {
@@ -50,116 +80,32 @@ export type Bytes = Uint8Array<ArrayBuffer>;
 /** Board files by path, with `/` between segments on every platform. */
 export type Files = Map<string, Bytes>;
 
-export interface Rect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface Point {
-  x: number;
-  y: number;
-}
-
-export interface Size {
-  width: number;
-  height: number;
-}
-
-export interface Text {
-  content: string;
-  /** In board units. */
-  font_size: number;
-  bold?: boolean;
-  italic?: boolean;
-  strike?: boolean;
-  /** Left out for what holds it to choose. */
-  align?: Align;
-}
-
-/** Mirrors `board::Colour`, whose own colours are `#rrggbb` in lowercase. */
-export type Colour = "ink" | "red" | "orange" | "green" | "blue" | "violet" | `#${string}`;
-export type Paper = "yellow" | "pink" | "blue" | "green" | "lilac";
-export type Weight = "thin" | "medium" | "thick";
-export type Dash = "solid" | "dashed";
-export type Heads = "end" | "both";
-export type Fill = "hollow" | "tint" | "solid";
-export type Align = "left" | "centre" | "right";
-/** Mirrors `board::CropShape`. */
-export type CropShape = "rectangle" | "ellipse";
-
-/** Mirrors `board::ElementKind`, as far as the shells read it. */
-export type Kind =
-  | {
-      type: "image";
-      asset: string;
-      natural_size: Size;
-      frame: Rect;
-      rotation: number;
-      edits: {
-        crop: Rect | null;
-        flip_horizontal: boolean;
-        flip_vertical: boolean;
-        greyscale: boolean;
-        crop_shape?: CropShape;
-      };
-      source?: string;
-      filename?: string;
-      caption?: string;
-    }
-  | { type: "note"; frame: Rect; rotation: number; text: Text; target?: string; colour?: Colour }
-  | { type: "sticky"; frame: Rect; rotation: number; text: Text; target?: string; paper?: Paper }
-  | {
-      type: "shape";
-      frame: Rect;
-      rotation: number;
-      shape: "rectangle" | "ellipse" | "cross";
-      text: Text;
-      target?: string;
-      colour?: Colour;
-      weight?: Weight;
-      dash?: Dash;
-      fill?: Fill;
-    }
-  | {
-      type: "arrow";
-      from: Point;
-      to: Point;
-      from_target?: string;
-      to_target?: string;
-      colour?: Colour;
-      weight?: Weight;
-      dash?: Dash;
-      heads?: Heads;
-    }
-  | {
-      type: "line";
-      from: Point;
-      to: Point;
-      from_target?: string;
-      to_target?: string;
-      colour?: Colour;
-      weight?: Weight;
-      dash?: Dash;
-    }
-  | { type: "comment"; at: Point; text: string; target?: string }
-  | { type: "group" };
-
-export interface Element {
-  group?: string;
-  z: string;
-  kind: Kind;
-}
-
-export type Background = "plain" | "grid" | "dots";
-
-export interface Board {
-  elements: Record<string, Element>;
-  /** Back to front. */
-  draw_order: string[];
-  background: Background;
-}
+export type {
+  Align,
+  Background,
+  Board,
+  Colour,
+  CropShape,
+  Dash,
+  Element,
+  Kind,
+  End,
+  Fill,
+  Heads,
+  Media,
+  Order,
+  Paper,
+  Point,
+  Rect,
+  Restack,
+  Setting,
+  Side,
+  Size,
+  Style,
+  Text,
+  Transform,
+  Weight,
+};
 
 /** The grid's lines that show at a zoom, in board units apart. */
 export interface GridLevel {
@@ -184,8 +130,6 @@ export function coreMemory(): number {
 
 /** The most bytes the core takes in one call to name or checksum a file, so that its memory does not grow with it. */
 const SLICE = 8 * 2 ** 20;
-/** What of a file tells whether it is a video. */
-export const VIDEO_START = 1024;
 
 function feed(sink: { update(slice: Bytes): void }, bytes: Bytes): void {
   for (let at = 0; at < bytes.length; at += SLICE) {
@@ -236,10 +180,10 @@ export function setCropShape(editor: Editor, ids: string[], shape: CropShape): s
   return editor.setCropShape(ids, JSON.stringify(shape));
 }
 
-const widths = new Map<Weight, number>();
+const widths = new Map<Weight | undefined, number>();
 
-/** How wide a stroke of `weight` draws, in board units, as the core hits it. */
-export function strokeWidth(weight: Weight = "medium"): number {
+/** How wide a stroke of `weight`, or of one as it comes, draws, in board units, as the core hits it. */
+export function strokeWidth(weight?: Weight): number {
   let found = widths.get(weight);
   if (found === undefined) {
     found = width(weight);
@@ -254,22 +198,17 @@ export function gridLevel(zoom: number): GridLevel {
   return { spacing: spacing!, fade: fade!, coarse: coarse! };
 }
 
-/** An SVG's natural size, in CSS pixels, `undefined` when the bytes do not start as one. */
-export function svgSize(bytes: Bytes): Size | undefined {
-  const size = vectorSize(bytes);
-  return size && { width: size[0]!, height: size[1]! };
+/**
+ * What a file holds, from `bytes`, its start, or all of it when `whole`, `undefined` when its start
+ * does not tell, as for a GIF, whose frames take the whole file.
+ */
+export function media(bytes: Bytes, whole: boolean): Media | undefined {
+  const json = told(bytes, whole);
+  return json === undefined ? undefined : (JSON.parse(json) as Media);
 }
 
-/** How many times an animated image plays through, `undefined` when the bytes do not move. */
-export function animationPlays(bytes: Bytes): number | undefined {
-  const times = plays(bytes);
-  return times === 0 ? Infinity : times;
-}
-
-/** The type of the blob a video plays from, `undefined` when the bytes do not start as one. */
-export function videoType(bytes: Bytes): string | undefined {
-  return containerType(bytes.subarray(0, VIDEO_START));
-}
+/** How much of a file's start tells what most files hold. */
+export { mediaStart };
 
 /** The SVG with its root sized to `natural`, for every host to draw it at that size. */
 export function sizedSvg(bytes: Bytes, natural: Size): Bytes | undefined {
@@ -297,24 +236,39 @@ export function snapScaleToGrid(
   return snapScale(origin.x, origin.y, corner.x, corner.y, factor, zoom);
 }
 
-export interface Stuck {
-  target: string;
-  at: Point;
+/** What the elements draw over, their groups' elements included, `undefined` when nothing. */
+export function bounds(editor: Editor, ids: string[]): Rect | undefined {
+  return rect(editor.bounds(ids));
+}
+
+/** As `bounds`, with the points where the comments among them are pinned. */
+export function extent(editor: Editor, ids: string[]): Rect | undefined {
+  return rect(editor.extent(ids));
+}
+
+function rect(box: Float64Array | undefined): Rect | undefined {
+  return box && { x: box[0]!, y: box[1]!, width: box[2]!, height: box[3]! };
+}
+
+/** Each optional field of `T`, which JSON leaves out when `undefined`. */
+type Loose<T> = { [K in keyof T]?: T[K] | undefined };
+
+/** Throws the core's error, which leaves the board as it was, when any part of it is refused. */
+export function transform(editor: Editor, ids: string[], how: Loose<Transform>): string[] {
+  return editor.transform(ids, JSON.stringify(how));
 }
 
 /**
- * Where an end let go at `at` sticks, onto the outline of what it sticks to when within
- * `tolerance` of it, `undefined` when nothing there takes ends.
+ * Where an end let go at `at` lands. Within `reach` of what it sticks to when it sticks, pulled by
+ * the grid that shows at the zoom `pull` when it pulls, and at a multiple of 45° `around` the
+ * other end when locked to it.
  */
-export function stick(editor: Editor, at: Point, tolerance: number): Stuck | undefined {
-  const json = editor.stick(at.x, at.y, tolerance);
-  return json === undefined ? undefined : (JSON.parse(json) as Stuck);
-}
-
-/** What the elements draw over, their groups' elements included, `undefined` when nothing. */
-export function bounds(editor: Editor, ids: string[]): Rect | undefined {
-  const box = editor.bounds(ids);
-  return box && { x: box[0]!, y: box[1]!, width: box[2]!, height: box[3]! };
+export function landEnd(
+  editor: Editor,
+  at: Point,
+  { around, reach, pull }: Loose<{ around: Point; reach: number; pull: number }>,
+): End {
+  return JSON.parse(editor.landEnd(at.x, at.y, around?.x, around?.y, reach, pull)) as End;
 }
 
 /** The pixel of the image `id` at `at`, as displayed, `undefined` when it is no image. */
@@ -329,18 +283,64 @@ export function pointOfPixel(editor: Editor, id: string, pixel: Point): Point | 
   return at && { x: at[0]!, y: at[1]! };
 }
 
-/** Mirrors `board::Order`. */
-export type Order =
-  | { by: "name" | "size" }
-  | { by: "hue"; colours: Record<string, [number, number, number]> }
-  | { by: "random"; seed: number };
-
 export function arrange(editor: Editor, ids: string[], order: Order): string[] {
   return editor.arrange(ids, JSON.stringify(order));
 }
 
-/** Mirrors `board::Side`. */
-export type Side = "height" | "width";
+/** What alone tells the parts of a style a kind takes, and how each comes. */
+function typeOf(kind: Kind): string {
+  return kind.type === "shape" ? kind.shape : kind.type;
+}
+
+const taken = new Map<string, readonly Setting[]>();
+
+/** The parts of a style `kind` takes. */
+export function settings(kind: Kind): readonly Setting[] {
+  let found = taken.get(typeOf(kind));
+  if (found === undefined) {
+    found = JSON.parse(styleSettings(JSON.stringify(kind))) as Setting[];
+    taken.set(typeOf(kind), found);
+  }
+  return found;
+}
+
+const plains = new Map<string, Readonly<Style>>();
+
+/**
+ * Each part of a style `kind` takes as it comes, which a part it leaves out draws as, and none of
+ * those it does not take.
+ */
+export function plain(kind: Kind): Readonly<Style> {
+  let found = plains.get(typeOf(kind));
+  if (found === undefined) {
+    found = JSON.parse(plainStyle(JSON.stringify(kind))) as Style;
+    plains.set(typeOf(kind), found);
+  }
+  return found;
+}
+
+/** `kind` with each part of `style` it takes, as it writes, so that a part as it comes writes nothing. */
+export function withStyle<K extends Kind>(kind: K, style: Style): K {
+  return JSON.parse(styled(JSON.stringify(kind), JSON.stringify(style))) as K;
+}
+
+/** `style` when it holds nothing but parts of a style, as the core spells them. */
+export function checked(style: unknown): Style | undefined {
+  try {
+    return JSON.parse(checkedStyle(JSON.stringify(style))) as Style;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `colour` when it is one, as the core spells it. */
+export function colour(text: unknown): Colour | undefined {
+  try {
+    return typeof text === "string" ? (checkedColour(text) as Colour) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Every file but the assets. */
 export function write(snapshot: Snapshot): Files {

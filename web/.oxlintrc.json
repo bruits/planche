@@ -1,5 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // Written by a test of crates/mcp.
+  "ignorePatterns": ["src/arguments.ts"],
   "plugins": ["typescript", "unicorn", "oxc", "import", "promise", "vitest"],
   "categories": {
     "correctness": "error",

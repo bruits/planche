@@ -4,6 +4,7 @@
 // same power reuses it.
 
 import type { Camera, Viewport } from "./camera.js";
+import * as core from "./core.js";
 import type { Align, Board, Kind, Point, Rect, Size } from "./core.js";
 import type { Paint } from "./paint.js";
 import { LONGEST_SIDE, overlaps, rounded, settling } from "./raster.js";
@@ -78,17 +79,19 @@ export function alignment(kind: Holder): Align {
 }
 
 export function defaultAlignment(kind: Holder): Align {
-  return kind.type === "shape" ? "centre" : "left";
+  // Whatever holds text aligns it some way.
+  return core.plain(kind).align!;
 }
 
 export function paint(kind: Holder): Paint {
   if (kind.type === "sticky") {
     return "sticky-ink";
   }
-  const colour = kind.colour ?? "ink";
-  return kind.type === "shape" && kind.shape !== "cross" && kind.fill === "solid"
-    ? { on: colour }
-    : colour;
+  const plain = core.plain(kind);
+  const colour = kind.colour ?? plain.colour!;
+  // A cross takes no fill, though one written before crosses took none may hold one.
+  const filled = kind.type === "shape" && kind.shape !== "cross" && (kind.fill ?? plain.fill);
+  return filled === "solid" ? { on: colour } : colour;
 }
 
 export function layout(kind: Holder): Layout {

@@ -3,30 +3,18 @@
 //! shells do the I/O. Bytes named as an asset or checksummed for a ZIP file cross in slices, as
 //! the core's memory never shrinks.
 
-use std::collections::BTreeMap;
 use std::ops::Range;
 
 use board::{
-    Animation, AssetId, Background, Board, Element, ElementId, ElementKind, GRID_STEP, GridLevel,
-    Order, Point, Rect, Restack, Side, Size, Weight,
+    AssetId, Board, Colour, ElementId, ElementKind, GRID_STEP, GridLevel, Order, Point, Rect,
+    Restack, Side, Size, Style, Transform, Weight,
 };
 use format::{save, zip};
 use js_sys::{Map, Uint8Array};
-use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-#[derive(Serialize)]
-struct BoardJson<'a> {
-    elements: &'a BTreeMap<ElementId, Element>,
-    draw_order: Vec<ElementId>,
-    background: Background,
-}
-
-#[derive(Serialize)]
-struct Stuck {
-    target: ElementId,
-    at: Point,
-}
+#[wasm_bindgen(typescript_custom_section)]
+const TYPES: &str = include_str!(concat!(env!("OUT_DIR"), "/types.d.ts"));
 
 /// A board being edited, and the history of its edits. Every edit, undo, and redo returns the
 /// ids of the elements it touched, which leaves out the background.
@@ -41,6 +29,16 @@ impl Editor {
         Self::default()
     }
 
+    /// Refuses a board missing an asset its images show, as `listed`, the paths of its folder,
+    /// has them.
+    #[wasm_bindgen(js_name = checkAssets)]
+    pub fn check_assets(&self, listed: Vec<String>) -> Result<(), JsError> {
+        Ok(format::check_assets(
+            self.0.board(),
+            listed.iter().map(String::as_str),
+        )?)
+    }
+
     /// Reads a board from its files, all but the assets.
     pub fn read(paths: Vec<String>, contents: Vec<Uint8Array>) -> Result<Editor, JsError> {
         let files = paths
@@ -53,13 +51,7 @@ impl Editor {
 
     /// The board's elements by id, its draw order, and its background.
     pub fn json(&self) -> Result<String, JsError> {
-        let board = self.0.board();
-        let json = BoardJson {
-            elements: &board.elements,
-            draw_order: board.draw_order(),
-            background: board.background,
-        };
-        Ok(serde_json::to_string(&json)?)
+        Ok(serde_json::to_string(&self.0.board().view())?)
     }
 
     /// As JSON, as in [`Editor::json`].
@@ -92,6 +84,13 @@ impl Editor {
         dy: f64,
     ) -> Result<Vec<String>, JsError> {
         Ok(strings(self.0.translate(&parse(ids)?, dx, dy)?))
+    }
+
+    /// `transform` as JSON. Sets down what it moves, and is refused as a whole when any part of it
+    /// is.
+    pub fn transform(&mut self, ids: Vec<String>, transform: &str) -> Result<Vec<String>, JsError> {
+        let transform: Transform = serde_json::from_str(transform)?;
+        Ok(strings(self.0.transform(&parse(ids)?, &transform)?))
     }
 
     pub fn remove(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
@@ -131,46 +130,8 @@ impl Editor {
         Ok(strings(self.0.stretch(id.parse()?, kind)?))
     }
 
-    pub fn scale(
-        &mut self,
-        ids: Vec<String>,
-        x: f64,
-        y: f64,
-        factor: f64,
-    ) -> Result<Vec<String>, JsError> {
-        Ok(strings(self.0.scale(
-            &parse(ids)?,
-            Point { x, y },
-            factor,
-        )?))
-    }
-
-    pub fn rotate(
-        &mut self,
-        ids: Vec<String>,
-        x: f64,
-        y: f64,
-        degrees: f64,
-    ) -> Result<Vec<String>, JsError> {
-        Ok(strings(self.0.rotate(
-            &parse(ids)?,
-            Point { x, y },
-            degrees,
-        )?))
-    }
-
-    /// Once moved or scaled onto the grid, so that what is on it writes as it reads.
-    #[wasm_bindgen(js_name = settleOnGrid)]
-    pub fn settle_on_grid(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
-        Ok(strings(self.0.settle_on_grid(&parse(ids)?)?))
-    }
-
     pub fn land(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
         Ok(strings(self.0.land(&parse(ids)?)?))
-    }
-
-    pub fn unstick(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
-        Ok(strings(self.0.unstick(&parse(ids)?)?))
     }
 
     pub fn flip(&mut self, ids: Vec<String>, horizontally: bool) -> Result<Vec<String>, JsError> {
@@ -178,14 +139,8 @@ impl Editor {
     }
 
     /// `to` is `forward`, `backward`, `front`, or `back`.
-    pub fn restack(&mut self, ids: Vec<String>, to: &str) -> Result<Vec<String>, JsError> {
-        let to = match to {
-            "forward" => Restack::Forward,
-            "backward" => Restack::Backward,
-            "front" => Restack::Front,
-            "back" => Restack::Back,
-            _ => return Err(JsError::new(&format!("`{to}` is not a way to restack"))),
-        };
+    pub fn restack(&mut self, ids: Vec<String>, to: String) -> Result<Vec<String>, JsError> {
+        let to: Restack = serde_json::from_value(to.into())?;
         Ok(strings(self.0.restack(&parse(ids)?, to)?))
     }
 
@@ -196,12 +151,8 @@ impl Editor {
     }
 
     /// `side` is `height` or `width`.
-    pub fn normalize(&mut self, ids: Vec<String>, side: &str) -> Result<Vec<String>, JsError> {
-        let side = match side {
-            "height" => Side::Height,
-            "width" => Side::Width,
-            _ => return Err(JsError::new(&format!("`{side}` is not a side"))),
-        };
+    pub fn normalize(&mut self, ids: Vec<String>, side: String) -> Result<Vec<String>, JsError> {
+        let side: Side = serde_json::from_value(side.into())?;
         Ok(strings(self.0.normalize(&parse(ids)?, side)?))
     }
 
@@ -337,16 +288,27 @@ impl Editor {
         strings(self.0.board().covering(Point { x, y }))
     }
 
-    /// Where an arrow's or a line's end let go at a point sticks, as JSON: the element it
-    /// sticks to, and where, onto its outline when within `tolerance` of it. `undefined` when
-    /// nothing there takes ends.
-    pub fn stick(&self, x: f64, y: f64, tolerance: f64) -> Result<Option<String>, JsError> {
-        let stuck = self.0.board().stick(Point { x, y }, tolerance);
-        let json = stuck.map(|(target, at)| serde_json::to_string(&Stuck { target, at }));
-        Ok(json.transpose()?)
+    /// Where an arrow's or a line's end let go at a point lands, and what it sticks to there, as
+    /// JSON. Within `reach` of what it sticks to, when it sticks, or pulled by the grid that shows
+    /// at the zoom `pull`, when it pulls, or locked at a multiple of 45° around the other end, when
+    /// given.
+    #[wasm_bindgen(js_name = landEnd)]
+    pub fn land_end(
+        &self,
+        x: f64,
+        y: f64,
+        around_x: Option<f64>,
+        around_y: Option<f64>,
+        reach: Option<f64>,
+        pull: Option<f64>,
+    ) -> Result<String, JsError> {
+        let around = around_x.zip(around_y).map(|(x, y)| Point { x, y });
+        let end = self.0.board().land_end(Point { x, y }, around, reach, pull);
+        Ok(serde_json::to_string(&end)?)
     }
 
-    /// Every element that draws something within the rectangle, from back to front.
+    /// Every element that draws something within the rectangle, and every comment pinned in
+    /// it, from back to front.
     pub fn touching(&self, x: f64, y: f64, width: f64, height: f64) -> Vec<String> {
         let area = Rect {
             x,
@@ -355,6 +317,24 @@ impl Editor {
             height,
         };
         strings(self.0.board().touching(area))
+    }
+
+    /// The top-level elements and outermost groups of what `touching` finds, once each.
+    #[wasm_bindgen(js_name = touchingTopLevel)]
+    pub fn touching_top_level(&self, x: f64, y: f64, width: f64, height: f64) -> Vec<String> {
+        let area = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        strings(self.0.board().touching_top_level(area))
+    }
+
+    /// What the elements, with those of the groups among them, stick to whole, once each.
+    #[wasm_bindgen(js_name = targetsOf)]
+    pub fn targets_of(&self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.board().targets_of(&parse(ids)?)))
     }
 
     /// The element itself when at the top level, otherwise its outermost group.
@@ -384,8 +364,12 @@ impl Editor {
     /// The x, y, width, and height of what the elements draw, their groups' elements included,
     /// `undefined` when they draw nothing.
     pub fn bounds(&self, ids: Vec<String>) -> Result<Option<Vec<f64>>, JsError> {
-        let bounds = self.0.board().bounds(&parse(ids)?);
-        Ok(bounds.map(|bounds| vec![bounds.x, bounds.y, bounds.width, bounds.height]))
+        Ok(self.0.board().bounds(&parse(ids)?).map(rect))
+    }
+
+    /// As `bounds`, with the points where the comments among them are pinned.
+    pub fn extent(&self, ids: Vec<String>) -> Result<Option<Vec<f64>>, JsError> {
+        Ok(self.0.board().extent(&parse(ids)?).map(rect))
     }
 
     /// The x and y of the image's pixel at a point, as displayed, `undefined` for no image.
@@ -523,6 +507,43 @@ pub fn stroke_width(weight: Option<String>) -> Result<f64, JsError> {
     Ok(weight.width())
 }
 
+/// The parts of a style that `kind`, as JSON, takes, as a JSON array.
+#[wasm_bindgen(js_name = styleSettings)]
+pub fn style_settings(kind: &str) -> Result<String, JsError> {
+    let kind: ElementKind = serde_json::from_str(kind)?;
+    Ok(serde_json::to_string(kind.settings())?)
+}
+
+/// Each part of a style that `kind`, as JSON, takes as it comes, which its type, and a shape's,
+/// alone tell, as JSON.
+#[wasm_bindgen(js_name = plainStyle)]
+pub fn plain_style(kind: &str) -> Result<String, JsError> {
+    let kind: ElementKind = serde_json::from_str(kind)?;
+    Ok(serde_json::to_string(&kind.plain_style())?)
+}
+
+/// `kind` with each part of `style` that it takes, both as JSON, as it writes.
+#[wasm_bindgen(js_name = withStyle)]
+pub fn with_style(kind: &str, style: &str) -> Result<String, JsError> {
+    let kind: ElementKind = serde_json::from_str(kind)?;
+    let style: Style = serde_json::from_str(style)?;
+    Ok(serde_json::to_string(&kind.with_style(&style))?)
+}
+
+/// `style` as JSON, with nothing but parts of a style, each as the core spells it, refused
+/// otherwise.
+#[wasm_bindgen(js_name = checkedStyle)]
+pub fn checked_style(style: &str) -> Result<String, JsError> {
+    let style: Style = serde_json::from_str(style)?;
+    Ok(serde_json::to_string(&style)?)
+}
+
+/// `colour` as the core spells it, refused when it is no colour.
+#[wasm_bindgen(js_name = checkedColour)]
+pub fn checked_colour(colour: &str) -> Result<String, JsError> {
+    Ok(colour.parse::<Colour>()?.to_string())
+}
+
 /// The grid's finest lines that show at `zoom`, CSS pixels per board unit. How far apart they
 /// are in board units, how much they show from 0 to 1, and how far apart are those that show in
 /// full.
@@ -628,11 +649,18 @@ impl Crc32 {
     }
 }
 
-/// An SVG's natural size in CSS pixels, width then height, `undefined` when `bytes` are not
-/// an SVG document.
-#[wasm_bindgen(js_name = svgSize)]
-pub fn svg_size(bytes: &[u8]) -> Option<Vec<u32>> {
-    board::svg_size(bytes).map(|size| vec![size.width, size.height])
+/// What a file holds, as JSON, from `bytes`, its start, or all of it when `whole`. `undefined`
+/// when its start does not tell, which then takes the whole file.
+#[wasm_bindgen]
+pub fn media(bytes: &[u8], whole: bool) -> Result<Option<String>, JsError> {
+    let media = board::media(bytes, whole);
+    Ok(media.as_ref().map(serde_json::to_string).transpose()?)
+}
+
+/// How much of a file's start `media` takes to tell what most files hold.
+#[wasm_bindgen(js_name = mediaStart)]
+pub fn media_start() -> usize {
+    board::MEDIA_START
 }
 
 /// The SVG with its root sized to `width` by `height`, for every host to draw it at that size,
@@ -642,26 +670,10 @@ pub fn sized_svg(bytes: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
     board::sized_svg(bytes, Size { width, height })
 }
 
-/// How many times an animated image plays through, 0 for ever, `undefined` when `bytes` do not
-/// move.
-#[wasm_bindgen(js_name = animationPlays)]
-pub fn animation_plays(bytes: &[u8]) -> Option<u32> {
-    board::animation(bytes).map(|animation| match animation {
-        Animation::Forever => 0,
-        Animation::Plays(times) => times.get(),
-    })
-}
-
 /// How long a frame that asks for `milliseconds` shows.
 #[wasm_bindgen(js_name = frameDelay)]
 pub fn frame_delay(milliseconds: f64) -> f64 {
     board::frame_delay(milliseconds)
-}
-
-/// The type of the blob a video plays from, `undefined` when `bytes` do not start as one.
-#[wasm_bindgen(js_name = videoType)]
-pub fn video_type(bytes: &[u8]) -> Option<String> {
-    board::video(bytes).map(|video| video.mime().to_owned())
 }
 
 /// Writes a board's ZIP file one entry at a time.
@@ -750,8 +762,8 @@ fn parse(ids: Vec<String>) -> Result<Vec<ElementId>, JsError> {
         .collect::<Result<_, board::Error>>()?)
 }
 
-fn strings(ids: Vec<ElementId>) -> Vec<String> {
-    ids.iter().map(ElementId::to_string).collect()
+fn strings(ids: impl IntoIterator<Item = ElementId>) -> Vec<String> {
+    ids.into_iter().map(|id| id.to_string()).collect()
 }
 
 /// JavaScript's `Number.MAX_SAFE_INTEGER`.
@@ -767,6 +779,10 @@ fn offset(value: f64) -> Result<u64, JsError> {
 
 fn span(range: Range<u64>) -> Vec<f64> {
     vec![range.start as f64, range.end as f64]
+}
+
+fn rect(rect: Rect) -> Vec<f64> {
+    vec![rect.x, rect.y, rect.width, rect.height]
 }
 
 fn to_map(files: impl IntoIterator<Item = (String, Vec<u8>)>) -> Map {

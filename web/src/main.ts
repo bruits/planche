@@ -2,7 +2,7 @@
 // to it and edit it, which it saves as it goes, and save it elsewhere or export it.
 
 import * as core from "./core.js";
-import type { Background, CropShape, Kind, Order, Point, Rect, Size } from "./core.js";
+import type { Background, CropShape, Kind, Order, Point, Rect, Restack, Size } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
 import { animations } from "./animation.js";
@@ -39,7 +39,7 @@ import {
   type Command,
   type Shortcut,
 } from "./commands.js";
-import { edits, type Draw, type Restack } from "./edit.js";
+import { edits, type Draw } from "./edit.js";
 import { message } from "./errors.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";

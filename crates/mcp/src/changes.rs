@@ -27,6 +27,7 @@ const MOST_LABEL: usize = 2_000;
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct Point {
     pub x: f64,
     pub y: f64,
@@ -36,6 +37,7 @@ pub struct Point {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct Pixels {
     pub x: f64,
     pub y: f64,
@@ -45,6 +47,7 @@ pub struct Pixels {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct Ids {
     #[schemars(length(min = 1, max = MOST_IDS))]
     pub ids: Vec<String>,
@@ -52,6 +55,7 @@ pub struct Ids {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct AddImagesArguments {
     #[schemars(length(min = 1, max = MOST_IMAGES))]
     pub images: Vec<NewImage>,
@@ -60,6 +64,7 @@ pub struct AddImagesArguments {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct NewImage {
     /// An absolute path to an image or video file on this machine, of 25 MB at most.
     pub path: Option<String>,
@@ -83,6 +88,7 @@ pub struct NewImage {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct AddArguments {
     #[schemars(length(min = 1, max = MOST_ELEMENTS))]
     pub elements: Vec<NewElement>,
@@ -95,6 +101,7 @@ pub struct AddArguments {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum NewElement {
     /// Text alone, as tall as its lines. `x` and `y` are its top left corner.
     Note {
@@ -186,6 +193,7 @@ pub enum NewElement {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum ShapeKind {
     Rectangle,
     Ellipse,
@@ -197,6 +205,7 @@ pub enum ShapeKind {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(transparent)]
 #[schemars(inline, extend("pattern" = "^(ink|red|orange|green|blue|violet|#[0-9a-fA-F]{6})$"))]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
 pub struct Colour(String);
 
 /// As the schema's pattern says, which clients may not check.
@@ -220,6 +229,7 @@ impl<'de> Deserialize<'de> for Colour {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum Paper {
     Yellow,
     Pink,
@@ -232,6 +242,7 @@ pub enum Paper {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum Weight {
     Thin,
     Medium,
@@ -242,6 +253,7 @@ pub enum Weight {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum Dash {
     Solid,
     Dashed,
@@ -251,6 +263,7 @@ pub enum Dash {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum Heads {
     End,
     Both,
@@ -259,6 +272,7 @@ pub enum Heads {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum Fill {
     Hollow,
     Tint,
@@ -269,6 +283,7 @@ pub enum Fill {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum CropShape {
     Rectangle,
     Ellipse,
@@ -277,6 +292,7 @@ pub enum CropShape {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum Align {
     Left,
     Centre,
@@ -285,6 +301,7 @@ pub enum Align {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct UpdateArguments {
     #[schemars(length(min = 1, max = MOST_IDS))]
     pub updates: Vec<Update>,
@@ -293,6 +310,7 @@ pub struct UpdateArguments {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct Update {
     pub id: String,
     /// For a note, a sticky note, a shape, or a comment.
@@ -336,6 +354,7 @@ pub struct Update {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct TransformArguments {
     #[schemars(length(min = 1, max = MOST_IDS))]
     pub ids: Vec<String>,
@@ -360,6 +379,7 @@ pub struct TransformArguments {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum Flip {
     Horizontal,
     Vertical,
@@ -367,6 +387,7 @@ pub enum Flip {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct RestackArguments {
     #[schemars(length(min = 1, max = MOST_IDS))]
     pub ids: Vec<String>,
@@ -376,6 +397,7 @@ pub struct RestackArguments {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub enum Restack {
     Front,
     Forward,
@@ -385,6 +407,7 @@ pub enum Restack {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct SelectArguments {
     /// None, to select nothing.
     #[schemars(length(max = MOST_IDS))]
@@ -515,5 +538,81 @@ pub fn without_nulls(value: Value) -> Value {
             .collect(),
         Value::Array(values) => values.into_iter().map(without_nulls).collect(),
         value => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::{env, fs};
+
+    use ts_rs::{Config, TS, TypeVisitor};
+
+    use super::*;
+
+    /// Where the web app reads them, which only this test writes.
+    fn declared() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/arguments.ts")
+    }
+
+    /// Each type once with those it holds, as the board gathers its own, since this crate knows
+    /// nothing of boards.
+    struct Declarations<'a> {
+        config: &'a Config,
+        declared: BTreeMap<String, String>,
+    }
+
+    impl TypeVisitor for Declarations<'_> {
+        fn visit<T: TS + 'static + ?Sized>(&mut self) {
+            // Primitives and collections declare nothing of their own.
+            if T::output_path().is_none() {
+                return;
+            }
+            let name = T::ident(self.config);
+            if !self.declared.contains_key(&name) {
+                self.declared.insert(name, T::decl(self.config));
+                T::visit_dependencies(self);
+            }
+        }
+    }
+
+    fn declarations() -> String {
+        let config = Config::default();
+        let mut found = Declarations {
+            config: &config,
+            declared: BTreeMap::new(),
+        };
+        found.visit::<AddImagesArguments>();
+        found.visit::<AddArguments>();
+        found.visit::<UpdateArguments>();
+        found.visit::<TransformArguments>();
+        found.visit::<RestackArguments>();
+        found.visit::<SelectArguments>();
+        found.visit::<Ids>();
+        let mut written = String::from(
+            "// The arguments of the tools that change the board, as `crates/mcp` takes them from\n\
+             // agents and the web app answers them. Written by `PLANCHE_DECLARE=1 cargo test -p mcp`.\n",
+        );
+        for declaration in found.declared.values() {
+            written.push_str(&format!("\nexport {declaration}\n"));
+        }
+        written
+    }
+
+    #[test]
+    fn the_web_app_takes_the_arguments_as_agents_give_them() {
+        let wanted = declarations();
+        if env::var_os("PLANCHE_DECLARE").is_some() {
+            fs::write(declared(), &wanted).unwrap();
+        }
+        // A checkout may turn its line ends into CRLF.
+        let written = fs::read_to_string(declared())
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert!(
+            written == wanted,
+            "web/src/arguments.ts is not as the arguments are, so run `PLANCHE_DECLARE=1 cargo test -p mcp`"
+        );
     }
 }

@@ -5,17 +5,81 @@
 //! whole, which turns, scales, and mirrors with it too.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4};
+
+use serde::Serialize;
 
 use crate::geometry::{anchor, apart, covers, hits, holds, nearest_on_outline, surface_bounds};
+use crate::grid::{pulled, pulled_along};
 use crate::{Board, ElementId, ElementKind, Point, Rect, angle};
 
 impl Board {
-    /// Where an arrow's or a line's end let go at `point` sticks: to the topmost element it can
-    /// stick to that draws there, or within `tolerance` of it, and onto its outline when within
-    /// `tolerance` of it too, or when what the element fills leaves `point` out. `None` when
-    /// there is no such element.
-    pub fn stick(&self, point: Point, tolerance: f64) -> Option<(ElementId, Point)> {
-        let id = self.draw_order().into_iter().rev().find(|id| {
+    /// Where an arrow's or a line's end let go at `point` lands. Within `reach`, when it sticks,
+    /// it sticks to the topmost element it can stick to that draws there, onto its outline when
+    /// within `reach` of it too, or when what the element fills leaves `point` out, otherwise the
+    /// grid that shows at `pull`, a zoom, pulls it, when it pulls. Locked to the nearest multiple
+    /// of 45° `around` the other end, it sticks only to what it lies on, as moving it onto an
+    /// outline would turn it off its angle, and the grid pulls it along its way.
+    pub fn land_end(
+        &self,
+        point: Point,
+        around: Option<Point>,
+        reach: Option<f64>,
+        pull: Option<f64>,
+    ) -> End {
+        // Once for every place tried, and only when it sticks.
+        let order = reach.map(|_| self.draw_order()).unwrap_or_default();
+        let Some(around) = around else {
+            if let Some((target, at)) = reach.and_then(|reach| self.stick_in(&order, point, reach))
+            {
+                return End {
+                    at,
+                    target: Some(target),
+                };
+            }
+            let at = pull.map_or(point, |zoom| pulled(point, zoom));
+            return End { at, target: None };
+        };
+        let lying_on = |at: Point| {
+            reach
+                .and_then(|_| self.stick_in(&order, at, 0.0))
+                .map(|(target, _)| target)
+        };
+        let at = angled(point, around);
+        let target = lying_on(at);
+        match pull {
+            Some(zoom) if target.is_none() => {
+                let at = pulled_along(at, around, zoom);
+                End {
+                    at,
+                    target: lying_on(at),
+                }
+            }
+            _ => End { at, target },
+        }
+    }
+
+    /// What the elements, with those of the groups among them, stick to whole, once each.
+    pub fn targets_of(&self, ids: &[ElementId]) -> BTreeSet<ElementId> {
+        self.with_descendants(ids)
+            .into_iter()
+            .filter_map(|id| self.elements[&id].kind.target())
+            .collect()
+    }
+
+    /// The element, and what sticks to it whole, and so on.
+    pub(crate) fn stuck_to(&self, id: ElementId) -> BTreeSet<ElementId> {
+        stuck_to(&holding(self), id)
+    }
+
+    /// As [`Board::land_end`] sticks an end within `tolerance`, the elements drawing in `order`.
+    fn stick_in(
+        &self,
+        order: &[ElementId],
+        point: Point,
+        tolerance: f64,
+    ) -> Option<(ElementId, Point)> {
+        let id = *order.iter().rev().find(|id| {
             let kind = &self.elements[id].kind;
             kind.is_target() && hits(kind, point, tolerance)
         })?;
@@ -25,10 +89,42 @@ impl Board {
             .filter(|on| apart(*on, point) <= reach || !covers(kind, point));
         Some((id, outline.unwrap_or(point)))
     }
+}
 
-    /// The element, and what sticks to it whole, and so on.
-    pub(crate) fn stuck_to(&self, id: ElementId) -> BTreeSet<ElementId> {
-        stuck_to(&holding(self), id)
+/// Where an arrow's or a line's end lands, and what it sticks to there.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct End {
+    pub at: Point,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub target: Option<ElementId>,
+}
+
+/// Across, then by 45° each, clockwise as the board's y runs down, with no hair off an axis.
+const DIRECTIONS: [(f64, f64); 8] = [
+    (1.0, 0.0),
+    (FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+    (0.0, 1.0),
+    (-FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+    (-1.0, 0.0),
+    (-FRAC_1_SQRT_2, -FRAC_1_SQRT_2),
+    (0.0, -1.0),
+    (FRAC_1_SQRT_2, -FRAC_1_SQRT_2),
+];
+
+/// `point` turned around `around` onto the nearest multiple of 45°, as far from it.
+fn angled(point: Point, around: Point) -> Point {
+    let (dx, dy) = (point.x - around.x, point.y - around.y);
+    let length = dx.hypot(dy);
+    if length == 0.0 {
+        return point;
+    }
+    let eighth = (dy.atan2(dx) / FRAC_PI_4).round() as i64;
+    let (x, y) = DIRECTIONS[eighth.rem_euclid(8) as usize];
+    Point {
+        x: around.x + x * length,
+        y: around.y + y * length,
     }
 }
 
@@ -472,6 +568,11 @@ mod tests {
         Point { x, y }
     }
 
+    fn stick(board: &Board, point: Point, tolerance: f64) -> Option<(ElementId, Point)> {
+        let End { at, target } = board.land_end(point, None, Some(tolerance), None);
+        target.map(|target| (target, at))
+    }
+
     fn assert_at(stuck: Option<(ElementId, Point)>, bits: u128, x: f64, y: f64) {
         let (target, at) = stuck.expect("stuck");
         assert_eq!(target, id(bits));
@@ -506,9 +607,9 @@ mod tests {
             (5, element(None, "a3", comment)),
         ]);
         // Through the arrow and the comment, onto the image within the group.
-        assert_at(board.stick(point(60.0, 50.0), 3.0), 3, 60.0, 50.0);
-        assert_at(board.stick(point(20.0, 50.0), 3.0), 1, 20.0, 50.0);
-        assert_eq!(board.stick(point(200.0, 50.0), 3.0), None);
+        assert_at(stick(&board, point(60.0, 50.0), 3.0), 3, 60.0, 50.0);
+        assert_at(stick(&board, point(20.0, 50.0), 3.0), 1, 20.0, 50.0);
+        assert_eq!(stick(&board, point(200.0, 50.0), 3.0), None);
     }
 
     #[test]
@@ -532,8 +633,8 @@ mod tests {
                 ),
             ),
         ]);
-        assert_at(board.stick(point(50.0, 50.0), 3.0), 1, 50.0, 50.0);
-        assert_at(board.stick(point(250.0, 50.0), 3.0), 3, 250.0, 50.0);
+        assert_at(stick(&board, point(50.0, 50.0), 3.0), 1, 50.0, 50.0);
+        assert_at(stick(&board, point(250.0, 50.0), 3.0), 3, 250.0, 50.0);
     }
 
     #[test]
@@ -576,11 +677,11 @@ mod tests {
                 ),
             ),
         ]);
-        assert_at(board.stick(point(50.0, 50.0), 3.0), 2, 50.0, 50.0);
-        assert_at(board.stick(point(50.0, 98.0), 3.0), 2, 50.0, 100.0);
-        assert_at(board.stick(point(300.0, 50.0), 3.0), 3, 300.0, 50.0);
+        assert_at(stick(&board, point(50.0, 50.0), 3.0), 2, 50.0, 50.0);
+        assert_at(stick(&board, point(50.0, 98.0), 3.0), 2, 50.0, 100.0);
+        assert_at(stick(&board, point(300.0, 50.0), 3.0), 3, 300.0, 50.0);
         // Between the cross's strokes, onto the image below it.
-        assert_at(board.stick(point(620.0, 50.0), 3.0), 4, 620.0, 50.0);
+        assert_at(stick(&board, point(620.0, 50.0), 3.0), 4, 620.0, 50.0);
     }
 
     #[test]
@@ -621,13 +722,13 @@ mod tests {
             ),
         ]);
         // Within reach of the image's bottom side, and away from its sides.
-        assert_at(board.stick(point(30.0, 18.0), 3.0), 1, 30.0, 20.0);
-        assert_at(board.stick(point(30.0, 10.0), 3.0), 1, 30.0, 10.0);
-        assert_at(board.stick(point(262.0, 0.0), 3.0), 2, 260.0, 0.0);
+        assert_at(stick(&board, point(30.0, 18.0), 3.0), 1, 30.0, 20.0);
+        assert_at(stick(&board, point(30.0, 10.0), 3.0), 1, 30.0, 10.0);
+        assert_at(stick(&board, point(262.0, 0.0), 3.0), 2, 260.0, 0.0);
         // Just out of the ellipse's side, whose middle turned to (475, 93.3). Turned back
         // upright, its curve is where its equation gives 1, and the nearest point of it is
         // where the way to the end runs along its normal.
-        let (target, on) = board.stick(point(474.0, 95.0), 3.0).unwrap();
+        let (target, on) = stick(&board, point(474.0, 95.0), 3.0).unwrap();
         assert_eq!(target, id(3));
         let upright = on.turned(point(500.0, 50.0), -30.0);
         let curve = ((upright.x - 500.0) / 100.0).hypot((upright.y - 50.0) / 50.0);
@@ -639,9 +740,102 @@ mod tests {
         );
         let aslant = (end.x - upright.x) * normal.1 - (end.y - upright.y) * normal.0;
         assert!(aslant.abs() < 1e-9, "{aslant}");
-        assert_at(board.stick(point(50.0, 202.0), 3.0), 4, 50.0, 200.0);
-        assert_at(board.stick(point(221.0, 219.0), 3.0), 5, 220.0, 220.0);
-        assert_at(board.stick(point(250.0, 220.0), 3.0), 5, 250.0, 220.0);
+        assert_at(stick(&board, point(50.0, 202.0), 3.0), 4, 50.0, 200.0);
+        assert_at(stick(&board, point(221.0, 219.0), 3.0), 5, 220.0, 220.0);
+        assert_at(stick(&board, point(250.0, 220.0), 3.0), 5, 250.0, 220.0);
+    }
+
+    fn end(at: Point, target: Option<u128>) -> End {
+        End {
+            at,
+            target: target.map(id),
+        }
+    }
+
+    #[test]
+    fn an_end_let_go_sticks_or_else_the_grid_pulls_it() {
+        let board = board([(1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0))))]);
+        // At a zoom of 1, lines 20 apart pull from 5 away.
+        let near = point(57.0, 102.0);
+        assert_eq!(
+            board.land_end(near, None, Some(5.0), Some(1.0)),
+            end(point(57.0, 100.0), Some(1))
+        );
+        assert_eq!(
+            board.land_end(near, None, None, Some(1.0)),
+            end(point(60.0, 100.0), None)
+        );
+        assert_eq!(board.land_end(near, None, None, None), end(near, None));
+        assert_eq!(
+            board.land_end(point(157.0, 102.0), None, Some(5.0), Some(1.0)),
+            end(point(160.0, 100.0), None)
+        );
+    }
+
+    #[test]
+    fn an_end_locked_around_the_other_keeps_to_its_angle() {
+        let board = board([(1, element(None, "a0", image(area(90.0, 90.0, 40.0, 40.0))))]);
+        let origin = point(0.0, 0.0);
+        let aslant = 100.0_f64.hypot(90.0) * FRAC_1_SQRT_2;
+        // On what it lies on, with no pull and no snap onto its outline.
+        assert_eq!(
+            board.land_end(point(100.0, 90.0), Some(origin), Some(5.0), Some(1.0)),
+            end(point(aslant, aslant), Some(1))
+        );
+        // Along its way onto a line, which keeps it at 45°.
+        assert_eq!(
+            board.land_end(point(60.0, 54.0), Some(origin), Some(5.0), Some(1.0)),
+            end(point(60.0, 60.0), None)
+        );
+        assert_eq!(
+            board.land_end(point(57.0, 2.0), Some(point(0.0, 10.0)), None, Some(1.0)),
+            end(point(60.0, 10.0), None)
+        );
+        // Never onto the other end's own line, nor past it.
+        let short = point(3.0, 2.5);
+        let around = point(0.0, 2.0);
+        assert_eq!(
+            board.land_end(short, Some(around), None, Some(1.0)),
+            end(point(3.0_f64.hypot(0.5), 2.0), None)
+        );
+        assert_eq!(
+            board.land_end(around, Some(around), None, Some(1.0)),
+            end(around, None)
+        );
+    }
+
+    #[test]
+    fn the_targets_of_elements_are_what_they_stick_to_whole() {
+        let stuck = |target: u128| {
+            let mut kind = shape(Shape::Rectangle, area(10.0, 10.0, 5.0, 5.0), 0.0, "");
+            *kind.target_mut().expect("sticks whole") = Some(id(target));
+            kind
+        };
+        let arrow = ElementKind::Arrow {
+            from: point(10.0, 10.0),
+            to: point(50.0, 50.0),
+            from_target: Some(id(1)),
+            to_target: Some(id(2)),
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
+            heads: Heads::End,
+        };
+        let board = board([
+            (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0)))),
+            (2, element(None, "a1", image(area(0.0, 0.0, 100.0, 100.0)))),
+            (3, element(None, "a2", ElementKind::Group)),
+            (4, element(Some(3), "a0", stuck(1))),
+            (5, element(Some(3), "a1", stuck(1))),
+            (6, element(None, "a3", stuck(2))),
+            (7, element(None, "a4", arrow)),
+        ]);
+        assert_eq!(board.targets_of(&[id(3)]), BTreeSet::from([id(1)]));
+        assert_eq!(
+            board.targets_of(&[id(5), id(6), id(7), id(9)]),
+            BTreeSet::from([id(1), id(2)])
+        );
+        assert!(board.targets_of(&[id(1), id(7)]).is_empty());
     }
 
     #[test]
@@ -652,12 +846,12 @@ mod tests {
         }
         let board = board([(1, element(None, "a0", shown))]);
         // Far from the frame's sides, within reach of the curve.
-        let (target, on) = board.stick(point(168.0, 17.0), 3.0).unwrap();
+        let (target, on) = stick(&board, point(168.0, 17.0), 3.0).unwrap();
         assert_eq!(target, id(1));
         let curve = ((on.x - 100.0) / 100.0).hypot((on.y - 50.0) / 50.0);
         assert!((curve - 1.0).abs() < 1e-9, "{curve}");
         // In a corner of the frame, which shows nothing.
-        assert_eq!(board.stick(point(5.0, 5.0), 3.0), None);
+        assert_eq!(stick(&board, point(5.0, 5.0), 3.0), None);
     }
 
     #[test]

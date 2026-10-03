@@ -70,12 +70,24 @@ impl Board {
             .collect()
     }
 
-    /// Every element that draws something within `area`, from back to front.
+    /// Every element that draws something within `area`, and every comment pinned in it, edges
+    /// included, from back to front.
     pub fn touching(&self, area: Rect) -> Vec<ElementId> {
         let area = corners(&area, 0.0);
         self.draw_order()
             .into_iter()
             .filter(|id| touches(&self.elements[id].kind, &area))
+            .collect()
+    }
+
+    /// The top-level elements and outermost groups of what [`Board::touching`] finds, once
+    /// each, in the order it finds them.
+    pub fn touching_top_level(&self, area: Rect) -> Vec<ElementId> {
+        let mut seen = BTreeSet::new();
+        self.touching(area)
+            .into_iter()
+            .filter_map(|id| self.top_level(id))
+            .filter(|id| seen.insert(*id))
             .collect()
     }
 
@@ -131,6 +143,21 @@ impl Board {
             .with_descendants(ids)
             .into_iter()
             .filter_map(|id| shape(&self.elements[&id].kind))
+            .flatten()
+            .collect();
+        around(&points)
+    }
+
+    /// As [`Board::bounds`], with the points where the comments among them are pinned, which a
+    /// view must show though they draw nothing on the board.
+    pub fn extent(&self, ids: &[ElementId]) -> Option<Rect> {
+        let points: Vec<Point> = self
+            .with_descendants(ids)
+            .into_iter()
+            .filter_map(|id| match &self.elements[&id].kind {
+                ElementKind::Comment { at, .. } => Some(vec![*at]),
+                kind => shape(kind),
+            })
             .flatten()
             .collect();
         around(&points)
@@ -350,7 +377,7 @@ fn filled(shape: Shape, fill: Fill, text: &Text) -> bool {
 }
 
 /// As [`hits`], a shape neither filled nor holding text only draws its strokes, so an area
-/// between them touches none of it.
+/// between them touches none of it. A comment, which draws nothing, touches it by its pin.
 fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
     match kind {
         ElementKind::Shape {
@@ -402,6 +429,9 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
             ..
         } if frame.width != 0.0 && frame.height != 0.0 => {
             ellipse_touches(frame, *rotation, area, true)
+        }
+        ElementKind::Comment { at, .. } => {
+            around(area).is_some_and(|upright| upright.contains(*at))
         }
         _ => shape(kind).is_some_and(|shape| overlap(&shape, area)),
     }
@@ -1351,9 +1381,76 @@ mod tests {
         };
         let board = board([(1, element(None, "a0", comment))]);
         assert_eq!(board.hit(point(10.0, 10.0), 3.0), None);
-        assert!(board.touching(area(0.0, 0.0, 20.0, 20.0)).is_empty());
         assert_eq!(board.outline(id(1)), Some(Vec::new()));
         assert_eq!(board.bounds(&[id(1)]), None);
+    }
+
+    fn comment(x: f64, y: f64) -> ElementKind {
+        ElementKind::Comment {
+            at: point(x, y),
+            text: "Too dark".to_owned(),
+            target: None,
+        }
+    }
+
+    #[test]
+    fn an_area_touches_the_comments_pinned_in_it_edges_included() {
+        let board = board([
+            (1, element(None, "a0", image(0.0, 0.0, 20.0, 20.0, 0.0))),
+            (2, element(None, "a1", comment(30.0, 10.0))),
+            (3, element(None, "a2", image(25.0, 0.0, 20.0, 20.0, 0.0))),
+        ]);
+        assert_eq!(
+            board.touching(area(10.0, 5.0, 20.0, 5.0)),
+            [id(1), id(2), id(3)]
+        );
+        assert_eq!(board.touching(area(28.0, 10.0, 2.0, 5.0)), [id(2), id(3)]);
+        assert_eq!(board.touching(area(32.0, 12.0, -4.0, -4.0)), [id(2), id(3)]);
+        assert!(board.touching(area(30.5, 21.0, 5.0, 5.0)).is_empty());
+    }
+
+    #[test]
+    fn an_area_touches_the_outermost_groups_of_what_it_touches_once_each() {
+        let board = board([
+            (1, element(None, "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", image(0.0, 0.0, 20.0, 20.0, 0.0))),
+            (3, element(Some(1), "a1", ElementKind::Group)),
+            (4, element(Some(3), "a0", comment(10.0, 10.0))),
+            (5, element(None, "a1", image(0.0, 0.0, 20.0, 20.0, 0.0))),
+        ]);
+        assert_eq!(
+            board.touching(area(5.0, 5.0, 10.0, 10.0)),
+            [id(2), id(4), id(5)]
+        );
+        assert_eq!(
+            board.touching_top_level(area(5.0, 5.0, 10.0, 10.0)),
+            [id(1), id(5)]
+        );
+        assert!(
+            board
+                .touching_top_level(area(50.0, 5.0, 10.0, 10.0))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_extent_of_elements_holds_what_they_draw_and_where_their_comments_are_pinned() {
+        let board = board([
+            (1, element(None, "a0", image(0.0, 0.0, 20.0, 10.0, 0.0))),
+            (2, element(None, "a1", comment(50.0, -5.0))),
+            (3, element(None, "a2", ElementKind::Group)),
+            (4, element(Some(3), "a0", comment(-10.0, 30.0))),
+            (5, element(Some(3), "a1", arrow((0.0, 0.0), (5.0, 5.0)))),
+        ]);
+        assert_eq!(board.extent(&[id(2)]), Some(area(50.0, -5.0, 0.0, 0.0)));
+        assert_eq!(
+            board.extent(&[id(1), id(2)]),
+            Some(area(0.0, -5.0, 50.0, 15.0))
+        );
+        assert_eq!(board.extent(&[id(3)]), Some(area(-10.0, 0.0, 15.0, 30.0)));
+        assert_eq!(board.bounds(&[id(3)]), Some(area(0.0, 0.0, 5.0, 5.0)));
+        assert_eq!(board.extent(&[]), None);
+        assert_eq!(board.extent(&[id(9)]), None);
     }
 
     #[test]

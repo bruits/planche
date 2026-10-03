@@ -20,6 +20,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.11"
 thiserror = "2"
+# Declares Rust types to the web app's TypeScript, where they cross as JSON.
+ts-rs = { version = "12", default-features = false, features = [
+  "serde-compat",
+  "no-serde-warnings",
+] }
 
 [patch.crates-io]
 # 0.2.4 clears disposed frames under lossy ones with the wrong stride (image-rs/image-webp#178).

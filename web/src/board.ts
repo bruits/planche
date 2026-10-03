@@ -85,16 +85,14 @@ export async function open<T extends Folder>(
     return contents;
   });
   const [editor, parsing] = await timed(() => core.read(read));
-  const opened = { folder, editor, board: core.board(editor), added: new Map<string, Blob>() };
   // Found before it takes the open board's place, as showing it would fail.
-  const kept = new Set(listed);
-  const missing = [...assetSizes(opened.board).keys()].find(
-    (asset) => !kept.has(core.assetPath(asset)),
-  );
-  if (missing !== undefined) {
+  try {
+    editor.checkAssets(listed);
+  } catch (error) {
     editor.free();
-    throw new Error(`asset ${missing} is missing`);
+    throw error;
   }
+  const opened = { folder, editor, board: core.board(editor), added: new Map<string, Blob>() };
   timings.clear();
   timings.set(`list ${listed.length} files`, milliseconds(listing));
   timings.set(`read ${read.size} files`, milliseconds(reading));
@@ -138,24 +136,31 @@ export async function prepare(
   cap: number,
   held: (asset: string) => Size | undefined = () => undefined,
 ): Promise<Added> {
-  const type = core.videoType(new Uint8Array(await bytes.slice(0, core.VIDEO_START).arrayBuffer()));
-  if (type !== undefined) {
-    return prepareVideo(bytes, type, held);
+  const start = new Uint8Array(await bytes.slice(0, core.mediaStart()).arrayBuffer());
+  const told = core.media(start, start.length === bytes.size);
+  if (told?.kind === "video") {
+    return prepareVideo(bytes, told.type, held);
   }
   const whole = new Uint8Array(await bytes.arrayBuffer());
-  const vector = checkedSvgSize(whole);
   const asset = await digest(whole);
   const known = held(asset);
   if (known !== undefined) {
     return { asset, bytes, natural: known };
   }
-  if (vector !== undefined) {
-    return { asset, bytes, natural: vector, decoded: await picture(whole, vector) };
+  // Only what its start does not tell is worth copying whole into the core.
+  const media = told ?? core.media(whole, true)!;
+  switch (media.kind) {
+    case "video":
+      return prepareVideo(bytes, media.type, held);
+    case "markup":
+      throw new Error("markup that is not an SVG");
+    case "svg":
+      return { asset, bytes, natural: media.size, decoded: await picture(whole, media.size) };
   }
   // Its first frame, when it moves.
   const full = await createImageBitmap(bytes, { imageOrientation: "from-image" });
   const natural = { width: full.width, height: full.height };
-  const moving = moves(whole);
+  const moving = movingOf(media, whole);
   const { width, height } = capped(natural, cap);
   if (width === natural.width && height === natural.height) {
     return { asset, bytes, natural, decoded: full, moving };
@@ -191,41 +196,14 @@ async function prepareVideo(
   return { asset, bytes, natural, decoded: bitmap, video };
 }
 
-/** Only a GIF, a PNG, or a WebP may move, and only their bytes are worth copying into the core. */
-function moves(bytes: Bytes): Moving | undefined {
-  const head = String.fromCharCode(...bytes.subarray(0, 12));
-  const may =
-    head.startsWith("GIF8") ||
-    head.startsWith("\x89PNG") ||
-    (head.startsWith("RIFF") && head.endsWith("WEBP"));
-  const plays = may ? core.animationPlays(bytes) : undefined;
-  return plays === undefined ? undefined : { bytes, plays };
+function movingOf(media: core.Media, bytes: Bytes): Moving | undefined {
+  return media.kind === "animated" ? { bytes, plays: media.plays ?? Infinity } : undefined;
 }
 
 export function release(decoded: Decoded | undefined): void {
   if (decoded instanceof ImageBitmap) {
     decoded.close();
   }
-}
-
-/**
- * An SVG's natural size, `undefined` for bytes that do not start as markup, which only then are
- * worth copying into the core. Throws for other markup, such as HTML.
- */
-function checkedSvgSize(bytes: Bytes): Size | undefined {
-  if (!markup(bytes)) {
-    return undefined;
-  }
-  const size = core.svgSize(bytes);
-  if (size === undefined) {
-    throw new Error("markup that is not an SVG");
-  }
-  return size;
-}
-
-/** Whether the bytes start as markup, which only an SVG may. */
-function markup(bytes: Bytes): boolean {
-  return new TextDecoder().decode(bytes.subarray(0, 256)).trimStart().startsWith("<");
 }
 
 export function newId(): string {
@@ -368,7 +346,7 @@ export function placed(
           rotation: kind.rotation,
           opacity: 1,
         } as const;
-        return [{ ...paper, paint: `paper-${kind.paper ?? "yellow"}` }, ...written];
+        return [{ ...paper, paint: `paper-${kind.paper ?? core.plain(kind).paper!}` }, ...written];
       }
       case "shape":
         return [...shape(kind), ...written];
@@ -406,15 +384,15 @@ function image(kind: Extract<Kind, { type: "image" }>): Placed {
 }
 
 function line(kind: Extract<Kind, { type: "arrow" | "line" }>): Extract<Placed, { kind: "line" }> {
-  const width = core.strokeWidth(kind.weight);
+  const plain = core.plain(kind);
   const { from, to } = kind;
   return {
     kind: "line",
     from,
     to,
-    width,
-    paint: kind.colour ?? "ink",
-    dashed: kind.dash === "dashed",
+    width: core.strokeWidth(kind.weight),
+    paint: kind.colour ?? plain.colour!,
+    dashed: (kind.dash ?? plain.dash) === "dashed",
   };
 }
 
@@ -423,7 +401,7 @@ function arrow(kind: Extract<Kind, { type: "arrow" }>): Placed[] {
   const drawn = line(kind);
   const { from, to, width } = drawn;
   const span = Math.hypot(to.x - from.x, to.y - from.y);
-  const heads = kind.heads ?? "end";
+  const heads = kind.heads ?? core.plain(kind).heads;
   if (span === 0) {
     return [drawn];
   }
@@ -446,18 +424,19 @@ function arrow(kind: Extract<Kind, { type: "arrow" }>): Placed[] {
 
 function shape(kind: Extract<Kind, { type: "shape" }>): Placed[] {
   const { frame, rotation } = kind;
-  const paint = kind.colour ?? "ink";
-  const width = core.strokeWidth(kind.weight);
+  const plain = core.plain(kind);
+  const paint = kind.colour ?? plain.colour!;
   const outline: Placed = {
     kind: kind.shape,
     frame,
     rotation,
-    width,
+    width: core.strokeWidth(kind.weight),
     paint,
-    dashed: kind.dash === "dashed",
+    dashed: (kind.dash ?? plain.dash) === "dashed",
   };
-  const fill = kind.fill ?? "hollow";
-  if (kind.shape === "cross" || fill === "hollow") {
+  const fill = kind.fill ?? plain.fill;
+  // A cross takes no fill, though one written before crosses took none may hold one.
+  if (kind.shape === "cross" || fill === undefined || fill === "hollow") {
     return [outline];
   }
   const opacity = fill === "tint" ? TINT : 1;
@@ -466,24 +445,7 @@ function shape(kind: Extract<Kind, { type: "shape" }>): Placed[] {
 
 /** What the elements draw over, with the points their comments are pinned at, `undefined` when nothing. */
 export function extent({ editor, board }: Opened, ids = board.draw_order): Rect | undefined {
-  const drawn = core.bounds(editor, ids);
-  const chosen = new Set(ids);
-  const points = board.draw_order.flatMap((id) => {
-    const { kind } = board.elements[id]!;
-    return kind.type === "comment" && among(board, id, chosen) ? [kind.at] : [];
-  });
-  if (drawn) {
-    points.push(
-      { x: drawn.x, y: drawn.y },
-      { x: drawn.x + drawn.width, y: drawn.y + drawn.height },
-    );
-  }
-  if (points.length === 0) {
-    return undefined;
-  }
-  const [xs, ys] = [points.map(({ x }) => x), points.map(({ y }) => y)];
-  const [x, y] = [Math.min(...xs), Math.min(...ys)];
-  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+  return core.extent(editor, ids);
 }
 
 /** Whether any of the elements is an image, or a group holding one. */
@@ -558,13 +520,16 @@ export function assetSizes(board: Board): Map<string, Size> {
 export async function readAsset(folder: Folder, asset: string, natural: Size): Promise<Asset> {
   const bytes = await folder.read(core.assetPath(asset));
   core.verifyAsset(asset, await digest(bytes));
-  const type = core.videoType(bytes);
-  if (type === undefined) {
-    const vector = markup(bytes);
-    return { asset, blob: new Blob([bytes]), natural, vector, moving: moves(bytes) };
+  const start = core.mediaStart();
+  const media =
+    core.media(bytes.subarray(0, start), bytes.length <= start) ?? core.media(bytes, true)!;
+  if (media.kind === "video") {
+    const video = new Blob([bytes], { type: media.type });
+    return { asset, blob: video, natural, vector: false, video };
   }
-  const video = new Blob([bytes], { type });
-  return { asset, blob: video, natural, vector: false, video };
+  // Markup that is no SVG shows crossed out, as an image this machine cannot decode.
+  const vector = media.kind === "svg" || media.kind === "markup";
+  return { asset, blob: new Blob([bytes]), natural, vector, moving: movingOf(media, bytes) };
 }
 
 /** Each as `decodeAsset` decodes it, but those this machine cannot decode or play, which are left out. */

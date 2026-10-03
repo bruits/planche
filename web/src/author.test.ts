@@ -6,6 +6,13 @@ import * as core from "./core.js";
 
 const arrow = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
 const comment = { type: "comment", at: { x: 40, y: 60 }, text: "Why here?" };
+/** Text fits what holds it as a font of fixed widths would. */
+const measure = (text: string) => ({
+  width: text.length * 50,
+  fontBoundingBoxAscent: 80,
+  fontBoundingBoxDescent: 20,
+  actualBoundingBoxAscent: 70,
+});
 /** As far as the shell's deadline usually is. */
 const later = () => Date.now() + 60_000;
 
@@ -44,6 +51,7 @@ function page(
 describe("write", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("adds what an agent describes, and tells the ids of what it added", async () => {
@@ -116,5 +124,58 @@ describe("write", () => {
       "took too long",
     );
     expect(Object.keys(opened.board.elements)).toEqual([]);
+  });
+
+  it("moves and scales what an agent names as one edit, comments included", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const { added } = (await write("add", { elements: [arrow, comment] }, writing, later())) as {
+      added: { id: string; bounds: core.Rect }[];
+    };
+    const ids = added.map(({ id }) => id);
+    // A comment covers nothing, so it is where it is pinned.
+    expect(added[1]!.bounds).toEqual({ x: 40, y: 60, width: 0, height: 0 });
+    const before = opened.editor.json();
+    await write("transform", { ids, width: 50, move_to: { x: 10, y: 20 } }, writing, later());
+    expect(core.extent(opened.editor, ids)).toEqual({ x: 10, y: 20, width: 50, height: 30 });
+    opened.editor.undo();
+    expect(opened.editor.json()).toBe(before);
+  });
+
+  it("refuses a transform that cannot be made, which changes nothing", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const { added } = (await write("add", { elements: [arrow] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const ids = added.map(({ id }) => id);
+    const before = opened.editor.json();
+    await expect(write("transform", { ids, scale: 2, width: 5 }, writing, later())).rejects.toThrow(
+      "not both",
+    );
+    await expect(write("transform", { ids, width: 0 }, writing, later())).rejects.toThrow(
+      "positive",
+    );
+    expect(opened.editor.json()).toBe(before);
+  });
+
+  it("writes a style an agent chooses as it comes as nothing", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      font: "",
+      measureText: measure,
+    } as unknown as CanvasRenderingContext2D);
+    const opened = untitled();
+    const { writing } = page(opened);
+    const filled = { type: "shape", x: 0, y: 0, shape: "rectangle", fill: "solid", text: "Hi" };
+    const note = { type: "note", x: 0, y: 200, text: "Hello", align: "left" };
+    const { added } = (await write("add", { elements: [filled, note] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const [shape, written] = added.map(({ id }) => id);
+    const kindOf = (id: string) => opened.board.elements[id]!.kind;
+    expect(kindOf(written!)).not.toHaveProperty("text.align");
+    await write("update", { updates: [{ id: shape, shape: "cross" }] }, writing, later());
+    expect(kindOf(shape!)).toMatchObject({ shape: "cross" });
+    expect(kindOf(shape!)).not.toHaveProperty("fill");
   });
 });

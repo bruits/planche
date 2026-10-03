@@ -21,6 +21,8 @@ const SMALLEST_INTEGER: &[u8] = b"A00000000000000000000000000";
 /// file, and two people restacking different elements never conflict. A merge can leave two
 /// siblings with the same key: to stack between them, re-key the upper one first.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "string"))]
 pub struct ZIndex(String);
 
 impl ZIndex {
