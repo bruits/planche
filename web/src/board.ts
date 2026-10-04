@@ -8,6 +8,7 @@ import { milliseconds, timed } from "./metrics.js";
 import type { Folder, Home } from "./platform.js";
 import type { Placed } from "./renderer.js";
 import type { Saving } from "./save.js";
+import { opacityOf } from "./style.js";
 import { holdsText, type Texts } from "./text.js";
 import { picture, type Picture } from "./vector.js";
 import { VIDEO_LIMIT, firstFrame } from "./video.js";
@@ -360,8 +361,6 @@ export function refresh({ editor, board }: Opened, touched: string[]): void {
 const HEAD_LENGTH = 10;
 const HEAD_WIDTHS = 3;
 const HEAD_SHARE = 1 / 3;
-/** Between each side of an arrow's head and its line, in radians. */
-const HEAD_ANGLE = Math.PI / 6;
 const TINT = 0.18;
 
 /**
@@ -377,6 +376,14 @@ export function placed(
   const width = core.strokeWidth();
   return board.draw_order.flatMap((id): Placed[] => {
     const { kind } = board.elements[id]!;
+    const shown = drawn(id, kind);
+    const opacity = opacityOf(kind);
+    return opacity === 1
+      ? shown
+      : shown.map((item) => ({ ...item, opacity: (item.opacity ?? 1) * opacity }));
+  });
+
+  function drawn(id: string, kind: Kind): Placed[] {
     const text = holdsText(kind) ? texts.placed(id, kind) : undefined;
     const written = text && id !== hidden ? [text] : [];
     switch (kind.type) {
@@ -398,10 +405,8 @@ export function placed(
       case "sticky": {
         const paper = {
           kind: "fill",
-          shape: "rectangle",
           frame: kind.frame,
           rotation: kind.rotation,
-          opacity: 1,
         } as const;
         return [{ ...paper, paint: `paper-${kind.paper ?? core.plain(kind).paper!}` }, ...written];
       }
@@ -411,7 +416,7 @@ export function placed(
       case "group":
         return [];
     }
-  });
+  }
 }
 
 function image(kind: Image): Placed {
@@ -453,30 +458,17 @@ function line(kind: Extract<Kind, { type: "arrow" | "line" }>): Extract<Placed, 
   };
 }
 
-/** Its line, and the two solid strokes of an open head at each end that draws one. */
+/** One item, as heads drawn apart from their shaft would overlap it, which fading shows. */
 function arrow(kind: Extract<Kind, { type: "arrow" }>): Placed[] {
   const drawn = line(kind);
   const { from, to, width } = drawn;
   const span = Math.hypot(to.x - from.x, to.y - from.y);
-  const heads = kind.heads ?? core.plain(kind).heads;
   if (span === 0) {
     return [drawn];
   }
-  const length = Math.min(HEAD_LENGTH + HEAD_WIDTHS * width, span * HEAD_SHARE);
-  const head = (tip: Point, tail: Point): Placed[] => {
-    const back = Math.atan2(tail.y - tip.y, tail.x - tip.x);
-    const side = (angle: number) => ({
-      ...drawn,
-      from: tip,
-      to: {
-        x: tip.x + Math.cos(back + angle) * length,
-        y: tip.y + Math.sin(back + angle) * length,
-      },
-      dashed: false,
-    });
-    return [side(HEAD_ANGLE), side(-HEAD_ANGLE)];
-  };
-  return [drawn, ...head(to, from), ...(heads === "both" ? head(from, to) : [])];
+  const heads = (kind.heads ?? core.plain(kind).heads) === "both" ? 2 : 1;
+  const head = Math.min(HEAD_LENGTH + HEAD_WIDTHS * width, span * HEAD_SHARE);
+  return [{ ...drawn, kind: "arrow", head, heads }];
 }
 
 function shape(kind: Extract<Kind, { type: "shape" }>): Placed[] {
@@ -496,8 +488,8 @@ function shape(kind: Extract<Kind, { type: "shape" }>): Placed[] {
   if (kind.shape === "cross" || fill === undefined || fill === "hollow") {
     return [outline];
   }
-  const opacity = fill === "tint" ? TINT : 1;
-  return [{ kind: "fill", shape: kind.shape, frame, rotation, paint, opacity }, outline];
+  // With its outline, which over a fill of its own would show darker once faded.
+  return [{ ...outline, fill: fill === "tint" ? TINT : 1 }];
 }
 
 /** What the elements draw over, with the points their comments are pinned at, `undefined` when nothing. */

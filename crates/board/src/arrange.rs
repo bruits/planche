@@ -306,6 +306,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         }
     }
 
@@ -329,6 +330,7 @@ mod tests {
             text: Text::new("Note".to_owned(), 20.0),
             target: target.map(id),
             colour: Colour::Ink,
+            opacity: Default::default(),
         }
     }
 

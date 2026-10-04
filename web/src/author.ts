@@ -277,6 +277,7 @@ const SETTABLE = [
   "italic",
   "strike",
   "align",
+  "opacity",
 ] as const;
 
 /** In what `given` sets of its style, each where the style card would offer it, or `refuse` throws. */
@@ -303,6 +304,11 @@ function styled(
         );
       }
       style.colour = colour;
+    } else if (field === "opacity") {
+      if (core.checked({ opacity: value }) === undefined) {
+        throw new Error(`\`opacity\` is a percent from 1 to 100, not ${String(value)}`);
+      }
+      style.opacity = value as number;
     } else {
       Object.assign(style, { [field]: value });
     }

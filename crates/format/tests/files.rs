@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use board::{
     Align, Alignment, AssetHasher, AssetId, Background, Board, Colour, CropShape, Dash, Editor,
-    Element, ElementId, ElementKind, Fill, Heads, ImageEdits, Paper, Point, Rect, Restack, Shape,
-    Size, Text, Weight, ZIndex,
+    Element, ElementId, ElementKind, Fill, Heads, ImageEdits, Opacity, Paper, Point, Rect, Restack,
+    Shape, Size, Text, Weight, ZIndex,
 };
 use format::save::{Known, Save};
 use format::{Error, Files, zip};
@@ -40,6 +40,7 @@ fn note(group: Option<ElementId>, text: &str) -> Element {
             text: Text::new(text.to_owned(), 20.0),
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         },
     }
 }
@@ -79,6 +80,7 @@ fn sample() -> Board {
                     filename: Some("harbour.png".to_owned()),
                     // Quotes, a line break and accents, which JSON escapes or keeps as they are.
                     caption: Some("The \"old\" harbour\nlumière rasante".to_owned()),
+                    opacity: Default::default(),
                 },
             },
         ),
@@ -98,6 +100,7 @@ fn sample() -> Board {
                     weight: Weight::Medium,
                     fill: Fill::Hollow,
                     dash: Dash::Solid,
+                    opacity: Default::default(),
                 },
             },
         ),
@@ -119,6 +122,7 @@ fn sample() -> Board {
                     weight: Weight::Medium,
                     dash: Dash::Solid,
                     heads: Heads::End,
+                    opacity: Default::default(),
                 },
             },
         ),
@@ -133,6 +137,7 @@ fn sample() -> Board {
                     text: Text::new("Try a warmer grade\nfor the dusk shots".to_owned(), 20.0),
                     target: None,
                     paper: Paper::Yellow,
+                    opacity: Default::default(),
                 },
             },
         ),
@@ -149,6 +154,7 @@ fn sample() -> Board {
                     colour: Colour::Ink,
                     weight: Weight::Medium,
                     dash: Dash::Solid,
+                    opacity: Default::default(),
                 },
             },
         ),
@@ -179,6 +185,7 @@ fn sample() -> Board {
                     weight: Weight::Medium,
                     fill: Fill::Hollow,
                     dash: Dash::Solid,
+                    opacity: Default::default(),
                 },
             },
         ),
@@ -381,6 +388,7 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
         weight: Weight::Thick,
         dash: Dash::Dashed,
         fill: Fill::Tint,
+        opacity: Default::default(),
     };
     let arrow = ElementKind::Arrow {
         from: Point { x: 0.0, y: 0.0 },
@@ -391,6 +399,7 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
         weight: Weight::Medium,
         dash: Dash::Dashed,
         heads: Heads::Both,
+        opacity: Opacity::new(50).unwrap(),
     };
     let sticky = ElementKind::Sticky {
         frame: frame(160.0, 150.0),
@@ -398,6 +407,7 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
         text: Text::new("Try a warmer grade", 20.0),
         target: None,
         paper: Paper::Pink,
+        opacity: Default::default(),
     };
     let board = Board {
         elements: [(NOTE, shape), (ARROW, arrow), (STICKY, sticky)]
@@ -430,6 +440,8 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
     assert_eq!(arrow["dash"], "dashed");
     assert_eq!(arrow["heads"], "both");
     assert!(arrow.get("weight").is_none());
+    assert_eq!(arrow["opacity"], 50);
+    assert!(shape.get("opacity").is_none());
     assert_eq!(written(STICKY)["paper"], "pink");
     assert_eq!(format::read(&files).unwrap(), board);
 }
@@ -648,6 +660,7 @@ fn equal_boards_write_the_same_bytes() {
         source: None,
         filename: None,
         caption: None,
+        opacity: Default::default(),
     };
     let shape = ElementKind::Shape {
         frame: zero,
@@ -659,6 +672,7 @@ fn equal_boards_write_the_same_bytes() {
         weight: Weight::Medium,
         fill: Fill::Hollow,
         dash: Dash::Solid,
+        opacity: Default::default(),
     };
     for (bits, kind) in [(20, image), (21, shape)] {
         let element = Element {
@@ -703,6 +717,16 @@ fn text_of_no_size_is_refused_on_read() {
     assert_ne!(sizeless, note);
     files.insert(path, sizeless.into_bytes());
     assert!(matches!(format::read(&files), Err(Error::Invalid(NOTE))));
+}
+
+#[test]
+fn an_opacity_that_would_hide_an_element_is_refused_on_read() {
+    let mut files = format::write(&sample()).unwrap();
+    let path = format!("elements/{NOTE}.json");
+    let mut note: serde_json::Value = serde_json::from_slice(&files[&path]).unwrap();
+    note["kind"]["opacity"] = serde_json::json!(0);
+    files.insert(path.clone(), serde_json::to_vec(&note).unwrap());
+    assert!(matches!(format::read(&files), Err(Error::Json { path: at, .. }) if at == path));
 }
 
 #[test]

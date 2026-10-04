@@ -846,9 +846,7 @@ const commands = {
     keys: [{ key: "c", code: "KeyC", command: true, alt: true }],
     unavailable: () =>
       noneSelected() ??
-      (styleCard.common().length > 0
-        ? undefined
-        : "Only arrows, lines, shapes, and text have a style"),
+      (styleCard.common().length > 0 ? undefined : "Comments and groups have no style"),
     run: () => styleCard.copy(),
   },
   pasteStyle: {
@@ -941,6 +939,9 @@ const styleCard = card(
     reading: () => editing.reading(),
     floor: () => bar.top(),
     apply: (work) => editing.apply(work),
+    adjust: (work) => editing.adjust(work),
+    finishAdjusting: () => editing.finishAdjusting(),
+    adjusting: () => editing.adjusting(),
     pick: () => picker.start(false),
     explain: (element, explanation) => bar.explain(element, explanation),
     say: (said) => bar.say(said),

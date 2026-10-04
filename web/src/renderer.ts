@@ -22,9 +22,31 @@ export type Placed =
       greyscale: boolean;
       /** Whether it shows only the ellipse that fills its frame. */
       elliptical: boolean;
+      opacity?: number;
     }
-  | { kind: "text"; id: string; frame: Rect; rotation: number; paint: Paint }
-  | { kind: "line"; from: Point; to: Point; width: number; paint: Paint; dashed?: boolean }
+  | { kind: "text"; id: string; frame: Rect; rotation: number; paint: Paint; opacity?: number }
+  | {
+      kind: "line";
+      from: Point;
+      to: Point;
+      width: number;
+      paint: Paint;
+      dashed?: boolean;
+      opacity?: number;
+    }
+  /** Its heads `head` long, at `to`, and at `from` too when `heads` is 2, never dashed. */
+  | {
+      kind: "arrow";
+      from: Point;
+      to: Point;
+      width: number;
+      paint: Paint;
+      dashed?: boolean;
+      head: number;
+      heads: 1 | 2;
+      opacity?: number;
+    }
+  /** `fill` how much of its paint fills it, none unless given. */
   | {
       kind: "rectangle" | "ellipse" | "cross";
       frame: Rect;
@@ -32,14 +54,15 @@ export type Placed =
       width: number;
       paint: Paint;
       dashed?: boolean;
+      fill?: number;
+      opacity?: number;
     }
   | {
       kind: "fill";
-      shape: "rectangle" | "ellipse";
       frame: Rect;
       rotation: number;
       paint: Paint;
-      opacity: number;
+      opacity?: number;
     };
 
 /** An animated image, whose frames it draws onto its asset's texture. */
@@ -105,11 +128,11 @@ export interface Renderer {
 /** How long a render may wait for the GPU to hand its pixels over, in milliseconds. */
 const READBACK_TIME = 15_000;
 /** Floats per item, as `draw` reads them, those an item leaves out being zeros. */
-const STRIDE = 13;
+const STRIDE = 14;
 /** As the renderer tells its items apart. */
 const KINDS = { image: 0, stroke: 1, text: 2 };
 /** As the renderer tells its strokes apart. */
-const SHAPES = { line: 0, rectangle: 1, ellipse: 2, fill: 3, cross: 4, ellipseFill: 5 };
+const SHAPES = { line: 0, rectangle: 1, ellipse: 2, fill: 3, cross: 4, arrow: 6 };
 /** How wide a line of the grid is, or a dot across, in CSS pixels, and how much of the ink it takes. */
 const GRID = {
   grid: { width: 1, alpha: 0.1 },
@@ -326,10 +349,15 @@ function packed(
         : item.kind === "text"
           ? texts.get(item.id)
           : -1;
-    return texture === undefined ? [] : [floats(item, texture, painted)];
+    return texture === undefined
+      ? []
+      : [{ values: floats(item, texture, painted), opacity: item.opacity ?? 1 }];
   });
   const items = new Float32Array(shown.length * STRIDE);
-  shown.forEach((item, at) => items.set(item, at * STRIDE));
+  shown.forEach(({ values, opacity }, at) => {
+    items.set(values, at * STRIDE);
+    items[(at + 1) * STRIDE - 1] = opacity;
+  });
   return items;
 }
 
@@ -350,7 +378,7 @@ function turn(): Promise<void> {
   });
 }
 
-/** As the renderer lays out its items: its kind, its texture, then its instance. */
+/** As the renderer lays out its items: its kind, its texture, then its instance, but its opacity. */
 function floats(item: Placed, texture: number, colours: Paints): number[] {
   switch (item.kind) {
     case "image": {
@@ -369,21 +397,21 @@ function floats(item: Placed, texture: number, colours: Paints): number[] {
       const line = [from.x, from.y, to.x, to.y, 0, stroke(item)];
       return [KINDS.stroke, -1, SHAPES.line, ...line, ...colours(item.paint)];
     }
+    case "arrow": {
+      const { from, to } = item;
+      const arrow = [from.x, from.y, to.x, to.y, item.head, stroke(item)];
+      return [KINDS.stroke, -1, SHAPES.arrow, ...arrow, ...colours(item.paint), item.heads];
+    }
     case "fill": {
       const { frame } = item;
-      const fill = [frame.x, frame.y, frame.width, frame.height, item.rotation, item.opacity];
-      return [
-        KINDS.stroke,
-        -1,
-        item.shape === "ellipse" ? SHAPES.ellipseFill : SHAPES.fill,
-        ...fill,
-        ...colours(item.paint),
-      ];
+      const fill = [frame.x, frame.y, frame.width, frame.height, item.rotation, 0];
+      return [KINDS.stroke, -1, SHAPES.fill, ...fill, ...colours(item.paint)];
     }
     default: {
       const { frame } = item;
       const outline = [frame.x, frame.y, frame.width, frame.height, item.rotation, stroke(item)];
-      return [KINDS.stroke, -1, SHAPES[item.kind], ...outline, ...colours(item.paint)];
+      const fill = item.fill ?? 0;
+      return [KINDS.stroke, -1, SHAPES[item.kind], ...outline, ...colours(item.paint), fill];
     }
   }
 }

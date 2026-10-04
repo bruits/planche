@@ -545,6 +545,7 @@ mod tests {
             weight: Weight::Medium,
             fill: Fill::Hollow,
             dash: Dash::Solid,
+            opacity: Default::default(),
         }
     }
 
@@ -561,6 +562,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         }
     }
 
@@ -590,6 +592,7 @@ mod tests {
             weight: Weight::Medium,
             dash: Dash::Solid,
             heads: Heads::End,
+            opacity: Default::default(),
         };
         let comment = ElementKind::Comment {
             at: point(50.0, 50.0),
@@ -820,6 +823,7 @@ mod tests {
             weight: Weight::Medium,
             dash: Dash::Solid,
             heads: Heads::End,
+            opacity: Default::default(),
         };
         let board = board([
             (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0)))),
@@ -880,6 +884,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         };
         // At the picture's (7.5, 2.5), which lands at the crop's (0.5, 0.75) once flipped:
         // (150, 150) upright, turned a quarter around (150, 100).

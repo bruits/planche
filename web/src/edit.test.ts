@@ -81,6 +81,17 @@ function page(more: [string, Kind][] = [], { drawing }: Partial<Pick<Hooks, "dra
   return { opened, editing, hooks, pointer, at };
 }
 
+function lower(editing: Edits, y: number) {
+  editing.adjust((editor, touched) =>
+    touched.push(
+      ...editor.update(
+        STICKY,
+        JSON.stringify({ ...sticky, frame: { x: 0, y, width: 100, height: 100 } }),
+      ),
+    ),
+  );
+}
+
 function nextFrame(): Promise<number> {
   return new Promise((resolve) => requestAnimationFrame(resolve));
 }
@@ -176,6 +187,58 @@ describe("edits", () => {
     ).toThrow("Someone is editing in Planche");
     pointer("pointerup", 90, 50);
     expect(at()).toEqual({ x: 40, y: 0 });
+  });
+
+  it("holds what is adjusted open, keeping others out, and undoes it in one step", async () => {
+    const { editing, pointer, at } = page();
+    lower(editing, 10);
+    lower(editing, 30);
+    expect(at()).toEqual({ x: 0, y: 30 });
+    expect(() =>
+      editing.apply((editor, touched) => touched.push(...editor.translate([STICKY], 0, 20))),
+    ).toThrow("Someone is editing in Planche");
+    pointer("pointerdown", 50, 50);
+    pointer("pointermove", 90, 50);
+    await nextFrame();
+    pointer("pointerup", 90, 50);
+    editing.undo();
+    expect(at()).toEqual({ x: 0, y: 30 });
+    const idle = vi.fn<() => void>();
+    const waited = editing.idle().then(idle);
+    await Promise.resolve();
+    expect(idle).not.toHaveBeenCalled();
+    editing.finishAdjusting();
+    await waited;
+    editing.undo();
+    expect(at()).toEqual({ x: 0, y: 0 });
+  });
+
+  it("takes back all it adjusted once a step throws, and lets others in", async () => {
+    const { editing, at } = page();
+    lower(editing, 10);
+    expect(() =>
+      editing.adjust(() => {
+        throw new Error("Not there");
+      }),
+    ).toThrow("Not there");
+    expect(at()).toEqual({ x: 0, y: 0 });
+    await editing.idle();
+    expect(editing.adjusting()).toBe(false);
+  });
+
+  it("lets go of what is adjusted once its board goes, waking who waits", async () => {
+    const { opened, editing, at } = page();
+    lower(editing, 10);
+    const waited = editing.idle();
+    // As the app does once another board opens.
+    const next = untitled();
+    next.editor.add(STICKY, undefined, JSON.stringify(sticky));
+    opened.editor = next.editor;
+    opened.board = core.board(next.editor);
+    editing.reset();
+    await waited;
+    editing.apply((editor, touched) => touched.push(...editor.translate([STICKY], 0, 20)));
+    expect(at()).toEqual({ x: 0, y: 20 });
   });
 
   it("selects the comments pinned within a marquee", async () => {

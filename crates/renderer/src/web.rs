@@ -58,6 +58,7 @@ struct Out {
     /// In device pixels.
     @location(3) size: vec2f,
     @location(4) elliptical: f32,
+    @location(5) opacity: f32,
 };
 
 @vertex fn vs(
@@ -67,6 +68,7 @@ struct Out {
     @location(2) crop: vec4f,
     @location(3) grey: f32,
     @location(4) elliptical: f32,
+    @location(5) opacity: f32,
 ) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
     let size = abs(rect.zw) * camera.zoom;
@@ -78,6 +80,7 @@ struct Out {
     out.grey = grey;
     out.size = size;
     out.elliptical = elliptical;
+    out.opacity = opacity;
     return out;
 }
 
@@ -86,7 +89,7 @@ struct Out {
     let luma = dot(color.rgb, vec3f(0.2126, 0.7152, 0.0722));
     let away = ellipse((in.parts - 0.5) * in.size, in.size * 0.5);
     let shown = select(1.0, clamp(0.5 - away, 0.0, 1.0), in.elliptical > 0.5);
-    return vec4f(mix(color.rgb, vec3f(luma), in.grey), color.a * shown);
+    return vec4f(mix(color.rgb, vec3f(luma), in.grey), color.a * shown * in.opacity);
 }
 "#;
 
@@ -96,24 +99,31 @@ const TEXT: &str = r#"
 @group(1) @binding(0) var coverage: texture_2d<f32>;
 @group(1) @binding(1) var coverage_sampler: sampler;
 
-struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f, @location(1) colour: vec3f };
+struct Out {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+    @location(1) colour: vec3f,
+    @location(2) opacity: f32,
+};
 
 @vertex fn vs(
     @builtin(vertex_index) index: u32,
     @location(0) rect: vec4f,
     @location(1) degrees: f32,
     @location(2) colour: vec3f,
+    @location(3) opacity: f32,
 ) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
     var out: Out;
     out.position = place(corner, rect, degrees);
     out.uv = corner;
     out.colour = colour;
+    out.opacity = opacity;
     return out;
 }
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
-    return vec4f(in.colour, textureSample(coverage, coverage_sampler, in.uv).a);
+    return vec4f(in.colour, textureSample(coverage, coverage_sampler, in.uv).a * in.opacity);
 }
 "#;
 
@@ -132,12 +142,16 @@ struct Out {
     @location(4) colour: vec3f,
     @location(5) dash: f32,
     @location(6) opacity: f32,
+    @location(7) extra: f32,
 };
 
-/// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, 1 or 2 for the outline of a
-/// rectangle or an ellipse in the frame `geometry`, turned by `degrees`, 3 or 5 fills that
-/// rectangle or that ellipse, then `width` being its opacity, and 4 draws its diagonals. `width`
-/// is otherwise in board units, but never under a device pixel, and dashes the stroke when negative.
+/// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, and 6 for an arrow along it, its
+/// heads `degrees` long, at its end, and its start too when `extra` is 2. 1 or 2 outlines a
+/// rectangle or an ellipse in the frame `geometry`, turned by `degrees`, filling it as much as
+/// `extra`, 3 fills the rectangle, and 4 draws its diagonals. `width` is in board units, but never under
+/// a device pixel, and dashes the stroke when negative, though not an arrow's heads. What one
+/// instance draws blends once, so that an arrow with its heads, or an outline with its fill, fades
+/// as a whole. A text over them blends apart.
 @vertex fn vs(
     @builtin(vertex_index) index: u32,
     @location(0) shape: f32,
@@ -145,9 +159,11 @@ struct Out {
     @location(2) degrees: f32,
     @location(3) width: f32,
     @location(4) colour: vec3f,
+    @location(5) opacity: f32,
+    @location(6) extra: f32,
 ) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
-    let fills = (shape > 2.5 && shape < 3.5) || shape > 4.5;
+    let fills = shape > 2.5 && shape < 3.5;
     let dashed = width < 0.0 && !fills;
     let thickness = abs(width);
     let radius = max(select(thickness, 0.0, fills) * camera.zoom, 1.0) * 0.5;
@@ -156,17 +172,21 @@ struct Out {
     out.radius = radius;
     out.shape = shape;
     out.colour = colour;
-    out.opacity = select(1.0, width, fills);
+    out.opacity = opacity;
+    out.extra = extra;
     // Never so short that the caps close the gaps.
     out.dash = select(0.0, max(DASH * thickness * camera.zoom, radius * 6.0), dashed);
-    if shape < 0.5 {
+    if shape < 0.5 || shape > 5.5 {
         let start = (geometry.xy - camera.origin) * camera.zoom;
         let end = (geometry.zw - camera.origin) * camera.zoom;
         let span = distance(start, end);
         let along = select(vec2f(1.0, 0.0), (end - start) / span, span > 0.0);
         let across = vec2f(-along.y, along.x);
-        out.local = vec2f(mix(-margin, span + margin, corner.x), mix(-margin, margin, corner.y));
-        out.size = vec2f(span, 0.0);
+        let head = select(0.0, degrees * camera.zoom, shape > 5.5);
+        // As far across as the heads reach, at 30° from the shaft.
+        let reach = margin + head * 0.5;
+        out.local = vec2f(mix(-margin, span + margin, corner.x), mix(-reach, reach, corner.y));
+        out.size = vec2f(span, head);
         out.position = clip(start + along * out.local.x + across * out.local.y);
     } else {
         let half = abs(geometry.zw) * 0.5 * camera.zoom;
@@ -176,6 +196,12 @@ struct Out {
         out.position = clip(centre + turn(out.local, degrees));
     }
     return out;
+}
+
+fn segment(point: vec2f, start: vec2f, end: vec2f) -> f32 {
+    let along = end - start;
+    let t = clamp(dot(point - start, along) / max(dot(along, along), 1e-6), 0.0, 1.0);
+    return distance(point, start + along * t);
 }
 
 /// Negative within the box.
@@ -250,25 +276,40 @@ fn dashed_ellipse(local: vec2f, half: vec2f, base: f32, away: f32) -> f32 {
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
     var away: f32;
-    if in.shape < 0.5 {
+    var filled = 0.0;
+    if in.shape < 0.5 || in.shape > 5.5 {
         var nearest = clamp(in.local.x, 0.0, in.size.x);
         if in.dash > 0.0 {
             nearest = nearest_dash(in.local.x, whole_period(in.size.x, in.dash), in.size.x);
         }
         away = length(vec2f(in.local.x - nearest, in.local.y));
+        if in.shape > 5.5 {
+            // Folded across the shaft, each head's two strokes are one.
+            let point = vec2f(in.local.x, abs(in.local.y));
+            let back = in.size.y * vec2f(0.8660254, 0.5);
+            let tip = vec2f(in.size.x, 0.0);
+            away = min(away, segment(point, tip, tip + vec2f(-back.x, back.y)));
+            if in.extra > 1.5 {
+                away = min(away, segment(point, vec2f(0.0), back));
+            }
+        }
     } else if in.shape < 1.5 {
-        away = abs(box(in.local, in.size));
+        let edge = box(in.local, in.size);
+        away = abs(edge);
+        filled = clamp(0.5 - edge, 0.0, 1.0) * in.extra;
         if in.dash > 0.0 && away < in.radius + 1.0 {
             away = dashed_box(in.local, in.size, in.dash);
         }
     } else if in.shape < 2.5 {
-        away = abs(ellipse(in.local, in.size));
+        let edge = ellipse(in.local, in.size);
+        away = abs(edge);
+        filled = clamp(0.5 - edge, 0.0, 1.0) * in.extra;
         if in.dash > 0.0 && away < in.radius + 1.0 {
             away = dashed_ellipse(in.local, in.size, in.dash, away);
         }
     } else if in.shape < 3.5 {
         return vec4f(in.colour, clamp(0.5 - box(in.local, in.size), 0.0, 1.0) * in.opacity);
-    } else if in.shape < 4.5 {
+    } else {
         // Folded into one quarter, both diagonals run from the centre to the corner.
         let point = abs(in.local);
         let along = clamp(dot(point, in.size) / max(dot(in.size, in.size), 1e-6), 0.0, 1.0);
@@ -281,10 +322,9 @@ fn dashed_ellipse(local: vec2f, half: vec2f, base: f32, away: f32) -> f32 {
             let off = reach - nearest_dash(reach, whole_period(arm, in.dash), arm);
             away = length(vec2f(off, length(point - direction * reach)));
         }
-    } else {
-        return vec4f(in.colour, clamp(0.5 - ellipse(in.local, in.size), 0.0, 1.0) * in.opacity);
     }
-    return vec4f(in.colour, clamp(in.radius - away + 0.5, 0.0, 1.0));
+    let stroke = clamp(in.radius - away + 0.5, 0.0, 1.0);
+    return vec4f(in.colour, (stroke + filled * (1.0 - stroke)) * in.opacity);
 }
 "#;
 
@@ -344,18 +384,26 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f };
 
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Floats per item in [`Renderer::draw`]: its kind, which is 0 for an image, 1 for a stroke, and
-/// 2 for a text, its texture or -1, then its instance.
+/// 2 for a text, its texture or -1, then its instance, whose last float is its opacity from 0 to
+/// 1, whatever its kind.
 ///
 /// An image's instance is its x, y, width, height, rotation, the crop's x, y, width, and height
 /// in texture coordinates, which a negative size flips, 1 to draw in greys or 0, and 1 to show
 /// the ellipse that fills it or 0. A text's is its x, y, width, height, rotation, colour, and
-/// padding. A stroke's is the shape, geometry, rotation, width, and colour that [`STROKES`]
-/// reads, and padding. Colours are red, green, and blue from 0 to 1.
-const STRIDE: usize = 13;
+/// padding. A stroke's is the shape, geometry, rotation, width, colour, and extra that [`STROKES`]
+/// reads. Colours are red, green, and blue from 0 to 1.
+const STRIDE: usize = 14;
 const IMAGE: f32 = 0.0;
 const STROKE: f32 = 1.0;
 /// Bytes per instance, which every kind shares, as WebGL2 finds instances by one stride.
 const INSTANCE: u64 = (STRIDE as u64 - 2) * 4;
+const fn opacity(location: u32) -> wgpu::VertexAttribute {
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32,
+        offset: INSTANCE - 4,
+        shader_location: location,
+    }
+}
 /// The camera's origin, zoom, and viewport, padded as [`CAMERA`] lays them out.
 const CAMERA_SIZE: u64 = 32;
 /// Floats of the grid, as [`GRID`] lays them out. Its offset, spacing, fade, colour's red,
@@ -506,6 +554,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
         write_mask: wgpu::ColorWrites::ALL,
     };
+    let [rect, degrees, crop, grey, elliptical] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x4, 3 => Float32, 4 => Float32];
     let quads = pipeline(
         &device,
         &[CAMERA, ELLIPSE, QUADS].concat(),
@@ -513,10 +562,12 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         &[Some(wgpu::VertexBufferLayout {
             array_stride: INSTANCE,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x4, 3 => Float32, 4 => Float32],
+            attributes: &[rect, degrees, crop, grey, elliptical, opacity(5)],
         })],
         target.clone(),
     );
+    let [rect, degrees, colour] =
+        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x3];
     let texts = pipeline(
         &device,
         &[CAMERA, TEXT].concat(),
@@ -524,10 +575,11 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         &[Some(wgpu::VertexBufferLayout {
             array_stride: INSTANCE,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x3],
+            attributes: &[rect, degrees, colour, opacity(3)],
         })],
         target.clone(),
     );
+    let [shape, geometry, degrees, width, colour, extra] = wgpu::vertex_attr_array![0 => Float32, 1 => Float32x4, 2 => Float32, 3 => Float32, 4 => Float32x3, 5 => Float32];
     let strokes = pipeline(
         &device,
         &[CAMERA, ELLIPSE, STROKES].concat(),
@@ -535,7 +587,18 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         &[Some(wgpu::VertexBufferLayout {
             array_stride: INSTANCE,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32, 1 => Float32x4, 2 => Float32, 3 => Float32, 4 => Float32x3],
+            attributes: &[
+                shape,
+                geometry,
+                degrees,
+                width,
+                colour,
+                wgpu::VertexAttribute {
+                    shader_location: 6,
+                    ..extra
+                },
+                opacity(5),
+            ],
         })],
         target.clone(),
     );

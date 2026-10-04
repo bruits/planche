@@ -104,6 +104,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         }
     }
 
@@ -222,6 +223,7 @@ mod tests {
             text: Text::new("Note".to_owned(), 20.0),
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         };
         let editor = editor([note]);
         let point = Point { x: 5.0, y: 5.0 };
@@ -314,6 +316,7 @@ mod tests {
             text: Text::new("Note".to_owned(), 20.0),
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         };
         let mut editor = editor([image(0.0, false, false), note]);
         let before = editor.board().clone();
@@ -348,6 +351,7 @@ mod tests {
             text: Text::new("Note".to_owned(), 20.0),
             target: Some(id(1)),
             colour: Colour::Ink,
+            opacity: Default::default(),
         };
         let mut editor = editor([image(30.0, true, false), note]);
         let centre = |editor: &Editor| match &editor.board().elements[&id(2)].kind {

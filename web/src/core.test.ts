@@ -156,8 +156,8 @@ const defaults: [string, Kind, Kind][] = [
 
 describe("the core", () => {
   it("tells how each part of a style comes, by the type of what takes it", () => {
-    const parts = { colour: "ink", weight: "medium", dash: "solid" };
-    const written = { bold: false, italic: false, strike: false };
+    const parts = { colour: "ink", weight: "medium", dash: "solid", opacity: 100 };
+    const written = { bold: false, italic: false, strike: false, opacity: 100 };
     expect(core.plain(note())).toEqual({
       colour: "ink",
       ...written,
@@ -172,7 +172,7 @@ describe("the core", () => {
     });
     expect(core.plain(arrow())).toEqual({ ...parts, heads: "end" });
     expect(core.plain(line())).toEqual(parts);
-    expect(core.plain(image())).toEqual({});
+    expect(core.plain(image())).toEqual({ opacity: 100 });
   });
 
   it.each(kinds)("%s reads back as the shells sent it", (_, kind) => {

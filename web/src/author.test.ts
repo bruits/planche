@@ -187,6 +187,22 @@ describe("write", () => {
     expect(opened.editor.json()).toBe(before);
   });
 
+  it("fades what an agent names, but no comment, which takes no opacity", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const line = { type: "line", from: { x: 0, y: 0 }, to: { x: 100, y: 0 }, opacity: 40 };
+    const { added } = (await write("add", { elements: [line, comment] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const [drawn, pinned] = added.map(({ id }) => id);
+    expect(opened.board.elements[drawn!]!.kind).toMatchObject({ opacity: 40 });
+    await write("update", { updates: [{ id: drawn, opacity: 100 }] }, writing, later());
+    expect(opened.board.elements[drawn!]!.kind).not.toHaveProperty("opacity");
+    await expect(
+      write("update", { updates: [{ id: pinned, opacity: 50 }] }, writing, later()),
+    ).rejects.toThrow("opacity");
+  });
+
   it("writes a style an agent chooses as it comes as nothing", async () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       font: "",

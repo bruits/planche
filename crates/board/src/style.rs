@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Align, Colour, Dash, ElementKind, Fill, Heads, Paper, Shape, Text, Weight};
+use crate::{Align, Colour, Dash, ElementKind, Fill, Heads, Opacity, Paper, Shape, Text, Weight};
 
 /// A part of a style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +21,7 @@ pub enum Setting {
     Italic,
     Strike,
     Align,
+    Opacity,
 }
 
 /// Parts of a style, each set or not.
@@ -62,8 +63,12 @@ pub struct Style {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub align: Option<Align>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub opacity: Option<Opacity>,
 }
 
+const IMAGE: &[Setting] = &[Setting::Opacity];
 const NOTE: &[Setting] = &[
     Setting::Colour,
     Setting::FontSize,
@@ -71,6 +76,7 @@ const NOTE: &[Setting] = &[
     Setting::Italic,
     Setting::Strike,
     Setting::Align,
+    Setting::Opacity,
 ];
 const STICKY: &[Setting] = &[
     Setting::Paper,
@@ -79,6 +85,7 @@ const STICKY: &[Setting] = &[
     Setting::Italic,
     Setting::Strike,
     Setting::Align,
+    Setting::Opacity,
 ];
 const SHAPE: &[Setting] = &[
     Setting::Colour,
@@ -90,6 +97,7 @@ const SHAPE: &[Setting] = &[
     Setting::Italic,
     Setting::Strike,
     Setting::Align,
+    Setting::Opacity,
 ];
 const CROSS: &[Setting] = &[
     Setting::Colour,
@@ -100,14 +108,21 @@ const CROSS: &[Setting] = &[
     Setting::Italic,
     Setting::Strike,
     Setting::Align,
+    Setting::Opacity,
 ];
 const ARROW: &[Setting] = &[
     Setting::Colour,
     Setting::Weight,
     Setting::Dash,
     Setting::Heads,
+    Setting::Opacity,
 ];
-const LINE: &[Setting] = &[Setting::Colour, Setting::Weight, Setting::Dash];
+const LINE: &[Setting] = &[
+    Setting::Colour,
+    Setting::Weight,
+    Setting::Dash,
+    Setting::Opacity,
+];
 
 impl ElementKind {
     /// The parts of a style it takes, those of its text even while it holds none. A cross fills
@@ -123,7 +138,8 @@ impl ElementKind {
             Self::Shape { .. } => SHAPE,
             Self::Arrow { .. } => ARROW,
             Self::Line { .. } => LINE,
-            Self::Image { .. } | Self::Comment { .. } | Self::Group => &[],
+            Self::Image { .. } => IMAGE,
+            Self::Comment { .. } | Self::Group => &[],
         }
     }
 
@@ -144,6 +160,7 @@ impl ElementKind {
                 Setting::Italic => style.italic = Some(false),
                 Setting::Strike => style.strike = Some(false),
                 Setting::Align => style.align = self.default_align(),
+                Setting::Opacity => style.opacity = Some(Opacity::default()),
             }
         }
         style
@@ -193,6 +210,9 @@ impl ElementKind {
             }
             Self::Image { .. } | Self::Comment { .. } | Self::Group => {}
         }
+        if let Some(opacity) = self.opacity_mut() {
+            set(opacity, style.opacity);
+        }
         if let Some(text) = self.text_mut() {
             set(&mut text.font_size, style.font_size);
             set(&mut text.bold, style.bold);
@@ -227,6 +247,18 @@ impl ElementKind {
             Self::Note { .. } | Self::Sticky { .. } => Some(Align::Left),
             Self::Shape { .. } => Some(Align::Centre),
             _ => None,
+        }
+    }
+
+    fn opacity_mut(&mut self) -> Option<&mut Opacity> {
+        match self {
+            Self::Image { opacity, .. }
+            | Self::Note { opacity, .. }
+            | Self::Sticky { opacity, .. }
+            | Self::Shape { opacity, .. }
+            | Self::Arrow { opacity, .. }
+            | Self::Line { opacity, .. } => Some(opacity),
+            Self::Comment { .. } | Self::Group => None,
         }
     }
 
@@ -272,6 +304,7 @@ mod tests {
             weight: Weight::Medium,
             dash: Dash::Solid,
             fill,
+            opacity: Default::default(),
         }
     }
 
@@ -284,6 +317,7 @@ mod tests {
             text,
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         }
     }
 
@@ -294,6 +328,7 @@ mod tests {
             text: Text::new("", 20.0),
             target: None,
             paper: Paper::Yellow,
+            opacity: Default::default(),
         }
     }
 
@@ -310,6 +345,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         }
     }
 
@@ -322,6 +358,7 @@ mod tests {
             colour: Colour::Ink,
             weight: Weight::Medium,
             dash: Dash::Solid,
+            opacity: Default::default(),
         }
     }
 
@@ -363,6 +400,7 @@ mod tests {
             italic: Some(true),
             strike: Some(true),
             align: Some(Align::Right),
+            opacity: Opacity::new(40),
         });
         // A fill a cross holds from a file written before crosses took none.
         if let ElementKind::Shape {
@@ -391,7 +429,7 @@ mod tests {
                 .contains(&Setting::Fill)
         );
         assert!(arrow().settings().contains(&Setting::Heads));
-        assert!(image().settings().is_empty());
+        assert_eq!(image().settings(), [Setting::Opacity]);
         assert!(comment().settings().is_empty());
         assert!(ElementKind::Group.settings().is_empty());
         // The plain style shows each part the element takes, but the size of its text.
@@ -414,17 +452,21 @@ mod tests {
 
     #[test]
     fn the_plain_style_is_each_part_as_it_comes_whatever_the_element_chose() {
+        let whole = Style {
+            opacity: Some(Opacity::WHOLE),
+            ..Style::default()
+        };
         let text = Style {
             bold: Some(false),
             italic: Some(false),
             strike: Some(false),
-            ..Style::default()
+            ..whole
         };
         let stroke = Style {
             colour: Some(Colour::Ink),
             weight: Some(Weight::Medium),
             dash: Some(Dash::Solid),
-            ..Style::default()
+            ..whole
         };
         let in_shape = Style {
             colour: stroke.colour,
@@ -458,7 +500,7 @@ mod tests {
                 ..stroke
             },
             stroke,
-            Style::default(),
+            whole,
             Style::default(),
             Style::default(),
         ];
@@ -488,6 +530,15 @@ mod tests {
         };
         assert_eq!((colour, fill), (Colour::Red, Fill::Hollow));
         assert_eq!(image().with_style(&style), image());
+        let faded = Style {
+            opacity: Opacity::new(50),
+            ..Style::default()
+        };
+        let ElementKind::Image { opacity, .. } = image().with_style(&faded) else {
+            unreachable!()
+        };
+        assert_eq!(opacity.percent(), 50);
+        assert_eq!(comment().with_style(&faded), comment());
         // Unset parts stay as they were.
         let right = note(Some(Align::Right));
         assert_eq!(right.clone().with_style(&Style::default()), right);

@@ -90,9 +90,15 @@ function framed({ board, editor }: Opened, ids: string[], chosen: string[]): Rec
       chosen.length === 0 ? "Give an area or some ids" : "Those elements draw nothing to show",
     );
   }
-  // The core bounds an arrow by its ends, past which the strokes of its head reach.
+  // The core bounds an arrow by its ends, past which its heads reach, as far as they are long.
   const reached = placed({ ...board, draw_order: ids }, { placed: () => undefined }).flatMap(
-    (item) => (item.kind === "line" ? [item.to] : []),
+    (item) =>
+      item.kind === "arrow"
+        ? [item.from, item.to].flatMap(({ x, y }) => [
+            { x: x - item.head, y: y - item.head },
+            { x: x + item.head, y: y + item.head },
+          ])
+        : [],
   );
   const xs = [bounds.x, bounds.x + bounds.width, ...reached.map(({ x }) => x)];
   const ys = [bounds.y, bounds.y + bounds.height, ...reached.map(({ y }) => y)];

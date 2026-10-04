@@ -305,6 +305,8 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         caption: Option<String>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        opacity: Opacity,
     },
     /// Text alone.
     Note {
@@ -317,6 +319,8 @@ pub enum ElementKind {
         target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "is_default")]
         colour: Colour,
+        #[serde(default, skip_serializing_if = "is_default")]
+        opacity: Opacity,
     },
     /// A sticky note, on its paper, whose colour stays whatever the theme.
     Sticky {
@@ -329,6 +333,8 @@ pub enum ElementKind {
         target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "is_default")]
         paper: Paper,
+        #[serde(default, skip_serializing_if = "is_default")]
+        opacity: Opacity,
     },
     /// Its outline, its fill, and its text in its `colour`. A cross fills nothing.
     Shape {
@@ -348,6 +354,8 @@ pub enum ElementKind {
         dash: Dash,
         #[serde(default, skip_serializing_if = "is_default")]
         fill: Fill,
+        #[serde(default, skip_serializing_if = "is_default")]
+        opacity: Opacity,
     },
     /// Its head is at `to`, unless `heads` says otherwise.
     Arrow {
@@ -367,6 +375,8 @@ pub enum ElementKind {
         dash: Dash,
         #[serde(default, skip_serializing_if = "is_default")]
         heads: Heads,
+        #[serde(default, skip_serializing_if = "is_default")]
+        opacity: Opacity,
     },
     Line {
         from: Point,
@@ -383,6 +393,8 @@ pub enum ElementKind {
         weight: Weight,
         #[serde(default, skip_serializing_if = "is_default")]
         dash: Dash,
+        #[serde(default, skip_serializing_if = "is_default")]
+        opacity: Opacity,
     },
     /// Pinned at `at`, and shown at one size on screen, whatever the zoom, so it covers nothing
     /// on the board.
@@ -528,6 +540,7 @@ impl ElementKind {
                 source: _,
                 filename: _,
                 caption: _,
+                opacity: _,
             } => frame.is_finite() && rotation.is_finite() && edits.is_finite(),
             Self::Note {
                 frame,
@@ -535,6 +548,7 @@ impl ElementKind {
                 text,
                 target: _,
                 colour: _,
+                opacity: _,
             }
             | Self::Sticky {
                 frame,
@@ -542,6 +556,7 @@ impl ElementKind {
                 text,
                 target: _,
                 paper: _,
+                opacity: _,
             }
             | Self::Shape {
                 frame,
@@ -553,6 +568,7 @@ impl ElementKind {
                 weight: _,
                 dash: _,
                 fill: _,
+                opacity: _,
             } => frame.is_finite() && rotation.is_finite() && text.is_valid(),
             // Whether their targets are there is up to the board.
             Self::Arrow {
@@ -564,6 +580,7 @@ impl ElementKind {
                 weight: _,
                 dash: _,
                 heads: _,
+                opacity: _,
             }
             | Self::Line {
                 from,
@@ -573,6 +590,7 @@ impl ElementKind {
                 colour: _,
                 weight: _,
                 dash: _,
+                opacity: _,
             } => from.is_finite() && to.is_finite(),
             Self::Comment {
                 at,
@@ -755,6 +773,43 @@ impl<'de> Deserialize<'de> for Colour {
         String::deserialize(deserializer)?
             .parse()
             .map_err(serde::de::Error::custom)
+    }
+}
+
+/// How much of an element shows, a whole percent from 1 to 100, as none would leave nothing to
+/// find it by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "number"))]
+pub struct Opacity(u8);
+
+impl Opacity {
+    pub const WHOLE: Self = Self(100);
+
+    pub fn new(percent: u8) -> Option<Self> {
+        (1..=100).contains(&percent).then_some(Self(percent))
+    }
+
+    pub fn percent(self) -> u8 {
+        self.0
+    }
+}
+
+impl Default for Opacity {
+    fn default() -> Self {
+        Self::WHOLE
+    }
+}
+
+impl<'de> Deserialize<'de> for Opacity {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let percent = u8::deserialize(deserializer)?;
+        Self::new(percent).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "an opacity is a percent from 1 to 100, not {percent}"
+            ))
+        })
     }
 }
 
@@ -1058,6 +1113,17 @@ mod tests {
     }
 
     #[test]
+    fn an_opacity_is_a_whole_percent_that_shows_something() {
+        let read = |json: &str| serde_json::from_str::<Opacity>(json);
+        assert_eq!(read("1").unwrap().percent(), 1);
+        assert_eq!(read("100").unwrap(), Opacity::default());
+        for json in ["0", "101", "-1", "0.5", "\"50\""] {
+            assert!(read(json).is_err(), "{json}");
+        }
+        assert_eq!(serde_json::to_string(&Opacity::new(40)).unwrap(), "40");
+    }
+
+    #[test]
     fn an_id_has_no_other_spelling() {
         for text in [
             "00000000000000000123456789ABCDEF",
@@ -1093,6 +1159,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         };
         let text = |font_size| Text::new(String::new(), font_size);
         let note = |frame, rotation| ElementKind::Note {
@@ -1101,6 +1168,7 @@ mod tests {
             text: text(20.0),
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         };
         let sticky = |frame, rotation, font_size| ElementKind::Sticky {
             frame,
@@ -1108,6 +1176,7 @@ mod tests {
             text: text(font_size),
             target: None,
             paper: Paper::Yellow,
+            opacity: Default::default(),
         };
         let shape = |frame, rotation, font_size| ElementKind::Shape {
             frame,
@@ -1119,6 +1188,7 @@ mod tests {
             weight: Weight::Medium,
             fill: Fill::Hollow,
             dash: Dash::Solid,
+            opacity: Default::default(),
         };
         let arrow = |from, to| ElementKind::Arrow {
             from,
@@ -1129,6 +1199,7 @@ mod tests {
             weight: Weight::Medium,
             dash: Dash::Solid,
             heads: Heads::End,
+            opacity: Default::default(),
         };
         let line = |from, to| ElementKind::Line {
             from,
@@ -1138,6 +1209,7 @@ mod tests {
             colour: Colour::Ink,
             weight: Weight::Medium,
             dash: Dash::Solid,
+            opacity: Default::default(),
         };
         let comment = |at| ElementKind::Comment {
             at,
@@ -1240,6 +1312,7 @@ mod tests {
             weight: Weight::Medium,
             dash: Dash::Solid,
             heads: Heads::End,
+            opacity: Default::default(),
         }
     }
 
@@ -1331,6 +1404,7 @@ mod tests {
             colour: Colour::Ink,
             weight: Weight::Medium,
             dash: Dash::Solid,
+            opacity: Default::default(),
         };
         let note = ElementKind::Note {
             frame: Rect {
@@ -1343,6 +1417,7 @@ mod tests {
             text: Text::new(String::new(), 1.0),
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         };
         let mut broken = board([
             (1, element(None, "a0", note)),
@@ -1370,6 +1445,7 @@ mod tests {
             text: Text::new(String::new(), 1.0),
             target: Some(id(target)),
             colour: Colour::Ink,
+            opacity: Default::default(),
         };
         let mut broken = board([
             (1, element(None, "a0", note(3))),

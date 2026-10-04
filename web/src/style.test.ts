@@ -35,8 +35,8 @@ describe("a style", () => {
   });
 
   it("offers what each element takes, but no text style for a blank shape", () => {
-    expect(settings(arrow)).toEqual(["colour", "weight", "dash", "heads"]);
-    expect(settings(shape("rectangle"))).toEqual(["colour", "weight", "dash", "fill"]);
+    expect(settings(arrow)).toEqual(["colour", "weight", "dash", "heads", "opacity"]);
+    expect(settings(shape("rectangle"))).toEqual(["colour", "weight", "dash", "fill", "opacity"]);
     expect(settings(shape("cross", "X"))).toEqual([
       "colour",
       "weight",
@@ -46,6 +46,7 @@ describe("a style", () => {
       "italic",
       "strike",
       "align",
+      "opacity",
     ]);
   });
 

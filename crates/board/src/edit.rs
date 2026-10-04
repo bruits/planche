@@ -1435,6 +1435,7 @@ mod tests {
             text: Text::new(String::new(), 2.0),
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         }
     }
 
@@ -1869,6 +1870,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         };
         let mut editor = Editor::new(board([
             (1, element(None, "a0", ElementKind::Group)),
@@ -1906,6 +1908,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         };
         let mut editor = Editor::new(board([
             (1, element(None, "a0", image(true))),
@@ -2306,6 +2309,7 @@ mod tests {
                 weight: Weight::Medium,
                 dash: Dash::Solid,
                 heads: Heads::End,
+                opacity: Default::default(),
             },
             ElementKind::Line {
                 from,
@@ -2315,6 +2319,7 @@ mod tests {
                 colour: Colour::Ink,
                 weight: Weight::Medium,
                 dash: Dash::Solid,
+                opacity: Default::default(),
             },
         ] {
             let mut editor = Editor::new(board([(1, element(None, "a0", kind))]));
@@ -2384,6 +2389,7 @@ mod tests {
             text: Text::new("a".to_owned(), font_size),
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         };
         for font_size in [0.0, -0.0, -2.0] {
             let mut editor = editor();
@@ -2422,6 +2428,7 @@ mod tests {
             weight: Weight::Medium,
             dash: Dash::Solid,
             heads: Heads::End,
+            opacity: Default::default(),
         }
     }
 
@@ -2437,6 +2444,7 @@ mod tests {
             text: Text::new(String::new(), 2.0),
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         }
     }
 
@@ -2508,6 +2516,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         };
         let rect = |width, height| Rect {
             x: 0.0,
@@ -2584,6 +2593,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         };
         let mut editor = Editor::new(board([
             (1, element(None, "a0", image)),
@@ -2694,6 +2704,7 @@ mod tests {
             text: Text::new("Warm".to_owned(), 2.0),
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         };
         assert_eq!(editor.update(id(1), written).unwrap(), ids([1]));
         assert_eq!(
@@ -2814,6 +2825,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         }
     }
 
@@ -2833,6 +2845,7 @@ mod tests {
             text,
             target,
             colour: Colour::Ink,
+            opacity: Default::default(),
         }
     }
 
@@ -2927,6 +2940,7 @@ mod tests {
             weight: Weight::Medium,
             dash: Dash::Solid,
             fill: Fill::Solid,
+            opacity: Default::default(),
         };
         let mut editor = Editor::new(board([(1, element(None, "a0", filled.clone()))]));
         let mut cross = filled;
@@ -3444,6 +3458,7 @@ mod tests {
             weight: Weight::Medium,
             fill: Fill::Hollow,
             dash: Dash::Solid,
+            opacity: Default::default(),
         };
         let comment = |x, y| ElementKind::Comment {
             at: Point { x, y },
@@ -3500,6 +3515,7 @@ mod tests {
             weight: Weight::Medium,
             fill: Fill::Hollow,
             dash: Dash::Solid,
+            opacity: Default::default(),
         };
         let mut aslant = picture(400.0, 0.0);
         if let ElementKind::Image { rotation, .. } = &mut aslant {
@@ -3553,6 +3569,7 @@ mod tests {
             weight: Weight::Medium,
             fill: Fill::Hollow,
             dash: Dash::Solid,
+            opacity: Default::default(),
         };
         let mut editor = Editor::new(board([
             (1, element(None, "a0", shown)),
@@ -3588,6 +3605,7 @@ mod tests {
             weight: Weight::Medium,
             fill,
             dash: Dash::Solid,
+            opacity: Default::default(),
         };
         let comment = ElementKind::Comment {
             at: Point { x: 50.0, y: 50.0 },
@@ -3771,6 +3789,7 @@ mod tests {
             text: Text::new(String::new(), 20.0),
             target: None,
             paper: crate::Paper::default(),
+            opacity: Default::default(),
         };
         let comment = ElementKind::Comment {
             at: Point { x: 150.0, y: 190.0 },

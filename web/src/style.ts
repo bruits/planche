@@ -40,6 +40,9 @@ export const SIZES: { label: string; name: string; pixels: number }[] = [
   { label: "XL", name: "Extra large text", pixels: 40 },
 ];
 
+/** In percent, the steps the card marks on its opacity, and snaps to. */
+export const OPACITIES = [25, 50, 75, 100];
+
 /** What a change sets, each where it applies. */
 export interface Style {
   colour?: Colour;
@@ -54,6 +57,8 @@ export interface Style {
   italic?: boolean;
   strike?: boolean;
   align?: Align;
+  /** In percent. */
+  opacity?: number;
 }
 
 export type Setting = keyof Style;
@@ -88,6 +93,8 @@ export function valueOf(kind: Kind, setting: Setting, zoom: number): Style[Setti
       return drawn(plain.heads, "heads" in kind ? kind.heads : undefined);
     case "fill":
       return drawn(plain.fill, "fill" in kind ? kind.fill : undefined);
+    case "opacity":
+      return drawn(plain.opacity, "opacity" in kind ? kind.opacity : undefined);
     case "size":
       return text && text.font_size * zoom;
     case "bold":
@@ -96,6 +103,11 @@ export function valueOf(kind: Kind, setting: Setting, zoom: number): Style[Setti
     case "align":
       return drawn(plain[setting], text?.[setting]);
   }
+}
+
+/** How much of it shows, from 0 to 1. */
+export function opacityOf(kind: Kind): number {
+  return Number(valueOf(kind, "opacity", 1) ?? 100) / 100;
 }
 
 /** None where the plain style leaves the part out, which the element then takes none of. */

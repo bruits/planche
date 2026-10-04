@@ -126,21 +126,33 @@ describe("placed", () => {
     const sticky: Kind = { type: "sticky", frame, rotation: 0, text };
     expect(drawn(sticky)).toMatchObject([{ kind: "fill", paint: "paper-yellow" }]);
     const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
-    expect(drawn(arrow)).toMatchObject([
-      { kind: "line", paint: "ink", dashed: false },
-      { kind: "line", paint: "ink", dashed: false },
-      { kind: "line", paint: "ink", dashed: false },
-    ]);
-    expect(drawn({ ...arrow, heads: "both" })).toHaveLength(5);
+    expect(drawn(arrow)).toMatchObject([{ kind: "arrow", paint: "ink", dashed: false, heads: 1 }]);
+    expect(drawn({ ...arrow, heads: "both" })).toMatchObject([{ kind: "arrow", heads: 2 }]);
+  });
+
+  it("fades all an element draws by its opacity, over what its fills take", () => {
+    const shape: Kind = {
+      type: "shape",
+      frame,
+      rotation: 0,
+      shape: "rectangle",
+      text,
+      fill: "solid",
+      opacity: 50,
+    };
+    expect(drawn(shape)).toMatchObject([{ kind: "rectangle", fill: 1, opacity: 0.5 }]);
+    expect(drawn({ ...shape, fill: "tint" })).toMatchObject([{ fill: 0.18, opacity: 0.5 }]);
+    const sticky: Kind = { type: "sticky", frame, rotation: 0, text, opacity: 50 };
+    expect(drawn(sticky)).toMatchObject([{ kind: "fill", opacity: 0.5 }]);
+    const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
+    expect(drawn({ ...arrow, opacity: 25 })).toMatchObject([{ kind: "arrow", opacity: 0.25 }]);
+    expect(drawn(arrow)[0]).not.toHaveProperty("opacity");
   });
 
   it("fills no cross, though one from an older file may hold a fill", () => {
     const cross: Kind = { type: "shape", frame, rotation: 0, shape: "cross", text, fill: "solid" };
     expect(drawn(cross)).toMatchObject([{ kind: "cross" }]);
-    expect(drawn({ ...cross, shape: "ellipse" })).toMatchObject([
-      { kind: "fill", shape: "ellipse" },
-      { kind: "ellipse" },
-    ]);
+    expect(drawn({ ...cross, shape: "ellipse" })).toMatchObject([{ kind: "ellipse", fill: 1 }]);
   });
 });
 

@@ -7,12 +7,35 @@ import * as core from "./core.js";
 import { styles } from "./style.js";
 
 const IMAGE = "a".repeat(32);
+const ARROW = "d".repeat(32);
+const OTHER = "e".repeat(32);
 const ASSET = "b".repeat(64);
 const frame = { x: 0, y: 0, width: 160, height: 120 };
+const ORIGIN = { x: 0, y: 0 };
 const command = (): Command => ({ label: "", run: vi.fn<() => void>() });
 
 function field(name: string): HTMLInputElement {
   return document.querySelector<HTMLInputElement>(`.style-card input[aria-label="${name}"]`)!;
+}
+
+function slider(): HTMLInputElement {
+  return document.querySelector<HTMLInputElement>('.style-card input[type="range"]')!;
+}
+
+function press(type: "pointerdown" | "pointerup", init: PointerEventInit = {}) {
+  slider().dispatchEvent(new PointerEvent(type, init));
+}
+
+function key(type: "keydown" | "keyup") {
+  slider().dispatchEvent(new KeyboardEvent(type, { key: "ArrowLeft" }));
+}
+
+function slide(percent: number, { release = false } = {}) {
+  slider().value = String(percent);
+  slider().dispatchEvent(new Event("input"));
+  if (release) {
+    slider().dispatchEvent(new Event("change"));
+  }
 }
 
 /** The card over a board holding one image, selected, which comes from `source`. */
@@ -25,6 +48,7 @@ function opened(source?: string) {
   board.editor.add(IMAGE, undefined, JSON.stringify(kind));
   board.board = core.board(board.editor);
   let selected = [IMAGE];
+  let held = false;
   const commands: CardCommands = {
     colours: [],
     bold: command(),
@@ -50,10 +74,13 @@ function opened(source?: string) {
       ],
       client: ({ x, y }) => ({ clientX: x, clientY: y }),
       zoom: () => 1,
-      busy: () => false,
+      busy: () => held,
       reading: () => undefined,
       floor: () => 800,
       apply(work) {
+        if (held) {
+          throw new Error("Someone is editing in Planche");
+        }
         const touched: string[] = [];
         board.editor.beginGesture();
         work(board.editor, touched);
@@ -62,6 +89,23 @@ function opened(source?: string) {
         // As the app does once an edit is made.
         shown.refresh();
       },
+      adjust(work) {
+        held = true;
+        board.editor.beginGesture();
+        work(board.editor, []);
+        board.board = core.board(board.editor);
+        shown.refresh();
+      },
+      finishAdjusting() {
+        if (!held) {
+          return;
+        }
+        held = false;
+        board.editor.endGesture();
+        board.board = core.board(board.editor);
+        shown.refresh();
+      },
+      adjusting: () => held,
       pick() {},
       explain() {},
       say() {},
@@ -78,7 +122,12 @@ function opened(source?: string) {
     selected = ids;
     shown.refresh();
   };
-  return { board, shown, commands, image, select };
+  /** As the app does once its board goes. */
+  const drop = () => {
+    held = false;
+    board.editor.endGesture();
+  };
+  return { board, shown, commands, image, select, drop };
 }
 
 describe("the card of a lone image", () => {
@@ -174,6 +223,87 @@ describe("the card of a lone image", () => {
     expect(document.querySelector('button[aria-label="Open a.example"]')).not.toBeNull();
   });
 
+  it("fades it as its opacity slides, and as one edit once let go", () => {
+    const { board, image } = opened();
+    const sliding = slider();
+    press("pointerdown");
+    slide(40);
+    slide(60);
+    expect(image()?.opacity).toBe(60);
+    expect(slider()).toBe(sliding);
+    expect(document.querySelector<HTMLElement>(".style-card")?.hidden).toBe(false);
+    expect(board.editor.canUndo()).toBe(false);
+    press("pointerup");
+    board.editor.undo();
+    expect(image()).not.toHaveProperty("opacity");
+  });
+
+  it("lets go of its opacity once released, though no change comes, nor counts after", () => {
+    const { board, image } = opened();
+    const sliding = slider();
+    press("pointerdown");
+    slide(52);
+    press("pointerup");
+    expect(image()?.opacity).toBe(50);
+    expect(board.editor.canUndo()).toBe(true);
+    // As a browser sends it after the release, to the slider the card has since built again.
+    sliding.dispatchEvent(new Event("change"));
+    board.editor.undo();
+    expect(image()).not.toHaveProperty("opacity");
+  });
+
+  it("writes nothing of its opacity once whole again", () => {
+    const { image } = opened();
+    slide(50, { release: true });
+    expect(image()?.opacity).toBe(50);
+    slide(100, { release: true });
+    expect(image()).not.toHaveProperty("opacity");
+  });
+
+  it("snaps its opacity to a step under a pointer, but not under the keys", () => {
+    const { image } = opened();
+    press("pointerdown");
+    slide(52);
+    press("pointerup");
+    expect(image()?.opacity).toBe(50);
+    key("keydown");
+    slide(51, { release: true });
+    key("keyup");
+    expect(image()?.opacity).toBe(51);
+  });
+
+  it("makes one edit of a key held on its opacity, once the key is up", () => {
+    const { board, image } = opened();
+    const sliding = slider();
+    for (const percent of [99, 98, 97]) {
+      key("keydown");
+      slide(percent, { release: true });
+    }
+    expect(slider()).toBe(sliding);
+    key("keyup");
+    expect(image()?.opacity).toBe(97);
+    board.editor.undo();
+    expect(image()).not.toHaveProperty("opacity");
+  });
+
+  it("keeps the focus on its opacity as the keys change it", () => {
+    opened();
+    slider().focus();
+    key("keydown");
+    slide(99, { release: true });
+    key("keyup");
+    expect(document.activeElement).toBe(slider());
+    expect(slider().getAttribute("aria-valuetext")).toBe("99%");
+  });
+
+  it("lays its opacity under its own row, as a shape's comes last", () => {
+    opened();
+    const rows = [...document.querySelectorAll('.style-card [role="group"]')].map((row) =>
+      row.getAttribute("aria-label"),
+    );
+    expect(rows).toEqual(["Image", "Opacity", "Info"]);
+  });
+
   it("lets go of a field before a press elsewhere reaches the board", () => {
     opened();
     field("Caption").focus();
@@ -195,5 +325,84 @@ describe("the card of a lone image", () => {
     board.board = core.board(board.editor);
     shown.refresh();
     expect(field("Caption").value).toBe("From an agent");
+  });
+});
+
+/** An arrow as its tool would draw it now. */
+function drawn() {
+  return styles().dressed({ type: "arrow", from: ORIGIN, to: ORIGIN }, 1);
+}
+
+function both() {
+  const made = opened();
+  const arrow = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } } as const;
+  made.board.editor.add(ARROW, undefined, JSON.stringify({ ...arrow, colour: "red" }));
+  made.board.editor.add(OTHER, undefined, JSON.stringify(arrow));
+  made.board.board = core.board(made.board.editor);
+  made.select([IMAGE, ARROW]);
+  const kind = (id: string) => core.element(made.board.editor, id)?.kind;
+  return { ...made, kind };
+}
+
+describe("the card of an image and an arrow", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    localStorage.clear();
+  });
+
+  it("offers what the arrow takes, as an image narrows it to nothing but opacity", () => {
+    const { shown, kind } = both();
+    expect(shown.common()).toEqual(expect.arrayContaining(["colour", "opacity"]));
+    shown.set({ colour: "blue", opacity: 50 });
+    expect(kind(ARROW)).toMatchObject({ colour: "blue", opacity: 50 });
+    expect(kind(IMAGE)).toMatchObject({ opacity: 50 });
+    expect(kind(IMAGE)).not.toHaveProperty("colour");
+  });
+
+  it("shows a mixed opacity, which a press sets on them all, but not a right-click", () => {
+    const { board, shown, kind } = both();
+    board.editor.update(IMAGE, JSON.stringify({ ...kind(IMAGE), opacity: 40 }));
+    board.board = core.board(board.editor);
+    shown.refresh();
+    expect(document.querySelector(".style-card .slider.mixed .value")?.textContent).toBe("Mixed");
+    press("pointerdown", { button: 2 });
+    press("pointerup", { button: 2 });
+    expect(kind(IMAGE)).toMatchObject({ opacity: 40 });
+    press("pointerdown");
+    press("pointerup");
+    expect(kind(IMAGE)).not.toHaveProperty("opacity");
+    expect(kind(ARROW)).not.toHaveProperty("opacity");
+  });
+
+  it("leaves the arrow tool's opacity alone while ⌥ is held", () => {
+    both();
+    press("pointerdown", { altKey: true });
+    slide(40);
+    press("pointerup");
+    expect(drawn()).not.toHaveProperty("opacity");
+    press("pointerdown");
+    slide(25);
+    press("pointerup");
+    expect(drawn()).toMatchObject({ opacity: 25 });
+  });
+
+  it("builds again once the edit its opacity holds ends elsewhere, as the board goes", () => {
+    const { select, drop } = both();
+    press("pointerdown");
+    slide(40);
+    drop();
+    select([IMAGE]);
+    const rows = [...document.querySelectorAll('.style-card [role="group"]')].map((row) =>
+      row.getAttribute("aria-label"),
+    );
+    expect(rows).toEqual(["Image", "Opacity", "Info"]);
+  });
+
+  it("copies the arrow's style", () => {
+    const { shown, kind, select } = both();
+    shown.copy();
+    select([OTHER]);
+    shown.paste();
+    expect(kind(OTHER)).toMatchObject({ colour: "red" });
   });
 });

@@ -48,7 +48,11 @@ strike?: boolean,
 /**
  * Left by default.
  */
-align?: Align, } | { "type": "sticky", x: number, y: number, width?: number, height?: number, text?: string, font_size?: number, rotation?: number, group?: string, 
+align?: Align, 
+/**
+ * In percent, whole by default.
+ */
+opacity?: number, } | { "type": "sticky", x: number, y: number, width?: number, height?: number, text?: string, font_size?: number, rotation?: number, group?: string, 
 /**
  * Yellow by default, whatever the theme.
  */
@@ -56,7 +60,11 @@ paper?: Paper, bold?: boolean, italic?: boolean, strike?: boolean,
 /**
  * Left by default.
  */
-align?: Align, } | { "type": "shape", shape?: ShapeKind, x: number, y: number, width?: number, height?: number, text?: string, font_size?: number, rotation?: number, group?: string, colour?: Colour, weight?: Weight, 
+align?: Align, 
+/**
+ * In percent, whole by default.
+ */
+opacity?: number, } | { "type": "shape", shape?: ShapeKind, x: number, y: number, width?: number, height?: number, text?: string, font_size?: number, rotation?: number, group?: string, colour?: Colour, weight?: Weight, 
 /**
  * Of its outline.
  */
@@ -72,7 +80,19 @@ bold?: boolean, italic?: boolean, strike?: boolean,
 /**
  * Centred by default.
  */
-align?: Align, } | { "type": "arrow", from: Point, to: Point, group?: string, colour?: Colour, weight?: Weight, dash?: Dash, heads?: Heads, } | { "type": "line", from: Point, to: Point, group?: string, colour?: Colour, weight?: Weight, dash?: Dash, } | { "type": "comment", at: Point, text: string, group?: string, };
+align?: Align, 
+/**
+ * In percent, whole by default.
+ */
+opacity?: number, } | { "type": "arrow", from: Point, to: Point, group?: string, colour?: Colour, weight?: Weight, dash?: Dash, heads?: Heads, 
+/**
+ * In percent, whole by default.
+ */
+opacity?: number, } | { "type": "line", from: Point, to: Point, group?: string, colour?: Colour, weight?: Weight, dash?: Dash, 
+/**
+ * In percent, whole by default.
+ */
+opacity?: number, } | { "type": "comment", at: Point, text: string, group?: string, };
 
 export type NewImage = { 
 /**
@@ -238,7 +258,11 @@ strike?: boolean,
 /**
  * For a note, a sticky note, or a shape holding text.
  */
-align?: Align, };
+align?: Align, 
+/**
+ * For anything but a comment or a group, in percent.
+ */
+opacity?: number, };
 
 export type UpdateArguments = { updates: Array<Update>, };
 

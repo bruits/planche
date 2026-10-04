@@ -3,6 +3,7 @@
 // is written. Pressing anywhere else, Esc, or ⌘ or Ctrl with Enter finishes it.
 
 import { css } from "./paint.js";
+import { opacityOf } from "./style.js";
 import { FONT, LINE_HEIGHT, face, layout, paint, type Holder } from "./text.js";
 
 export interface Writer {
@@ -88,7 +89,9 @@ export function writer(board: HTMLElement): Writer {
         "font-style": italic ? "italic" : "normal",
         "text-decoration": text.strike ? "line-through" : "none",
         "text-align": { left: "left", centre: "center", right: "right" }[align],
-        color: css(paint(kind), board),
+        // Faded as the renderer fades it, but for the caret, which would be hard to find.
+        color: `color-mix(in srgb, ${css(paint(kind), board)} ${opacityOf(kind) * 100}%, transparent)`,
+        "caret-color": css(paint(kind), board),
         transform: `rotate(${rotation}deg)`,
       });
       field.classList.remove("bubble");

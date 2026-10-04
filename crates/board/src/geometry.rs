@@ -712,6 +712,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         }
     }
 
@@ -725,6 +726,7 @@ mod tests {
             weight: Weight::Medium,
             dash: Dash::Solid,
             heads: Heads::End,
+            opacity: Default::default(),
         }
     }
 
@@ -915,6 +917,7 @@ mod tests {
             weight: Weight::Medium,
             fill: Fill::Hollow,
             dash: Dash::Solid,
+            opacity: Default::default(),
         }
     }
 
@@ -1068,6 +1071,7 @@ mod tests {
             text,
             target: None,
             paper: Paper::Yellow,
+            opacity: Default::default(),
         };
         let board = board([(1, element(None, "a0", sticky))]);
         assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(1)));
@@ -1253,6 +1257,7 @@ mod tests {
                 weight: Weight::Medium,
                 dash: Dash::Solid,
                 heads: Heads::End,
+                opacity: Default::default(),
             },
             ElementKind::Line {
                 from,
@@ -1262,6 +1267,7 @@ mod tests {
                 colour: Colour::Ink,
                 weight: Weight::Medium,
                 dash: Dash::Solid,
+                opacity: Default::default(),
             },
         ] {
             let board = board([(1, element(None, "a0", kind))]);

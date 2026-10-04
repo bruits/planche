@@ -153,6 +153,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         }
     }
 
@@ -253,6 +254,7 @@ mod tests {
             text: Text::new("On it".to_owned(), 10.0),
             target: Some(id(1)),
             colour: Colour::Ink,
+            opacity: Default::default(),
         };
         let mut pointing = arrow();
         let [(from, from_target), (to, _)] = pointing.ends_mut().unwrap();
@@ -414,6 +416,7 @@ mod tests {
             text: Text::new("On it".to_owned(), 10.0),
             target: Some(id(target)),
             colour: Colour::Ink,
+            opacity: Default::default(),
         }
     }
 

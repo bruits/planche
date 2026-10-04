@@ -120,6 +120,9 @@ pub enum NewElement {
         strike: Option<bool>,
         /// Left by default.
         align: Option<Align>,
+        /// In percent, whole by default.
+        #[schemars(range(min = 1, max = 100))]
+        opacity: Option<u8>,
     },
     /// A sticky note, which grows to hold its text. `x` and `y` are its top left corner.
     Sticky {
@@ -138,6 +141,9 @@ pub enum NewElement {
         strike: Option<bool>,
         /// Left by default.
         align: Option<Align>,
+        /// In percent, whole by default.
+        #[schemars(range(min = 1, max = 100))]
+        opacity: Option<u8>,
     },
     /// A rectangle by default, which grows to hold its text, centred. `x` and `y` are its top
     /// left corner.
@@ -163,6 +169,9 @@ pub enum NewElement {
         strike: Option<bool>,
         /// Centred by default.
         align: Option<Align>,
+        /// In percent, whole by default.
+        #[schemars(range(min = 1, max = 100))]
+        opacity: Option<u8>,
     },
     /// Its head is at `to`, unless `heads` says both ends.
     Arrow {
@@ -173,6 +182,9 @@ pub enum NewElement {
         weight: Option<Weight>,
         dash: Option<Dash>,
         heads: Option<Heads>,
+        /// In percent, whole by default.
+        #[schemars(range(min = 1, max = 100))]
+        opacity: Option<u8>,
     },
     Line {
         from: Point,
@@ -181,6 +193,9 @@ pub enum NewElement {
         colour: Option<Colour>,
         weight: Option<Weight>,
         dash: Option<Dash>,
+        /// In percent, whole by default.
+        #[schemars(range(min = 1, max = 100))]
+        opacity: Option<u8>,
     },
     /// Pinned at `at`.
     Comment {
@@ -350,6 +365,9 @@ pub struct Update {
     pub strike: Option<bool>,
     /// For a note, a sticky note, or a shape holding text.
     pub align: Option<Align>,
+    /// For anything but a comment or a group, in percent.
+    #[schemars(range(min = 1, max = 100))]
+    pub opacity: Option<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

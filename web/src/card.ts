@@ -14,7 +14,7 @@ import {
   type Image,
   type Opened,
 } from "./board.js";
-import { ariaKeys, describe, type Command, type Shortcut } from "./commands.js";
+import { ariaKeys, describe, opensMenu, type Command, type Shortcut } from "./commands.js";
 import type { Colour, CropShape, Kind, Point } from "./core.js";
 import type { Reading } from "./edit.js";
 import { message } from "./errors.js";
@@ -23,6 +23,7 @@ import { css, type Paint } from "./paint.js";
 import { unitsPerPixel } from "./vector.js";
 import { defaultAlignment, holdsText } from "./text.js";
 import {
+  OPACITIES,
   PALETTE,
   PAPERS,
   RECENT,
@@ -72,6 +73,9 @@ const ALIGNMENTS: Choice<"align">[] = [
   { value: "right", label: "Align right", look: () => icon("alignRight") },
 ];
 
+/** How near one of the steps a pointer snaps the opacity to it, in percent. */
+const SNAP = 3;
+
 /** From the window's edges, in CSS pixels. */
 const MARGIN = 8;
 /** From the selection, past the zones outside its corners that turn it, in CSS pixels. */
@@ -92,6 +96,11 @@ export interface CardHost {
   floor(): number;
   /** As one edit that undoes in one step. Throws when one is under way. */
   apply(work: (editor: Opened["editor"], touched: string[]) => void): void;
+  /** As `apply`, held open until `finishAdjusting`, each going on from the last, as one edit. */
+  adjust(work: (editor: Opened["editor"], touched: string[]) => void): void;
+  finishAdjusting(): void;
+  /** Whether its edit is held open, which no other gesture is meanwhile. */
+  adjusting(): boolean;
   /** Starts picking a colour from the board, until a click. */
   pick(): void;
   /** Names `button` in the hint while it is hovered or focused. */
@@ -216,14 +225,17 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       .map((id) => ({ id, kind: board.elements[id]!.kind }));
   };
   const alone = () => loneImage(host.current()?.board, host.selection());
-  /** Of the targets, those that have a style, which images and comments lack. */
+  /** Of the targets, those that have a style, which comments lack. */
   const styled = () => targets().filter(({ kind }) => settings(kind).length > 0);
+  /** Of what they take, as an image, which takes only opacity, narrows nothing. */
   const common = (): Setting[] => {
     const all = styled();
-    const [first] = all;
+    const drawn = all.filter(({ kind }) => kind.type !== "image");
+    const counted = drawn.length > 0 ? drawn : all;
+    const [first] = counted;
     return first
       ? settings(first.kind).filter((setting) =>
-          all.every(({ kind }) => settings(kind).includes(setting)),
+          counted.every(({ kind }) => settings(kind).includes(setting)),
         )
       : [];
   };
@@ -233,22 +245,28 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   };
   const value = <S extends Setting>(setting: S): Style[S] | undefined => {
     const zoom = host.zoom() ?? 1;
-    const values = styled().map(({ kind }) => valueOf(kind, setting, zoom));
+    const values = styled()
+      .filter(({ kind }) => settings(kind).includes(setting))
+      .map(({ kind }) => valueOf(kind, setting, zoom));
     const [first] = values;
     // A size shows as one when within a pixel, as zooming leaves it a hair off.
     const same = (other: Style[Setting]) =>
       setting === "size" ? Math.abs(Number(other) - Number(first)) < 0.5 : other === first;
     return values.length > 0 && values.every(same) ? (first as Style[S]) : undefined;
   };
-  const edit = (work: (editor: Opened["editor"], touched: string[]) => void) => {
+  const edit = (work: (editor: Opened["editor"], touched: string[]) => void, held = false) => {
     try {
-      host.apply(work);
+      if (held) {
+        host.adjust(work);
+      } else {
+        host.apply(work);
+      }
     } catch (error) {
       host.say(message(error));
     }
   };
   /** Each element selected in `style`, or the style `each` gives it, as one edit. */
-  const restyle = (style: Style, each: (kind: Kind) => Style = () => style) => {
+  const restyle = (style: Style, each: (kind: Kind) => Style = () => style, held = false) => {
     const zoom = host.zoom();
     const all = targets();
     if (zoom === undefined || all.length === 0) {
@@ -261,7 +279,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
           touched.push(...editor.update(id, JSON.stringify(next)));
         }
       }
-    });
+    }, held);
     if (style.colour !== undefined) {
       store.pick(style.colour);
     }
@@ -330,6 +348,119 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       }),
     );
   };
+  const opacity = () => {
+    const shown = value("opacity");
+    const paper = value("paper");
+    const made = document.createElement("div");
+    made.className = "slider";
+    made.classList.toggle("mixed", shown === undefined);
+    const tint = value("colour") ?? (paper ? `paper-${paper}` : "ink");
+    made.style.setProperty("--tint", css(tint, panel));
+    const track = document.createElement("div");
+    track.className = "track";
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = "1";
+    input.max = "100";
+    input.value = String(shown ?? 100);
+    // Apart from its row's, which the focus would go back to as the card builds again.
+    input.setAttribute("aria-label", "Opacity level");
+    const ticks = OPACITIES.slice(0, -1).map((percent) => {
+      const tick = document.createElement("span");
+      tick.className = "tick";
+      const at = (percent - Number(input.min)) / (Number(input.max) - Number(input.min));
+      tick.style.setProperty("--at", String(at));
+      return tick;
+    });
+    track.append(input, ...ticks);
+    const amount = document.createElement("span");
+    amount.className = "value";
+    const show = (text: string) => {
+      amount.textContent = text;
+      input.setAttribute("aria-valuetext", text);
+    };
+    show(shown === undefined ? "Mixed" : `${shown}%`);
+    /** Whether its edit is held, so that it ends once, as several events may each end it. */
+    let sliding = false;
+    let pointer = false;
+    let held = false;
+    let only = false;
+    const slide = () => {
+      const near = pointer
+        ? OPACITIES.find((step) => Math.abs(step - Number(input.value)) <= SNAP)
+        : undefined;
+      if (near !== undefined) {
+        input.value = String(near);
+      }
+      made.classList.remove("mixed");
+      show(`${input.value}%`);
+      sliding = true;
+      restyle({ opacity: Number(input.value) }, undefined, true);
+    };
+    const finish = () => {
+      if (!sliding) {
+        return;
+      }
+      sliding = false;
+      // Back to the board, as a button pressed gives it back.
+      if (pointer) {
+        input.blur();
+      }
+      host.finishAdjusting();
+      if (!only) {
+        store.learn(
+          targets().map(({ kind }) => kind),
+          { opacity: Number(input.value) },
+        );
+      }
+    };
+    const release = () => {
+      if (pointer) {
+        finish();
+        pointer = false;
+      }
+    };
+    input.addEventListener("pointerdown", (event) => {
+      // The primary button alone, as the others, and ⌃ on a Mac, open the menu.
+      if (event.button === 0 && !opensMenu(event)) {
+        pointer = true;
+        only = event.altKey;
+      }
+    });
+    input.addEventListener("keydown", (event) => {
+      held = true;
+      only = event.altKey;
+    });
+    input.addEventListener("input", slide);
+    // Browsers send none once a pointer lets go where the value started, or on a step snapped to,
+    // which its release ends instead. A key held repeats it, as one edit until the key is up.
+    input.addEventListener("change", () => {
+      if (!held) {
+        finish();
+      }
+    });
+    input.addEventListener("keyup", () => {
+      held = false;
+      finish();
+    });
+    // A press that moves nothing sets nothing, but from Mixed it takes the value shown.
+    input.addEventListener("pointerup", () => {
+      if (pointer && made.classList.contains("mixed")) {
+        slide();
+      }
+      release();
+    });
+    // Never left holding its edit open, which would keep undo from working.
+    input.addEventListener("lostpointercapture", release);
+    input.addEventListener("pointercancel", release);
+    input.addEventListener("blur", () => {
+      held = false;
+      finish();
+    });
+    host.explain(input, () => "Opacity");
+    made.append(track, amount);
+    return [made];
+  };
   const toggle = (
     setting: "bold" | "italic" | "strike",
     label: string,
@@ -371,10 +502,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     if (can.has("size")) {
       const shown = value("size");
       const sizes = SIZES.map(({ label, name, pixels }) => {
-        const letters = document.createElement("span");
-        letters.className = "letters";
-        letters.textContent = label;
-        return button(name, letters, (event) => set({ size: pixels }, event.altKey), {
+        return button(name, letters(label), (event) => set({ size: pixels }, event.altKey), {
           pressed: shown !== undefined && Math.abs(shown - pixels) < 0.5,
         });
       });
@@ -435,6 +563,9 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
           ],
         ),
       );
+    }
+    if (can.has("opacity")) {
+      rows.push(row("Opacity", opacity()));
     }
     const lone = alone();
     if (lone) {
@@ -594,7 +725,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     // Not under a field being written in, which would lose what it holds, until it is left.
     const active = document.activeElement;
     const writing = active instanceof HTMLInputElement && panel.contains(active.closest(".info"));
-    if (signature !== built && !writing && !saving) {
+    if (signature !== built && !writing && !saving && !host.adjusting()) {
       rebuild(rows, signature);
     }
     sync();
@@ -605,7 +736,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     const holder = focused?.closest<HTMLElement>(".info")?.dataset.element;
     // Gone without the pointer leaving them, they would leave their hint behind.
     panel
-      .querySelectorAll("button, .custom")
+      .querySelectorAll("button, .custom, input[type=range]")
       .forEach((old) => old.dispatchEvent(new PointerEvent("pointerleave")));
     built = signature;
     panel.replaceChildren(...rows.flatMap((made, at) => (at > 0 ? [rule(), made] : [made])));
@@ -639,7 +770,9 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       opener.title = shortcut ? `${name} · ${describe(shortcut)}` : name;
     }
   };
-  const visible = () => targets().length > 0 && (common().length > 0 || images()) && !host.busy();
+  // Not hidden by the edit its opacity holds open as it slides.
+  const visible = () =>
+    targets().length > 0 && (common().length > 0 || images()) && (host.adjusting() || !host.busy());
   const show = (focus = false) => {
     const reading = host.reading();
     readout.hidden = reading === undefined;
@@ -747,7 +880,8 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     images,
     greyscale,
     copy() {
-      const [first] = styled();
+      const all = styled();
+      const first = all.find(({ kind }) => kind.type !== "image") ?? all[0];
       const zoom = host.zoom();
       if (first && zoom !== undefined && settings(first.kind).length > 0) {
         const { kind } = first;
@@ -769,6 +903,13 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     },
     canPaste: () => copied !== undefined,
   };
+}
+
+function letters(text: string): HTMLSpanElement {
+  const made = document.createElement("span");
+  made.className = "letters";
+  made.textContent = text;
+  return made;
 }
 
 function swatch(paint: Paint, kind: "palette" | "own" | "paper"): HTMLSpanElement {

@@ -99,7 +99,7 @@ export interface Hooks {
    */
   changed(touched: string[]): void;
   selectionChanged(): void;
-  /** Once a press ends, whose gesture held undo and redo back. */
+  /** Once a press or an adjustment ends, whose gesture held undo and redo back. */
   settled(): void;
   snapping(): boolean;
   /** What a press draws, `undefined` when it selects. */
@@ -167,6 +167,14 @@ export interface Edits {
    * gesture or some writing is under way, or when `work` throws, after which none of it stays.
    */
   apply(work: (editor: Editor, touched: string[]) => void): string[];
+  /**
+   * As `apply`, but held open until `finishAdjusting`, each one going on from the last, so that a
+   * value slid to shows on the board as it goes and undoes in one step.
+   */
+  adjust(work: (editor: Editor, touched: string[]) => void): string[];
+  finishAdjusting(): void;
+  /** Whether `adjust` holds its edit open, until it is finished, its work throws, or the board goes. */
+  adjusting(): boolean;
   /** The element being written in, whose text the renderer leaves to the field. */
   writing(): string | undefined;
   /** Whether the selection is one element that holds text. */
@@ -398,8 +406,10 @@ export function edits(
    * agents read the image whole.
    */
   let cropping: { id: string; area: Rect; shape: CropShape } | undefined;
+  let adjusting = false;
   let waiting: (() => void)[] = [];
-  const underway = () => press !== undefined || written !== undefined || cropping !== undefined;
+  const underway = () =>
+    press !== undefined || written !== undefined || cropping !== undefined || adjusting;
   const resolve = () => {
     if (!underway()) {
       const ready = waiting;
@@ -750,6 +760,7 @@ export function edits(
     const zoom = view.zoom();
     if (
       press ||
+      adjusting ||
       !editing ||
       !at ||
       !zoom ||
@@ -1467,6 +1478,40 @@ export function edits(
       }
       return [...new Set(touched)];
     },
+    adjust(work) {
+      const editing = current();
+      if (editing === undefined || (underway() && !adjusting)) {
+        throw new Error("Someone is editing in Planche");
+      }
+      const { editor } = editing;
+      if (!adjusting) {
+        editor.beginGesture();
+        adjusting = true;
+      }
+      const touched: string[] = [];
+      try {
+        work(editor, touched);
+      } catch (error) {
+        touched.push(...editor.rewindGesture());
+        editor.endGesture();
+        adjusting = false;
+        throw error;
+      } finally {
+        edit(editing, [...new Set(touched)]);
+        resolve();
+      }
+      return [...new Set(touched)];
+    },
+    finishAdjusting() {
+      if (!adjusting) {
+        return;
+      }
+      adjusting = false;
+      current()?.editor.endGesture();
+      resolve();
+      settled();
+    },
+    adjusting: () => adjusting,
     writing: () => written?.id,
     writable() {
       const editing = current();
@@ -1638,6 +1683,7 @@ export function edits(
       // Its board is gone, and its gesture with it.
       written = undefined;
       cropping = undefined;
+      adjusting = false;
       field.close();
       settle();
       overlay.outline([]);

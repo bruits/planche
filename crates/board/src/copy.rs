@@ -88,6 +88,7 @@ mod tests {
             text: Text::new(String::new(), 2.0),
             target: None,
             colour: Colour::Ink,
+            opacity: Default::default(),
         }
     }
 
@@ -142,6 +143,7 @@ mod tests {
             source: None,
             filename: None,
             caption: None,
+            opacity: Default::default(),
         };
         let copied = Copied {
             elements: board([
