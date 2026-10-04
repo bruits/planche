@@ -2,6 +2,7 @@
 // own undo, laid over the element as the renderer draws its text, so that nothing moves once it
 // is written. Pressing anywhere else, Esc, or ⌘ or Ctrl with Enter finishes it.
 
+import { composing } from "./commands.js";
 import { css } from "./paint.js";
 import { opacityOf } from "./style.js";
 import { FONT, LINE_HEIGHT, face, layout, paint, type Holder } from "./text.js";
@@ -45,7 +46,7 @@ export function writer(board: HTMLElement): Writer {
   };
   field.addEventListener("input", () => writing?.input(field.value));
   field.addEventListener("keydown", (event) => {
-    if (event.isComposing) {
+    if (composing(event)) {
       return;
     }
     if (event.key === "Escape" || (event.key === "Enter" && (event.metaKey || event.ctrlKey))) {

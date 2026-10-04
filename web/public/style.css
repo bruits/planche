@@ -285,9 +285,19 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .pin,
-  .pin .text {
+  .pin .text,
+  .selection {
     transition: none;
   }
+}
+
+/* Out of the way while the style card is used, as it would hide the strokes the card changes. */
+.selection {
+  transition: opacity 0.15s;
+}
+
+:root:has(.style-card:hover, .style-card:focus-within, .style-card :active) .selection {
+  opacity: 0;
 }
 
 .selection > *,

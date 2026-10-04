@@ -180,12 +180,15 @@ export interface Styles {
 }
 
 export function styles(): Styles {
-  const byTool = recalled();
-  let lately = recalledColours();
+  // Read once first used, as the core that checks them starts after the app makes this.
+  let byTool: Partial<Record<Draw, Style>> | undefined;
+  let lately: Colour[] | undefined;
+  const learnt = () => (byTool ??= recalled());
+  const colours = () => (lately ??= recalledColours());
   return {
     dressed(kind, zoom) {
       const tool = toolOf(kind);
-      const style = tool && byTool[tool];
+      const style = tool && learnt()[tool];
       if (!style) {
         return kind;
       }
@@ -195,24 +198,25 @@ export function styles(): Styles {
         : restyled(kind, style, zoom);
     },
     learn(kinds, style) {
+      const tools = learnt();
       for (const kind of kinds) {
         const tool = toolOf(kind);
         if (tool !== undefined) {
           const applying = settings(kind).filter((setting) => style[setting] !== undefined);
-          byTool[tool] = {
-            ...byTool[tool],
+          tools[tool] = {
+            ...tools[tool],
             ...Object.fromEntries(applying.map((setting) => [setting, style[setting]])),
           };
         }
       }
-      remember(STYLES, JSON.stringify(byTool));
+      remember(STYLES, JSON.stringify(tools));
     },
-    picked: () => lately,
+    picked: colours,
     pick(colour) {
       if (!colour.startsWith("#")) {
         return;
       }
-      lately = [colour, ...lately.filter((other) => other !== colour)].slice(0, RECENT);
+      lately = [colour, ...colours().filter((other) => other !== colour)].slice(0, RECENT);
       remember(PICKED, JSON.stringify(lately));
     },
   };

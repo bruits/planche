@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, it, expect, vi } from "vitest";
 import type { Kind } from "./core.js";
 import { restyled, settings, styleOf, styles, valueOf } from "./style.js";
@@ -32,6 +34,26 @@ describe("a style", () => {
   afterEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();
+  });
+
+  it("keeps what the tools learnt and the colours picked, though made before the core starts", async () => {
+    localStorage.setItem("planche.styles", JSON.stringify({ rectangle: { opacity: 40 } }));
+    localStorage.setItem("planche.picked", JSON.stringify(["#12ab9f", "nonsense"]));
+    // Its modules again, with no core yet.
+    vi.resetModules();
+    const early = (await import("./style.js")).styles();
+    expect(() => early.picked()).toThrow(TypeError);
+    const { initSync } = await import("./wasm/bindings.js");
+    initSync({
+      module: readFileSync(join(import.meta.dirname, "../public/js/wasm/bindings_bg.wasm")),
+    });
+    expect(early.dressed(shape("rectangle"), 1)).toEqual({ ...shape("rectangle"), opacity: 40 });
+    expect(early.picked()).toEqual(["#12ab9f"]);
+    early.learn([arrow], { colour: "red" });
+    expect(JSON.parse(localStorage.getItem("planche.styles")!)).toEqual({
+      rectangle: { opacity: 40 },
+      arrow: { colour: "red" },
+    });
   });
 
   it("offers what each element takes, but no text style for a blank shape", () => {

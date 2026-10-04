@@ -9,6 +9,14 @@ export function opensMenu(event: MouseEvent): boolean {
 }
 
 /**
+ * A key an input method composes text with, such as an accent. WebKit sends the one that ends the
+ * composition after it ended, which only its key code, 229, tells.
+ */
+export function composing(event: KeyboardEvent): boolean {
+  return event.isComposing || event.keyCode === 229;
+}
+
+/**
  * Letters match the character typed, so that they follow the keyboard layout, and `code`
  * matches where a key sits, for keys that some layouts only type with a modifier, such as
  * brackets. The character typed wins, since on some layouts one shortcut's key types another's
@@ -133,13 +141,7 @@ function capitalise(word: string): string {
  */
 export function listen(commands: Command[], listening: (command: Command) => boolean): () => void {
   const pressedKey = (event: KeyboardEvent) => {
-    // 229 is what a key composing text, such as an accent, reports in some browsers.
-    if (
-      event.defaultPrevented ||
-      event.isComposing ||
-      event.keyCode === 229 ||
-      typing(event.target)
-    ) {
+    if (event.defaultPrevented || composing(event) || typing(event.target)) {
       return;
     }
     // A focused button takes Enter to press itself.

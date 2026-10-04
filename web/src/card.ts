@@ -14,7 +14,14 @@ import {
   type Image,
   type Opened,
 } from "./board.js";
-import { ariaKeys, describe, opensMenu, type Command, type Shortcut } from "./commands.js";
+import {
+  ariaKeys,
+  composing,
+  describe,
+  opensMenu,
+  type Command,
+  type Shortcut,
+} from "./commands.js";
 import type { Colour, CropShape, Kind, Point } from "./core.js";
 import type { Reading } from "./edit.js";
 import { message } from "./errors.js";
@@ -612,8 +619,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       return kind?.type === "image" ? (kind[name] ?? "") : "";
     };
     input.addEventListener("keydown", (event) => {
-      // 229 is what a key composing text, such as an accent, reports in some browsers.
-      if (event.isComposing || event.keyCode === 229) {
+      if (composing(event)) {
         return;
       }
       if (event.key === "Escape") {

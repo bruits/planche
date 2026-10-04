@@ -162,6 +162,14 @@ describe("the card of a lone image", () => {
     expect(image()?.source).toBe("https://example.com/cat.png");
   });
 
+  it("keeps what its source is being written as when Esc ends a composition", () => {
+    const { image } = opened("https://example.com/cat.png");
+    field("Source").value = "elsewhere";
+    field("Source").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", keyCode: 229 }));
+    field("Source").dispatchEvent(new Event("change"));
+    expect(image()?.source).toBe("elsewhere");
+  });
+
   it("opens its source only when a web page", () => {
     const { commands } = opened("https://example.com/cat.png");
     document.querySelector<HTMLButtonElement>('button[aria-label="Open example.com"]')!.click();

@@ -43,6 +43,14 @@ describe("listen", () => {
     expect(forward.run).not.toHaveBeenCalled();
   });
 
+  it("leaves a key ending an input method's composition to it", () => {
+    const remove = command("Delete", { keys: [{ key: "backspace" }] });
+    listening([remove]);
+    const event = press({ key: "Backspace", code: "Backspace", keyCode: 229 });
+    expect(remove.run).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("leaves keys typed into a text field to the field", () => {
     const remove = command("Delete", { keys: [{ key: "backspace" }] });
     listening([remove]);

@@ -367,8 +367,8 @@ export function withStyle<K extends Kind>(kind: K, style: Style): K {
 export function checked(style: unknown): Style | undefined {
   try {
     return JSON.parse(checkedStyle(JSON.stringify(style))) as Style;
-  } catch {
-    return undefined;
+  } catch (error) {
+    return refused(error);
   }
 }
 
@@ -376,9 +376,20 @@ export function checked(style: unknown): Style | undefined {
 export function colour(text: unknown): Colour | undefined {
   try {
     return typeof text === "string" ? (checkedColour(text) as Colour) : undefined;
-  } catch {
-    return undefined;
+  } catch (error) {
+    return refused(error);
   }
+}
+
+/**
+ * Nothing for what the core refuses. Its bindings throw a `TypeError` before it starts, which read
+ * as nothing would lose what the browser remembers.
+ */
+function refused(error: unknown): undefined {
+  if (error instanceof TypeError) {
+    throw error;
+  }
+  return undefined;
 }
 
 /** Every file but the assets. */
