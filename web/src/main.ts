@@ -1372,12 +1372,13 @@ function views(): Entry {
   return submenu(
     "View",
     sectioned([
-      [stated(commands.hints), stated(commands.measurements)],
-      measurements.hidden ? [] : TEST_PHOTOS.map(testPhotosItem),
       [
+        stated(commands.hints),
+        stated(commands.measurements),
         ...(platform.keepOnTop ? [stated(commands.alwaysOnTop)] : []),
         ...(platform.titleBar ? [stated(commands.compact)] : []),
       ],
+      measurements.hidden ? [] : TEST_PHOTOS.map(testPhotosItem),
     ]),
   );
 }

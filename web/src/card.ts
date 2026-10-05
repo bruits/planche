@@ -150,7 +150,6 @@ export interface Card {
   resize(larger: boolean): void;
   /** Whether every element selected is an image. */
   images(): boolean;
-  greyscale(): void;
   copy(): void;
   paste(): void;
   canPaste(): boolean;
@@ -541,7 +540,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
         row(
           "Image",
           [
-            button("Greyscale", icon("contrast"), () => greyscale(), {
+            button("Greyscale", icon("contrast"), () => commands.greyscale.run(), {
               pressed: grey,
               shortcut: commands.greyscale.keys?.[0],
             }),
@@ -711,23 +710,6 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     label.append(input);
     return label;
   };
-  const greyscale = () => {
-    const all = targets();
-    const grey = !all.every(({ kind }) => kind.type === "image" && kind.edits.greyscale);
-    edit((editor, touched) => {
-      for (const { id, kind } of all) {
-        if (kind.type === "image") {
-          touched.push(
-            ...editor.update(
-              id,
-              JSON.stringify({ ...kind, edits: { ...kind.edits, greyscale: grey } }),
-            ),
-          );
-        }
-      }
-    });
-  };
-
   /** Builds it again only once what it shows changed, keeping the focus on the same button. */
   const fill = () => {
     filledAt = host.zoom();
@@ -889,7 +871,6 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       );
     },
     images,
-    greyscale,
     copy() {
       const all = styled();
       const first = all.find(({ kind }) => kind.type !== "image") ?? all[0];

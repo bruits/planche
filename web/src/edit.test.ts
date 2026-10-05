@@ -204,6 +204,75 @@ describe("edits", () => {
     expect(core.element(opened.editor, other)?.kind).toMatchObject({ frame: { x: 300, y: 40 } });
   });
 
+  it("keeps the selection through undo and redo of what moved part of it, and what stuck to that", () => {
+    const other = "b".repeat(32);
+    const pin = "d".repeat(32);
+    const { opened, editing } = page([
+      [other, { ...sticky, frame: { x: 300, y: 40, width: 100, height: 100 } }],
+      [pin, { type: "comment", at: { x: 350, y: 90 }, text: "Here", target: other }],
+    ]);
+    editing.select([STICKY, other]);
+    editing.align("top");
+    expect(core.element(opened.editor, pin)?.kind).toMatchObject({ at: { x: 350, y: 50 } });
+    editing.undo();
+    expect(editing.selection()).toEqual([STICKY, other]);
+    editing.redo();
+    expect(editing.selection()).toEqual([STICKY, other]);
+  });
+
+  it("keeps the selection inside the group gone into through an undo", () => {
+    const other = "b".repeat(32);
+    const group = "c".repeat(32);
+    const { editing } = page([
+      [other, { ...sticky, frame: { x: 300, y: 40, width: 100, height: 100 } }],
+    ]);
+    editing.select([STICKY, other]);
+    editing.group(group);
+    editing.goInside();
+    editing.select([STICKY, other]);
+    editing.align("top");
+    editing.undo();
+    expect(editing.entered()).toBe(group);
+    expect(editing.selection()).toEqual([STICKY, other]);
+  });
+
+  it("keeps the selection when an undo takes away all it touched", () => {
+    const other = "b".repeat(32);
+    const { editing } = page();
+    editing.select([STICKY]);
+    editing.apply((editor, touched) => {
+      editor.add(other, undefined, JSON.stringify(sticky));
+      touched.push(other);
+    });
+    editing.select([STICKY]);
+    editing.undo();
+    expect(editing.selection()).toEqual([STICKY]);
+  });
+
+  it("selects what an undo brings back, though it sticks to what is selected", () => {
+    const pin = "d".repeat(32);
+    const { editing } = page([
+      [pin, { type: "comment", at: { x: 50, y: 50 }, text: "Here", target: STICKY }],
+    ]);
+    editing.select([pin]);
+    editing.remove();
+    editing.select([STICKY]);
+    editing.undo();
+    expect(editing.selection()).toEqual([pin]);
+  });
+
+  it("selects what an undo brings back", () => {
+    const other = "b".repeat(32);
+    const { editing } = page([
+      [other, { ...sticky, frame: { x: 300, y: 40, width: 100, height: 100 } }],
+    ]);
+    editing.select([STICKY]);
+    editing.remove();
+    editing.select([other]);
+    editing.undo();
+    expect(editing.selection()).toEqual([STICKY]);
+  });
+
   it("undoes in one step an edit applied from outside, as an agent's", () => {
     const { editing, at } = page();
     editing.apply((editor, touched) => {

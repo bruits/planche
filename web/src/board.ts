@@ -338,6 +338,15 @@ export function nudge(zoom: number, wide: boolean, grid: boolean): number {
   return times * (fade < 1 ? coarse : spacing);
 }
 
+/** What `kind` sticks to, which carries it along. */
+export function anchors(kind: Kind): string[] {
+  return [
+    "target" in kind ? kind.target : undefined,
+    "from_target" in kind ? kind.from_target : undefined,
+    "to_target" in kind ? kind.to_target : undefined,
+  ].filter((id) => id !== undefined);
+}
+
 /** How far to move `area` for its centre to come to `at`, by whole steps of the grid that shows at `zoom`. */
 export function centring(area: Rect, at: Point, zoom: number): Point {
   const step = core.gridLevel(zoom).spacing;

@@ -2,7 +2,7 @@
 // board is read as it stands, since a call is answered between two events, up to its first wait.
 
 import { write, type Writing } from "./author.js";
-import { decodeAsset, files, readAsset, release, type Opened } from "./board.js";
+import { anchors, decodeAsset, files, readAsset, release, type Opened } from "./board.js";
 import { MOST_SIDE, capture, type Capture } from "./capture.js";
 import * as core from "./core.js";
 import type { Element, Kind, Rect } from "./core.js";
@@ -129,11 +129,7 @@ function cut(text: string | undefined): string | undefined {
 }
 
 function targets(kind: Kind): string[] | undefined {
-  const found = [
-    "target" in kind ? kind.target : undefined,
-    "from_target" in kind ? kind.from_target : undefined,
-    "to_target" in kind ? kind.to_target : undefined,
-  ].filter((id) => id !== undefined);
+  const found = anchors(kind);
   return found.length > 0 ? found : undefined;
 }
 

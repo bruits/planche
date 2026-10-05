@@ -46,7 +46,7 @@ import type {
   Side,
   Size,
 } from "./core.js";
-import { among, newId, nudge, renamed } from "./board.js";
+import { among, anchors, newId, nudge, renamed } from "./board.js";
 import { cursor, dotted, type Crop, type Grab, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
 import { anchored, fitted, holdsText, LINE_HEIGHT, needed, type Holder } from "./text.js";
@@ -711,6 +711,27 @@ export function edits(
     }
     selected = new Set(present.flatMap((id) => level(editor, id) ?? []));
   };
+  /**
+   * Whether the selection holds what a click would select of each of `ids` there, or but for those
+   * brought `back`, what each sticks to, which carried it along.
+   */
+  const holdsAll = ({ editor, board }: Editing, ids: string[], back: Set<string>) => {
+    const held = (id: string, visited: Set<string>): boolean => {
+      if (visited.has(id)) {
+        return false;
+      }
+      visited.add(id);
+      const at = level(editor, id);
+      const kind = board.elements[id]?.kind;
+      return (
+        (at !== undefined && selected.has(at)) ||
+        (!back.has(id) &&
+          kind !== undefined &&
+          anchors(kind).some((anchor) => held(anchor, visited)))
+      );
+    };
+    return ids.filter((id) => id in board.elements).every((id) => held(id, new Set()));
+  };
   /** As a click would select it, but outside the group gone into without leaving it. */
   const erasable = (editor: Editor, id: string) => level(editor, id) ?? editor.topLevel(id);
   const erase = (
@@ -756,9 +777,13 @@ export function edits(
     }
     return [...pins];
   };
-  /** Undoing and redoing select what they touch, and nothing touched keeps the selection. */
+  /**
+   * Undoing and redoing select what they touch, but keep the selection when it holds all of it
+   * already, or when none of it is left.
+   */
   const edit = (editing: Editing, touched: string[], reselect = false) => {
     const { board } = editing;
+    const back = new Set(touched.filter((id) => !(id in board.elements)));
     // Read before the edit, which may remove the group gone into, and its emptied groups too.
     const around: string[] = [];
     for (
@@ -775,7 +800,7 @@ export function edits(
         around.find((id) => id in board.elements),
       );
     }
-    if (reselect && touched.length > 0) {
+    if (reselect && !holdsAll(editing, touched, back)) {
       select(editing, touched);
     }
     for (const id of selected) {

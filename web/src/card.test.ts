@@ -151,6 +151,12 @@ describe("the card of a lone image", () => {
     );
   });
 
+  it("turns its images grey as the greyscale command does", () => {
+    const { commands } = opened();
+    (document.querySelector('button[aria-label="Greyscale"]') as HTMLButtonElement).click();
+    expect(commands.greyscale.run).toHaveBeenCalledOnce();
+  });
+
   it("names the keys of its greyscale and elliptical crop", () => {
     opened();
     expect(titled("Greyscale")).toBe("Greyscale · Alt+G");
