@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { listen, typed, type Command } from "./commands.js";
+import { learnLayout, listen, typed, type Command } from "./commands.js";
 
 const stops: (() => void)[] = [];
 
@@ -83,6 +83,37 @@ describe("listen", () => {
     expect(deselect.run).toHaveBeenCalledOnce();
   });
 
+  it("takes the keys of a command meant everywhere from a text field, running nothing there", () => {
+    const save = command("Save", { keys: [{ key: "s", command: true }], everywhere: true });
+    const bold = command("Bold", { keys: [{ key: "b", command: true }] });
+    listening([save, bold]);
+    const field = document.body.appendChild(document.createElement("textarea"));
+    expect(press({ key: "s", code: "KeyS", metaKey: true }, field).defaultPrevented).toBe(true);
+    expect(press({ key: "b", code: "KeyB", metaKey: true }, field).defaultPrevented).toBe(false);
+    expect(save.run).not.toHaveBeenCalled();
+    press({ key: "s", code: "KeyS", metaKey: true });
+    expect(save.run).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Alt, let go of alone, from handing the focus to the browser's menu", () => {
+    listening([]);
+    const up = new KeyboardEvent("keyup", { key: "Alt", bubbles: true, cancelable: true });
+    window.dispatchEvent(up);
+    expect(up.defaultPrevented).toBe(true);
+  });
+
+  it("runs a command that turns something on and off once while its key is held", () => {
+    const play = command("Play", { keys: [{ key: "p" }], once: true });
+    const undo = command("Undo", { keys: [{ key: "z", command: true }] });
+    listening([play, undo]);
+    for (const repeat of [false, true, true]) {
+      press({ key: "p", code: "KeyP", repeat });
+      press({ key: "z", code: "KeyZ", metaKey: true, repeat });
+    }
+    expect(play.run).toHaveBeenCalledOnce();
+    expect(undo.run).toHaveBeenCalledTimes(3);
+  });
+
   it("runs a command once while its Enter is held", () => {
     const enter = command("Write", { keys: [{ key: "enter" }] });
     listening([enter]);
@@ -93,9 +124,110 @@ describe("listen", () => {
   });
 });
 
+/** The module as macOS loads it. */
+async function macOS() {
+  Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+  vi.resetModules();
+  return import("./commands.js");
+}
+
+describe("on macOS", () => {
+  const platform = navigator.platform;
+
+  afterEach(() => {
+    stops.splice(0).forEach((stop) => stop());
+    Object.defineProperty(navigator, "platform", { value: platform, configurable: true });
+    vi.resetModules();
+  });
+
+  it("leaves Ctrl and a letter to a field, which moves its caret with them", async () => {
+    const { listen: listenOnMac } = await macOS();
+    const print = command("Print", { keys: [{ key: "p", command: true }], everywhere: true });
+    stops.push(listenOnMac([print], () => true));
+    const field = document.body.appendChild(document.createElement("textarea"));
+    expect(press({ key: "p", code: "KeyP", metaKey: true }, field).defaultPrevented).toBe(true);
+    expect(press({ key: "p", code: "KeyP", ctrlKey: true }, field).defaultPrevented).toBe(false);
+  });
+
+  it("follows the letter printed on a key under ⌥, once the layout is told, as on AZERTY", async () => {
+    const { learnLayout: learn, listen: listenOnMac } = await macOS();
+    const left = command("Align left", { keys: [{ key: "a", alt: true }] });
+    const top = command("Align top", { keys: [{ key: "w", alt: true }] });
+    stops.push(listenOnMac([left, top], () => true));
+    // What macOS's French layout types with ⌥, æ on the key printed A, where QWERTY has Q.
+    learn(
+      new Map([
+        ["KeyQ", "a"],
+        ["KeyA", "q"],
+        ["KeyZ", "w"],
+        ["KeyW", "z"],
+      ]),
+    );
+    press({ key: "‡", code: "KeyA", altKey: true });
+    press({ key: "Â", code: "KeyW", altKey: true });
+    expect(left.run).not.toHaveBeenCalled();
+    expect(top.run).not.toHaveBeenCalled();
+    press({ key: "æ", code: "KeyQ", altKey: true });
+    press({ key: "‹", code: "KeyZ", altKey: true });
+    expect(left.run).toHaveBeenCalledOnce();
+    expect(top.run).toHaveBeenCalledOnce();
+  });
+
+  it("follows it where ⌥ types another Latin character, as @ on Swiss layouts", async () => {
+    const { learnLayout: learn, typed: typedOnMac } = await macOS();
+    const event = new KeyboardEvent("keydown", { key: "@", code: "KeyG", altKey: true });
+    expect(typedOnMac(event)).toBe("g");
+    learn(new Map([["KeyG", "g"]]));
+    expect(typedOnMac(event)).toBe("g");
+  });
+
+  it("follows it where the layout puts a letter on punctuation, as Dvorak does", async () => {
+    const { learnLayout: learn, typed: typedOnMac } = await macOS();
+    learn(
+      new Map([
+        ["Comma", "w"],
+        ["KeyW", ","],
+      ]),
+    );
+    expect(
+      typedOnMac(new KeyboardEvent("keydown", { key: "∑", code: "Comma", altKey: true })),
+    ).toBe("w");
+  });
+
+  it("follows where a key sits on QWERTY under ⌥ while the layout is untold", async () => {
+    const { listen: listenOnMac } = await macOS();
+    const left = command("Align left", { keys: [{ key: "a", alt: true }] });
+    stops.push(listenOnMac([left], () => true));
+    press({ key: "å", code: "KeyA", altKey: true });
+    expect(left.run).toHaveBeenCalledOnce();
+  });
+});
+
 describe("typed", () => {
+  afterEach(() => {
+    learnLayout(undefined);
+  });
+
   it("reads a Cyrillic layout's letter as the Latin letter of its key", () => {
     expect(typed(new KeyboardEvent("keydown", { key: "ф", code: "KeyA" }))).toBe("a");
+    learnLayout(new Map([["KeyA", "ф"]]));
+    expect(typed(new KeyboardEvent("keydown", { key: "ф", code: "KeyA" }))).toBe("a");
+  });
+
+  it("reads what a key types alone, as told, where a modifier makes it type something else", () => {
+    learnLayout(new Map([["KeyQ", "a"]]));
+    expect(typed(new KeyboardEvent("keydown", { key: "æ", code: "KeyQ", altKey: true }))).toBe("a");
+  });
+
+  it("reads what AltGr types as itself, off macOS, whatever the layout told", () => {
+    learnLayout(new Map([["KeyQ", "q"]]));
+    const event = new KeyboardEvent("keydown", {
+      key: "@",
+      code: "KeyQ",
+      ctrlKey: true,
+      altKey: true,
+    });
+    expect(typed(event)).toBe("@");
   });
 
   it("reads a character the layout types as itself", () => {

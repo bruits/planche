@@ -121,6 +121,7 @@ export interface CardCommands {
   bold: Command;
   italic: Command;
   strike: Command;
+  greyscale: Command;
   flipHorizontally: Command;
   flipVertically: Command;
   crop: Command;
@@ -540,7 +541,10 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
         row(
           "Image",
           [
-            button("Greyscale", icon("contrast"), () => greyscale(), { pressed: grey }),
+            button("Greyscale", icon("contrast"), () => greyscale(), {
+              pressed: grey,
+              shortcut: commands.greyscale.keys?.[0],
+            }),
             button(
               "Flip horizontally",
               icon("flipHorizontally"),
@@ -566,6 +570,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
             }),
             button("Elliptical crop", icon("circle"), () => commands.ellipticalCrop.run(), {
               pressed: shaped("ellipse"),
+              shortcut: commands.ellipticalCrop.keys?.[0],
             }),
           ],
         ),

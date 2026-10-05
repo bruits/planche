@@ -5,6 +5,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+mod keyboard;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, TryLockError};
 use std::io;
@@ -115,6 +118,7 @@ fn main() {
             close_window,
             keep_window,
             keep_on_top,
+            keyboard_layout,
             show_title_bar,
             drag_window,
             read_dropped,
@@ -365,6 +369,17 @@ fn keep_on_top(window: Window, on: bool) -> Result<(), String> {
     window
         .set_always_on_top(on)
         .map_err(|error| error.to_string())
+}
+
+/// What each key types alone, by `KeyboardEvent.code`, which macOS's webview does not tell the
+/// page. Elsewhere none, as ⌥ types letters as they are. Not async, so on the main thread.
+#[tauri::command]
+fn keyboard_layout() -> Vec<(&'static str, String)> {
+    #[cfg(target_os = "macos")]
+    let typed = keyboard::typed();
+    #[cfg(not(target_os = "macos"))]
+    let typed = Vec::new();
+    typed
 }
 
 /// As GTK picks its backend.

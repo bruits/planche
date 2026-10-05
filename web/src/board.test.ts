@@ -6,6 +6,7 @@ import {
   copiedAssets,
   duplicateOffset,
   files as filesOf,
+  nudge,
   open,
   placed,
   prepare,
@@ -201,6 +202,19 @@ describe("duplicateOffset", () => {
       expect(offset * zoom).toBeGreaterThanOrEqual(16);
       expect((offset - step) * zoom).toBeLessThan(16);
     }
+  });
+});
+
+describe("nudge", () => {
+  it("moves a CSS pixel, or ten when wide, whatever the zoom", () => {
+    expect(nudge(2, false, false)).toBe(0.5);
+    expect(nudge(0.5, true, false)).toBe(20);
+  });
+
+  it("moves by the step between the grid's lines that show, but those still fading in", () => {
+    expect(nudge(1, false, true)).toBe(20);
+    expect(nudge(1, true, true)).toBe(200);
+    expect(nudge(0.5, false, true)).toBe(100);
   });
 });
 

@@ -51,6 +51,7 @@ import { clipboard, type Pasted } from "./clipboard.js";
 import { meanColours } from "./colour.js";
 import {
   describe,
+  learnLayout,
   listen,
   mac,
   named,
@@ -59,15 +60,15 @@ import {
   type Command,
   type Shortcut,
 } from "./commands.js";
-import { edits, type Draw } from "./edit.js";
+import { CROP_KEYS, edits, type Draw } from "./edit.js";
 import { message } from "./errors.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
 import { lifecycle } from "./lifecycle.js";
 import { menuOpen, openMenu, type Entry, type Item } from "./menu.js";
+import { openFinder, type Listed } from "./finder.js";
 import { heapInUse, megabytes, milliseconds, percentile, rate, timed } from "./metrics.js";
 import { overlay } from "./overlay.js";
-import { css, type Paint } from "./paint.js";
 import { testPhotos } from "./photos.js";
 import { pinned, pins } from "./pins.js";
 import { platform } from "./platform.js";
@@ -344,6 +345,14 @@ const shapedAs = (shape: CropShape) => {
     images.length > 0 && images.every((kind) => (kind.edits.crop_shape ?? "rectangle") === shape)
   );
 };
+/** Whether the crop under way, or else every image selected, is an ellipse. */
+const elliptical = () => {
+  const cropping = editing.croppedAs();
+  return cropping === undefined ? shapedAs("ellipse") : cropping === "ellipse";
+};
+const croppable = () =>
+  noneSelected() ??
+  (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images are cropped");
 const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet" : undefined);
 const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection()) : []);
 const selectedMoving = () =>
@@ -355,15 +364,6 @@ const restack = (label: string, to: Restack, shortcut: Shortcut): Command => ({
   unavailable: noneSelected,
   run: () => editing.restack(to),
 });
-const cropShape = (label: string, shape: CropShape): Command => ({
-  label,
-  unavailable: () =>
-    noneSelected() ??
-    (opened && holdsImage(opened.board, editing.selection())
-      ? undefined
-      : "Only images are cropped"),
-  run: () => editing.cropShape(shape),
-});
 const flip = (label: string, key: string, horizontally: boolean): Command => ({
   label,
   keys: [{ key, shift: true }],
@@ -371,6 +371,7 @@ const flip = (label: string, key: string, horizontally: boolean): Command => ({
     noneSelected() ??
     (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images flip"),
   run: () => editing.flip(horizontally),
+  once: true,
 });
 const turn = (label: string, degrees: number, key: string): Command => ({
   label,
@@ -447,6 +448,7 @@ const textStyle = (
     noneSelected() ??
     (styleCard.common().includes(setting) ? undefined : "Not everything selected is text"),
   run: () => styleCard.set({ [setting]: styleCard.value(setting) !== true }),
+  once: true,
 });
 const resize = (label: string, larger: boolean, keys: Shortcut[]): Command => ({
   label,
@@ -456,6 +458,7 @@ const resize = (label: string, larger: boolean, keys: Shortcut[]): Command => ({
     (styleCard.common().includes("size") ? undefined : "Not everything selected is text"),
   run: () => styleCard.resize(larger),
 });
+const furthest: Shortcut = mac ? { alt: true } : { shift: true };
 const backspace: Shortcut = { key: "backspace" };
 const deleteKey: Shortcut = { key: "delete" };
 const shiftZ: Shortcut = { key: "z", command: true, shift: true };
@@ -514,27 +517,48 @@ const commands = {
     unavailable: noneShown,
     run: () => addPicked(viewport.centre()),
   },
-  newBoard: { label: "New board", unavailable: loadingBoard, run: () => report(life.newBoard()) },
+  newBoard: {
+    label: "New board",
+    // Where the app has a window of its own, as browsers keep their keys for a new one.
+    keys: platform.titleBar ? [{ key: "n", command: true }] : undefined,
+    unavailable: loadingBoard,
+    run: () => report(life.newBoard()),
+    everywhere: true,
+  },
   open: {
     label: "Open a board…",
+    keys: [{ key: "o", command: true }],
     unavailable: loadingBoard,
     run: () => report(life.openFolder()),
+    everywhere: true,
   },
   openZip: {
     label: "Open a ZIP file…",
     unavailable: loadingBoard,
     run: () => report(life.openZip()),
   },
+  save: {
+    label: () => (savesToFiles() ? "Save" : "Save…"),
+    keys: [{ key: "s", command: true }],
+    unavailable: () => loadingBoard() ?? noBoard(),
+    // Where the browser cannot write a board, as a ZIP file it downloads.
+    run: () =>
+      report(platform.cannotSave !== undefined && !savesToFiles() ? exportZip() : life.save()),
+    everywhere: true,
+  },
   saveAs: {
     label: "Save as…",
+    keys: [{ key: "s", command: true, shift: true }],
     unavailable: () => platform.cannotSave ?? noBoard(),
     run: () => report(life.saveAs()),
+    everywhere: true,
   },
   exportZip: {
     label: "Export a ZIP file…",
     unavailable: () => (exporting ? "An export is under way" : noBoard()),
     run: () => report(exportZip()),
   },
+
   undo: {
     label: "Undo",
     keys: [{ key: "z", command: true }],
@@ -586,12 +610,23 @@ const commands = {
     unavailable: noneSelected,
     run: () => editing.remove(),
   },
-  // With Alt only where the brackets sit on US keys, since AltGr, which types them on many
-  // layouts, counts as Ctrl and Alt.
-  front: restack("Bring to front", "front", { code: "BracketRight", command: true, alt: true }),
+  // By the bracket typed, or where it sits on US keys where the layout types it with more keys, as
+  // with AltGr. With ⌥ on macOS, whose browsers switch tabs on ⌘⇧ and a bracket, but Shift
+  // elsewhere, where Ctrl and Alt together are AltGr.
+  front: restack("Bring to front", "front", {
+    key: "]",
+    code: "BracketRight",
+    command: true,
+    ...furthest,
+  }),
   forward: restack("Bring forward", "forward", { key: "]", code: "BracketRight", command: true }),
   backward: restack("Send backward", "backward", { key: "[", code: "BracketLeft", command: true }),
-  back: restack("Send to back", "back", { code: "BracketLeft", command: true, alt: true }),
+  back: restack("Send to back", "back", {
+    key: "[",
+    code: "BracketLeft",
+    command: true,
+    ...furthest,
+  }),
   arrangeByName: arrangement("By name", () => ({ by: "name" })),
   arrangeBySize: arrangement("By size", () => ({ by: "size" })),
   arrangeByColour: arrangement("By colour", async (target, ids) => ({
@@ -639,10 +674,7 @@ const commands = {
   },
   resetCrop: {
     label: "Reset crop",
-    keys: [
-      { key: "c", command: true, shift: true },
-      { key: "c", alt: true },
-    ],
+    keys: [{ key: "c", command: true, shift: true }],
     unavailable: () =>
       editing.cropping() !== undefined
         ? undefined
@@ -652,8 +684,18 @@ const commands = {
             : "Nothing selected is cropped")),
     run: () => editing.resetCrop(),
   },
-  rectangularCrop: cropShape("Rectangular crop", "rectangle"),
-  ellipticalCrop: cropShape("Elliptical crop", "ellipse"),
+  rectangularCrop: {
+    label: "Rectangular crop",
+    unavailable: croppable,
+    run: () => editing.cropShape("rectangle"),
+  },
+  ellipticalCrop: {
+    label: "Elliptical crop",
+    keys: [{ key: "c", alt: true }],
+    unavailable: croppable,
+    run: () => editing.cropShape(elliptical() ? "rectangle" : "ellipse"),
+    once: true,
+  },
   greyscale: {
     label: "Greyscale",
     keys: [{ key: "g", alt: true }],
@@ -663,6 +705,7 @@ const commands = {
         ? undefined
         : "Only images turn grey"),
     run: () => editing.greyscale(!greyed()),
+    once: true,
   },
   play: {
     label: () => (selectedMoving().some(moving) ? "Pause" : "Play"),
@@ -677,6 +720,7 @@ const commands = {
       films.play(assets, playing);
       refreshBar();
     },
+    once: true,
   },
   sound: {
     label: () => (selectedAssets().some(films.sounding) ? "Turn sound off" : "Turn sound on"),
@@ -688,6 +732,7 @@ const commands = {
       films.sound(assets, !assets.some(films.sounding));
       refreshBar();
     },
+    once: true,
   },
   openSource: {
     label: "Open source",
@@ -780,6 +825,7 @@ const commands = {
     unavailable: () =>
       platform.titleBar ? undefined : "Only the desktop app has a window of its own",
     run: () => report(useCompact(!compact)),
+    once: true,
   },
   plain: backdrop("No grid", "plain"),
   grid: backdrop("Lines", "grid"),
@@ -792,6 +838,7 @@ const commands = {
       const at = BACKGROUNDS.indexOf(opened!.board.background);
       useBackground(BACKGROUNDS[(at + 1) % BACKGROUNDS.length]!);
     },
+    once: true,
   },
   snap: {
     label: "Snap to grid",
@@ -803,8 +850,17 @@ const commands = {
   dark: palette("Dark", "dark"),
   system: palette("System", "system"),
   highContrast: { label: "High contrast", run: () => appearance.toggleContrast() },
-  agentAccess: { label: "Agent access", run: () => report(allowAgents(!agentsAllowed)) },
-  alwaysOnTop: { label: "Always on top", run: () => report(keepOnTop(!onTop)) },
+  agentAccess: {
+    label: "Agent access",
+    unavailable: () => (platform.agent ? undefined : "Only the desktop app lets agents in"),
+    run: () => report(allowAgents(!agentsAllowed)),
+  },
+  alwaysOnTop: {
+    label: "Always on top",
+    unavailable: () =>
+      platform.keepOnTop ? undefined : "Only the desktop app has a window of its own",
+    run: () => report(keepOnTop(!onTop)),
+  },
   hoverPlay: {
     label: "Play videos on hover",
     run: () => {
@@ -832,6 +888,7 @@ const commands = {
         ? undefined
         : "Comments and groups have no style"),
     run: () => (styleCard.isOpen() ? styleCard.close() : styleCard.open(true)),
+    once: true,
   },
   colour1: colourCommand(0),
   colour2: colourCommand(1),
@@ -873,6 +930,15 @@ const commands = {
     unavailable: noneShown,
     run: contextMenuFromKeys,
   },
+  find: {
+    label: "Find a command…",
+    keys: [
+      { key: "k", command: true },
+      { key: "/", code: "Slash", command: true },
+    ],
+    run: () => openFinder(listed),
+    once: true,
+  },
 } satisfies Record<string, Command>;
 const leaveCompact: Command = { ...commands.compact, label: "Leave compact mode" };
 const colourCommands = [
@@ -883,6 +949,57 @@ const colourCommands = [
   commands.colour5,
   commands.colour6,
 ];
+/** Whether what each turns on and off is on. */
+const SWITCHES = new Map<Command, () => boolean>([
+  [commands.ellipticalCrop, elliptical],
+  [commands.greyscale, greyed],
+  [commands.snap, () => snapping],
+  [commands.highContrast, () => appearance.highContrast()],
+  [commands.hints, () => hintsShown],
+  [commands.measurements, () => !measurements.hidden],
+  [commands.alwaysOnTop, () => onTop],
+  [commands.compact, () => compact],
+  [commands.hoverPlay, () => hoverPlay],
+  [commands.agentAccess, () => agentsAllowed],
+]);
+/** Whether each is the one in use among those that exclude each other. */
+const TICKS = new Map<Command, () => boolean>([
+  ...BACKGROUNDS.map((to): [Command, () => boolean] => [
+    commands[to],
+    () => opened?.board.background === to,
+  ]),
+  ...SCHEMES.map((to): [Command, () => boolean] => [
+    commands[to],
+    () => appearance.scheme() === to,
+  ]),
+]);
+/** The menu each sits in, which the finder names where theirs would not tell alone. */
+const WITHIN = new Map<Command, string>(
+  (
+    [
+      ["Align", [commands.alignLeft, commands.alignCentre, commands.alignRight]],
+      ["Align", [commands.alignTop, commands.alignMiddle, commands.alignBottom]],
+      [
+        "Arrange",
+        [
+          commands.arrangeByName,
+          commands.arrangeBySize,
+          commands.arrangeByColour,
+          commands.arrangeRandomly,
+          commands.sameHeight,
+          commands.sameWidth,
+        ],
+      ],
+      ["Grid", [commands.plain, commands.grid, commands.dots, commands.snap]],
+      ["Theme", [commands.light, commands.dark, commands.system, commands.highContrast]],
+      ["View", [commands.hints, commands.measurements, commands.alwaysOnTop, commands.compact]],
+      ["Settings", [commands.hoverPlay, commands.agentAccess]],
+      ["Colour", colourCommands],
+    ] satisfies [string, Command[]][]
+  ).flatMap(([name, members]) => members.map((member): [Command, string] => [member, name])),
+);
+/** What only answers keys, or opens the finder. */
+const UNLISTED = new Set<Command>([commands.escape, commands.contextMenu, commands.find]);
 
 const bar = toolbar(
   byId("toolbar"),
@@ -927,9 +1044,12 @@ const bar = toolbar(
     ],
   ],
   () => [
+    commands.find,
+    "separator",
     commands.newBoard,
     commands.open,
     commands.openZip,
+    commands.save,
     commands.saveAs,
     commands.exportZip,
     "separator",
@@ -964,6 +1084,7 @@ const styleCard = card(
     bold: commands.bold,
     italic: commands.italic,
     strike: commands.strike,
+    greyscale: commands.greyscale,
     flipHorizontally: commands.flipHorizontally,
     flipVertically: commands.flipVertically,
     crop: commands.crop,
@@ -997,11 +1118,21 @@ if (platform.titleBar) {
 }
 // The page's own copy, cut, and paste events run these, which handling their keys would cancel.
 const native = new Set<Command>([commands.cut, commands.copy, commands.paste]);
+// The browser would print the page, which shows nothing of the board.
+const print: Command = {
+  label: "Print",
+  keys: [{ key: "p", command: true }],
+  unavailable: () => "Planche does not print",
+  run() {},
+  everywhere: true,
+};
 listen(
-  Object.values(commands).filter((command) => !native.has(command)),
+  [...Object.values(commands).filter((command) => !native.has(command)), print],
   (command) =>
     !menuOpen() &&
-    (!busy() || (command === commands.resetCrop && editing.cropping() !== undefined)),
+    (!busy() ||
+      (editing.cropping() !== undefined &&
+        (command === commands.resetCrop || command === commands.ellipticalCrop))),
 );
 addEventListener("keydown", (event) => {
   // A focused button takes Space to press itself.
@@ -1052,6 +1183,10 @@ addEventListener("blur", () => void life.saver()?.flush());
 addEventListener("pagehide", () => void life.saver()?.flush());
 addEventListener("beforeunload", () => void life.saver()?.flush());
 addEventListener("focus", () => report(life.saver()?.check() ?? Promise.resolve()));
+learnKeys();
+addEventListener("focus", learnKeys);
+// Before the letter it comes with, as the layout may have changed without the window losing focus.
+addEventListener("keydown", (event) => event.key === "Alt" && !event.repeat && learnKeys());
 document.addEventListener("visibilitychange", () =>
   document.visibilityState === "hidden"
     ? void life.saver()?.flush()
@@ -1189,26 +1324,21 @@ function fitTo(ids: string[]): void {
 }
 
 function grids(): Entry {
-  const current = opened?.board.background;
   return {
     ...commands.nextBackground,
     options: [
-      ...BACKGROUNDS.map((background) => ({
-        ...commands[background],
-        checked: background === current,
-      })),
+      ...BACKGROUNDS.map((background) => stated(commands[background])),
       "separator",
-      { ...commands.snap, checked: snapping, toggle: true },
+      stated(commands.snap),
     ],
   };
 }
 
 function themes(): Entry {
-  const current = appearance.scheme();
   return submenu("Theme", [
-    ...SCHEMES.map((scheme) => ({ ...commands[scheme], checked: scheme === current })),
+    ...SCHEMES.map((scheme) => stated(commands[scheme])),
     "separator",
-    { ...commands.highContrast, checked: appearance.highContrast(), toggle: true },
+    stated(commands.highContrast),
   ]);
 }
 
@@ -1216,17 +1346,30 @@ function views(): Entry {
   return submenu(
     "View",
     sectioned([
-      [
-        { ...commands.hints, checked: hintsShown, toggle: true },
-        { ...commands.measurements, checked: !measurements.hidden, toggle: true },
-      ],
+      [stated(commands.hints), stated(commands.measurements)],
       measurements.hidden ? [] : TEST_PHOTOS.map(testPhotosItem),
       [
-        ...(platform.keepOnTop ? [{ ...commands.alwaysOnTop, checked: onTop, toggle: true }] : []),
-        ...(platform.titleBar ? [{ ...commands.compact, checked: compact, toggle: true }] : []),
+        ...(platform.keepOnTop ? [stated(commands.alwaysOnTop)] : []),
+        ...(platform.titleBar ? [stated(commands.compact)] : []),
       ],
     ]),
   );
+}
+
+/** Ticked, or switched on or off, where it says what it does. */
+function stated(command: Command): Item {
+  const on = SWITCHES.get(command);
+  if (on) {
+    return { ...command, checked: on(), toggle: true };
+  }
+  const ticked = TICKS.get(command);
+  return ticked ? { ...command, checked: ticked() } : command;
+}
+
+function listed(): Listed[] {
+  return Object.values(commands)
+    .filter((command) => !UNLISTED.has(command))
+    .map((command) => ({ ...stated(command), within: WITHIN.get(command) }));
 }
 
 function testPhotosItem(count: number): Item {
@@ -1237,6 +1380,12 @@ function testPhotosItem(count: number): Item {
   };
 }
 
+function learnKeys(): void {
+  if (mac && platform.layout) {
+    void platform.layout().then(learnLayout, () => learnLayout(undefined));
+  }
+}
+
 /** Whether the board saves itself into a folder or a ZIP file, rather than in the session or nowhere. */
 function savesToFiles(): boolean {
   const saver = life.saver();
@@ -1245,8 +1394,8 @@ function savesToFiles(): boolean {
 
 function settings(): Entry {
   return submenu("Settings", [
-    { ...commands.hoverPlay, checked: hoverPlay, toggle: true },
-    ...(platform.agent ? [{ ...commands.agentAccess, checked: agentsAllowed, toggle: true }] : []),
+    stated(commands.hoverPlay),
+    ...(platform.agent ? [stated(commands.agentAccess)] : []),
   ]);
 }
 
@@ -1440,8 +1589,12 @@ function hint(): string {
     return `${escapeKey} or click away to finish`;
   }
   if (editing.cropping() !== undefined) {
-    const resetKey = describe(commands.resetCrop.keys[0]!);
-    return `Drag an edge or a corner to crop, or the inside to move the crop · ${resetKey} to start over · ${insideKey} or click away to crop · ${escapeKey} to leave it as it was`;
+    const [resetKey, turnKey, guidesKey] = [
+      commands.resetCrop.keys[0]!,
+      { key: CROP_KEYS.turn },
+      { key: CROP_KEYS.guides },
+    ].map(describe);
+    return `Drag an edge or a corner to crop, holding ${stepKey} to keep its proportions, or the inside to move it · ${turnKey} to turn it · ${guidesKey} for guides · ${resetKey} to start over · ${insideKey} or click away to crop · ${escapeKey} to leave it as it was`;
   }
   const styling =
     commands.style.unavailable() === undefined
@@ -1501,10 +1654,14 @@ function hint(): string {
       .map((command) => `${describe(command.keys[0]!)} to ${named(command).toLowerCase()} · `);
     return `Drag to move, holding ${centreKey} to copy · corners scale · turn from outside a corner · ${crops}${keys.join("")}${styling}right-click for more`;
   }
-  return "Drop or paste images · scroll to move around · right-click for more";
+  return `Drop or paste images · scroll to move around · right-click or ${describe(commands.find.keys[0]!)} for more`;
 }
 
-/** About the selection, or else the board, with its images landing where it opens. */
+/**
+ * About the selection, or else the board, with its images landing where it opens. Each keeps to
+ * three groups, and each submenu to two, so that it stays quick to scan. What the style card and
+ * the keys already reach, such as colours, stays out.
+ */
 function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: number }): void {
   const paste = { ...commands.paste, run: () => pasteAt(at) };
   const entries: Entry[] = onSelection
@@ -1513,18 +1670,57 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.copy,
         paste,
         commands.duplicate,
+        commands.remove,
+        "separator",
+        commands.write,
+        commands.play,
+        commands.sound,
+        commands.openSource,
+        {
+          ...submenu("Style", [
+            commands.style,
+            "separator",
+            commands.copyStyle,
+            commands.pasteStyle,
+          ]),
+          unavailable: commands.style.unavailable,
+        },
+        relevantSubmenu("Image", [
+          commands.crop,
+          commands.resetCrop,
+          "separator",
+          stated(commands.ellipticalCrop),
+          stated(commands.greyscale),
+        ]),
+        relevantSubmenu("Transform", [
+          commands.rotateLeft,
+          commands.rotateRight,
+          commands.straighten,
+          "separator",
+          commands.flipHorizontally,
+          commands.flipVertically,
+        ]),
         "separator",
         commands.group,
         commands.ungroup,
         commands.goInside,
-        commands.write,
-        styleMenu(),
-        "separator",
         relevantSubmenu("Order", [
           commands.front,
           commands.forward,
           commands.backward,
           commands.back,
+        ]),
+        // By the axis they move along.
+        relevantSubmenu("Align", [
+          commands.alignLeft,
+          commands.alignCentre,
+          commands.alignRight,
+          commands.distributeHorizontally,
+          "separator",
+          commands.alignTop,
+          commands.alignMiddle,
+          commands.alignBottom,
+          commands.distributeVertically,
         ]),
         {
           ...submenu("Arrange", [
@@ -1538,40 +1734,6 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
           ]),
           unavailable: fewImages,
         },
-        relevantSubmenu("Align", [
-          commands.alignLeft,
-          commands.alignCentre,
-          commands.alignRight,
-          "separator",
-          commands.alignTop,
-          commands.alignMiddle,
-          commands.alignBottom,
-          "separator",
-          commands.distributeHorizontally,
-          commands.distributeVertically,
-        ]),
-        relevantSubmenu("Transform", [
-          commands.rotateLeft,
-          commands.rotateRight,
-          commands.straighten,
-          "separator",
-          commands.flipHorizontally,
-          commands.flipVertically,
-          "separator",
-          commands.crop,
-          commands.resetCrop,
-          "separator",
-          { ...commands.rectangularCrop, checked: shapedAs("rectangle") },
-          { ...commands.ellipticalCrop, checked: shapedAs("ellipse") },
-          "separator",
-          { ...commands.greyscale, checked: greyed(), toggle: true },
-        ]),
-        "separator",
-        commands.play,
-        commands.sound,
-        commands.openSource,
-        "separator",
-        commands.remove,
       ]
     : [
         { ...commands.addImages, run: () => addPicked(at) },
@@ -1579,7 +1741,6 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.selectAll,
         "separator",
         commands.fit,
-        "separator",
         grids(),
       ];
   const shown = onSelection ? relevant(entries) : entries;
@@ -1610,40 +1771,6 @@ function relevant(entries: Entry[]): Entry[] {
     }
   }
   return kept;
-}
-
-/** What sets the selection's style, as the card and the keys do, for when the card is out of reach. */
-function styleMenu(): Entry {
-  const can = new Set(styleCard.common());
-  const papers = can.has("paper");
-  const current = papers ? styleCard.value("paper") : styleCard.value("colour");
-  const choices: { value: string; paint: Paint }[] = papers
-    ? PAPERS.map(({ paper }) => ({ value: paper, paint: `paper-${paper}` }))
-    : PALETTE.map(({ colour }) => ({ value: colour, paint: colour }));
-  const colours: Entry[] =
-    papers || can.has("colour")
-      ? choices.map(({ value, paint }, at) => ({
-          ...colourCommands[at]!,
-          swatch: css(paint, viewport.host),
-          checked: current === value,
-        }))
-      : [];
-  const text: Entry[] = can.has("bold")
-    ? ([commands.bold, commands.italic, commands.strike] as const).map((command, at) => ({
-        ...command,
-        checked: styleCard.value((["bold", "italic", "strike"] as const)[at]!) === true,
-        toggle: true,
-      }))
-    : [];
-  const sizes: Entry[] = can.has("size") ? [commands.larger, commands.smaller] : [];
-  const sections = [
-    [commands.style],
-    colours,
-    text,
-    sizes,
-    [commands.copyStyle, commands.pasteStyle],
-  ];
-  return submenu("Style", sectioned(sections));
 }
 
 /**

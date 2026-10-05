@@ -74,6 +74,7 @@ export function tauri({ core, event }: TauriApi): Platform {
   };
   return {
     name: "desktop",
+    layout: async () => new Map(await core.invoke<[string, string][]>("keyboard_layout")),
 
     agent: {
       allow: (on) => core.invoke("agent_allow", { on }),

@@ -201,6 +201,26 @@ describe("lifecycle", () => {
     expect(opened()?.folder.name).toBe("Untitled");
   });
 
+  it("saves a folder's board at once into its folder, and says so", async () => {
+    const { home, written } = memoryHome("demo", sample("demo"));
+    const { life, said, move } = app({ session: memorySession().session, picked: home });
+    await life.start();
+    await life.openFolder();
+    move(STICKY);
+    await life.save();
+    expect(written).toEqual([`elements/${STICKY}.json`]);
+    expect(said).toContain("Saved");
+  });
+
+  it("saves a session board as into the folder picked", async () => {
+    const { home, files } = memoryHome("target");
+    const { life, opened } = app({ session: memorySession(sample("demo")).session, target: home });
+    await life.start();
+    await life.save();
+    expect(files.has("board.json")).toBe(true);
+    expect(opened()?.folder.name).toBe("target");
+  });
+
   it("writes the open board's edits into its folder before another board takes its place", async () => {
     const { home, written } = memoryHome("demo", sample("demo"));
     const { life, move } = app({ session: memorySession().session, picked: home });

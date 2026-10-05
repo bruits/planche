@@ -4,6 +4,7 @@ import { refresh, untitled } from "./board.js";
 import * as core from "./core.js";
 import type { Kind } from "./core.js";
 import { edits, type Edits, type Hooks } from "./edit.js";
+import { closeMenu, openMenu } from "./menu.js";
 import { overlay } from "./overlay.js";
 import type { Renderer } from "./renderer.js";
 import { view } from "./view.js";
@@ -16,8 +17,19 @@ const sticky: Kind = {
   text: { content: "", font_size: 20 },
 };
 
-/** A board holding a sticky note, and `more`, shown at 1:1 from the origin. */
-function page(more: [string, Kind][] = [], { drawing }: Partial<Pick<Hooks, "drawing">> = {}) {
+/** How each page's board goes once its test ends, so that what it listens to on the window stays still. */
+const leaving: (() => void)[] = [];
+afterEach(() => leaving.splice(0).forEach((leave) => leave()));
+
+/** A board holding a sticky note, and `more`, shown at `zoom` from the origin. */
+function page(
+  more: [string, Kind][] = [],
+  {
+    drawing,
+    snapping,
+    zoom = 1,
+  }: Partial<Pick<Hooks, "drawing" | "snapping">> & { zoom?: number } = {},
+) {
   const opened = untitled();
   for (const [id, kind] of [[STICKY, sticky] as const, ...more]) {
     opened.editor.add(id, undefined, JSON.stringify(kind));
@@ -40,12 +52,12 @@ function page(more: [string, Kind][] = [], { drawing }: Partial<Pick<Hooks, "dra
     draw() {},
     destroy() {},
   };
-  viewport.show(renderer as unknown as Renderer, { x: 0, y: 0, zoom: 1 });
+  viewport.show(renderer as unknown as Renderer, { x: 0, y: 0, zoom });
   const hooks: Hooks = {
     changed: vi.fn<Hooks["changed"]>((touched) => refresh(opened, touched)),
     selectionChanged() {},
     settled() {},
-    snapping: () => false,
+    snapping: snapping ?? (() => false),
     drawing: drawing ?? (() => undefined),
     erasing: () => false,
     sampling: () => false,
@@ -56,7 +68,9 @@ function page(more: [string, Kind][] = [], { drawing }: Partial<Pick<Hooks, "dra
     pointed() {},
     stepped() {},
   };
-  editing = edits(viewport, overlay(host), () => opened, hooks);
+  let gone = false;
+  leaving.push(() => (gone = true));
+  editing = edits(viewport, overlay(host), () => (gone ? undefined : opened), hooks);
   const pointer = (
     type: string,
     clientX: number,
@@ -78,7 +92,30 @@ function page(more: [string, Kind][] = [], { drawing }: Partial<Pick<Hooks, "dra
     const kind = core.element(opened.editor, STICKY)?.kind;
     return kind?.type === "sticky" ? { x: kind.frame.x, y: kind.frame.y } : undefined;
   };
-  return { opened, editing, hooks, pointer, at };
+  return { opened, editing, hooks, host, pointer, at };
+}
+
+/** Pressed on the page, `type` "keydown" or "keyup", and whether something took it. */
+function key(type: string, init: KeyboardEventInit, target: EventTarget = document.body): boolean {
+  const event = new KeyboardEvent(type, { bubbles: true, cancelable: true, ...init });
+  target.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
+const IMAGE = "c".repeat(32);
+/** Of samples/demo. */
+const image: Kind = {
+  type: "image",
+  asset: "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f",
+  natural_size: { width: 300, height: 200 },
+  frame: { x: 200, y: 0, width: 300, height: 200 },
+  rotation: 0,
+  edits: { crop: null, flip_horizontal: false, flip_vertical: false, greyscale: false },
+};
+
+function cropOf(opened: ReturnType<typeof page>["opened"]) {
+  const kind = core.element(opened.editor, IMAGE)?.kind;
+  return kind?.type === "image" ? kind.edits : undefined;
 }
 
 function lower(editing: Edits, y: number) {
@@ -264,5 +301,210 @@ describe("edits", () => {
     expect(from).toEqual({ x: 200, y: 0 });
     expect(to!.x - from!.x).toBeCloseTo(to!.y - from!.y, 9);
     expect(to!.x - from!.x).toBeCloseTo(Math.hypot(100, 90) * Math.SQRT1_2, 9);
+  });
+});
+
+/** A board whose image is being cropped, from its whole. */
+function cropping() {
+  const shown = page([[IMAGE, image]]);
+  shown.editing.select([IMAGE]);
+  shown.editing.crop();
+  return shown;
+}
+
+describe("cropping", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("keeps the crop's proportions while Shift drags a corner, to a pixel", () => {
+    const { opened, pointer } = cropping();
+    pointer("pointerdown", 500, 200);
+    pointer("pointermove", 400, 180, { shiftKey: true });
+    pointer("pointerup", 400, 180, { shiftKey: true });
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 222, height: 148 });
+  });
+
+  it("keeps the proportions within the image, growing as far as it lets", () => {
+    const kept = { x: 100, y: 0, width: 150, height: 100 };
+    const { opened, editing, pointer } = page([
+      [IMAGE, { ...image, edits: { ...image.edits, crop: kept } }],
+    ]);
+    editing.select([IMAGE]);
+    editing.crop();
+    const corner = core.pointOfPixel(opened.editor, IMAGE, { x: 250, y: 100 })!;
+    pointer("pointerdown", corner.x, corner.y);
+    pointer("pointermove", corner.x + 400, corner.y + 400, { shiftKey: true });
+    pointer("pointerup", corner.x + 400, corner.y + 400, { shiftKey: true });
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop).toEqual({ x: 100, y: 0, width: 200, height: 133 });
+  });
+
+  it("drags a corner freely without Shift", () => {
+    const { opened, pointer } = cropping();
+    pointer("pointerdown", 500, 200);
+    pointer("pointermove", 400, 180);
+    pointer("pointerup", 400, 180);
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
+  });
+
+  it("grows a side dragged with Shift around the crop's centre line, within the image", () => {
+    const { opened, pointer } = cropping();
+    pointer("pointerdown", 500, 100);
+    pointer("pointermove", 350, 100, { shiftKey: true });
+    pointer("pointerup", 350, 100, { shiftKey: true });
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 50, width: 150, height: 100 });
+  });
+
+  it("keeps the proportions once Shift goes down mid-drag", async () => {
+    const { opened, pointer } = cropping();
+    pointer("pointerdown", 500, 200);
+    pointer("pointermove", 400, 180);
+    await nextFrame();
+    key("keydown", { key: "Shift", shiftKey: true });
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 222, height: 148 });
+    pointer("pointerup", 400, 180);
+  });
+
+  it("lets go of the proportions once Shift comes up mid-drag", async () => {
+    const { opened, pointer } = cropping();
+    pointer("pointerdown", 500, 200);
+    pointer("pointermove", 400, 180, { shiftKey: true });
+    await nextFrame();
+    key("keyup", { key: "Shift" });
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
+    pointer("pointerup", 400, 180);
+  });
+
+  it("turns the crop between portrait and landscape with X, as large as the image lets it", () => {
+    const { opened, editing } = cropping();
+    expect(key("keydown", { key: "x" })).toBe(true);
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop).toEqual({ x: 84, y: 0, width: 133, height: 200 });
+    editing.undo();
+    expect(cropOf(opened)?.crop).toBeFalsy();
+  });
+
+  it("shows the guides of each composition over the crop in turn with O", () => {
+    const { host } = cropping();
+    const segments = () =>
+      (host.querySelector(".crop-guides.line")?.getAttribute("d") ?? "").split("M").length - 1;
+    expect(segments()).toBe(0);
+    const shown = [1, 2, 3, 4].map(() => {
+      expect(key("keydown", { key: "o" })).toBe(true);
+      return segments();
+    });
+    expect(shown).toEqual([4, 4, 2, 0]);
+  });
+
+  it("leaves X and O to the tools when nothing is being cropped, or with a modifier", () => {
+    cropping();
+    expect(key("keydown", { key: "x", metaKey: true })).toBe(false);
+    key("keydown", { key: "Escape" });
+    expect(key("keydown", { key: "x" })).toBe(false);
+    expect(key("keydown", { key: "o" })).toBe(false);
+  });
+
+  it("changes the shape of the crop under way", () => {
+    const { opened, editing } = cropping();
+    editing.cropShape("ellipse");
+    expect(editing.croppedAs()).toBe("ellipse");
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop_shape).toBe("ellipse");
+  });
+});
+
+describe("nudging", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("moves the selection a CSS pixel with an arrow key, or ten with Shift", () => {
+    const { editing, at } = page([], { zoom: 2 });
+    editing.select([STICKY]);
+    expect(key("keydown", { key: "ArrowRight" })).toBe(true);
+    key("keyup", { key: "ArrowRight" });
+    expect(at()).toEqual({ x: 0.5, y: 0 });
+    key("keydown", { key: "ArrowUp", shiftKey: true });
+    key("keyup", { key: "ArrowUp" });
+    expect(at()).toEqual({ x: 0.5, y: -5 });
+  });
+
+  it("moves by the grid's step while snapping to the grid shown", () => {
+    const { opened, editing, at } = page([], { snapping: () => true });
+    core.setBackground(opened.editor, "grid");
+    opened.board = core.board(opened.editor);
+    editing.select([STICKY]);
+    key("keydown", { key: "ArrowDown" });
+    key("keyup", { key: "ArrowDown" });
+    expect(at()).toEqual({ x: 0, y: 20 });
+  });
+
+  it("holds a held key's moves as one edit, keeping others out until it comes up", async () => {
+    const { editing, at } = page();
+    editing.select([STICKY]);
+    key("keydown", { key: "ArrowLeft" });
+    key("keydown", { key: "ArrowLeft", repeat: true });
+    key("keydown", { key: "ArrowLeft", repeat: true });
+    expect(at()).toEqual({ x: -3, y: 0 });
+    expect(() => editing.apply(() => {})).toThrow("Someone is editing in Planche");
+    key("keyup", { key: "ArrowLeft" });
+    await editing.idle();
+    editing.undo();
+    expect(at()).toEqual({ x: 0, y: 0 });
+  });
+
+  it("ends a move once ⌘ goes down, as macOS then sends no keyup", async () => {
+    const { editing, at } = page();
+    editing.select([STICKY]);
+    key("keydown", { key: "ArrowRight" });
+    key("keydown", { key: "Meta", metaKey: true });
+    await editing.idle();
+    editing.undo();
+    expect(at()).toEqual({ x: 0, y: 0 });
+  });
+
+  it("leaves the keys alone with nothing selected, a modifier held, or a field focused", () => {
+    const { editing, at } = page();
+    expect(key("keydown", { key: "ArrowRight" })).toBe(false);
+    editing.select([STICKY]);
+    expect(key("keydown", { key: "ArrowRight", altKey: true })).toBe(false);
+    const field = document.body.appendChild(document.createElement("textarea"));
+    expect(key("keydown", { key: "ArrowRight" }, field)).toBe(false);
+    const slider = document.body.appendChild(document.createElement("input"));
+    slider.type = "range";
+    expect(key("keydown", { key: "ArrowRight" }, slider)).toBe(false);
+    expect(at()).toEqual({ x: 0, y: 0 });
+  });
+
+  it("leaves the selection still as the arrow keys move within a menu", () => {
+    const { editing, at } = page();
+    editing.select([STICKY]);
+    openMenu([{ label: "Copy", run() {} }], { label: "Selection", place: { x: 10, y: 10 } });
+    const item = document.activeElement!;
+    key("keydown", { key: "ArrowRight" }, item);
+    key("keydown", { key: "ArrowLeft" }, item);
+    closeMenu();
+    expect(at()).toEqual({ x: 0, y: 0 });
+  });
+
+  it("sets down what it moves, as a drag does", () => {
+    const { opened, editing } = page([[IMAGE, image]]);
+    const note = "d".repeat(32);
+    opened.editor.add(
+      note,
+      undefined,
+      JSON.stringify({ ...sticky, frame: { x: 300, y: 50, width: 50, height: 50 } }),
+    );
+    opened.board = core.board(opened.editor);
+    editing.select([note]);
+    key("keydown", { key: "ArrowRight" });
+    key("keyup", { key: "ArrowRight" });
+    expect(core.element(opened.editor, note)?.kind).toMatchObject({ target: IMAGE });
   });
 });

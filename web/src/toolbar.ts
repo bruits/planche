@@ -178,6 +178,12 @@ export function toolbar(
       End: -1,
     };
     const to = moves[event.key];
+    // Up and Down are its own too, though they open no menu here, so that they never move the
+    // selection.
+    if (at >= 0 && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault();
+      return;
+    }
     if (at < 0 || to === undefined) {
       return;
     }

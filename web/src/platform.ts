@@ -112,6 +112,8 @@ export interface Platform {
   titleBar?: TitleBar;
   /** Why saving into a folder is impossible here, if it is. */
   cannotSave?: string | undefined;
+  /** What each key types without a modifier, by `KeyboardEvent.code`. Missing where none can tell. */
+  layout?: (() => Promise<ReadonlyMap<string, string>>) | undefined;
   /** A home where the board can save itself. `null` when the user cancels. */
   open(): Promise<Folder | Home | null>;
   /** `null` when the user cancels. Throws when the folder is not empty. */

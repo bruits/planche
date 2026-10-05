@@ -67,14 +67,15 @@ export interface Overlay {
 }
 
 /**
- * An image being cropped, the corners of the whole image, the outline of what its crop keeps, and
- * the grips on the corners and edges of its crop. Flipped once, they run the other way, which the
- * shade's even-odd fill ignores.
+ * An image being cropped, the corners of the whole image, the outline of what its crop keeps, the
+ * grips on the corners and edges of its crop, and the guides drawn over it. Flipped once, they run
+ * the other way, which the shade's even-odd fill ignores.
  */
 export interface Crop {
   image: Point[];
   kept: Point[];
   grips: Point[];
+  guides: [Point, Point][];
 }
 
 /** Whether `box` shows large enough for its dots and sides, which would cover it otherwise. */
@@ -128,10 +129,16 @@ export function overlay(host: HTMLElement): Overlay {
   shade.classList.add("crop-shade");
   const kept = document.createElementNS(SVG, "polygon");
   kept.classList.add("crop-frame");
+  // Twice, light over dark, so that they show over any image.
+  const guides = ["halo", "line"].map((name) => {
+    const guide = document.createElementNS(SVG, "path");
+    guide.classList.add("crop-guides", name);
+    return guide;
+  });
   const cropGrips = document.createElementNS(SVG, "g");
   cropGrips.classList.add("handles");
   const cropping = document.createElementNS(SVG, "g");
-  cropping.append(shade, kept, cropGrips);
+  cropping.append(shade, ...guides, kept, cropGrips);
   cropping.setAttribute("display", "none");
   svg.append(entered, targets, preview, start, selection, grips, marquee, cropping);
   host.append(svg);
@@ -249,6 +256,8 @@ export function overlay(host: HTMLElement): Overlay {
         return;
       }
       shade.setAttribute("d", closed(shown.image) + closed(shown.kept));
+      const across = shown.guides.map(([from, to]) => `M${from.x} ${from.y}L${to.x} ${to.y}`);
+      guides.forEach((guide) => guide.setAttribute("d", across.join("")));
       kept.setAttribute("points", shown.kept.flatMap(({ x, y }) => [x, y]).join(" "));
       cropping.removeAttribute("display");
     },

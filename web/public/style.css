@@ -372,6 +372,21 @@ body {
   vector-effect: non-scaling-stroke;
 }
 
+.crop-guides {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.crop-guides.halo {
+  stroke: rgb(0 0 0 / 0.35);
+  stroke-width: 3px;
+}
+
+.crop-guides.line {
+  stroke: rgb(255 255 255 / 0.85);
+  stroke-width: 1px;
+}
+
 [data-contrast="high"] .selection > *,
 [data-contrast="high"] .crop-frame {
   stroke-width: 3px;
@@ -429,7 +444,8 @@ body {
 .bar,
 #message,
 #measurements,
-.menu {
+.menu,
+.finder {
   background: var(--surface);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
@@ -915,12 +931,6 @@ body {
   border-radius: 4px;
 }
 
-.menu .swatch {
-  width: 14px;
-  height: 14px;
-  margin: 2px;
-}
-
 /* In its own colour, as the accent would read as one more to choose. */
 .style-card button[aria-pressed="true"]:has(> .swatch) {
   background: color-mix(in srgb, var(--swatch) 24%, transparent);
@@ -1056,7 +1066,8 @@ body {
   cursor: pointer;
 }
 
-.menu .name {
+.menu .name,
+.finder .name {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1072,7 +1083,8 @@ body {
   font-weight: 600;
 }
 
-.menu .end {
+.menu .end,
+.finder .end {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1085,18 +1097,21 @@ body {
   transform: rotate(-90deg);
 }
 
-.menu .tick {
+.menu .tick,
+.finder .tick {
   color: var(--accent);
 }
 
 /* The tick takes the shortcut's place, which the toolbar's button shows already. */
 .menu [aria-checked="false"] .tick,
+.finder [aria-checked="false"] .tick,
 .menu [role="menuitemradio"][aria-checked="true"] kbd {
   display: none;
 }
 
 /* Outlined while off, so that it shows in every theme. */
-.menu .switch {
+.menu .switch,
+.finder .switch {
   position: relative;
   box-sizing: border-box;
   width: 26px;
@@ -1105,7 +1120,8 @@ body {
   border-radius: 8px;
 }
 
-.menu .switch::after {
+.menu .switch::after,
+.finder .switch::after {
   content: "";
   position: absolute;
   top: 2px;
@@ -1116,12 +1132,14 @@ body {
   background: var(--muted);
 }
 
-.menu [aria-checked="true"] .switch {
+.menu [aria-checked="true"] .switch,
+.finder [aria-checked="true"] .switch {
   border-color: var(--accent);
   background: var(--accent);
 }
 
-.menu [aria-checked="true"] .switch::after {
+.menu [aria-checked="true"] .switch::after,
+.finder [aria-checked="true"] .switch::after {
   left: 12px;
   background: var(--surface);
 }
@@ -1142,7 +1160,8 @@ body {
   cursor: default;
 }
 
-.menu kbd {
+.menu kbd,
+.finder kbd {
   font: inherit;
   color: var(--muted);
 }
@@ -1151,6 +1170,72 @@ body {
   height: 1px;
   margin: 4px 6px;
   background: var(--line);
+}
+
+/* High in the window, where the eye goes first, and short enough for a small one. */
+.finder {
+  position: fixed;
+  top: min(15vh, 96px);
+  left: 50%;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  width: min(32rem, calc(100vw - 16px));
+  max-height: min(28rem, calc(100vh - 2 * min(15vh, 96px)));
+  padding: 4px;
+  border-radius: 10px;
+  transform: translateX(-50%);
+}
+
+.finder input {
+  margin: 0 0 4px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  outline: none;
+  color: inherit;
+  background: none;
+  font: inherit;
+}
+
+.finder [role="listbox"] {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.finder [role="option"] {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.finder [aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+.finder [aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.finder .within {
+  color: var(--muted);
+}
+
+.finder .why {
+  margin: 4px 10px 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.finder .why:empty {
+  display: none;
 }
 
 /* Forced colours drop backgrounds unless in system colours. */
@@ -1212,41 +1297,50 @@ body {
     background: Highlight;
   }
 
-  .menu button:focus {
+  .menu button:focus,
+  .finder [aria-selected="true"] {
     color: HighlightText;
     background: Highlight;
   }
 
-  .menu .switch {
+  .menu .switch,
+  .finder .switch {
     border-color: CanvasText;
   }
 
-  .menu .switch::after {
+  .menu .switch::after,
+  .finder .switch::after {
     background: CanvasText;
   }
 
-  .menu [aria-checked="true"] .switch {
+  .menu [aria-checked="true"] .switch,
+  .finder [aria-checked="true"] .switch {
     border-color: CanvasText;
     background: CanvasText;
   }
 
-  .menu [aria-checked="true"] .switch::after {
+  .menu [aria-checked="true"] .switch::after,
+  .finder [aria-checked="true"] .switch::after {
     background: Canvas;
   }
 
-  .menu button:focus .switch {
+  .menu button:focus .switch,
+  .finder [aria-selected="true"] .switch {
     border-color: HighlightText;
   }
 
-  .menu button:focus .switch::after {
+  .menu button:focus .switch::after,
+  .finder [aria-selected="true"] .switch::after {
     background: HighlightText;
   }
 
-  .menu [aria-checked="true"]:focus .switch {
+  .menu [aria-checked="true"]:focus .switch,
+  .finder [aria-checked="true"][aria-selected="true"] .switch {
     background: HighlightText;
   }
 
-  .menu [aria-checked="true"]:focus .switch::after {
+  .menu [aria-checked="true"]:focus .switch::after,
+  .finder [aria-checked="true"][aria-selected="true"] .switch::after {
     background: Highlight;
   }
 

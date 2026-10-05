@@ -42,6 +42,8 @@ export interface Lifecycle {
   openZip(): Promise<void>;
   /** Into an empty folder, where the board saves itself from then on. */
   saveAs(): Promise<void>;
+  /** Writes what waits at once, where the board saves itself into its own files, or else saves it as. */
+  save(): Promise<void>;
   /** Where the open board saves itself, `undefined` when nowhere. */
   saver(): Saving | undefined;
   touched(ids: string[]): void;
@@ -514,6 +516,15 @@ export function lifecycle(host: Host): Lifecycle {
     }
   }
 
+  async function save(): Promise<void> {
+    if (autosave === undefined || autosave.store.session) {
+      return saveAs();
+    }
+    if (await autosave.flush()) {
+      host.say("Saved");
+    }
+  }
+
   function saved(editor: core.Editor, snapshot: core.Snapshot): void {
     if (host.opened()?.editor === editor) {
       editor.markSaved(snapshot);
@@ -545,6 +556,7 @@ export function lifecycle(host: Host): Lifecycle {
     openFolder: () => openBoard(pickedFolder),
     openZip: () => openBoard(pickedZip),
     saveAs,
+    save,
     saver: () => autosave,
     touched(ids) {
       autosave?.touched(ids);

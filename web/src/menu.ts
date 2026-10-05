@@ -13,10 +13,8 @@ import { icon, type Icon } from "./icons.js";
  */
 export type Entry = Item | "separator";
 
-/** `swatch` shows a colour, as CSS gives it, where an icon would. */
 export type Item = Command & {
   icon?: Icon;
-  swatch?: string;
   checked?: boolean;
   toggle?: boolean;
   options?: Entry[];
@@ -247,8 +245,9 @@ function navigate(
       focus(-1);
     } else if (event.key === "Tab") {
       closeMenu();
-    } else if (!other(event.key)) {
-      // Enter and Space click the focused item, as buttons do.
+    } else if (!other(event.key) && event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      // Enter and Space click the focused item, as buttons do. Left and Right are the menu's own
+      // even where they lead nowhere, so that they never move the selection.
       return;
     }
     event.preventDefault();
@@ -268,51 +267,13 @@ function menuItem(command: Item, activate: (item: HTMLButtonElement) => void): H
         ? "menuitemcheckbox"
         : "menuitemradio",
   );
-  if (command.checked !== undefined) {
-    item.setAttribute("aria-checked", String(command.checked));
-  }
-  const label = document.createElement("span");
-  label.className = "name";
-  if (command.icon) {
-    label.append(icon(command.icon));
-  }
-  if (command.swatch) {
-    const swatch = document.createElement("span");
-    swatch.className = "swatch";
-    swatch.style.setProperty("--swatch", command.swatch);
-    label.append(swatch);
-  }
-  label.append(named(command));
-  const end = document.createElement("span");
-  end.className = "end";
-  item.append(label, end);
-  // Named apart from its label, as its glyphs would otherwise be read out as part of it.
-  const shortcut = command.keys?.[0];
-  if (shortcut) {
-    item.setAttribute("aria-keyshortcuts", ariaKeys(shortcut));
-    const keys = document.createElement("kbd");
-    keys.setAttribute("aria-hidden", "true");
-    keys.textContent = describe(shortcut);
-    end.append(keys);
-  }
+  const [, end] = present(item, command);
   if (command.options) {
     item.setAttribute("aria-haspopup", "menu");
     item.setAttribute("aria-expanded", "false");
     const opens = icon("chevron");
     opens.classList.add("opens");
     end.append(opens);
-  }
-  // Hidden from assistive technologies, which `aria-checked` tells already.
-  if (command.checked !== undefined) {
-    const state = document.createElement("span");
-    state.setAttribute("aria-hidden", "true");
-    if (command.toggle) {
-      state.className = "switch";
-    } else {
-      state.className = "tick";
-      state.textContent = "✓";
-    }
-    end.append(state);
   }
   // Still focusable, as the pattern wants, so that its reason can be read.
   const reason = command.unavailable?.();
@@ -329,6 +290,47 @@ function menuItem(command: Item, activate: (item: HTMLButtonElement) => void): H
   // Hovering moves the focus, so that the keyboard carries on from there.
   item.addEventListener("pointermove", () => item.focus());
   return item;
+}
+
+/**
+ * Its name, its first keys, and whether it is on, into `item`, in a part for its name and one for
+ * the rest, which more may go into.
+ */
+export function present(item: HTMLElement, command: Item): [HTMLSpanElement, HTMLSpanElement] {
+  if (command.checked !== undefined) {
+    item.setAttribute("aria-checked", String(command.checked));
+  }
+  const label = document.createElement("span");
+  label.className = "name";
+  if (command.icon) {
+    label.append(icon(command.icon));
+  }
+  label.append(named(command));
+  const end = document.createElement("span");
+  end.className = "end";
+  item.append(label, end);
+  // Named apart from its label, as its glyphs would otherwise be read out as part of it.
+  const shortcut = command.keys?.[0];
+  if (shortcut) {
+    item.setAttribute("aria-keyshortcuts", ariaKeys(shortcut));
+    const keys = document.createElement("kbd");
+    keys.setAttribute("aria-hidden", "true");
+    keys.textContent = describe(shortcut);
+    end.append(keys);
+  }
+  // Hidden from assistive technologies, which `aria-checked` tells already.
+  if (command.checked !== undefined) {
+    const state = document.createElement("span");
+    state.setAttribute("aria-hidden", "true");
+    if (command.toggle) {
+      state.className = "switch";
+    } else {
+      state.className = "tick";
+      state.textContent = "✓";
+    }
+    end.append(state);
+  }
+  return [label, end];
 }
 
 function position(menu: HTMLElement, place: Place): void {

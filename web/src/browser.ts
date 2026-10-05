@@ -22,9 +22,12 @@ const CANNOT_SAVE = window.showDirectoryPicker
   ? undefined
   : "This browser cannot write to a folder: export a ZIP file, or try a Chromium-based browser or the desktop app.";
 
+const { keyboard } = navigator;
+
 export const browser: Platform = {
   name: "browser",
   cannotSave: CANNOT_SAVE,
+  layout: keyboard ? async () => new Map(await keyboard.getLayoutMap()) : undefined,
 
   async open() {
     if (!window.showDirectoryPicker) {

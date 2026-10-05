@@ -328,6 +328,16 @@ export function duplicateOffset(zoom: number, least: number): number {
   return Math.ceil(least / (step * zoom)) * step;
 }
 
+/** How far an arrow key moves the selection at `zoom`, ten times as far when `wide`. */
+export function nudge(zoom: number, wide: boolean, grid: boolean): number {
+  const times = wide ? 10 : 1;
+  if (!grid) {
+    return times / zoom;
+  }
+  const { spacing, fade, coarse } = core.gridLevel(zoom);
+  return times * (fade < 1 ? coarse : spacing);
+}
+
 /** How far to move `area` for its centre to come to `at`, by whole steps of the grid that shows at `zoom`. */
 export function centring(area: Rect, at: Point, zoom: number): Point {
   const step = core.gridLevel(zoom).spacing;

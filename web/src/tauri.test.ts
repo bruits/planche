@@ -13,8 +13,11 @@ function shell(answer: boolean) {
       },
       async invoke(command: string) {
         sent.push(command);
-        // Only the confirm dialog answers anything that matters here.
-        return (command === "confirm" ? answer : undefined) as never;
+        const answers: Record<string, unknown> = {
+          confirm: answer,
+          keyboard_layout: [["KeyQ", "a"]],
+        };
+        return answers[command] as never;
       },
     },
     event: {
@@ -32,6 +35,11 @@ function shell(answer: boolean) {
 }
 
 describe("tauri", () => {
+  it("reads what each key types alone from the shell, by where it sits", async () => {
+    const { api } = shell(true);
+    expect(await tauri(api).layout!()).toEqual(new Map([["KeyQ", "a"]]));
+  });
+
   it("closing an unsaved board asks first, and keeps the window when the user declines", async () => {
     const { api, sent, close } = shell(false);
     tauri(api).whenClosing!(async () => false);

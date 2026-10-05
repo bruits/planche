@@ -9,6 +9,14 @@ interface Window {
   __TAURI__?: TauriApi;
 }
 
+/** Chromium only. */
+interface Navigator {
+  readonly keyboard?: {
+    /** What each key types without a modifier, by `KeyboardEvent.code`. */
+    getLayoutMap(): Promise<ReadonlyMap<string, string>>;
+  };
+}
+
 /** Chromium only, where a handle the page kept needs the user's leave again after a restart. */
 interface FileSystemHandle {
   queryPermission?(descriptor: { mode: "read" | "readwrite" }): Promise<PermissionState>;

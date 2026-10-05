@@ -43,6 +43,16 @@ export interface Command {
   /** Why it cannot run now, `undefined` when it can. */
   unavailable?(): string | undefined;
   run(): void;
+  /**
+   * Whether its keys never reach the browser, which would save, open, or print the page, even
+   * from a text field, where they run nothing.
+   */
+  everywhere?: boolean;
+  /**
+   * Whether it runs once while its keys are held, as what it opens or turns on would otherwise go
+   * off and on again by turns.
+   */
+  once?: boolean;
 }
 
 export function named({ label }: Command): string {
@@ -69,14 +79,38 @@ function pressed(commands: Command[], event: KeyboardEvent): Command | undefined
   );
 }
 
+/** What each key types without a modifier in the layout in use, by `KeyboardEvent.code`, where told. */
+let layout: ReadonlyMap<string, string> | undefined;
+
+/** As the shell tells it, which browsers and webviews do not all do. */
+export function learnLayout(next: ReadonlyMap<string, string> | undefined): void {
+  layout = next;
+}
+
 /**
- * The character typed, lower-case, or the letter of the key where the layout types none, as
- * Cyrillic ones do, or Option does on macOS.
+ * The character typed, lower-case, or where the layout types none, as Cyrillic ones do, what its
+ * key types alone, or else the letter of the key. With Option on macOS, which types other
+ * characters, some of them Latin, as @ on Swiss layouts, what the key types alone too.
  */
 export function typed(event: KeyboardEvent): string {
   const key = event.key.toLowerCase();
-  const latin = key.length > 1 ? key !== "dead" : /^[\x20-\x7e]$/.test(key);
-  return !latin && /^Key[A-Z]$/.test(event.code) ? event.code.slice(3).toLowerCase() : key;
+  const alone = layout?.get(event.code)?.toLowerCase();
+  const told = alone !== undefined && latin(alone);
+  const letter = /^Key[A-Z]$/.test(event.code);
+  if (mac && event.altKey && (told || letter)) {
+    return told ? alone : event.code.slice(3).toLowerCase();
+  }
+  if (key.length > 1 ? key !== "dead" : latin(key)) {
+    return key;
+  }
+  if (told) {
+    return alone;
+  }
+  return letter ? event.code.slice(3).toLowerCase() : key;
+}
+
+function latin(character: string): boolean {
+  return /^[\x20-\x7e]$/.test(character);
 }
 
 export function describe(shortcut: Shortcut): string {
@@ -141,20 +175,28 @@ function capitalise(word: string): string {
  */
 export function listen(commands: Command[], listening: (command: Command) => boolean): () => void {
   const pressedKey = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || composing(event) || typing(event.target)) {
+    if (event.defaultPrevented || composing(event)) {
       return;
     }
     // A focused button takes Enter to press itself.
     if (event.key === "Enter" && event.target instanceof HTMLButtonElement) {
       return;
     }
-    const command = pressed(commands, event);
+    const field = typing(event.target);
+    // A field on macOS moves its caret with Ctrl and these letters, as Cocoa has it.
+    if (field && mac && !event.metaKey) {
+      return;
+    }
+    const command = pressed(
+      field ? commands.filter(({ everywhere }) => everywhere) : commands,
+      event,
+    );
     if (command === undefined) {
       return;
     }
     event.preventDefault();
     // What Enter does opens a mode, which a held Enter would leave and open again by turns.
-    if (event.repeat && event.key === "Enter") {
+    if (field || (event.repeat && (event.key === "Enter" || command.once))) {
       return;
     }
     if (listening(command) && command.unavailable?.() === undefined) {
@@ -162,7 +204,18 @@ export function listen(commands: Command[], listening: (command: Command) => boo
     }
   };
   addEventListener("keydown", pressedKey);
-  return () => removeEventListener("keydown", pressedKey);
+  addEventListener("keyup", altUp);
+  return () => {
+    removeEventListener("keydown", pressedKey);
+    removeEventListener("keyup", altUp);
+  };
+}
+
+/** Let go of alone, Alt would hand the focus to the browser's menu, but on macOS. */
+function altUp(event: KeyboardEvent): void {
+  if (event.key === "Alt") {
+    event.preventDefault();
+  }
 }
 
 /** Whether keys pressed on `target` type text into it. */

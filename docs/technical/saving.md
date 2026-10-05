@@ -2,7 +2,7 @@
 
 ## Behaviour
 
-A board saves itself shortly after each edit, and at once when its window loses focus, hides, or closes. Agents' edits save the same way. Leaving a board or closing the app first writes all that waits, once the images being read are read, and asks only when it cannot.
+A board saves itself shortly after each edit, and at once when its window loses focus, hides, or closes, or when the user saves it. Agents' edits save the same way. Leaving a board or closing the app first writes all that waits, once the images being read are read, and asks only when it cannot.
 
 A board opened from a folder, or saved as one, saves into that folder, and a ZIP file opened on desktop saves into that file. In a browser only Chromium can write to a folder, and after the browser restarts the user clicks once before the page may write there again, unless they allowed it on every visit. Any other board lives in the session, such as a new board, or one opened in Firefox, in Safari, or from a ZIP file in a browser, which is copied into it. The next launch reopens the board or the session as it was left. Leaving a board kept only in the session asks first, until it is saved as a folder or exported as a ZIP file. A session the app cannot read, such as one written by a newer version, stays untouched until the user opens or starts another board. A board missing one of its images does not open, and the open board stays. One whose image turns out unlike its digest as it shows, such as a Git LFS pointer, does not open either. It saves nothing more, and as the board it replaced is gone, a blank board takes its place.
 

@@ -19,12 +19,16 @@
 // otherwise. Holding ⌘, or Ctrl elsewhere than macOS, keeps things from sticking and the grid from
 // pulling, but for a move only once under way, as pressing an element with it toggles the element
 // instead. The eraser removes what a click would select, or all that a drag passes over but what
-// it starts within, in one edit. Cropping shows an image whole, what its crop leaves out dimmed,
-// and its edges and corners drag the crop, or its inside moves it, until Enter or a press
-// elsewhere crops it, or Escape leaves it as it was. Resetting the crop meanwhile starts it over
-// from the whole image.
+// it starts within, in one edit. The arrow keys move the selection by a pixel, or ten while ⇧ is
+// held, or by the grid's step while snapping to the grid shown, as one edit until let go.
+// Cropping shows an image whole, what its crop leaves out dimmed, and its edges and corners drag
+// the crop, or its inside moves it, until Enter or a press elsewhere crops it, or Escape leaves it
+// as it was. Holding ⇧ keeps the crop's proportions as its edges and corners drag it, X turns it
+// between portrait and landscape, and O shows each composition's guides over it in turn.
+// Resetting the crop meanwhile starts it over from the whole image, and its shape changes as
+// asked.
 
-import { mac, opensMenu } from "./commands.js";
+import { composing, mac, opensMenu, typed, typing } from "./commands.js";
 import * as core from "./core.js";
 import type {
   Alignment,
@@ -42,7 +46,7 @@ import type {
   Side,
   Size,
 } from "./core.js";
-import { among, newId, renamed } from "./board.js";
+import { among, newId, nudge, renamed } from "./board.js";
 import { cursor, dotted, type Crop, type Grab, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
 import { anchored, fitted, holdsText, LINE_HEIGHT, needed, type Holder } from "./text.js";
@@ -149,6 +153,30 @@ const GRIPS: [number, number][] = [
   [0, 0.5],
 ];
 const CORNERS = GRIPS.filter(([x, y]) => x !== 0.5 && y !== 0.5);
+export const CROP_KEYS = { turn: "x", guides: "o" } as const;
+const NUDGES: Record<string, Point> = {
+  ArrowLeft: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
+  ArrowUp: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: 1 },
+};
+const GOLDEN = (Math.sqrt(5) - 1) / 2;
+/** Over a crop in turn, as segments between parts of its width and height. */
+const GUIDES: [[number, number], [number, number]][][] = [
+  [],
+  lines([1 / 3, 2 / 3]),
+  lines([1 - GOLDEN, GOLDEN]),
+  [
+    [
+      [0, 0],
+      [1, 1],
+    ],
+    [
+      [1, 0],
+      [0, 1],
+    ],
+  ],
+];
 /** Around the ellipse that fills a crop, in parts of its width and height, close enough to draw it. */
 const CURVE: [number, number][] = Array.from({ length: 128 }, (_, at) => {
   const angle = (at / 128) * 2 * Math.PI;
@@ -216,9 +244,11 @@ export interface Edits {
   /** The one image selected. */
   crop(): void;
   cropping(): string | undefined;
+  /** The shape of the crop under way. */
+  croppedAs(): CropShape | undefined;
   /** Of the images among the selection, or of the one being cropped, which it starts over. */
   resetCrop(): void;
-  /** Of the images among the selection. */
+  /** Of the images among the selection, or of the crop under way. */
   cropShape(shape: CropShape): void;
   /** The images among the selection, which stays as it is. */
   arrange(order: Order): void;
@@ -406,6 +436,8 @@ export function edits(
    * agents read the image whole.
    */
   let cropping: { id: string; area: Rect; shape: CropShape } | undefined;
+  /** Kept from one crop to the next. */
+  let guides = 0;
   let adjusting = false;
   let waiting: (() => void)[] = [];
   const underway = () =>
@@ -624,6 +656,10 @@ export function edits(
       image: lying(editing, id, whole(kind.natural_size), CORNERS),
       kept: lying(editing, id, area, shape === "ellipse" ? CURVE : CORNERS),
       grips: lying(editing, id, area, GRIPS),
+      guides: GUIDES[guides]!.flatMap((ends) => {
+        const [from, to] = lying(editing, id, area, ends);
+        return from && to ? [[from, to] satisfies [Point, Point]] : [];
+      }),
     };
   };
   const show = () => {
@@ -933,17 +969,22 @@ export function edits(
       return;
     }
     if (press.kind === "crop") {
-      const kind = cropping && editing.board.elements[cropping.id]?.kind;
-      const pixel = cropping && core.pixelAt(editing.editor, cropping.id, at);
-      if (cropping && pixel && kind?.type === "image") {
-        cropping.area = dragged(press, pixel, kind.natural_size);
-        show();
-      }
+      last = at;
+      dragCrop(editing, at, (keys ?? event).shiftKey);
       return;
     }
     last = at;
     // With the keys held now, which may have changed since the move.
     drag(editing, at, zoom, keys ?? event);
+  };
+  /** To `at`, as wide for its height as it was when pressed while `keep`. */
+  const dragCrop = (editing: Editing, at: Point, keep: boolean) => {
+    const kind = cropping && editing.board.elements[cropping.id]?.kind;
+    const pixel = cropping && core.pixelAt(editing.editor, cropping.id, at);
+    if (press?.kind === "crop" && cropping && pixel && kind?.type === "image") {
+      cropping.area = dragged(press, pixel, kind.natural_size, keep);
+      show();
+    }
   };
   // As the keys change what a press does, or what a press would take, without the pointer moving.
   for (const type of ["keydown", "keyup"] as const) {
@@ -961,6 +1002,8 @@ export function edits(
       // Unless a move waits for the frame, which takes the keys then.
       if (held && modifier && editing && last && zoom && !moved) {
         drag(editing, last, zoom, event);
+      } else if (press?.kind === "crop" && modifier && editing && last && !moved) {
+        dragCrop(editing, last, event.shiftKey);
       } else if (!press) {
         rehover();
       }
@@ -1394,15 +1437,40 @@ export function edits(
       resolve();
     }
   };
-  // Captured ahead of the commands on Enter and Escape, which wait while an image is being cropped.
+  /** Between portrait and landscape, unless dragged, which would carry on from where it started. */
+  const turnCrop = (editing: Editing) => {
+    const kind = cropping && editing.board.elements[cropping.id]?.kind;
+    if (cropping && press === undefined && kind?.type === "image") {
+      cropping.area = swapped(cropping.area, kind.natural_size);
+      show();
+    }
+  };
+  // Captured ahead of the commands, which wait while an image is being cropped, on Enter and
+  // Escape, and on X and O, whose tools they would otherwise pick then.
   addEventListener(
     "keydown",
     (event) => {
       const editing = current();
-      const key = event.key === "Enter" || event.key === "Escape";
-      if (cropping && editing && key && !event.repeat && !event.defaultPrevented) {
+      if (!cropping || !editing || event.repeat || event.defaultPrevented) {
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Escape") {
         event.preventDefault();
         finishCropping(editing, event.key === "Enter");
+        return;
+      }
+      const plain = !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey;
+      const key = typed(event);
+      const { turn, guides: guide } = CROP_KEYS;
+      if (!plain || (key !== turn && key !== guide) || composing(event) || typing(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      if (key === turn) {
+        turnCrop(editing);
+      } else {
+        guides = (guides + 1) % GUIDES.length;
+        show();
       }
     },
     true,
@@ -1454,6 +1522,94 @@ export function edits(
     }
   };
 
+  const adjust = (work: (editor: Editor, touched: string[]) => void): string[] => {
+    const editing = current();
+    if (editing === undefined || (underway() && !adjusting)) {
+      throw new Error("Someone is editing in Planche");
+    }
+    const { editor } = editing;
+    if (!adjusting) {
+      editor.beginGesture();
+      adjusting = true;
+    }
+    const touched: string[] = [];
+    try {
+      work(editor, touched);
+    } catch (error) {
+      touched.push(...editor.rewindGesture());
+      editor.endGesture();
+      adjusting = false;
+      throw error;
+    } finally {
+      edit(editing, [...new Set(touched)]);
+      resolve();
+    }
+    return [...new Set(touched)];
+  };
+  const finishAdjusting = () => {
+    if (!adjusting) {
+      return;
+    }
+    adjusting = false;
+    current()?.editor.endGesture();
+    resolve();
+    settled();
+  };
+  /** The arrow keys held that move the selection, as one edit until the last comes up. */
+  const nudging = new Set<string>();
+  const stopNudging = () => {
+    if (nudging.size > 0) {
+      nudging.clear();
+      finishAdjusting();
+    }
+  };
+  // After the toolbar, the menus, and the pins, which take arrow keys to move between their own.
+  addEventListener("keydown", (event) => {
+    const modified = event.metaKey || event.ctrlKey || event.altKey;
+    // As macOS sends no keyup for a key held with ⌘ down.
+    if (modified) {
+      stopNudging();
+    }
+    const towards = NUDGES[event.key];
+    const editing = current();
+    const zoom = view.zoom();
+    const target = event.target;
+    if (
+      towards === undefined ||
+      modified ||
+      event.defaultPrevented ||
+      composing(event) ||
+      typing(target) ||
+      (target instanceof HTMLInputElement && target.type === "range") ||
+      !editing ||
+      !zoom ||
+      selected.size === 0 ||
+      (underway() && nudging.size === 0)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    const grid = editing.board.background !== "plain" && snapping();
+    const step = nudge(zoom, event.shiftKey, grid);
+    const ids = [...selected];
+    nudging.add(event.key);
+    try {
+      adjust((editor, touched) => {
+        const by = { x: towards.x * step, y: towards.y * step };
+        touched.push(...core.transform(editor, ids, { place: { by }, settle: grid }));
+      });
+    } catch (error) {
+      nudging.clear();
+      reportError(error);
+    }
+  });
+  addEventListener("keyup", (event) => {
+    if (nudging.delete(event.key) && nudging.size === 0) {
+      finishAdjusting();
+    }
+  });
+  addEventListener("blur", stopNudging);
+  view.host.addEventListener("pointerdown", stopNudging, true);
   return {
     catchUp,
     busy: underway,
@@ -1478,39 +1634,8 @@ export function edits(
       }
       return [...new Set(touched)];
     },
-    adjust(work) {
-      const editing = current();
-      if (editing === undefined || (underway() && !adjusting)) {
-        throw new Error("Someone is editing in Planche");
-      }
-      const { editor } = editing;
-      if (!adjusting) {
-        editor.beginGesture();
-        adjusting = true;
-      }
-      const touched: string[] = [];
-      try {
-        work(editor, touched);
-      } catch (error) {
-        touched.push(...editor.rewindGesture());
-        editor.endGesture();
-        adjusting = false;
-        throw error;
-      } finally {
-        edit(editing, [...new Set(touched)]);
-        resolve();
-      }
-      return [...new Set(touched)];
-    },
-    finishAdjusting() {
-      if (!adjusting) {
-        return;
-      }
-      adjusting = false;
-      current()?.editor.endGesture();
-      resolve();
-      settled();
-    },
+    adjust,
+    finishAdjusting,
     adjusting: () => adjusting,
     writing: () => written?.id,
     writable() {
@@ -1624,6 +1749,7 @@ export function edits(
         }
       }),
     cropping: () => cropping?.id,
+    croppedAs: () => cropping?.shape,
     resetCrop() {
       const kind = cropping && current()?.board.elements[cropping.id]?.kind;
       if (cropping && kind?.type === "image") {
@@ -1637,8 +1763,14 @@ export function edits(
       }
       run((editing, ids) => edit(editing, editing.editor.resetCrop(ids)));
     },
-    cropShape: (shape) =>
-      run((editing, ids) => edit(editing, core.setCropShape(editing.editor, ids, shape))),
+    cropShape(shape) {
+      if (cropping) {
+        cropping.shape = shape;
+        show();
+        return;
+      }
+      run((editing, ids) => edit(editing, core.setCropShape(editing.editor, ids, shape)));
+    },
     arrange: (order) =>
       run((editing, ids) => edit(editing, core.arrange(editing.editor, ids, order))),
     normalize: (side) => run((editing, ids) => edit(editing, editing.editor.normalize(ids, side))),
@@ -1684,6 +1816,7 @@ export function edits(
       written = undefined;
       cropping = undefined;
       adjusting = false;
+      nudging.clear();
       field.close();
       settle();
       overlay.outline([]);
@@ -1937,11 +2070,15 @@ function whole(natural: Size): Rect {
   return { x: 0, y: 0, ...natural };
 }
 
-/** On whole pixels, within the image, and a pixel wide and tall at least. */
+/**
+ * On whole pixels, within the image, and a pixel wide and tall at least, as wide for its height
+ * as it was, to a pixel, while `keep`.
+ */
 function dragged(
   { grip, start, from }: Extract<Press, { kind: "crop" }>,
   pixel: Point,
   natural: Size,
+  keep: boolean,
 ): Rect {
   const [dx, dy] = [pixel.x - start.x, pixel.y - start.y];
   if (grip === undefined) {
@@ -1949,9 +2086,102 @@ function dragged(
     const y = Math.min(Math.max(Math.round(from.y + dy), 0), natural.height - from.height);
     return { ...from, x, y };
   }
+  if (keep) {
+    return proportioned(grip, from, dx, dy, natural);
+  }
   const [left, right] = stretched(from.x, from.width, grip[0], dx, natural.width);
   const [top, bottom] = stretched(from.y, from.height, grip[1], dy, natural.height);
   return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/** A span of a crop, which a grip drags at `side`, 0 or 1, or keeps centred on at ½. */
+interface Span {
+  start: number;
+  length: number;
+  side: number;
+  by: number;
+  size: number;
+}
+
+/**
+ * Scaled from its opposite corner along its diagonal, or from its opposite side and around its
+ * centre line, as far as the image lets it.
+ */
+function proportioned(
+  grip: [number, number],
+  from: Rect,
+  dx: number,
+  dy: number,
+  natural: Size,
+): Rect {
+  const spans: Span[] = [
+    { start: from.x, length: from.width, side: grip[0], by: dx, size: natural.width },
+    { start: from.y, length: from.height, side: grip[1], by: dy, size: natural.height },
+  ];
+  const dragging = spans.filter(({ side }) => side !== 0.5);
+  const grown = ({ length, side, by }: Span) => length + (side === 1 ? by : -by);
+  const scale =
+    dragging.reduce((sum, span) => sum + grown(span) * span.length, 0) /
+    dragging.reduce((sum, { length }) => sum + length ** 2, 0);
+  const least = Math.max(...spans.map(({ length }) => 1 / length));
+  const most = Math.min(...spans.map((span) => room(span) / span.length));
+  const by = Math.min(Math.max(scale, least), most);
+  const [[left, right], [top, bottom]] = spans.map((span) =>
+    resized(span, Math.round(span.length * by)),
+  ) as [[number, number], [number, number]];
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/** How long the image lets a span grow, from its side kept, or around its centre. */
+function room({ start, length, side, size }: Span): number {
+  if (side === 0.5) {
+    const centre = start + length / 2;
+    return 2 * Math.min(centre, size - centre);
+  }
+  return side === 1 ? size - start : start + length;
+}
+
+/** The ends of a span made `length` long, from its side kept, or around its centre within the image. */
+function resized(span: Span, length: number): [number, number] {
+  const { start, side, size } = span;
+  if (side === 0.5) {
+    const at = Math.min(
+      Math.max(Math.round(start + span.length / 2 - length / 2), 0),
+      size - length,
+    );
+    return [at, at + length];
+  }
+  const kept = side === 1 ? start : start + span.length;
+  return side === 1 ? [kept, kept + length] : [kept - length, kept];
+}
+
+/** Turned between portrait and landscape around its centre, as large as the image lets it. */
+function swapped(area: Rect, natural: Size): Rect {
+  const scale = Math.min(1, natural.width / area.height, natural.height / area.width);
+  const width = Math.max(Math.round(area.height * scale), 1);
+  const height = Math.max(Math.round(area.width * scale), 1);
+  const x = Math.round(area.x + area.width / 2 - width / 2);
+  const y = Math.round(area.y + area.height / 2 - height / 2);
+  return {
+    x: Math.min(Math.max(x, 0), natural.width - width),
+    y: Math.min(Math.max(y, 0), natural.height - height),
+    width,
+    height,
+  };
+}
+
+/** Lines across a crop at `parts` of its width, and of its height. */
+function lines(parts: number[]): [[number, number], [number, number]][] {
+  return parts.flatMap((part) => [
+    [
+      [part, 0],
+      [part, 1],
+    ],
+    [
+      [0, part],
+      [1, part],
+    ],
+  ]);
 }
 
 /** The ends of a span, one of them moved by `by` when `side` is 0 or 1, within `0..size`. */

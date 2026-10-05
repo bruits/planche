@@ -12,10 +12,18 @@ const OTHER = "e".repeat(32);
 const ASSET = "b".repeat(64);
 const frame = { x: 0, y: 0, width: 160, height: 120 };
 const ORIGIN = { x: 0, y: 0 };
-const command = (): Command => ({ label: "", run: vi.fn<() => void>() });
+const command = (keys?: Command["keys"]): Command => ({
+  label: "",
+  keys,
+  run: vi.fn<() => void>(),
+});
 
 function field(name: string): HTMLInputElement {
   return document.querySelector<HTMLInputElement>(`.style-card input[aria-label="${name}"]`)!;
+}
+
+function titled(name: string): string | null | undefined {
+  return document.querySelector(`.style-card button[aria-label="${name}"]`)?.getAttribute("title");
 }
 
 function slider(): HTMLInputElement {
@@ -54,11 +62,12 @@ function opened(source?: string) {
     bold: command(),
     italic: command(),
     strike: command(),
+    greyscale: command([{ key: "g", alt: true }]),
     flipHorizontally: command(),
     flipVertically: command(),
     crop: command(),
     rectangularCrop: command(),
-    ellipticalCrop: command(),
+    ellipticalCrop: command([{ key: "c", alt: true }]),
     openSource: command(),
     open: command(),
   };
@@ -140,6 +149,12 @@ describe("the card of a lone image", () => {
     expect(document.querySelector(".style-card .facts")?.textContent).toBe(
       "cat.png · 320 × 240 · 50%",
     );
+  });
+
+  it("names the keys of its greyscale and elliptical crop", () => {
+    opened();
+    expect(titled("Greyscale")).toBe("Greyscale · Alt+G");
+    expect(titled("Elliptical crop")).toBe("Elliptical crop · Alt+C");
   });
 
   it("writes its caption as one edit, and none when left blank", () => {
