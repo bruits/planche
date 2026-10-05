@@ -76,7 +76,7 @@ export async function render(scene: Scene, request: Request): Promise<Rendered> 
   const { board } = scene.opened;
   const chosen = request.ids && new Set(request.ids);
   const ids = chosen ? board.draw_order.filter((id) => among(board, id, chosen)) : board.draw_order;
-  const wanted = request.area ?? framed(scene.opened, ids, request.ids ?? []);
+  const wanted = request.area ?? framed(board, scene.crossedOut, request.ids ?? []);
   const zoom = density(wanted, request.size);
   const size: Size = {
     width: Math.max(1, Math.floor(wanted.width * zoom)),
@@ -433,29 +433,14 @@ function sharpest(board: Board, ids: string[], zoom: number, area: Rect): Map<st
   return most;
 }
 
-/** What the elements draw over, with some room around it, as a line or an arrow may have no height. */
-function framed({ board, editor }: Opened, ids: string[], chosen: string[]): Rect {
-  const bounds = core.bounds(editor, chosen);
-  if (bounds === undefined) {
+function framed(board: Board, crossedOut: ReadonlySet<string>, chosen: string[]): Rect {
+  const covered = drawnOver(board, chosen, crossedOut);
+  if (covered === undefined) {
     throw new Error(
       chosen.length === 0 ? "Give an area or some ids" : "Those elements draw nothing to show",
     );
   }
-  // The core bounds an arrow by its ends, past which its heads reach, as far as they are long.
-  const reached = placed({ ...board, draw_order: ids }, { placed: () => undefined }).flatMap(
-    (item) =>
-      item.kind === "arrow"
-        ? [item.from, item.to].flatMap(({ x, y }) => [
-            { x: x - item.head, y: y - item.head },
-            { x: x + item.head, y: y + item.head },
-          ])
-        : [],
-  );
-  const xs = [bounds.x, bounds.x + bounds.width, ...reached.map(({ x }) => x)];
-  const ys = [bounds.y, bounds.y + bounds.height, ...reached.map(({ y }) => y)];
-  const [x, y] = [Math.min(...xs), Math.min(...ys)];
-  const [width, height] = [Math.max(...xs) - x, Math.max(...ys) - y];
-  // Past the widest stroke.
+  const { x, y, width, height } = covered;
   const margin = Math.max(core.strokeWidth("thick"), 0.02 * Math.max(width, height));
   return { x: x - margin, y: y - margin, width: width + 2 * margin, height: height + 2 * margin };
 }

@@ -6,12 +6,13 @@ import {
   drawnOver,
   exported,
   pictureName,
+  render as forAgent,
   sizing,
   standInSide,
   type Scene,
   type Textures,
 } from "./render.js";
-import type { Renderer } from "./renderer.js";
+import type { Placed, Renderer } from "./renderer.js";
 import type { Vectors } from "./vector.js";
 
 const fakes = vi.hoisted(() => {
@@ -377,5 +378,82 @@ describe("a picture of the selection", () => {
       expect(cap).toBeCloseTo(4096 * Math.sqrt(4 / 5));
     }
     expect(capped).toBe(true);
+  });
+});
+
+async function framing(kinds: Record<string, Kind>, crossedOut = new Set<string>()) {
+  const board = boardOf(kinds);
+  const draw = vi.fn<Renderer["render"]>().mockResolvedValue({} as ImageData);
+  const scene = { ...sceneOf(board, draw), crossedOut };
+  const { area } = await forAgent(scene, { ids: board.draw_order });
+  return { board, area, drawn: draw.mock.calls[0]![0].area };
+}
+
+describe("a picture for an agent", () => {
+  beforeEach(() =>
+    vi.stubGlobal("document", {
+      createElement: () => ({ getContext: () => ({ putImageData() {} }) }),
+    }),
+  );
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("frames an arrow by its stroke and its head, nothing past its tail, the thick stroke around", async () => {
+    const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
+    const [placedArrow] = placed(boardOf({ a: arrow }), { placed: () => undefined });
+    const { head, width } = placedArrow as Extract<Placed, { kind: "arrow" }>;
+    const across = head / 2 + width / 2;
+    const margin = core.strokeWidth("thick");
+    expect(0.02 * (100 + width)).toBeLessThan(margin);
+    const { area, drawn } = await framing({ a: arrow });
+    expect(area.x).toBeCloseTo(-width / 2 - margin);
+    expect(area.y).toBeCloseTo(-across - margin);
+    expect(area.width).toBeCloseTo(100 + width + 2 * margin, 0);
+    expect(area.height).toBeCloseTo(2 * (across + margin), 0);
+    expect(drawn).toEqual(area);
+  });
+
+  it("frames a turned ellipse and an image crossed out as they draw, 2% of the longest side around", async () => {
+    const kinds: Record<string, Kind> = {
+      // Left of the ellipse, so that where the picture starts shows the outline it is crossed out with.
+      image: image({ x: -300, y: 0, width: 200, height: 100 }),
+      ellipse: {
+        type: "shape",
+        frame: { x: 0, y: 0, width: 200, height: 100 },
+        rotation: 30,
+        shape: "ellipse",
+        text: { content: "", font_size: 20 },
+      },
+    };
+    const half = core.strokeWidth() / 2;
+    const [across, down] = [25 * Math.sqrt(13), 25 * Math.sqrt(7)];
+    const [left, right] = [-300 - half, 100 + across + half];
+    const [top, bottom] = [50 - down - half, 50 + down + half];
+    const margin = 0.02 * (right - left);
+    const { area } = await framing(kinds, new Set([ASSET]));
+    expect(area.x).toBeCloseTo(left - margin);
+    expect(area.y).toBeCloseTo(top - margin);
+    expect(area.width).toBeCloseTo(right - left + 2 * margin, 0);
+    expect(area.height).toBeCloseTo(bottom - top + 2 * margin, 0);
+  });
+
+  it("refuses elements that draw nothing, and no elements at all", async () => {
+    const draw = vi.fn<Renderer["render"]>();
+    const board = boardOf({
+      blank: {
+        type: "note",
+        frame: { x: 0, y: 0, width: 100, height: 40 },
+        rotation: 0,
+        text: { content: " ", font_size: 20 },
+      },
+      comment: { type: "comment", at: { x: 0, y: 0 }, text: "Later" },
+    });
+    for (const [ids, reason] of [
+      [["blank", "comment"], "Those elements draw nothing to show"],
+      [[], "Give an area or some ids"],
+    ] as const) {
+      await expect(forAgent(sceneOf(board, draw), { ids: [...ids] })).rejects.toThrow(reason);
+    }
+    expect(draw).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,8 @@
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-use wasm_bindgen::Clamped;
 use wasm_bindgen::prelude::*;
+use web_sys::js_sys::Uint8ClampedArray;
 use web_sys::{HtmlCanvasElement, HtmlMediaElement, HtmlVideoElement, ImageBitmap};
 
 /// Uniform buffers take multiples of 16 bytes on WebGL2, hence the padding.
@@ -444,6 +444,7 @@ pub struct Renderer {
     textures: Vec<Option<Texture>>,
     instances: wgpu::Buffer,
     backend: String,
+    webgpu: bool,
     /// wgpu's default is to panic, which would leave the page waiting on a dead module.
     error: Arc<Mutex<Option<String>>>,
 }
@@ -645,6 +646,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         sampler,
         textures: Vec::new(),
         backend: format!("wgpu {:?}, {}", info.backend, info.name),
+        webgpu,
         error,
     })
 }
@@ -800,6 +802,15 @@ impl Renderer {
                 "a render of {width} by {height} pixels is not within 1 to {most}"
             )));
         }
+        let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let size = u64::from(stride) * u64::from(height);
+        // Also keeps the readback's offsets within a `u32`.
+        let largest = self.device.limits().max_buffer_size;
+        if size > largest {
+            return Err(JsError::new(&format!(
+                "a render of {width} by {height} pixels takes {size} bytes, past {largest}"
+            )));
+        }
         let swap = match self.config.format {
             wgpu::TextureFormat::Rgba8Unorm => false,
             wgpu::TextureFormat::Bgra8Unorm => true,
@@ -820,10 +831,9 @@ impl Renderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: u64::from(stride) * u64::from(height),
+            size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -873,10 +883,21 @@ impl Renderer {
             height,
             stride,
             swap,
+            webgpu: self.webgpu,
         };
         self.check()?;
         Ok(readback)
     }
+}
+
+#[wasm_bindgen]
+extern "C" {
+    /// The same array, whose allocation fails into a `Result`, as one thrown through the module
+    /// would leave the readback borrowed and its buffer mapped.
+    #[wasm_bindgen(extends = Uint8ClampedArray)]
+    type Pixels;
+    #[wasm_bindgen(catch, constructor, js_class = "Uint8ClampedArray")]
+    fn new(length: u32) -> Result<Pixels, JsValue>;
 }
 
 #[wasm_bindgen]
@@ -890,6 +911,8 @@ pub struct Readback {
     stride: u32,
     /// Whether the surface's format has blue first.
     swap: bool,
+    /// Whether its mapping is a JS array, which WebGL2 holds in the module's memory instead.
+    webgpu: bool,
 }
 
 #[wasm_bindgen]
@@ -908,25 +931,43 @@ impl Readback {
     }
 
     /// Red, green, blue, and alpha, as straight as the clear colour left them, which is opaque,
-    /// row by row from the top. Only once [`Readback::poll`] says so, and once.
-    pub fn pixels(&self) -> Result<Clamped<Vec<u8>>, JsError> {
+    /// row by row from the top. Only once [`Readback::poll`] says so, and once. They cross the
+    /// module's memory a row at a time, as it never shrinks once grown.
+    pub fn pixels(&self) -> Result<Uint8ClampedArray, JsError> {
         if !matches!(&*self.mapped.lock().expect("never poisoned"), Some(Ok(()))) {
             return Err(JsError::new("the render is not read back yet"));
         }
-        let row = self.width as usize * 4;
+        let row = self.width * 4;
+        let pixels: Uint8ClampedArray = Pixels::new(row * self.height)
+            .map_err(|_| {
+                JsError::new(&format!(
+                    "the browser has no room for a render of {} by {} pixels",
+                    self.width, self.height
+                ))
+            })?
+            .into();
+        let mut line = vec![0; row as usize];
         let view = self.buffer.slice(..).get_mapped_range()?;
-        let mut pixels = Vec::with_capacity(row * self.height as usize);
-        for line in view.chunks(self.stride as usize) {
-            pixels.extend_from_slice(&line[..row]);
+        for y in 0..self.height {
+            let start = y * self.stride;
+            // Dereferencing the view on WebGPU would copy the whole mapping into the module.
+            if self.webgpu {
+                view.as_uint8array()
+                    .subarray(start, start + row)
+                    .copy_to(&mut line);
+            } else {
+                line.copy_from_slice(&view[start as usize..(start + row) as usize]);
+            }
+            if self.swap {
+                for pixel in line.as_chunks_mut::<4>().0 {
+                    pixel.swap(0, 2);
+                }
+            }
+            pixels.subarray(y * row, (y + 1) * row).copy_from(&line);
         }
         drop(view);
         self.buffer.unmap();
-        if self.swap {
-            for pixel in pixels.as_chunks_mut::<4>().0 {
-                pixel.swap(0, 2);
-            }
-        }
-        Ok(Clamped(pixels))
+        Ok(pixels)
     }
 }
 

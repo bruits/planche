@@ -330,7 +330,7 @@ async function on(
           }
           await turn();
         }
-        // Copied out of the module's memory, so never a shared buffer.
+        // A JS array of its own, so never a shared buffer.
         return new ImageData(
           readback.pixels() as Uint8ClampedArray<ArrayBuffer>,
           picture.width,
