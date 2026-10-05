@@ -14,12 +14,10 @@ import {
 } from "./board.js";
 import type { Rect, Size } from "./core.js";
 import { linear } from "./paint.js";
+import { MOST_AREA, MOST_SIDE } from "./raster.js";
 
-/** Within what a canvas holds in every engine, Safari's area being the least. */
-const MOST_AREA = 4096 * 4096;
-const MOST_SIDE = 16_384;
 /** A vector's longest side at the least, as sharp as one pasted from a design tool. */
-const SMALLEST_VECTOR = 2048;
+export const SMALLEST_VECTOR = 2048;
 
 export async function still(opened: Opened, image: Image): Promise<Blob> {
   const { natural_size: natural, edits } = image;
@@ -108,7 +106,7 @@ function drawn(
   return canvas;
 }
 
-function png(canvas: HTMLCanvasElement): Promise<Blob> {
+export function png(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) =>
     canvas.toBlob(
       (blob) => (blob ? resolve(blob) : reject(new Error("Planche could not encode the image"))),

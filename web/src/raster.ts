@@ -7,6 +7,9 @@ import type { Board, Rect } from "./core.js";
 
 /** WebGL2 guarantees textures this large. */
 export const LONGEST_SIDE = 2048;
+/** Within what a canvas holds in every engine, Safari's area being the least. */
+export const MOST_AREA = 4096 * 4096;
+export const MOST_SIDE = 16_384;
 /** How long the camera stays put before rasters follow it, in milliseconds. */
 const SETTLE = 150;
 

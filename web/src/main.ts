@@ -74,12 +74,12 @@ import { pinned, pins } from "./pins.js";
 import { platform } from "./platform.js";
 import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE, onScreen } from "./raster.js";
-import { render } from "./render.js";
+import { drawnOver, exported, pictureName, render } from "./render.js";
 import type { Saving } from "./save.js";
 import { create, type Renderer } from "./renderer.js";
 import { ACROSS, sampler } from "./sampler.js";
 import { showing } from "./showing.js";
-import { still } from "./still.js";
+import { png, still } from "./still.js";
 import { PALETTE, PAPERS, styles } from "./style.js";
 import { loadFont, texts } from "./text.js";
 import { theme, type Scheme } from "./theme.js";
@@ -312,12 +312,23 @@ let onTop = false;
 let hoverPlay = recall(HOVER_PLAY) === "on";
 let arranging = false;
 let copying: { key: string; png: Promise<Blob> } | undefined;
+/** Copies as PNG asked for, so that one cancelled clears no later one's message. */
+let pngCopies = 0;
 
 type Ordering = (opened: Opened, ids: string[]) => Order | Promise<Order>;
 
 const loadingBoard = () => (life.loading() ? "A board is opening" : undefined);
 const noBoard = () => (opened === undefined ? "No board is open yet" : undefined);
 const noneSelected = () => (editing.selection().length === 0 ? "Nothing is selected" : undefined);
+const unexportable = () => {
+  const ids = editing.selection();
+  if (ids.length === 0) {
+    return "Select what to export";
+  }
+  return opened && drawnOver(opened.board, ids, crossedOut) === undefined
+    ? "The selection draws nothing"
+    : undefined;
+};
 // Images within a selected group do not count, as arranging leaves groups where they are.
 const fewImages = () =>
   editing.selection().filter((id) => opened?.board.elements[id]?.kind.type === "image").length < 2
@@ -558,7 +569,20 @@ const commands = {
     unavailable: () => (exporting ? "An export is under way" : noBoard()),
     run: () => report(exportZip()),
   },
-
+  exportPng: {
+    label: "Export the selection as PNG…",
+    keys: [{ key: "e", command: true, shift: true }],
+    unavailable: unexportable,
+    run: () => report(exportPng()),
+    once: true,
+  },
+  copyPng: {
+    label: "Copy as PNG",
+    keys: [{ key: "c", shift: true, alt: true }],
+    unavailable: unexportable,
+    run: copyPng,
+    once: true,
+  },
   undo: {
     label: "Undo",
     keys: [{ key: "z", command: true }],
@@ -1052,6 +1076,8 @@ const bar = toolbar(
     commands.save,
     commands.saveAs,
     commands.exportZip,
+    commands.exportPng,
+    commands.copyPng,
     "separator",
     grids(),
     themes(),
@@ -1668,8 +1694,10 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
     ? [
         commands.cut,
         commands.copy,
+        commands.copyPng,
         paste,
         commands.duplicate,
+        { ...commands.exportPng, label: "Export as PNG…" },
         commands.remove,
         "separator",
         commands.write,
@@ -2125,7 +2153,7 @@ async function exportZip(): Promise<void> {
   exporting = true;
   const snapshot = editor.snapshot();
   try {
-    const sink = await platform.pickZip(`${current.folder.name}.zip`);
+    const sink = await platform.pickExport(`${current.folder.name}.zip`, "zip");
     if (sink === null) {
       return;
     }
@@ -2141,6 +2169,105 @@ async function exportZip(): Promise<void> {
     snapshot.free();
     exporting = false;
   }
+}
+
+async function exportPng(): Promise<void> {
+  if (opened === undefined) {
+    return;
+  }
+  if (exporting) {
+    throw new Error("An export is under way");
+  }
+  // Before the user picks where, which would be in vain.
+  ready();
+  const current = opened;
+  const ids = editing.selection();
+  exporting = true;
+  try {
+    const sink = await platform.pickExport(
+      pictureName(current.board, ids, current.folder.name),
+      "png",
+    );
+    if (sink === null) {
+      return;
+    }
+    bar.say(`Exporting ${sink.name}…`, true);
+    let made: Picture;
+    try {
+      if (opened !== current) {
+        throw new Error("Another board opened meanwhile");
+      }
+      made = await selectionPng(current, ids);
+      await sink.append(new Uint8Array(await made.blob.arrayBuffer()));
+    } catch (error) {
+      await sink.discard().catch(() => {});
+      throw error;
+    }
+    await sink.close();
+    bar.say(`Exported ${sink.name}, ${sized(made)}`);
+  } finally {
+    exporting = false;
+  }
+}
+
+function copyPng(): void {
+  if (opened === undefined) {
+    return;
+  }
+  pngCopies += 1;
+  const copy = pngCopies;
+  const made = selectionPng(opened, editing.selection());
+  const written = clip.copyImage(made.then(({ blob }) => blob));
+  bar.say("Copying as PNG…", true);
+  report(
+    (async () => {
+      if (await written) {
+        bar.say(`Copied as PNG, ${sized(await made)}`);
+      } else if (copy === pngCopies) {
+        bar.say("");
+      }
+    })(),
+  );
+}
+
+interface Picture {
+  blob: Blob;
+  size: Size;
+  /** Whether it is smaller than its images would have it. */
+  capped: boolean;
+}
+
+/** The elements `ids` as the board shows them, on its background in the theme's colours. */
+async function selectionPng(current: Opened, ids: string[]): Promise<Picture> {
+  const scene = {
+    opened: current,
+    renderer: ready(),
+    drawings,
+    crossedOut,
+    background: getComputedStyle(document.body).backgroundColor,
+  };
+  const textures = {
+    holds: (asset: string) => loaded.has(asset),
+    plays: (asset: string) => animated.holds(asset) || films.holds(asset),
+    current: () => opened === current && renderer === scene.renderer,
+  };
+  // Its images from where they lie once no save moves them.
+  const draw = () => exported(scene, ids, textures);
+  const saver = life.saver();
+  const { canvas, capped } = await (saver ? saver.during(draw) : draw());
+  return { blob: await png(canvas), size: { width: canvas.width, height: canvas.height }, capped };
+}
+
+/** The renderer, once the board shows whole. */
+function ready(): Renderer {
+  if (renderer === undefined || halfDrawn || life.loading()) {
+    throw new Error("A board is opening");
+  }
+  return renderer;
+}
+
+function sized({ size, capped }: Picture): string {
+  return `${size.width} × ${size.height}${capped ? ", scaled down to fit" : ""}`;
 }
 
 /** The desktop window keeps its own title, so there only the menu's button marks changes. */

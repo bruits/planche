@@ -70,6 +70,9 @@ export type Reopening =
   /** A browser only lets a page write to the folder again once the user clicks, after a restart. */
   | { name: string; ask(): Promise<Home | null> };
 
+/** A board's ZIP file, or a picture of the selection. */
+export type Export = "zip" | "png";
+
 /** A file written from start to end, which only takes its place once closed. */
 export interface Sink {
   name: string;
@@ -120,8 +123,8 @@ export interface Platform {
   pickTarget(): Promise<Home | null>;
   /** A board's ZIP file. `null` when the user cancels. */
   openZip(): Promise<Slices | null>;
-  /** Where to export a ZIP file, suggested as `name`. `null` when the user cancels. */
-  pickZip(name: string): Promise<Sink | null>;
+  /** Where to export a file of the type, suggested as `name`. `null` when the user cancels. */
+  pickExport(name: string, type: Export): Promise<Sink | null>;
   /** `null` where it cannot be kept, or while another window or tab holds it. */
   session(): Promise<Session | null>;
   /** The board remembered, `null` when none is, or it is gone. */

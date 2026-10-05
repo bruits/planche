@@ -7,7 +7,7 @@ import type { Camera, Viewport } from "./camera.js";
 import * as core from "./core.js";
 import type { Align, Board, Kind, Point, Rect, Size } from "./core.js";
 import type { Paint } from "./paint.js";
-import { LONGEST_SIDE, overlaps, rounded, settling } from "./raster.js";
+import { LONGEST_SIDE, MOST_AREA, overlaps, rounded, settling } from "./raster.js";
 import type { Placed, Renderer } from "./renderer.js";
 
 export const FONT = "Inter";
@@ -308,10 +308,16 @@ function framed(id: string, kind: Holder, covers: Rect): Placed {
 }
 
 /**
- * Draws `kind` onto `canvas` at `density` pixels per font size, fewer where it would not fit a
- * texture. What it covers, in font sizes from the frame's top-left, `undefined` when nothing.
+ * Draws `kind` onto `canvas` at `density` pixels per font size, fewer where its longest side would
+ * pass `side` or a canvas would not hold it. What it covers, in font sizes from the frame's
+ * top-left, `undefined` when nothing.
  */
-function rasterise(canvas: HTMLCanvasElement, kind: Holder, density: number): Rect | undefined {
+function rasterise(
+  canvas: HTMLCanvasElement,
+  kind: Holder,
+  density: number,
+  side = LONGEST_SIDE,
+): Rect | undefined {
   const laid = layout(kind);
   const covers = {
     x: laid.area.x - MARGIN,
@@ -319,7 +325,11 @@ function rasterise(canvas: HTMLCanvasElement, kind: Holder, density: number): Re
     width: laid.area.width + 2 * MARGIN,
     height: laid.lines.length * LINE_HEIGHT + 2 * MARGIN,
   };
-  const capped = Math.min(density, LONGEST_SIDE / Math.max(covers.width, covers.height));
+  const capped = Math.min(
+    density,
+    side / Math.max(covers.width, covers.height),
+    Math.sqrt(MOST_AREA / (covers.width * covers.height)),
+  );
   if (!(capped > 0)) {
     return undefined;
   }
@@ -328,19 +338,20 @@ function rasterise(canvas: HTMLCanvasElement, kind: Holder, density: number): Re
 }
 
 /**
- * A text on a canvas of its own, at `density` pixels per font size, with what draws it. Nothing is
- * kept. `undefined` when there is nothing to show.
+ * A text on a canvas of its own, at `density` pixels per font size, within `side` pixels a side,
+ * with what draws it. Nothing is kept. `undefined` when there is nothing to show.
  */
 export function lettered(
   id: string,
   kind: Holder,
   density: number,
+  side?: number,
 ): { canvas: HTMLCanvasElement; placed: Placed } | undefined {
   if (isBlank(kind)) {
     return undefined;
   }
   const canvas = document.createElement("canvas");
-  const covers = rasterise(canvas, kind, density);
+  const covers = rasterise(canvas, kind, density, side);
   return covers && { canvas, placed: framed(id, kind, covers) };
 }
 

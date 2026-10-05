@@ -2,20 +2,23 @@
 import { describe, it, expect } from "vitest";
 import { tauri } from "./tauri.js";
 
-/** The desktop shell, which answers its confirm dialog with `answer`. */
-function shell(answer: boolean) {
+/** The desktop shell, which answers its confirm dialog with `answer`, and its save dialog with `picked`. */
+function shell(answer: boolean, picked: string | null = null) {
   let closing: (() => Promise<void>) | undefined;
   const sent: string[] = [];
+  const calls: unknown[][] = [];
   const api: TauriApi = {
     core: {
       Channel: class {
         onmessage() {}
       },
-      async invoke(command: string) {
+      async invoke(command: string, ...rest: unknown[]) {
         sent.push(command);
+        calls.push([command, ...rest]);
         const answers: Record<string, unknown> = {
           confirm: answer,
           keyboard_layout: [["KeyQ", "a"]],
+          pick_export: picked,
         };
         return answers[command] as never;
       },
@@ -31,7 +34,7 @@ function shell(answer: boolean) {
     },
   };
   const close = () => closing!();
-  return { api, sent, close };
+  return { api, sent, calls, close };
 }
 
 describe("tauri", () => {
@@ -61,6 +64,34 @@ describe("tauri", () => {
     });
     await close();
     expect(sent).toEqual(["confirm", "keep_window"]);
+  });
+
+  it.each([
+    ["zip", "Export the board as a ZIP file"],
+    ["png", "Export the selection as PNG"],
+  ] as const)(
+    "exports a %s file where the user picks, which takes its place once finished",
+    async (type, title) => {
+      const path = `/Users/me/Board.${type}`;
+      const { api, calls } = shell(true, path);
+      const sink = await tauri(api).pickExport(`Moodboard.${type}`, type);
+      expect(sink?.name).toBe(`Board.${type}`);
+      await sink!.append(new Uint8Array([1, 2]));
+      await sink!.close();
+      const headers = { path: encodeURIComponent(path) };
+      expect(calls).toEqual([
+        ["pick_export", { title, name: `Moodboard.${type}`, kind: type }],
+        ["append_export", new Uint8Array([1, 2]), { headers }],
+        ["finish_export", { path }],
+      ]);
+    },
+  );
+
+  it("exports nothing when the user cancels, and leaves no trace of a failed export", async () => {
+    expect(await tauri(shell(true).api).pickExport("Moodboard.png", "png")).toBeNull();
+    const { api, sent } = shell(true, "/Users/me/Board.png");
+    await (await tauri(api).pickExport("Moodboard.png", "png"))!.discard();
+    expect(sent).toEqual(["pick_export", "discard_export"]);
   });
 
   it("closing a saved board closes without asking", async () => {

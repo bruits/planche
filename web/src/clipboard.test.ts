@@ -303,6 +303,81 @@ describe("the clipboard", () => {
     expect(host.png).not.toHaveBeenCalled();
   });
 
+  describe("copying a picture alone", () => {
+    it("writes it at once, while the click or the key lets the page, though it is still being made", async () => {
+      const write = vi.spyOn(navigator.clipboard, "write").mockImplementation(async (items) => {
+        await items[0]!.getType("image/png");
+      });
+      let made: ((png: Blob) => void) | undefined;
+      const copying = clip.copyImage(new Promise((done) => (made = done)));
+      expect(write).toHaveBeenCalledOnce();
+      const [items] = write.mock.calls[0]!;
+      expect(items.map((each) => each.types)).toEqual([["image/png"]]);
+      made?.(new Blob(["picture"]));
+      expect(await (await items[0]!.getType("image/png")).text()).toBe("picture");
+      await expect(copying).resolves.toBe(true);
+    });
+
+    it.each([
+      [
+        "its own failure over the browser's",
+        () => Promise.reject(new Error("The GPU did not hand the render back in time")),
+        "The GPU did not hand the render back in time",
+      ],
+      [
+        "the browser's refusal",
+        () => Promise.resolve(new Blob()),
+        "The browser did not let Planche copy the image",
+      ],
+    ])("tells %s", async (_, png, reason) => {
+      vi.spyOn(navigator.clipboard, "write").mockRejectedValue(
+        new DOMException("Document is not focused", "NotAllowedError"),
+      );
+      await expect(clip.copyImage(png())).rejects.toThrow(reason);
+    });
+
+    it("tells nothing once a copy after it cancelled it, as Firefox and WebKit do", async () => {
+      let cancel: (() => void) | undefined;
+      vi.spyOn(navigator.clipboard, "write").mockReturnValueOnce(
+        new Promise((_, reject) => (cancel = () => reject(new DOMException("", "AbortError")))),
+      );
+      const copying = clip.copyImage(Promise.resolve(new Blob()));
+      fire("copy");
+      cancel?.();
+      await expect(copying).resolves.toBe(false);
+    });
+
+    it("writes nothing over a copy after it, which Chromium would let it", async () => {
+      // As Chromium writes once the item's promises settle, whatever came since.
+      const write = vi.spyOn(navigator.clipboard, "write").mockImplementation(async (items) => {
+        await items[0]!.getType("image/png");
+      });
+      let made: ((png: Blob) => void) | undefined;
+      const copying = clip.copyImage(new Promise((done) => (made = done)));
+      expect(fire("copy").text).toMatch(/^\{"planche":"elements"/);
+      made?.(new Blob(["picture"]));
+      await expect(write.mock.results[0]!.value).rejects.toThrow("Another copy came since");
+      await expect(copying).resolves.toBe(false);
+    });
+
+    it("takes the place of a lone image's PNG still being made", async () => {
+      host.png.mockReturnValueOnce(new Promise(() => {}));
+      vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+      const write = vi.spyOn(navigator.clipboard, "write").mockResolvedValue();
+      fire("copy");
+      await clip.copyImage(Promise.resolve(new Blob()));
+      await new Promise((done) => setTimeout(done));
+      expect(write.mock.calls.map(([items]) => items[0]!.types)).toEqual([["image/png"]]);
+    });
+
+    it("refuses where the browser cannot write an image", async () => {
+      vi.stubGlobal("ClipboardItem", undefined);
+      await expect(clip.copyImage(Promise.resolve(new Blob()))).rejects.toThrow(
+        "This browser cannot copy images",
+      );
+    });
+  });
+
   it("reads the clipboard when a paste hands nothing, as WebKitGTK's does", async () => {
     const { text } = fire("copy");
     const read = vi

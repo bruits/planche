@@ -721,6 +721,12 @@ impl Renderer {
         }
     }
 
+    /// The longest side a texture or a render may have, in pixels.
+    #[wasm_bindgen(getter, js_name = maxTextureSide)]
+    pub fn max_texture_side(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
     /// What the textures take on the GPU, their mipmaps included.
     #[wasm_bindgen(getter, js_name = textureBytes)]
     pub fn texture_bytes(&self) -> f64 {

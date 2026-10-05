@@ -6,7 +6,7 @@
 import type { Camera, Viewport } from "./camera.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Kind, Size } from "./core.js";
-import { LONGEST_SIDE, overlaps, rounded, settling } from "./raster.js";
+import { LONGEST_SIDE, MOST_AREA, overlaps, rounded, settling } from "./raster.js";
 import type { Renderer } from "./renderer.js";
 
 /** Pixels along the longest side of an SVG out of view, enough to show until it refines. */
@@ -51,11 +51,14 @@ export interface Vectors {
   update(board: Board, renderer: Renderer, camera: Camera, viewport: Viewport): void;
   /** Forgets `asset`, whose texture is freed. */
   drop(asset: string): void;
+  /** Whether it rasterises `asset`. */
+  holds(asset: string): boolean;
   /**
    * `asset` on a canvas of its own, at `density` pixels per pixel of its natural size, fewer where
-   * it would not fit a texture. Nothing is kept. `undefined` for an asset not rasterised.
+   * its longest side would pass `side` or a canvas would not hold it. Nothing is kept. `undefined`
+   * for an asset not rasterised.
    */
-  drawn(asset: string, density: number): HTMLCanvasElement | undefined;
+  drawn(asset: string, density: number, side?: number): HTMLCanvasElement | undefined;
   /** Forgets them all, as their renderer is gone. */
   reset(): void;
 }
@@ -116,14 +119,16 @@ export function vectors(again: () => void): Vectors {
       pictures.delete(asset);
       rasterised.delete(asset);
     },
-    drawn(asset, density) {
+    holds: (asset) => pictures.has(asset),
+    drawn(asset, density, side = LONGEST_SIDE) {
       const drawing = pictures.get(asset);
       if (drawing === undefined) {
         return undefined;
       }
       const own = document.createElement("canvas");
-      const longest = Math.max(drawing.natural.width, drawing.natural.height);
-      rasterise(own, drawing, Math.min(density, LONGEST_SIDE / longest));
+      const { width, height } = drawing.natural;
+      const within = Math.sqrt(MOST_AREA / (width * height));
+      rasterise(own, drawing, Math.min(density, side / Math.max(width, height), within));
       return own;
     },
     reset() {

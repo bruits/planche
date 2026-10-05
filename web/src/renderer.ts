@@ -85,14 +85,18 @@ export interface Shot {
   items: Placed[];
   /** The colour behind the board, as CSS gives it. */
   background: string;
-  /** Canvases that stand in, for this render only, for the textures of assets and texts. */
-  images: Map<string, HTMLCanvasElement>;
+  /** What the grid draws, the window's own unless given. */
+  backdrop?: Background;
+  /** Pictures that stand in, for this render only, for the textures of assets and texts. */
+  images: Map<string, HTMLCanvasElement | ImageBitmap>;
   texts: Map<string, HTMLCanvasElement>;
 }
 
 export interface Renderer {
   /** What it runs on, such as the GPU's name. */
   readonly backend: string;
+  /** The longest side of a texture or a render, in pixels. */
+  readonly maxTextureSide: number;
   /** What its textures take on the GPU. */
   readonly textureBytes: number;
   /** What it draws on, in device pixels. */
@@ -205,6 +209,7 @@ async function on(
   };
   return {
     backend: renderer.backend,
+    maxTextureSide: renderer.maxTextureSide,
     canvas: output,
     get textureBytes() {
       return renderer.textureBytes;
@@ -274,6 +279,7 @@ async function on(
       size: picture,
       items: shown,
       background: behind,
+      backdrop = background,
       images: own,
       texts: ownTexts,
     }) {
@@ -283,7 +289,14 @@ async function on(
       try {
         // Uploaded first, as the items name the textures by index, and released as soon as the
         // GPU has what it needs, which the readback does not wait for.
-        own.forEach((canvas, asset) => staged.set(asset, renderer.uploadCanvas(canvas)));
+        own.forEach((standIn, asset) =>
+          staged.set(
+            asset,
+            standIn instanceof ImageBitmap
+              ? renderer.upload(standIn)
+              : renderer.uploadCanvas(standIn),
+          ),
+        );
         ownTexts.forEach((canvas, id) => stagedTexts.set(id, renderer.uploadCanvas(canvas)));
         const zoom = picture.width / area.width;
         const view = Float32Array.of(
@@ -302,7 +315,7 @@ async function on(
         readback = renderer.render(
           view,
           packed(shown, lookup[0], lookup[1], painted),
-          grid(background, camera, painted("ink"), strength, 1),
+          grid(backdrop, camera, painted("ink"), strength, 1),
         );
       } finally {
         [...staged.values(), ...stagedTexts.values()].forEach((texture) =>

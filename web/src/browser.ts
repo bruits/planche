@@ -4,7 +4,9 @@
 // Every engine keeps the board being edited in the origin's private file system meanwhile.
 
 import type { Bytes } from "./core.js";
-import type { Folder, Home, Platform, Session } from "./platform.js";
+import type { Export, Folder, Home, Platform, Session } from "./platform.js";
+
+const TYPES: Record<Export, string> = { zip: "application/zip", png: "image/png" };
 
 /** Where the page remembers the folder of the board to reopen. */
 const DATABASE = "planche";
@@ -67,7 +69,7 @@ export const browser: Platform = {
     };
   },
 
-  async pickZip(name) {
+  async pickExport(name, type) {
     // A blob per part, which the browser may keep out of memory until the download.
     let parts: Blob[] = [];
     return {
@@ -75,10 +77,10 @@ export const browser: Platform = {
       append: async (bytes) => {
         parts.push(new Blob([bytes]));
       },
-      // The page never learns whether the download lands, but the user asked for it, so the
-      // board counts as saved.
+      // The page never learns whether the download lands, but the user asked for it, so a
+      // board's ZIP file counts as saved.
       close: async () => {
-        const url = URL.createObjectURL(new Blob(parts, { type: "application/zip" }));
+        const url = URL.createObjectURL(new Blob(parts, { type: TYPES[type] }));
         const link = document.createElement("a");
         link.href = url;
         link.download = name;

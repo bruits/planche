@@ -756,19 +756,25 @@ fn zip(picked: &Picked, path: &Path) -> Result<Zip, String> {
     zips.get(path).copied().ok_or_else(|| not_picked(path))
 }
 
-/// A file to export a ZIP file to, suggested as `name`, which stays as it was until
-/// [`finish_export`]. `None` when the user cancels.
+/// A file to export a ZIP file or a PNG image to, suggested as `name`, which stays as it was
+/// until [`finish_export`]. `None` when the user cancels.
 #[tauri::command(async)]
 fn pick_export(
     window: Window,
     picked: State<'_, Picked>,
     title: String,
     name: String,
+    kind: String,
 ) -> Result<Option<PathBuf>, String> {
+    let (filter, extension) = match kind.as_str() {
+        "zip" => ("ZIP", "zip"),
+        "png" => ("PNG image", "png"),
+        other => return Err(format!("cannot export a file of kind {other}")),
+    };
     let dialog = files(&window)
         .set_title(title)
         .set_file_name(name)
-        .add_filter("ZIP", &["zip"]);
+        .add_filter(filter, &[extension]);
     let Some(file) = dialog.blocking_save_file() else {
         return Ok(None);
     };

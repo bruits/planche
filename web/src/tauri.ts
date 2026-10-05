@@ -4,9 +4,14 @@
 import type { Incoming } from "./add.js";
 import { typed } from "./commands.js";
 import { message } from "./errors.js";
-import type { AgentCall, Home, Platform, Slices } from "./platform.js";
+import type { AgentCall, Export, Home, Platform, Slices } from "./platform.js";
 
 const LOSING = "Close, and lose the changes to this board?";
+/** What the save dialog says it picks a file for. */
+const EXPORTS: Record<Export, string> = {
+  zip: "Export the board as a ZIP file",
+  png: "Export the selection as PNG",
+};
 
 export function tauri({ core, event }: TauriApi): Platform {
   let unsaved = false;
@@ -137,9 +142,9 @@ export function tauri({ core, event }: TauriApi): Platform {
 
     forget: () => core.invoke("forget_board"),
 
-    async pickZip(name) {
-      const title = "Export the board as a ZIP file";
-      const path = await core.invoke<string | null>("pick_export", { title, name });
+    async pickExport(name, type) {
+      const title = EXPORTS[type];
+      const path = await core.invoke<string | null>("pick_export", { title, name, kind: type });
       if (path === null) {
         return null;
       }

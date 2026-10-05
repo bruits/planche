@@ -37,6 +37,11 @@ export interface Clipboard {
   /** As the menus copy, right after a click, which lets the page write to the clipboard. */
   copy(cut: boolean): void;
   /**
+   * The PNG alone, right after a click or a key, which lets the page write it while it is still
+   * being made. Whether it was written, as a copy after it cancels it. Rejects with why it was not.
+   */
+  copyImage(png: Promise<Blob>): Promise<boolean>;
+  /**
    * As the menus paste, reading the clipboard, which the browser may first ask the user to allow.
    * Rejects when it does not let the page read it.
    */
@@ -79,18 +84,21 @@ export function clipboard(view: View, host: Host): Clipboard {
     }
     return true;
   };
+  /** Refused once another copy came, as Chromium would write it over that one. */
+  const latest = (png: Promise<Blob>, copy: number) =>
+    png.then((made) => {
+      if (copy !== copies) {
+        throw new Error("Another copy came since");
+      }
+      return made;
+    });
   /**
    * A copy event that wrote anything itself would have WebKit refuse the image's write, as the
    * pasteboard changed since it began, and Firefox cancel the text's, as the event's data replaces
    * a pending write.
    */
   const withImage = (text: string, png: Promise<Blob>, copy: number, written: boolean) => {
-    const current = png.then((made) => {
-      if (copy !== copies) {
-        throw new Error("Another copy came since");
-      }
-      return made;
-    });
+    const current = latest(png, copy);
     // Handled at once, as Safari and Firefox tell its failure only as one of their own.
     const failed = current.then(
       () => undefined,
@@ -198,6 +206,30 @@ export function clipboard(view: View, host: Host): Clipboard {
     copy(cut) {
       // Through the page's own event, which the browser lets a click fire.
       document.execCommand(cut ? "cut" : "copy");
+    },
+    // Writing before any wait, while the click or the key lets it.
+    async copyImage(png) {
+      copies += 1;
+      const copy = copies;
+      const current = latest(png, copy);
+      // Handled at once, as Safari and Firefox tell its failure only as one of their own.
+      const failed = current.then(
+        () => undefined,
+        (error: unknown) => ({ error }),
+      );
+      if (!imageable()) {
+        throw new Error("This browser cannot copy images");
+      }
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": current })]);
+        return true;
+      } catch (error) {
+        if (copy !== copies) {
+          return false;
+        }
+        const made = await failed;
+        throw made ? made.error : refused(error);
+      }
     },
     paste: read,
   };
