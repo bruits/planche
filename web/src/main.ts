@@ -78,6 +78,7 @@ import type { Saving } from "./save.js";
 import { create, type Renderer } from "./renderer.js";
 import { ACROSS, sampler } from "./sampler.js";
 import { showing } from "./showing.js";
+import { still } from "./still.js";
 import { PALETTE, PAPERS, styles } from "./style.js";
 import { loadFont, texts } from "./text.js";
 import { theme, type Scheme } from "./theme.js";
@@ -299,6 +300,7 @@ let agentsAllowed = false;
 let onTop = false;
 let hoverPlay = recall(HOVER_PLAY) === "on";
 let arranging = false;
+let copying: { key: string; png: Promise<Blob> } | undefined;
 
 type Ordering = (opened: Opened, ids: string[]) => Order | Promise<Order>;
 
@@ -1083,6 +1085,28 @@ const clip = clipboard(viewport, {
   bytes: (copied) =>
     opened ? reader(opened, copiedAssets(copied), fleeting()) : async () => new Map(),
   cut: () => editing.remove(),
+  png() {
+    const image = selectedImage();
+    // Not a video, whose whole file a copy would read and hash for its first frame.
+    if (!opened || !image || crossedOut.has(image.asset) || films.holds(image.asset)) {
+      return undefined;
+    }
+    const key = `${image.asset} ${JSON.stringify(image.edits)}`;
+    if (copying?.key !== key) {
+      const made = {
+        key,
+        png: still(opened, image).finally(() => {
+          if (copying === made) {
+            copying = undefined;
+          }
+        }),
+      };
+      copying = made;
+    }
+    return copying.png;
+  },
+  failed: (error, copied) =>
+    bar.say(`${copied ? "Copied without the image" : "Nothing was copied"}. ${message(error)}`),
   pasted: (pasted, at) => report(pasteElements(pasted, at)),
   received: (incoming, at) => report(addImages(incoming, at)),
 });

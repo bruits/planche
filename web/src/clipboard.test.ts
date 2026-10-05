@@ -17,6 +17,8 @@ const host = {
   copyable: vi.fn<Host["copyable"]>(),
   bytes: vi.fn<Host["bytes"]>(),
   cut: vi.fn<Host["cut"]>(),
+  png: vi.fn<Host["png"]>(),
+  failed: vi.fn<Host["failed"]>(),
   pasted: vi.fn<Host["pasted"]>(),
   received: vi.fn<Host["received"]>(),
 };
@@ -54,6 +56,7 @@ describe("the clipboard", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("copies the selection as text, which a paste in the same window hands back with its images' bytes", async () => {
@@ -140,6 +143,164 @@ describe("the clipboard", () => {
     ]);
     read.mockRejectedValue(new DOMException("Read permission denied", "NotAllowedError"));
     await expect(clip.paste(centre)).rejects.toThrow("Read permission denied");
+  });
+
+  it("copies a lone image as text first, then with a PNG of it, the event writing nothing", async () => {
+    host.png.mockReturnValue(Promise.resolve(new Blob(["image"], { type: "image/png" })));
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const write = vi.spyOn(navigator.clipboard, "write").mockResolvedValue();
+    expect(fire("copy")).toEqual({ prevented: true, text: "" });
+    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    expect(writeText.mock.invocationCallOrder[0]).toBeLessThan(write.mock.invocationCallOrder[0]!);
+    const [written] = writeText.mock.calls[0]!;
+    expect(written).toMatch(/^\{"planche":"elements"/);
+    const [items] = write.mock.calls[0]!;
+    expect(items.map((each) => each.types)).toEqual([["text/plain", "image/png"]]);
+    expect(await (await items[0]!.getType("text/plain")).text()).toBe(written);
+    expect(await (await items[0]!.getType("image/png")).text()).toBe("image");
+  });
+
+  it.each([
+    ["written", () => undefined],
+    ["refused", () => Promise.reject(new DOMException("", "NotAllowedError"))],
+  ])(
+    "writes the PNG only once its text is %s, as Firefox cancels a pending write",
+    async (_, end) => {
+      host.png.mockReturnValue(Promise.resolve(new Blob()));
+      let settle: (() => void) | undefined;
+      vi.spyOn(navigator.clipboard, "writeText").mockReturnValue(
+        new Promise((done) => (settle = () => done(end()))),
+      );
+      const write = vi.spyOn(navigator.clipboard, "write").mockResolvedValue();
+      fire("copy");
+      await Promise.resolve();
+      expect(write).not.toHaveBeenCalled();
+      settle?.();
+      await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    },
+  );
+
+  it.each([
+    ["Chromium", (failure: unknown) => failure],
+    ["Safari", () => new DOMException("", "NotAllowedError")],
+  ])("keeps the text alone when the PNG fails in %s, and tells why", async (_, failing) => {
+    host.png.mockReturnValue(Promise.reject(new Error("Planche could not encode the image")));
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    vi.spyOn(navigator.clipboard, "write").mockImplementation(async (items) => {
+      await items[0]!
+        .getType("image/png")
+        .catch((error: unknown) => Promise.reject(failing(error)));
+    });
+    fire("copy");
+    await vi.waitFor(() => expect(host.failed).toHaveBeenCalledOnce());
+    expect(host.failed).toHaveBeenCalledWith(new Error("Planche could not encode the image"), true);
+    expect(writeText).toHaveBeenCalledOnce();
+  });
+
+  it("tells the browser's refusal of an image it made", async () => {
+    host.png.mockReturnValue(Promise.resolve(new Blob()));
+    vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    vi.spyOn(navigator.clipboard, "write").mockRejectedValue(
+      new DOMException("Document is not focused", "NotAllowedError"),
+    );
+    fire("copy");
+    await vi.waitFor(() => expect(host.failed).toHaveBeenCalledOnce());
+    expect(host.failed).toHaveBeenCalledWith(
+      new Error("The browser did not let Planche copy the image"),
+      true,
+    );
+  });
+
+  it("tells that nothing was copied where the browser refuses its text too", async () => {
+    host.png.mockReturnValue(Promise.resolve(new Blob()));
+    const denied = new DOMException("Write permission denied.", "NotAllowedError");
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(denied);
+    vi.spyOn(navigator.clipboard, "write").mockRejectedValue(denied);
+    fire("copy");
+    await vi.waitFor(() => expect(host.failed).toHaveBeenCalledOnce());
+    expect(host.failed).toHaveBeenCalledWith(
+      new Error("The browser did not let Planche write to the clipboard"),
+      false,
+    );
+  });
+
+  describe("in Chromium", () => {
+    beforeEach(() => {
+      Object.defineProperty(navigator, "userAgentData", { value: {}, configurable: true });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(navigator, "userAgentData");
+    });
+
+    it("keeps the event's text, which a refusal of the clipboard's API leaves copied", async () => {
+      host.png.mockReturnValue(Promise.resolve(new Blob()));
+      const denied = new DOMException("Write permission denied.", "NotAllowedError");
+      vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(denied);
+      vi.spyOn(navigator.clipboard, "write").mockRejectedValue(denied);
+      expect(fire("copy").text).toMatch(/^\{"planche":"elements"/);
+      await vi.waitFor(() => expect(host.failed).toHaveBeenCalledOnce());
+      expect(host.failed).toHaveBeenCalledWith(
+        new Error("The browser did not let Planche copy the image"),
+        true,
+      );
+    });
+  });
+
+  it.each([
+    ["Planche's", () => document.body],
+    ["a field's", () => document.body.appendChild(document.createElement("textarea"))],
+  ])("writes no PNG for a copy %s came after", async (_, placed) => {
+    const target = placed();
+    let made: ((png: Blob) => void) | undefined;
+    host.png.mockReturnValueOnce(new Promise((done) => (made = done)));
+    vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const write = vi.spyOn(navigator.clipboard, "write").mockImplementation(async (items) => {
+      await items[0]!.getType("image/png");
+    });
+    fire("copy");
+    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    fire("copy", new DataTransfer(), target);
+    made?.(new Blob());
+    await expect(write.mock.results[0]!.value).rejects.toThrow("Another copy came since");
+    expect(host.failed).not.toHaveBeenCalled();
+  });
+
+  it("tells nothing of a refused copy another one came after", async () => {
+    let made: ((png: Blob) => void) | undefined;
+    host.png.mockReturnValueOnce(new Promise((done) => (made = done)));
+    vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const write = vi
+      .spyOn(navigator.clipboard, "write")
+      .mockRejectedValue(new DOMException("", "NotAllowedError"));
+    fire("copy");
+    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    fire("copy");
+    made?.(new Blob());
+    await new Promise((done) => setTimeout(done));
+    expect(host.failed).not.toHaveBeenCalled();
+  });
+
+  it("cuts a lone image as text alone, as its file may go with it", () => {
+    host.png.mockReturnValue(Promise.resolve(new Blob()));
+    expect(fire("cut").text).toMatch(/^\{"planche":"elements"/);
+    expect(host.png).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no ClipboardItem", () => vi.stubGlobal("ClipboardItem", undefined)],
+    [
+      "no clipboard write",
+      () =>
+        vi
+          .spyOn(navigator, "clipboard", "get")
+          .mockReturnValue({ writeText: vi.fn<Clipboard["writeText"]>() } as unknown as Clipboard),
+    ],
+  ])("copies a lone image as text alone where the browser has %s", (_, lacking) => {
+    host.png.mockReturnValue(Promise.resolve(new Blob()));
+    lacking();
+    expect(fire("copy").text).toMatch(/^\{"planche":"elements"/);
+    expect(host.png).not.toHaveBeenCalled();
   });
 
   it("reads the clipboard when a paste hands nothing, as WebKitGTK's does", async () => {

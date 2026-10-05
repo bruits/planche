@@ -1,7 +1,8 @@
 // Elements copied, cut, and pasted, within a board, between boards, and between windows. The
 // clipboard holds them as text, which a paste anywhere reads, and the window they were copied in
 // keeps, until the next copy, what reads the bytes of their images, which another board may lack.
-// Anything else pasted comes in as images.
+// Anything else pasted comes in as images. A lone image copied goes with a PNG of it, for other
+// apps.
 
 import { fromClipboard, pasted as pastedImages, type Incoming } from "./add.js";
 import { newId, type Reader } from "./board.js";
@@ -24,6 +25,10 @@ export interface Host {
   bytes(copied: Copied): Reader;
   /** Removes the selection, which `copy` just copied. */
   cut(): void;
+  /** Of the selection as it shows, when it is one image, not a video, this window can read. */
+  png(): Promise<Blob> | undefined;
+  /** Once a copy went without its PNG, and without its elements too unless `copied`. */
+  failed(error: unknown, copied: boolean): void;
   pasted(pasted: Pasted, at: Point): void;
   received(incoming: Promise<Incoming[]>, at: Point): void;
 }
@@ -49,18 +54,73 @@ const KIND = "elements";
 
 export function clipboard(view: View, host: Host): Clipboard {
   let held: { copy: string; assets: Reader } | undefined;
+  let copies = 0;
   const write = (transfer: DataTransfer, cut: boolean): boolean => {
     const copied = host.copy(cut);
     if (copied === undefined) {
       return false;
     }
     const copy = newId();
-    transfer.setData("text/plain", JSON.stringify({ planche: KIND, copy, copied } satisfies Held));
+    const text = JSON.stringify({ planche: KIND, copy, copied } satisfies Held);
+    // Not for a cut, whose image a board saved elsewhere may have dropped by the time it is read.
+    const png = !cut && imageable() ? host.png() : undefined;
+    // With a write to follow, the event's text too in Chromium, which keeps the copy where its
+    // permission, policy, or focus refuses that write.
+    const written = !png || chromium();
+    if (written) {
+      transfer.setData("text/plain", text);
+    }
+    if (png) {
+      withImage(text, png, copies, written);
+    }
     held = { copy, assets: host.bytes(copied) };
     if (cut) {
       host.cut();
     }
     return true;
+  };
+  /**
+   * A copy event that wrote anything itself would have WebKit refuse the image's write, as the
+   * pasteboard changed since it began, and Firefox cancel the text's, as the event's data replaces
+   * a pending write.
+   */
+  const withImage = (text: string, png: Promise<Blob>, copy: number, written: boolean) => {
+    const current = png.then((made) => {
+      if (copy !== copies) {
+        throw new Error("Another copy came since");
+      }
+      return made;
+    });
+    // Handled at once, as Safari and Firefox tell its failure only as one of their own.
+    const failed = current.then(
+      () => undefined,
+      (error: unknown) => ({ error }),
+    );
+    const plain = new Blob([text], { type: "text/plain" });
+    // Once the text is written, as Firefox cancels a write still pending for the next one. WebKit,
+    // whose writeText settles at once, still runs this while the key or click that copied lets it.
+    const then = (copied: boolean) => {
+      if (copy !== copies) {
+        return;
+      }
+      navigator.clipboard
+        .write([new ClipboardItem({ "text/plain": plain, "image/png": current })])
+        .catch(async (error: unknown) => {
+          const made = await failed;
+          if (copy !== copies) {
+            return;
+          }
+          if (!copied) {
+            host.failed(new Error("The browser did not let Planche write to the clipboard"), false);
+          } else {
+            host.failed(made ? made.error : refused(error), true);
+          }
+        });
+    };
+    navigator.clipboard.writeText(text).then(
+      () => then(true),
+      () => then(written),
+    );
   };
   const hand = (found: Held, at: Point) =>
     host.pasted(
@@ -86,6 +146,8 @@ export function clipboard(view: View, host: Host): Clipboard {
   };
   for (const type of ["copy", "cut"] as const) {
     document.addEventListener(type, (event) => {
+      // A field's too, whose text a PNG still being made would write over.
+      copies += 1;
       if (
         event.clipboardData &&
         !typing(event.target) &&
@@ -139,6 +201,21 @@ export function clipboard(view: View, host: Host): Clipboard {
     },
     paste: read,
   };
+}
+
+function imageable(): boolean {
+  return navigator.clipboard?.write !== undefined && typeof ClipboardItem !== "undefined";
+}
+
+/** Chromium alone has `userAgentData`, and alone keeps a write that follows a copy event's own. */
+function chromium(): boolean {
+  return "userAgentData" in navigator;
+}
+
+function refused(error: unknown): unknown {
+  return error instanceof DOMException && error.name === "NotAllowedError"
+    ? new Error("The browser did not let Planche copy the image")
+    : error;
 }
 
 function copyIn(text: string): Held | undefined {
