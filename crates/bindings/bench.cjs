@@ -122,6 +122,8 @@ function measure(count) {
   rows.set("touching, a quarter of the board", median(() => editor.touching(0, 0, side / 2, side / 2)));
   // Read again after each edit, as the app draws in that order.
   rows.set("drawOrder", median(() => editor.drawOrder()));
+  // As the app reads it once it opens the board, parsed.
+  rows.set("drawn", median(() => JSON.parse(editor.drawn(ids, []))));
   for (const [name, selected] of [
     ["50", some],
     ["all", ids],
@@ -140,6 +142,7 @@ function measure(count) {
     // Each once, as the app will read them: the move done again to learn what it touched.
     const touched = new Set([...editor.rewindGesture(), ...editor.translate(selected, 30, 20), ...editor.land(selected)]);
     rows.set(`element ${name}`, median(() => touched.forEach((id) => editor.element(id))));
+    rows.set(`drawn ${name}`, median(() => JSON.parse(editor.drawn([...touched], []))));
     editor.rewindGesture();
     editor.endGesture();
   }

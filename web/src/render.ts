@@ -6,19 +6,20 @@ import {
   decodeAsset,
   files,
   loneImage,
-  placed,
+  placing,
   pool,
   readAsset,
   release,
+  stacked,
   type Opened,
 } from "./board.js";
 import { density } from "./capture.js";
 import * as core from "./core.js";
-import type { Background, Board, Point, Rect, Size } from "./core.js";
+import type { Background, Board, Item, Point, Rect, Size } from "./core.js";
 import { LONGEST_SIDE, MOST_AREA, MOST_SIDE, overlaps } from "./raster.js";
-import type { Placed, Renderer } from "./renderer.js";
+import type { Lettering, Placed, Renderer } from "./renderer.js";
 import { SMALLEST_VECTOR } from "./still.js";
-import { holdsText, isBlank, lettered } from "./text.js";
+import { holdsText, lettered, type Holder } from "./text.js";
 import { unitsPerPixel, type Vectors } from "./vector.js";
 
 /** Either `area` of the board, or `ids` to frame, at most `size` pixels along the longest side. */
@@ -73,10 +74,12 @@ const BARB = { back: Math.sqrt(3) / 2, across: 0.5 };
 
 /** Throws what the agent reads when there is nothing to draw. */
 export async function render(scene: Scene, request: Request): Promise<Rendered> {
-  const { board } = scene.opened;
+  const { opened, crossedOut } = scene;
+  const { board } = opened;
   const chosen = request.ids && new Set(request.ids);
   const ids = chosen ? board.draw_order.filter((id) => among(board, id, chosen)) : board.draw_order;
-  const wanted = request.area ?? framed(board, scene.crossedOut, request.ids ?? []);
+  const items = stacked(opened, crossedOut, ids);
+  const wanted = request.area ?? framed(chosen ? items : [], board, request.ids ?? []);
   const zoom = density(wanted, request.size);
   const size: Size = {
     width: Math.max(1, Math.floor(wanted.width * zoom)),
@@ -84,7 +87,7 @@ export async function render(scene: Scene, request: Request): Promise<Rendered> 
   };
   // What the whole pixels show.
   const area = { x: wanted.x, y: wanted.y, width: size.width / zoom, height: size.height / zoom };
-  return { area, canvas: await draw(scene, ids, area, size) };
+  return { area, canvas: await draw(scene, { ...board, draw_order: ids }, items, area, size) };
 }
 
 /**
@@ -96,8 +99,8 @@ export async function exported(scene: Scene, ids: string[], textures: Textures):
   const { opened, renderer, drawings, crossedOut } = scene;
   // As it stands now, as edits landing while its assets decode replace its elements.
   const board = selected(opened.board, ids);
-  const still: Scene = { ...scene, opened: { ...opened, board } };
-  const wanted = tight(board, crossedOut);
+  const items = stacked(opened, crossedOut, board.draw_order);
+  const wanted = tight(items, board);
   if (wanted === undefined) {
     throw new Error("The selection draws nothing");
   }
@@ -111,13 +114,13 @@ export async function exported(scene: Scene, ids: string[], textures: Textures):
   const side = Math.min(MOST_SIDE, renderer.maxTextureSide);
   const { zoom, size, capped } = sizing(wanted, own, side);
   const area = { x: wanted.x, y: wanted.y, width: size.width / zoom, height: size.height / zoom };
-  const { bitmaps, shrunk } = await standIns(still, area, zoom, side, textures);
+  const { bitmaps, shrunk } = await standIns(scene, board, area, zoom, side, textures);
   try {
     if (!textures.current()) {
       throw new Error("Another board opened meanwhile");
     }
     const drawing = { side, bitmaps, backdrop: "plain" } as const;
-    const canvas = await draw(still, board.draw_order, area, size, drawing);
+    const canvas = await draw(scene, board, items, area, size, drawing);
     return { canvas, capped: capped || shrunk };
   } finally {
     bitmaps.forEach(release);
@@ -126,11 +129,12 @@ export async function exported(scene: Scene, ids: string[], textures: Textures):
 
 /** What the elements `ids` draw over, their groups' elements included, `undefined` when nothing. */
 export function drawnOver(
-  board: Board,
+  opened: Opened,
   ids: string[],
   crossedOut: ReadonlySet<string>,
 ): Rect | undefined {
-  return tight(selected(board, ids), crossedOut);
+  const { board } = opened;
+  return tight(stacked(opened, crossedOut, selected(board, ids).draw_order), board);
 }
 
 /**
@@ -174,22 +178,17 @@ function selected(board: Board, ids: string[]): Board {
   return { ...board, draw_order: order, elements };
 }
 
-/** What the board draws over, strokes and arrows' heads included, `undefined` when nothing. */
-function tight(board: Board, crossedOut: ReadonlySet<string>): Rect | undefined {
-  const items = placed(
-    board,
-    {
-      // As far as the frame it lies in, which the margin of its texture passes, but within an
-      // ellipse, whose outline holds it.
-      placed: (id, kind) =>
-        isBlank(kind) || (kind.type === "shape" && kind.shape === "ellipse")
-          ? undefined
-          : { kind: "text", id, frame: kind.frame, rotation: kind.rotation, paint: "ink" },
-    },
-    undefined,
-    crossedOut,
-  );
-  return reach(items);
+/** What `items` draw over, strokes and arrows' heads included, `undefined` when nothing. */
+function tight(items: Item[], board: Board): Rect | undefined {
+  const texts = {
+    // As far as the frame it lies in, which the margin of its texture passes, but within an
+    // ellipse, whose outline holds it.
+    placed: (id: string, kind: Holder): Lettering | undefined =>
+      kind.type === "shape" && kind.shape === "ellipse"
+        ? undefined
+        : { id, frame: kind.frame, rotation: kind.rotation, paint: "ink" },
+  };
+  return reach(placing(items, board, texts));
 }
 
 function reach(items: Placed[]): Rect | undefined {
@@ -206,13 +205,14 @@ function reach(items: Placed[]): Rect | undefined {
         return [item.from, item.to].flatMap((end) => around(end, item.width / 2));
       case "arrow":
         return [item.from, item.to, ...barbs(item)].flatMap((end) => around(end, item.width / 2));
-      // Its outline straddles the ellipse.
-      case "ellipse":
-        return oval(item.frame, item.rotation, item.width / 2);
-      default: {
+      case "outline": {
+        const half = item.width / 2;
+        // Its outline straddles the ellipse.
+        if (item.shape === "ellipse") {
+          return oval(item.frame, item.rotation, half);
+        }
         // Its outline straddles the frame's edge.
         const { x, y, width, height } = item.frame;
-        const half = item.width / 2;
         const grown = {
           x: x - half,
           y: y - half,
@@ -243,7 +243,7 @@ function barbs({ from, to, head, heads }: Extract<Placed, { kind: "arrow" }>): P
       x: tip.x - back * along.x * BARB.back * head - side * along.y * BARB.across * head,
       y: tip.y - back * along.y * BARB.back * head + side * along.x * BARB.across * head,
     }));
-  return heads === 2 ? [...ends(to, 1), ...ends(from, -1)] : ends(to, 1);
+  return heads === "both" ? [...ends(to, 1), ...ends(from, -1)] : ends(to, 1);
 }
 
 function around({ x, y }: Point, radius: number): Point[] {
@@ -310,12 +310,12 @@ export function standInSide(
  */
 async function standIns(
   { opened, drawings, crossedOut }: Scene,
+  board: Board,
   area: Rect,
   zoom: number,
   side: number,
   textures: Textures,
 ): Promise<{ bitmaps: Map<string, ImageBitmap>; shrunk: boolean }> {
-  const { board } = opened;
   const sizes = new Map<string, Size>();
   for (const id of board.draw_order) {
     const { kind } = board.elements[id]!;
@@ -372,17 +372,18 @@ interface Drawing {
   backdrop?: Background;
 }
 
-/** The elements among `ids` that `area` overlaps, onto a canvas of `size` pixels. */
+/** What `items` draw of `board`'s elements, where `area` overlaps them, onto a canvas of `size` pixels. */
 async function draw(
-  { opened, renderer, drawings, crossedOut, background }: Scene,
-  ids: string[],
+  { renderer, drawings, background }: Scene,
+  board: Board,
+  items: Item[],
   area: Rect,
   size: Size,
   { side, bitmaps, backdrop }: Drawing = {},
 ): Promise<HTMLCanvasElement> {
-  const { board } = opened;
+  const ids = board.draw_order;
   const zoom = size.width / area.width;
-  const lettering = new Map<string, Placed>();
+  const lettering = new Map<string, Lettering>();
   const texts = new Map<string, HTMLCanvasElement>();
   for (const id of ids) {
     const { kind } = board.elements[id]!;
@@ -401,16 +402,10 @@ async function draw(
       images.set(asset, canvas);
     }
   }
-  const items = placed(
-    { ...board, draw_order: ids },
-    { placed: (id) => lettering.get(id) },
-    undefined,
-    crossedOut,
-  );
   const pixels = await renderer.render({
     area,
     size,
-    items,
+    items: placing(items, board, { placed: (id) => lettering.get(id) }),
     background,
     ...(backdrop && { backdrop }),
     images,
@@ -433,8 +428,8 @@ function sharpest(board: Board, ids: string[], zoom: number, area: Rect): Map<st
   return most;
 }
 
-function framed(board: Board, crossedOut: ReadonlySet<string>, chosen: string[]): Rect {
-  const covered = drawnOver(board, chosen, crossedOut);
+function framed(items: Item[], board: Board, chosen: string[]): Rect {
+  const covered = tight(items, board);
   if (covered === undefined) {
     throw new Error(
       chosen.length === 0 ? "Give an area or some ids" : "Those elements draw nothing to show",

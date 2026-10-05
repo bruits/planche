@@ -250,6 +250,18 @@ impl ElementKind {
         }
     }
 
+    pub(crate) fn opacity(&self) -> Option<Opacity> {
+        match self {
+            Self::Image { opacity, .. }
+            | Self::Note { opacity, .. }
+            | Self::Sticky { opacity, .. }
+            | Self::Shape { opacity, .. }
+            | Self::Arrow { opacity, .. }
+            | Self::Line { opacity, .. } => Some(*opacity),
+            Self::Comment { .. } | Self::Group => None,
+        }
+    }
+
     fn opacity_mut(&mut self) -> Option<&mut Opacity> {
         match self {
             Self::Image { opacity, .. }

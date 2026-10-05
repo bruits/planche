@@ -6,17 +6,21 @@ import {
   copiedAssets,
   duplicateOffset,
   files as filesOf,
+  imageKind,
+  newId,
   nudge,
   open,
   placed,
   prepare,
   reader,
   readAsset,
+  refresh,
   row,
+  untitled,
   webAddress,
 } from "./board.js";
 import * as core from "./core.js";
-import type { Board, Bytes, Kind } from "./core.js";
+import type { Bytes, Kind } from "./core.js";
 import type { Slices, ZipHome } from "./platform.js";
 import { saving, zipStore } from "./save.js";
 import { zipFolder } from "./zip.js";
@@ -107,53 +111,70 @@ describe("prepare", () => {
   });
 });
 
-/** What a board holding `kind` alone draws, its text left out. */
-function drawn(kind: Kind) {
-  const board: Board = {
-    elements: { a: { z: "a0", kind } },
-    draw_order: ["a"],
-    background: "plain",
-  };
-  return placed(board, { placed: () => undefined });
+/** A new board holding `kinds`, back to front, and their ids. */
+function holding(kinds: Kind[]) {
+  const opened = untitled();
+  const ids = kinds.map((kind) => {
+    const id = newId();
+    refresh(opened, opened.editor.add(id, undefined, JSON.stringify(kind)));
+    return id;
+  });
+  return { opened, ids };
 }
 
 describe("placed", () => {
   const frame = { x: 0, y: 0, width: 100, height: 50 };
-  const text = { content: "", font_size: 20 };
+  const none = { placed: () => undefined };
 
-  it("draws each part of a style as it comes when left out", () => {
-    const shape: Kind = { type: "shape", frame, rotation: 0, shape: "rectangle", text };
-    expect(drawn(shape)).toMatchObject([{ kind: "rectangle", paint: "ink", dashed: false }]);
-    const sticky: Kind = { type: "sticky", frame, rotation: 0, text };
-    expect(drawn(sticky)).toMatchObject([{ kind: "fill", paint: "paper-yellow" }]);
-    const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
-    expect(drawn(arrow)).toMatchObject([{ kind: "arrow", paint: "ink", dashed: false, heads: 1 }]);
-    expect(drawn({ ...arrow, heads: "both" })).toMatchObject([{ kind: "arrow", heads: 2 }]);
-  });
-
-  it("fades all an element draws by its opacity, over what its fills take", () => {
-    const shape: Kind = {
-      type: "shape",
-      frame,
-      rotation: 0,
-      shape: "rectangle",
-      text,
-      fill: "solid",
-      opacity: 50,
+  it("lays each text out where its element stacks, faded with it, but the one being written and those not laid out", () => {
+    const { opened, ids } = holding([
+      { type: "sticky", frame, rotation: 0, text: { content: "Dusk", font_size: 20 }, opacity: 50 },
+      { type: "line", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } },
+    ]);
+    const sticky = ids[0]!;
+    const texts = {
+      placed: (id: string) => ({ id, frame, rotation: 0, paint: "sticky-ink" as const }),
     };
-    expect(drawn(shape)).toMatchObject([{ kind: "rectangle", fill: 1, opacity: 0.5 }]);
-    expect(drawn({ ...shape, fill: "tint" })).toMatchObject([{ fill: 0.18, opacity: 0.5 }]);
-    const sticky: Kind = { type: "sticky", frame, rotation: 0, text, opacity: 50 };
-    expect(drawn(sticky)).toMatchObject([{ kind: "fill", opacity: 0.5 }]);
-    const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
-    expect(drawn({ ...arrow, opacity: 25 })).toMatchObject([{ kind: "arrow", opacity: 0.25 }]);
-    expect(drawn(arrow)[0]).not.toHaveProperty("opacity");
+    expect(placed(opened, texts)).toMatchObject([
+      { kind: "fill", opacity: 0.5 },
+      { kind: "text", id: sticky, frame, paint: "sticky-ink", opacity: 0.5 },
+      { kind: "line", opacity: 1 },
+    ]);
+    for (const shown of [placed(opened, texts, sticky), placed(opened, none)]) {
+      expect(shown.map(({ kind }) => kind)).toEqual(["fill", "line"]);
+    }
   });
 
-  it("fills no cross, though one from an older file may hold a fill", () => {
-    const cross: Kind = { type: "shape", frame, rotation: 0, shape: "cross", text, fill: "solid" };
-    expect(drawn(cross)).toMatchObject([{ kind: "cross" }]);
-    expect(drawn({ ...cross, shape: "ellipse" })).toMatchObject([{ kind: "ellipse", fill: 1 }]);
+  it("draws an element anew once an edit touches it, and its images once other assets are crossed out", () => {
+    const { opened, ids } = holding([imageKind(ASSET, NATURAL, { x: 0, y: 0, ...NATURAL })]);
+    expect(placed(opened, none)).toMatchObject([{ kind: "image", frame: { x: 0 } }]);
+    refresh(opened, opened.editor.translate(ids, 10, 0));
+    expect(placed(opened, none)).toMatchObject([{ kind: "image", frame: { x: 10 } }]);
+    expect(placed(opened, none, undefined, new Set([ASSET]))).toMatchObject([
+      { kind: "outline", shape: "rectangle", frame: { x: 10 } },
+      { kind: "outline", shape: "cross" },
+    ]);
+  });
+
+  it("draws anew only the images whose assets were crossed out or back since", () => {
+    const { opened, ids } = holding([
+      { type: "line", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } },
+      imageKind(ASSET, NATURAL, { x: 0, y: 0, ...NATURAL }),
+      { type: "line", from: { x: 0, y: 10 }, to: { x: 100, y: 10 } },
+    ]);
+    const image = ids[1]!;
+    placed(opened, none, undefined, new Set());
+    const fetched = vi.spyOn(opened.editor, "drawn");
+    const asked = () => fetched.mock.calls.flatMap(([fetching]) => fetching);
+    // The same assets, as a new set, and one that no image shows.
+    placed(opened, none, undefined, new Set());
+    placed(opened, none, undefined, new Set(["0".repeat(64)]));
+    expect(asked()).toEqual([]);
+    placed(opened, none, undefined, new Set([ASSET]));
+    expect(asked()).toEqual([image]);
+    fetched.mockClear();
+    expect(placed(opened, none, undefined, new Set())[1]).toMatchObject({ kind: "image" });
+    expect(asked()).toEqual([image]);
   });
 });
 

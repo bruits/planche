@@ -2,68 +2,22 @@
 
 import type { Camera } from "./camera.js";
 import * as core from "./core.js";
-import type { Background, Bytes, Point, Rect, Size } from "./core.js";
+import type { Background, Bytes, Item, Rect, Size } from "./core.js";
 import { paints, reader, type Paint, type Paints } from "./paint.js";
 import start, { Animation, create as createWgpu, type Readback } from "./wasm/renderer.js";
 
-/**
- * An image, as it shows its asset, a text from its texture, a stroke, or a filled rectangle or
- * ellipse, with `opacity` from 0 to 1. Rotations are clockwise, in degrees, around the frame's
- * centre, and stroke widths in board units.
- */
+/** Where a text draws, from its texture, turned clockwise, in degrees, around its frame's centre. */
+export interface Lettering {
+  id: string;
+  frame: Rect;
+  rotation: number;
+  paint: Paint;
+}
+
+/** What the board draws, with its texts laid out. */
 export type Placed =
-  | {
-      kind: "image";
-      asset: string;
-      frame: Rect;
-      rotation: number;
-      /** The part of the asset it shows, from 0 to 1 across and down, which a negative size flips. */
-      texture: Rect;
-      greyscale: boolean;
-      /** Whether it shows only the ellipse that fills its frame. */
-      elliptical: boolean;
-      opacity?: number;
-    }
-  | { kind: "text"; id: string; frame: Rect; rotation: number; paint: Paint; opacity?: number }
-  | {
-      kind: "line";
-      from: Point;
-      to: Point;
-      width: number;
-      paint: Paint;
-      dashed?: boolean;
-      opacity?: number;
-    }
-  /** Its heads `head` long, at `to`, and at `from` too when `heads` is 2, never dashed. */
-  | {
-      kind: "arrow";
-      from: Point;
-      to: Point;
-      width: number;
-      paint: Paint;
-      dashed?: boolean;
-      head: number;
-      heads: 1 | 2;
-      opacity?: number;
-    }
-  /** `fill` how much of its paint fills it, none unless given. */
-  | {
-      kind: "rectangle" | "ellipse" | "cross";
-      frame: Rect;
-      rotation: number;
-      width: number;
-      paint: Paint;
-      dashed?: boolean;
-      fill?: number;
-      opacity?: number;
-    }
-  | {
-      kind: "fill";
-      frame: Rect;
-      rotation: number;
-      paint: Paint;
-      opacity?: number;
-    };
+  | Exclude<Item, { kind: "text" }>
+  | ({ kind: "text"; opacity: number } & Lettering);
 
 /** An animated image, whose frames it draws onto its asset's texture. */
 export interface Playing {
@@ -371,7 +325,7 @@ function packed(
           : -1;
     return texture === undefined
       ? []
-      : [{ values: floats(item, texture, painted), opacity: item.opacity ?? 1 }];
+      : [{ values: floats(item, texture, painted), opacity: item.opacity }];
   });
   const items = new Float32Array(shown.length * STRIDE);
   shown.forEach(({ values, opacity }, at) => {
@@ -420,24 +374,24 @@ function floats(item: Placed, texture: number, colours: Paints): number[] {
     case "arrow": {
       const { from, to } = item;
       const arrow = [from.x, from.y, to.x, to.y, item.head, stroke(item)];
-      return [KINDS.stroke, -1, SHAPES.arrow, ...arrow, ...colours(item.paint), item.heads];
+      const heads = item.heads === "both" ? 2 : 1;
+      return [KINDS.stroke, -1, SHAPES.arrow, ...arrow, ...colours(item.paint), heads];
     }
     case "fill": {
       const { frame } = item;
       const fill = [frame.x, frame.y, frame.width, frame.height, item.rotation, 0];
       return [KINDS.stroke, -1, SHAPES.fill, ...fill, ...colours(item.paint)];
     }
-    default: {
+    case "outline": {
       const { frame } = item;
       const outline = [frame.x, frame.y, frame.width, frame.height, item.rotation, stroke(item)];
-      const fill = item.fill ?? 0;
-      return [KINDS.stroke, -1, SHAPES[item.kind], ...outline, ...colours(item.paint), fill];
+      return [KINDS.stroke, -1, SHAPES[item.shape], ...outline, ...colours(item.paint), item.fill];
     }
   }
 }
 
 /** Its width, negative when dashed, as the renderer reads it. */
-function stroke({ width, dashed }: { width: number; dashed?: boolean }): number {
+function stroke({ width, dashed }: { width: number; dashed: boolean }): number {
   return dashed ? -width : width;
 }
 

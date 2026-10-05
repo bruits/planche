@@ -135,7 +135,7 @@ const viewport = view(byId("viewport"), {
       animated.update(opened.board, renderer, camera, size);
       films.update(opened.board, renderer, camera, size);
       if (lettering.update(opened.board, renderer, camera, size, editing.writing())) {
-        renderer.place(placed(opened.board, lettering, editing.writing(), crossedOut));
+        renderer.place(placed(opened, lettering, editing.writing(), crossedOut));
       }
     }
   },
@@ -249,7 +249,7 @@ const present = showing({
     created.backdrop(next.board.background);
     details.set("renderer", created.backend);
     renderer = created;
-    created.place(placed(next.board, lettering, editing.writing(), crossedOut));
+    created.place(placed(next, lettering, editing.writing(), crossedOut));
     viewport.show(created, camera ?? fit(extent(next), viewport.size()));
     editing.rehover();
     refreshBar();
@@ -325,7 +325,7 @@ const unexportable = () => {
   if (ids.length === 0) {
     return "Select what to export";
   }
-  return opened && drawnOver(opened.board, ids, crossedOut) === undefined
+  return opened && drawnOver(opened, ids, crossedOut) === undefined
     ? "The selection draws nothing"
     : undefined;
 };
@@ -1825,7 +1825,7 @@ async function readBoard(at: { clientX: number; clientY: number }): Promise<Imag
       height: ACROSS / scale,
     },
     size: { width: ACROSS, height: ACROSS },
-    items: placed(opened.board, lettering, editing.writing(), crossedOut),
+    items: placed(opened, lettering, editing.writing(), crossedOut),
     background: getComputedStyle(document.body).backgroundColor,
     images: new Map(),
     texts: new Map(),
@@ -1961,7 +1961,7 @@ async function show(next: Opened, camera?: Camera): Promise<void> {
 function crossOut(into: Renderer, asset: string): void {
   crossedOut = new Set([...crossedOut, asset]);
   if (opened) {
-    into.place(placed(opened.board, lettering, editing.writing(), crossedOut));
+    into.place(placed(opened, lettering, editing.writing(), crossedOut));
   }
 }
 
@@ -2139,7 +2139,7 @@ function changed(touched: string[]): void {
   }
   const undrawn = refresh(opened, touched);
   renderer?.backdrop(opened.board.background);
-  renderer?.place(placed(opened.board, lettering, editing.writing(), crossedOut));
+  renderer?.place(placed(opened, lettering, editing.writing(), crossedOut));
   life.touched(touched);
   present.edited(undrawn);
   viewport.redraw();

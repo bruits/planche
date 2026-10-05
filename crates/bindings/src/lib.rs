@@ -78,6 +78,19 @@ impl Editor {
         strings(self.0.board().draw_order())
     }
 
+    pub fn drawn(&self, ids: Vec<String>, crossed_out: Vec<String>) -> Result<String, JsError> {
+        let crossed_out = crossed_out
+            .iter()
+            .map(|asset| asset.parse())
+            .collect::<Result<_, board::Error>>()?;
+        let board = self.0.board();
+        let drawn: Vec<_> = parse(ids)?
+            .into_iter()
+            .map(|id| board.drawn(id, &crossed_out))
+            .collect();
+        Ok(serde_json::to_string(&drawn)?)
+    }
+
     pub fn translate(
         &mut self,
         ids: Vec<String>,

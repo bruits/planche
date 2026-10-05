@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { placed, type Opened } from "./board.js";
+import { newId, refresh, stacked, untitled, type Opened } from "./board.js";
 import * as core from "./core.js";
 import type { Board, Kind, Rect } from "./core.js";
 import {
@@ -58,6 +58,17 @@ function boardOf(kinds: Record<string, Kind>): Board {
   };
 }
 
+/** A board holding `kinds`, back to front, each under an id of its own, by its key. */
+function openedOf(kinds: Record<string, Kind>): { opened: Opened; ids: Record<string, string> } {
+  const opened = untitled();
+  const ids: Record<string, string> = {};
+  for (const [name, kind] of Object.entries(kinds)) {
+    ids[name] = newId();
+    refresh(opened, opened.editor.add(ids[name], undefined, JSON.stringify(kind)));
+  }
+  return { opened, ids };
+}
+
 function image(frame: Rect, more: Partial<Extract<Kind, { type: "image" }>> = {}): Kind {
   return {
     type: "image",
@@ -71,8 +82,13 @@ function image(frame: Rect, more: Partial<Extract<Kind, { type: "image" }>> = {}
 }
 
 function bounds(kinds: Record<string, Kind>, crossedOut = new Set<string>()) {
-  const board = boardOf(kinds);
-  return drawnOver(board, board.draw_order, crossedOut);
+  const { opened } = openedOf(kinds);
+  return drawnOver(opened, opened.board.draw_order, crossedOut);
+}
+
+function drawnArrow(arrow: Kind): Extract<Placed, { kind: "arrow" }> {
+  const [drawn] = stacked(openedOf({ a: arrow }).opened);
+  return drawn as Extract<Placed, { kind: "arrow" }>;
 }
 
 describe("what a picture of the selection covers", () => {
@@ -128,8 +144,7 @@ describe("what a picture of the selection covers", () => {
       to: { x: 100, y: 0 },
       heads: "both",
     };
-    const [drawn] = placed(boardOf({ a: arrow }), { placed: () => undefined });
-    const { head, width } = drawn as Extract<ReturnType<typeof placed>[number], { kind: "arrow" }>;
+    const { head, width } = drawnArrow(arrow);
     const across = head / 2 + width / 2;
     const covered = bounds({ a: arrow })!;
     expect(covered.x).toBeCloseTo(-width / 2);
@@ -298,9 +313,9 @@ describe("what a picture of the selection decodes again", () => {
   });
 });
 
-function sceneOf(board: Board, render: Renderer["render"]): Scene {
+function sceneOf(opened: Opened, render: Renderer["render"]): Scene {
   return {
-    opened: { board, folder: {}, added: new Map() } as unknown as Opened,
+    opened,
     renderer: { maxTextureSide: 16_384, render } as unknown as Renderer,
     drawings: { holds: () => false, drawn: () => undefined } as unknown as Vectors,
     crossedOut: new Set(),
@@ -310,9 +325,9 @@ function sceneOf(board: Board, render: Renderer["render"]): Scene {
 
 /** A board of one image, which the window holds no texture of, so that it is read again. */
 function picture(render: Renderer["render"], current: () => boolean) {
-  const board = boardOf({ a: image({ x: 0, y: 0, width: 400, height: 200 }) });
+  const { opened, ids } = openedOf({ a: image({ x: 0, y: 0, width: 400, height: 200 }) });
   const textures: Textures = { holds: () => false, plays: () => false, current };
-  return { board, made: exported(sceneOf(board, render), ["a"], textures) };
+  return { opened, made: exported(sceneOf(opened, render), [ids["a"]!], textures) };
 }
 
 describe("a picture of the selection", () => {
@@ -328,12 +343,8 @@ describe("a picture of the selection", () => {
 
   it("draws the selection as it stood, though an edit removed it while its image was read", async () => {
     const render = vi.fn<Renderer["render"]>().mockRejectedValue(new Error(DRAWN));
-    const { board, made } = picture(render, () => true);
-    // In place, as the window's board takes each edit.
-    fakes.meanwhile = () => {
-      delete board.elements["a"];
-      board.draw_order = [];
-    };
+    const { opened, made } = picture(render, () => true);
+    fakes.meanwhile = () => refresh(opened, opened.editor.remove(opened.board.draw_order));
     await expect(made).rejects.toThrow(DRAWN);
     expect(render.mock.calls[0]![0].items).toMatchObject([{ kind: "image", asset: ASSET }]);
   });
@@ -368,10 +379,10 @@ describe("a picture of the selection", () => {
         { asset: String(at).repeat(64), natural_size: { width: 4096, height: 4096 } },
       );
     }
-    const board = boardOf(kinds);
+    const { opened } = openedOf(kinds);
     const render = vi.fn<Renderer["render"]>().mockResolvedValue({} as ImageData);
     const textures: Textures = { holds: () => true, plays: () => false, current: () => true };
-    const { capped } = await exported(sceneOf(board, render), board.draw_order, textures);
+    const { capped } = await exported(sceneOf(opened, render), opened.board.draw_order, textures);
     expect(fakes.decoded.map(({ asset }) => asset)).not.toContain(ASSET);
     expect(fakes.decoded).toHaveLength(5);
     for (const { cap } of fakes.decoded) {
@@ -382,11 +393,11 @@ describe("a picture of the selection", () => {
 });
 
 async function framing(kinds: Record<string, Kind>, crossedOut = new Set<string>()) {
-  const board = boardOf(kinds);
+  const { opened } = openedOf(kinds);
   const draw = vi.fn<Renderer["render"]>().mockResolvedValue({} as ImageData);
-  const scene = { ...sceneOf(board, draw), crossedOut };
-  const { area } = await forAgent(scene, { ids: board.draw_order });
-  return { board, area, drawn: draw.mock.calls[0]![0].area };
+  const scene = { ...sceneOf(opened, draw), crossedOut };
+  const { area } = await forAgent(scene, { ids: opened.board.draw_order });
+  return { area, drawn: draw.mock.calls[0]![0].area };
 }
 
 describe("a picture for an agent", () => {
@@ -400,8 +411,7 @@ describe("a picture for an agent", () => {
 
   it("frames an arrow by its stroke and its head, nothing past its tail, the thick stroke around", async () => {
     const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
-    const [placedArrow] = placed(boardOf({ a: arrow }), { placed: () => undefined });
-    const { head, width } = placedArrow as Extract<Placed, { kind: "arrow" }>;
+    const { head, width } = drawnArrow(arrow);
     const across = head / 2 + width / 2;
     const margin = core.strokeWidth("thick");
     expect(0.02 * (100 + width)).toBeLessThan(margin);
@@ -439,7 +449,7 @@ describe("a picture for an agent", () => {
 
   it("refuses elements that draw nothing, and no elements at all", async () => {
     const draw = vi.fn<Renderer["render"]>();
-    const board = boardOf({
+    const { opened, ids: named } = openedOf({
       blank: {
         type: "note",
         frame: { x: 0, y: 0, width: 100, height: 40 },
@@ -449,11 +459,19 @@ describe("a picture for an agent", () => {
       comment: { type: "comment", at: { x: 0, y: 0 }, text: "Later" },
     });
     for (const [ids, reason] of [
-      [["blank", "comment"], "Those elements draw nothing to show"],
+      [[named["blank"]!, named["comment"]!], "Those elements draw nothing to show"],
       [[], "Give an area or some ids"],
     ] as const) {
-      await expect(forAgent(sceneOf(board, draw), { ids: [...ids] })).rejects.toThrow(reason);
+      await expect(forAgent(sceneOf(opened, draw), { ids: [...ids] })).rejects.toThrow(reason);
     }
+    expect(draw).not.toHaveBeenCalled();
+  });
+
+  it("refuses a request of neither area nor ids, even on a board that draws", async () => {
+    const draw = vi.fn<Renderer["render"]>();
+    const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
+    const { opened } = openedOf({ a: arrow });
+    await expect(forAgent(sceneOf(opened, draw), {})).rejects.toThrow("Give an area or some ids");
     expect(draw).not.toHaveBeenCalled();
   });
 });

@@ -48,8 +48,10 @@ import type {
   End,
   Fill,
   Heads,
+  Item,
   Media,
   Order,
+  Paint,
   Paper,
   Point,
   Rect,
@@ -99,8 +101,10 @@ export type {
   End,
   Fill,
   Heads,
+  Item,
   Media,
   Order,
+  Paint,
   Paper,
   Point,
   Rect,
@@ -173,6 +177,14 @@ export function board(editor: Editor): Board {
 export function element(editor: Editor, id: string): Element | undefined {
   const json = editor.element(id);
   return json === undefined ? undefined : (JSON.parse(json) as Element);
+}
+
+/**
+ * What each of `ids` draws itself, back to front. Images of the `crossedOut` assets draw where
+ * they lie, crossed out.
+ */
+export function drawn(editor: Editor, ids: string[], crossedOut: ReadonlySet<string>): Item[][] {
+  return JSON.parse(editor.drawn(ids, [...crossedOut])) as Item[][];
 }
 
 export function background(editor: Editor): Background {

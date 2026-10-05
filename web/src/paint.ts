@@ -1,14 +1,14 @@
 // The colours the board draws in, as the theme resolves them, for the renderer and for what the
 // page shows over the board alike.
 
-import type { Colour, Paper } from "./core.js";
+import type * as core from "./core.js";
 
 /**
  * A colour of the theme, its host's property of that name, or its text colour for the ink, one of
  * its own, alike in every theme, or what reads `on` one, as text on a solid fill. Forced colours
  * draw every colour as the ink.
  */
-export type Paint = Colour | `paper-${Paper}` | "sticky-ink" | { on: Colour };
+export type Paint = core.Paint | "sticky-ink" | { on: core.Colour };
 
 /** Straight red, green, and blue from 0 to 1. */
 export type Paints = (paint: Paint) => number[];
@@ -21,7 +21,7 @@ export function paints(host: HTMLElement): Paints {
   const read = reader();
   const style = getComputedStyle(host);
   const known = new Map<string, number[]>();
-  const resolve = (paint: Exclude<Paint, { on: Colour }>): number[] => {
+  const resolve = (paint: Exclude<Paint, { on: core.Colour }>): number[] => {
     let rgb = known.get(paint);
     if (rgb === undefined) {
       rgb = read(resolved(paint, style));
@@ -44,7 +44,7 @@ export function css(paint: Paint, host: HTMLElement): string {
     : `var(--${paint.startsWith("#") ? "ink" : paint})`;
 }
 
-function resolved(paint: Exclude<Paint, { on: Colour }>, style: CSSStyleDeclaration): string {
+function resolved(paint: Exclude<Paint, { on: core.Colour }>, style: CSSStyleDeclaration): string {
   if (paint === "ink" || (paint.startsWith("#") && forced())) {
     return style.color;
   }

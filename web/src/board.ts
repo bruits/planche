@@ -3,12 +3,11 @@
 
 import type { Moving } from "./animation.js";
 import * as core from "./core.js";
-import type { Board, Bytes, Copied, Editor, Files, Kind, Point, Rect, Size } from "./core.js";
+import type { Board, Bytes, Copied, Editor, Files, Item, Kind, Point, Rect, Size } from "./core.js";
 import { milliseconds, timed } from "./metrics.js";
 import type { Folder, Home } from "./platform.js";
 import type { Placed } from "./renderer.js";
 import type { Saving } from "./save.js";
-import { opacityOf } from "./style.js";
 import { holdsText, type Texts } from "./text.js";
 import { picture, type Picture } from "./vector.js";
 import { VIDEO_LIMIT, firstFrame } from "./video.js";
@@ -23,7 +22,17 @@ export interface Opened {
    * that undo or redo may bring back.
    */
   added: Map<string, Blob>;
+  /** What its elements draw, as the core gives it, until `refresh` finds them touched. */
+  drawn: Drawn;
 }
+
+/** Each element's items, with the images of `crossedOut` crossed out. */
+interface Drawn {
+  crossedOut: ReadonlySet<string>;
+  items: Map<string, readonly Item[]>;
+}
+
+const NONE: ReadonlySet<string> = new Set();
 
 /**
  * A bitmap capped as `decode` caps them, or a video's first frame, or an SVG, which is
@@ -103,7 +112,13 @@ export async function open<T extends Folder>(
     editor.free();
     throw error;
   }
-  const opened = { folder, editor, board: core.board(editor), added: new Map<string, Blob>() };
+  const opened = {
+    folder,
+    editor,
+    board: core.board(editor),
+    added: new Map<string, Blob>(),
+    drawn: { crossedOut: NONE, items: new Map() },
+  };
   timings.clear();
   timings.set(`list ${listed.length} files`, milliseconds(listing));
   timings.set(`read ${read.size} files`, milliseconds(reading));
@@ -124,7 +139,13 @@ export function untitled(): Opened {
     },
   };
   const editor = new core.Editor();
-  return { folder, editor, board: core.board(editor), added: new Map() };
+  return {
+    folder,
+    editor,
+    board: core.board(editor),
+    added: new Map(),
+    drawn: { crossedOut: NONE, items: new Map() },
+  };
 }
 
 /** Its files as they stand: its folder's, and the assets of the images added since. */
@@ -358,12 +379,13 @@ export function centring(area: Rect, at: Point, zoom: number): Point {
 }
 
 /** The assets that the touched elements showed and no longer do, which other images may. */
-export function refresh({ editor, board }: Opened, touched: string[]): string[] {
+export function refresh({ editor, board, drawn }: Opened, touched: string[]): string[] {
   // Only which elements there are, where each stacks, and in which group, order the board.
   let reordered = false;
   const shown = new Set<string>();
   const kept = new Set<string>();
   for (const id of new Set(touched)) {
+    drawn.items.delete(id);
     const before = board.elements[id];
     const element = core.element(editor, id);
     if (element === undefined) {
@@ -389,139 +411,67 @@ export function refresh({ editor, board }: Opened, touched: string[]): string[] 
   return [...shown].filter((asset) => !kept.has(asset));
 }
 
-/** The longest an arrow's head is, in board units, then in widths of its stroke, and the most of its arrow it takes. */
-const HEAD_LENGTH = 10;
-const HEAD_WIDTHS = 3;
-const HEAD_SHARE = 1 / 3;
-const TINT = 0.18;
+/**
+ * What the elements of `order` draw, stacked back to front, with the images of the `crossedOut`
+ * assets where they lie, crossed out.
+ */
+export function stacked(
+  { editor, board, drawn }: Opened,
+  crossedOut: ReadonlySet<string> = NONE,
+  order = board.draw_order,
+): Item[] {
+  if (drawn.crossedOut !== crossedOut) {
+    const before = drawn.crossedOut;
+    const changed = new Set(
+      [...before, ...crossedOut].filter((asset) => before.has(asset) !== crossedOut.has(asset)),
+    );
+    // Only images draw otherwise once their asset is crossed out, or back.
+    for (const id of drawn.items.keys()) {
+      const kind = board.elements[id]?.kind;
+      if (kind?.type === "image" && changed.has(kind.asset)) {
+        drawn.items.delete(id);
+      }
+    }
+    drawn.crossedOut = crossedOut;
+  }
+  // At once, as each call to the core costs as much as a few elements.
+  const missing = order.filter((id) => !drawn.items.has(id));
+  if (missing.length > 0) {
+    core.drawn(editor, missing, crossedOut).forEach((items, at) => {
+      drawn.items.set(missing[at]!, items);
+    });
+  }
+  return order.flatMap((id) => drawn.items.get(id)!);
+}
 
 /**
  * What draws, back to front, but the text of `hidden`, which is being written. Images of the
  * `crossedOut` assets show where they lie, crossed out.
  */
 export function placed(
-  board: Board,
+  opened: Opened,
   texts: Pick<Texts, "placed">,
   hidden?: string,
-  crossedOut: ReadonlySet<string> = new Set(),
+  crossedOut?: ReadonlySet<string>,
 ): Placed[] {
-  const width = core.strokeWidth();
-  return board.draw_order.flatMap((id): Placed[] => {
-    const { kind } = board.elements[id]!;
-    const shown = drawn(id, kind);
-    const opacity = opacityOf(kind);
-    return opacity === 1
-      ? shown
-      : shown.map((item) => ({ ...item, opacity: (item.opacity ?? 1) * opacity }));
-  });
+  return placing(stacked(opened, crossedOut), opened.board, texts, hidden);
+}
 
-  function drawn(id: string, kind: Kind): Placed[] {
-    const text = holdsText(kind) ? texts.placed(id, kind) : undefined;
-    const written = text && id !== hidden ? [text] : [];
-    switch (kind.type) {
-      case "image": {
-        const { frame, rotation } = kind;
-        return crossedOut.has(kind.asset)
-          ? [
-              { kind: "rectangle", frame, rotation, width, paint: "ink" },
-              { kind: "cross", frame, rotation, width, paint: "ink" },
-            ]
-          : [image(kind)];
-      }
-      case "arrow":
-        return arrow(kind);
-      case "line":
-        return [line(kind)];
-      case "note":
-        return written;
-      case "sticky": {
-        const paper = {
-          kind: "fill",
-          frame: kind.frame,
-          rotation: kind.rotation,
-        } as const;
-        return [{ ...paper, paint: `paper-${kind.paper ?? core.plain(kind).paper!}` }, ...written];
-      }
-      case "shape":
-        return [...shape(kind), ...written];
-      case "comment":
-      case "group":
-        return [];
+/** What `items` draw, their texts as `texts` lays them out, but that of `hidden` and those not laid out. */
+export function placing(
+  items: Item[],
+  { elements }: Board,
+  texts: Pick<Texts, "placed">,
+  hidden?: string,
+): Placed[] {
+  return items.flatMap((item): Placed[] => {
+    if (item.kind !== "text") {
+      return [item];
     }
-  }
-}
-
-function image(kind: Image): Placed {
-  const { width, height } = kind.natural_size;
-  const { crop, flip_horizontal, flip_vertical, greyscale, crop_shape } = kind.edits;
-  const shown = crop ?? { x: 0, y: 0, width, height };
-  let [x, y] = [shown.x / width, shown.y / height];
-  let [across, down] = [shown.width / width, shown.height / height];
-  // Flipped within the crop.
-  if (flip_horizontal) {
-    [x, across] = [x + across, -across];
-  }
-  if (flip_vertical) {
-    [y, down] = [y + down, -down];
-  }
-  const texture = { x, y, width: across, height: down };
-  const elliptical = crop_shape === "ellipse";
-  return {
-    kind: "image",
-    asset: kind.asset,
-    frame: kind.frame,
-    rotation: kind.rotation,
-    texture,
-    greyscale,
-    elliptical,
-  };
-}
-
-function line(kind: Extract<Kind, { type: "arrow" | "line" }>): Extract<Placed, { kind: "line" }> {
-  const plain = core.plain(kind);
-  const { from, to } = kind;
-  return {
-    kind: "line",
-    from,
-    to,
-    width: core.strokeWidth(kind.weight),
-    paint: kind.colour ?? plain.colour!,
-    dashed: (kind.dash ?? plain.dash) === "dashed",
-  };
-}
-
-/** One item, as heads drawn apart from their shaft would overlap it, which fading shows. */
-function arrow(kind: Extract<Kind, { type: "arrow" }>): Placed[] {
-  const drawn = line(kind);
-  const { from, to, width } = drawn;
-  const span = Math.hypot(to.x - from.x, to.y - from.y);
-  if (span === 0) {
-    return [drawn];
-  }
-  const heads = (kind.heads ?? core.plain(kind).heads) === "both" ? 2 : 1;
-  const head = Math.min(HEAD_LENGTH + HEAD_WIDTHS * width, span * HEAD_SHARE);
-  return [{ ...drawn, kind: "arrow", head, heads }];
-}
-
-function shape(kind: Extract<Kind, { type: "shape" }>): Placed[] {
-  const { frame, rotation } = kind;
-  const plain = core.plain(kind);
-  const paint = kind.colour ?? plain.colour!;
-  const outline: Placed = {
-    kind: kind.shape,
-    frame,
-    rotation,
-    width: core.strokeWidth(kind.weight),
-    paint,
-    dashed: (kind.dash ?? plain.dash) === "dashed",
-  };
-  const fill = kind.fill ?? plain.fill;
-  // A cross takes no fill, though one written before crosses took none may hold one.
-  if (kind.shape === "cross" || fill === undefined || fill === "hollow") {
-    return [outline];
-  }
-  // With its outline, which over a fill of its own would show darker once faded.
-  return [{ ...outline, fill: fill === "tint" ? TINT : 1 }];
+    const kind = elements[item.id]?.kind;
+    const text = item.id !== hidden && holdsText(kind) ? texts.placed(item.id, kind) : undefined;
+    return text ? [{ kind: "text", ...text, opacity: item.opacity }] : [];
+  });
 }
 
 /** What the elements draw over, with the points their comments are pinned at, `undefined` when nothing. */

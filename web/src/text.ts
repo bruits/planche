@@ -8,7 +8,7 @@ import * as core from "./core.js";
 import type { Align, Board, Kind, Point, Rect, Size } from "./core.js";
 import type { Paint } from "./paint.js";
 import { LONGEST_SIDE, MOST_AREA, overlaps, rounded, settling } from "./raster.js";
-import type { Placed, Renderer } from "./renderer.js";
+import type { Lettering, Renderer } from "./renderer.js";
 
 export const FONT = "Inter";
 /** In font sizes, as the editing field's `line-height` too. */
@@ -202,7 +202,7 @@ function split(line: string, width: number, measure: (text: string) => number): 
 
 export interface Texts {
   /** What draws a text, `undefined` until it is rasterised as it now reads. */
-  placed(id: string, kind: Holder): Placed | undefined;
+  placed(id: string, kind: Holder): Lettering | undefined;
   /**
    * Rasterises the texts that changed, but `hidden`, and those that show at a zoom they were
    * not rasterised for. Whether any did.
@@ -288,7 +288,7 @@ export function texts(again: () => void): Texts {
 }
 
 /** What draws a text of `kind` whose texture covers `covers`, in font sizes from its frame's top-left. */
-function framed(id: string, kind: Holder, covers: Rect): Placed {
+function framed(id: string, kind: Holder, covers: Rect): Lettering {
   const size = kind.text.font_size;
   const { frame, rotation } = kind;
   const { x, y, width, height } = covers;
@@ -304,7 +304,7 @@ function framed(id: string, kind: Holder, covers: Rect): Placed {
   const turned = turn({ x: own.x - centre.x, y: own.y - centre.y }, rotation);
   placed.x += centre.x + turned.x - own.x;
   placed.y += centre.y + turned.y - own.y;
-  return { kind: "text", id, frame: placed, rotation, paint: paint(kind) };
+  return { id, frame: placed, rotation, paint: paint(kind) };
 }
 
 /**
@@ -346,7 +346,7 @@ export function lettered(
   kind: Holder,
   density: number,
   side?: number,
-): { canvas: HTMLCanvasElement; placed: Placed } | undefined {
+): { canvas: HTMLCanvasElement; placed: Lettering } | undefined {
   if (isBlank(kind)) {
     return undefined;
   }
