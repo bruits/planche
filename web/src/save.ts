@@ -4,7 +4,7 @@
 
 import * as core from "./core.js";
 import type { Bytes, Files, Snapshot } from "./core.js";
-import type { Reading } from "./board.js";
+import { retain, type Opened, type Reading } from "./board.js";
 import { message } from "./errors.js";
 import type { Folder, Home, ZipHome } from "./platform.js";
 import { writeZip, zipFolder } from "./zip.js";
@@ -133,9 +133,15 @@ export async function folderStore(
   };
 }
 
-/** The board in a ZIP file, which reads from `moved` once rewritten. */
-export function zipStore(zip: ZipHome, moved: (folder: Folder) => void): Store {
+/**
+ * The board `opened` in a ZIP file, which it reads from once rewritten. The file holds only the
+ * assets the board shows, so those that undo or redo may bring back stay in memory.
+ */
+export function zipStore(zip: ZipHome, opened: Opened): Store {
   const rewrite = async (snapshot: Snapshot, source: () => Folder, over: boolean) => {
+    const holds = new Set(snapshot.zipPaths());
+    // While the file is as it was, as a rewrite moves what it held out of reach.
+    await retain(opened, source(), (path) => holds.has(path));
     const rewriting = await zip.rewrite(over);
     if (rewriting === null) {
       return false;
@@ -145,7 +151,7 @@ export function zipStore(zip: ZipHome, moved: (folder: Folder) => void): Store {
     if (written === null) {
       return false;
     }
-    moved(await zipFolder(written));
+    opened.folder = await zipFolder(written);
     return true;
   };
   return {
@@ -154,7 +160,7 @@ export function zipStore(zip: ZipHome, moved: (folder: Folder) => void): Store {
     save: (snapshot, _, source) => rewrite(snapshot, source, false),
     async overwrite(snapshot, source) {
       // Its images from the file as another program left it, as where they lay may have moved.
-      moved(await zipFolder(await zip.reread()));
+      opened.folder = await zipFolder(await zip.reread());
       await rewrite(snapshot, source, true);
     },
     changed: () => zip.changed(),

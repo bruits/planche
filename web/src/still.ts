@@ -13,6 +13,7 @@ import {
   type Opened,
 } from "./board.js";
 import type { Rect, Size } from "./core.js";
+import { linear } from "./paint.js";
 
 /** Within what a canvas holds in every engine, Safari's area being the least. */
 const MOST_AREA = 4096 * 4096;
@@ -48,13 +49,19 @@ export function sizeOf(shown: Size, scale: number): Size {
   };
 }
 
-/** As the renderer greys it, by the luminance of its sRGB values. */
+const LINEAR = Array.from({ length: 256 }, (_, value) => linear(value / 255));
+
+/** As the renderer greys it, by the luminance of its linear light. */
 export function greyed(pixels: Uint8ClampedArray): void {
   for (let at = 0; at < pixels.length; at += 4) {
-    const luma = 0.2126 * pixels[at]! + 0.7152 * pixels[at + 1]! + 0.0722 * pixels[at + 2]!;
-    pixels[at] = luma;
-    pixels[at + 1] = luma;
-    pixels[at + 2] = luma;
+    const luma =
+      0.2126 * LINEAR[pixels[at]!]! +
+      0.7152 * LINEAR[pixels[at + 1]!]! +
+      0.0722 * LINEAR[pixels[at + 2]!]!;
+    const grey = 255 * (luma <= 0.0031308 ? luma * 12.92 : 1.055 * luma ** (1 / 2.4) - 0.055);
+    pixels[at] = grey;
+    pixels[at + 1] = grey;
+    pixels[at + 2] = grey;
   }
 }
 

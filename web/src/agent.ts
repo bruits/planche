@@ -19,7 +19,10 @@ export interface Reading {
   writing(): string | undefined;
   /** The part of the board the window shows, `undefined` when nothing is shown. */
   shown(): Rect | undefined;
-  /** While a board shows half drawn, its images still being read and decoded. */
+  /**
+   * While a board shows half drawn, its images still being read and decoded, as it opens or once
+   * an edit brought back images whose textures were freed.
+   */
   halfDrawn(): boolean;
   drawNow(): HTMLCanvasElement | undefined;
   /** Draws part of the board off the window, which it leaves as it is. */
@@ -194,7 +197,7 @@ async function picture(opened: Opened, id: unknown, background: string) {
 /** Drawn and read in this task, as a canvas holds its drawing no longer. */
 function screenshot(reading: Reading) {
   if (reading.halfDrawn()) {
-    throw new Error("A board is opening in Planche");
+    throw new Error("Planche is still reading the board's images");
   }
   const canvas = reading.drawNow();
   const view = reading.shown();
@@ -216,7 +219,7 @@ async function render(
   { area, ids, size }: Record<string, unknown>,
 ) {
   if (reading.halfDrawn()) {
-    throw new Error("A board is opening in Planche");
+    throw new Error("Planche is still reading the board's images");
   }
   if ((area == null) === (ids == null)) {
     throw new Error("Give either an area or ids, not both or neither");

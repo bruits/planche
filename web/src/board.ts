@@ -18,7 +18,10 @@ export interface Opened {
   editor: Editor;
   /** The editor's board, as `refresh` keeps it. */
   board: Board;
-  /** The assets of the images added since it opened, by path, which its folder lacks. */
+  /**
+   * The assets its folder lacks, by path, those of the images added since it opened and those
+   * that undo or redo may bring back.
+   */
   added: Map<string, Blob>;
 }
 
@@ -335,9 +338,12 @@ export function centring(area: Rect, at: Point, zoom: number): Point {
   };
 }
 
-export function refresh({ editor, board }: Opened, touched: string[]): void {
+/** The assets that the touched elements showed and no longer do, which other images may. */
+export function refresh({ editor, board }: Opened, touched: string[]): string[] {
   // Only which elements there are, where each stacks, and in which group, order the board.
   let reordered = false;
+  const shown = new Set<string>();
+  const kept = new Set<string>();
   for (const id of new Set(touched)) {
     const before = board.elements[id];
     const element = core.element(editor, id);
@@ -350,11 +356,18 @@ export function refresh({ editor, board }: Opened, touched: string[]): void {
       (before === undefined) !== (element === undefined) ||
       before?.z !== element?.z ||
       before?.group !== element?.group;
+    if (before?.kind.type === "image") {
+      shown.add(before.kind.asset);
+    }
+    if (element?.kind.type === "image") {
+      kept.add(element.kind.asset);
+    }
   }
   if (reordered) {
     board.draw_order = editor.drawOrder();
   }
   board.background = core.background(editor);
+  return [...shown].filter((asset) => !kept.has(asset));
 }
 
 /** The longest an arrow's head is, in board units, then in widths of its stroke, and the most of its arrow it takes. */
@@ -546,6 +559,23 @@ function picking(read: Promise<Map<string, Blob>>): Reader {
   };
 }
 
+/**
+ * Holds in `added` the assets that undo or redo may bring back and `holds` lacks, read from `from`
+ * while it is still there. One it cannot read is left out, as on a board that lacks it.
+ */
+export async function retain(
+  opened: Opened,
+  from: Folder,
+  holds: (path: string) => boolean,
+): Promise<void> {
+  const lacking = opened.editor.historyAssets().filter((asset) => {
+    const path = core.assetPath(asset);
+    return !holds(path) && !opened.added.has(path);
+  });
+  const read = await readAssets(from, new Map(), lacking);
+  read.forEach((blob, asset) => opened.added.set(core.assetPath(asset), blob));
+}
+
 async function readAssets(
   folder: Folder,
   held: Map<string, Blob>,
@@ -581,7 +611,7 @@ export function among({ elements }: Board, id: string, chosen: Set<string>): boo
 }
 
 /** How many images are read, decoded, or prepared at once, which bounds the memory in flight. */
-const AT_ONCE = 4;
+export const AT_ONCE = 4;
 
 /**
  * Runs `work` on each item `next` hands out, `AT_ONCE` at a time, until it hands out none. Once

@@ -29,6 +29,13 @@ describe("a still of an image", () => {
   it("greys by the luminance the renderer greys by, leaving alpha alone", () => {
     const pixels = new Uint8ClampedArray([255, 0, 0, 128, 0, 255, 0, 255, 0, 0, 255, 0]);
     greyed(pixels);
-    expect([...pixels]).toEqual([54, 54, 54, 128, 182, 182, 182, 255, 18, 18, 18, 0]);
+    expect([...pixels]).toEqual([127, 127, 127, 128, 220, 220, 220, 255, 76, 76, 76, 0]);
+  });
+
+  it("leaves greys as they are", () => {
+    const greys = [0, 1, 10, 54, 128, 187, 254, 255];
+    const pixels = new Uint8ClampedArray(greys.flatMap((grey) => [grey, grey, grey, 255]));
+    greyed(pixels);
+    expect([...pixels]).toEqual(greys.flatMap((grey) => [grey, grey, grey, 255]));
   });
 });

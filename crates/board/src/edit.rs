@@ -15,8 +15,8 @@ use crate::crop::cropped;
 use crate::grid::settled;
 use crate::stick::{Landing, Motion, lands_on};
 use crate::{
-    Background, Board, Copied, CropShape, Element, ElementId, ElementKind, Error, Point, Rect,
-    Result, ZIndex, angle, with_emptied,
+    AssetId, Background, Board, Copied, CropShape, Element, ElementId, ElementKind, Error, Point,
+    Rect, Result, ZIndex, angle, with_emptied,
 };
 
 /// Where an element moves among the elements of its group.
@@ -900,6 +900,20 @@ impl Editor {
 
     pub fn can_redo(&self) -> bool {
         self.gesture.is_none() && !self.redo.is_empty()
+    }
+
+    /// The assets of the images its history holds, as they were before or after an edit, which
+    /// undo, redo, or rewinding the open gesture may bring back.
+    pub fn history_assets(&self) -> BTreeSet<AssetId> {
+        self.undo
+            .iter()
+            .chain(&self.redo)
+            .chain(&self.gesture)
+            .flat_map(|step| step.elements.values())
+            .flat_map(|change| [&change.before, &change.after])
+            .flatten()
+            .filter_map(|element| element.kind.asset())
+            .collect()
     }
 
     fn record(&mut self, elements: Changes) -> Result<Vec<ElementId>> {
@@ -2052,6 +2066,36 @@ mod tests {
         editor.redo();
         editor.remove(&[id(5)]).unwrap();
         assert!(editor.redo().is_empty());
+    }
+
+    #[test]
+    fn the_history_holds_the_assets_that_undo_and_redo_may_bring_back() {
+        let image = |bytes: &[u8]| {
+            let mut kind = picture(0.0, 0.0);
+            if let ElementKind::Image { asset, .. } = &mut kind {
+                *asset = AssetId::of(bytes);
+            }
+            kind
+        };
+        let [shown, added] = [b"shown", b"added"].map(|bytes| AssetId::of(bytes));
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", image(b"shown"))),
+            (2, element(None, "a1", note(0.0))),
+        ]));
+        assert!(editor.history_assets().is_empty());
+
+        editor.remove(&ids([1])).unwrap();
+        assert_eq!(editor.history_assets(), BTreeSet::from([shown]));
+
+        editor.begin_gesture();
+        editor.add(id(3), None, image(b"added")).unwrap();
+        assert_eq!(editor.history_assets(), BTreeSet::from([shown, added]));
+        editor.end_gesture();
+        editor.undo();
+        assert_eq!(editor.history_assets(), BTreeSet::from([shown, added]));
+
+        editor.translate(&ids([2]), 1.0, 0.0).unwrap();
+        assert_eq!(editor.history_assets(), BTreeSet::from([shown]));
     }
 
     #[test]

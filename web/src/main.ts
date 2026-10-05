@@ -129,6 +129,7 @@ const viewport = view(byId("viewport"), {
     editing.follow();
     styleCard.frame();
     if (opened && renderer) {
+      present.free();
       drawings.update(opened.board, renderer, camera, size);
       animated.update(opened.board, renderer, camera, size);
       films.update(opened.board, renderer, camera, size);
@@ -168,6 +169,8 @@ const editing = edits(viewport, overlaid, () => opened, {
   settled() {
     refreshBar();
     styleCard.refresh();
+    // A drag ending draws nothing, so what it stopped drawing is freed now.
+    present.free();
   },
   snapping: () => snapping,
   drawing: () => drawTool(),
@@ -260,6 +263,13 @@ const present = showing({
     films.keep([read]);
   },
   crossOut,
+  holds: (_, asset) => loaded.has(asset) || crossedOut.has(asset),
+  unload(into, asset) {
+    drawings.drop(asset);
+    into.release(asset);
+    loaded.delete(asset);
+  },
+  busy: () => editing.busy(),
   redraw: () => viewport.redraw(),
   abandon(into) {
     if (into !== undefined && renderer === into) {
@@ -1260,7 +1270,7 @@ async function serveAgents(): Promise<void> {
         const camera = viewport.camera();
         return camera && onScreen(camera, viewport.size());
       },
-      halfDrawn: () => halfDrawn,
+      halfDrawn: () => halfDrawn || present.reloading(),
       drawNow: () => viewport.drawNow(),
       async render(request) {
         if (opened === undefined || renderer === undefined) {
@@ -1785,7 +1795,7 @@ function fleeting(): Saving | undefined {
 async function show(next: Opened, camera?: Camera): Promise<void> {
   halfDrawn = true;
   try {
-    await present(next, camera);
+    await present.show(next, camera);
   } finally {
     halfDrawn = false;
   }
@@ -1971,10 +1981,11 @@ function changed(touched: string[]): void {
   ) {
     return;
   }
-  refresh(opened, touched);
+  const undrawn = refresh(opened, touched);
   renderer?.backdrop(opened.board.background);
   renderer?.place(placed(opened.board, lettering, editing.writing(), crossedOut));
   life.touched(touched);
+  present.edited(undrawn);
   viewport.redraw();
 }
 

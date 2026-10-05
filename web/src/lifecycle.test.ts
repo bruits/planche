@@ -12,6 +12,8 @@ const STICKY_FILE = `elements/${STICKY}.json`;
 /** One of the demo's notes, and one of its images. */
 const NOTE = "47b0c6e291d84f138a5c3e7fd06b2491";
 const IMAGE = "1a4e83c05f294b76a3d107e89c526b0f";
+/** What it shows, which no other element of the demo does. */
+const IMAGE_ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f";
 
 /** The demo's sticky note as another program rewrote it. */
 const THEIRS = JSON.stringify({
@@ -263,6 +265,24 @@ describe("saveAs", () => {
     expect(await life.closing()).toBe(true);
     expect(first.written).toEqual([`elements/${STICKY}.json`]);
     expect(second.written).toEqual([`elements/${STICKY}.json`]);
+  });
+
+  it("saves into the new folder an image that an undo brings back, which the folder lacked", async () => {
+    remembered({ name: "demo", unsaved: true });
+    const { session } = memorySession(sample("demo"));
+    const { home, files } = memoryHome("target");
+    const { life, opened } = app({ session, target: home });
+    await life.start();
+    const edit = (touched: string[]) => {
+      refresh(opened()!, touched);
+      life.touched(touched);
+    };
+    edit(opened()!.editor.remove([IMAGE]));
+    await life.saveAs();
+    expect(files.has(`assets/${IMAGE_ASSET}`)).toBe(false);
+    edit(opened()!.editor.undo());
+    expect(await life.closing()).toBe(true);
+    expect(files.has(`assets/${IMAGE_ASSET}`)).toBe(true);
   });
 
   it("says a folder filled meanwhile is no longer empty, and keeps saving into the session", async () => {

@@ -55,12 +55,15 @@ function forced(): boolean {
   return matchMedia("(forced-colors: active)").matches;
 }
 
+/** The linear light of an sRGB value, both from 0 to 1. */
+export function linear(encoded: number): number {
+  return encoded <= 0.04045 ? encoded / 12.92 : ((encoded + 0.055) / 1.055) ** 2.4;
+}
+
 /** The sticky notes' ink, or white where that would not show. */
 function readable(on: number[], ink: number[]): number[] {
-  const linear = on.map((channel) =>
-    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
-  );
-  const luminance = 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
+  const light = on.map(linear);
+  const luminance = 0.2126 * light[0]! + 0.7152 * light[1]! + 0.0722 * light[2]!;
   // Where black and white contrast alike with it.
   return luminance > 0.18 ? ink : [1, 1, 1];
 }

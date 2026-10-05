@@ -288,6 +288,17 @@ impl Editor {
         self.0.can_redo()
     }
 
+    /// The assets of the images its history holds, which undo, redo, or rewinding the open
+    /// gesture may bring back.
+    #[wasm_bindgen(js_name = historyAssets)]
+    pub fn history_assets(&self) -> Vec<String> {
+        self.0
+            .history_assets()
+            .iter()
+            .map(AssetId::to_string)
+            .collect()
+    }
+
     /// The topmost element that draws at a point, or within `tolerance` of it.
     pub fn hit(&self, x: f64, y: f64, tolerance: f64) -> Option<String> {
         let hit = self.0.board().hit(Point { x, y }, tolerance);

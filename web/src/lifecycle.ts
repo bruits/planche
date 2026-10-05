@@ -2,7 +2,7 @@
 // place, and where each saves itself as it is edited, in its own folder or ZIP file, or the session.
 
 import * as core from "./core.js";
-import { files, open, untitled, type Opened, type Reading } from "./board.js";
+import { files, open, retain, untitled, type Opened, type Reading } from "./board.js";
 import type { Camera } from "./camera.js";
 import { message } from "./errors.js";
 import { milliseconds, timed } from "./metrics.js";
@@ -478,6 +478,9 @@ export function lifecycle(host: Host): Lifecycle {
         if (!(await store.save(snapshot, written, () => files(current)))) {
           throw new Error(`${target.name} is no longer empty`);
         }
+        // From the folder it leaves, which the session's is emptied of once it does.
+        const holds = new Set(await target.list(core.fileDepth()));
+        await retain(current, files(current), (path) => holds.has(path));
       };
       const [, writing] = await timed(() => (autosave ? autosave.during(write) : write()));
       timings.set("save as", milliseconds(writing));
@@ -568,9 +571,7 @@ function zipPlace(zip: ZipHome): Place {
     async store(next) {
       // As read again, should another program have changed it.
       await zip.adopt();
-      return zipStore(zip, (folder) => {
-        next.folder = folder;
-      });
+      return zipStore(zip, next);
     },
     again: async () => zipFolder(await zip.reread()),
     remember: () => zip.remember(),

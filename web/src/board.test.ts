@@ -278,19 +278,16 @@ describe("reader", () => {
   it("reads at once the images of a ZIP file saved in place, which a save meanwhile keeps", async () => {
     const zip = zipInPlace(new Uint8Array(readFileSync(join(SAMPLES, "demo.zip"))));
     const { opened } = (await open(async () => zipFolder(await zip.home.reread()), new Map()))!;
-    const saver = saving(
-      zipStore(zip.home, (folder) => (opened.folder = folder)),
-      {
-        snapshot: () => opened.editor.snapshot(),
-        source: () => filesOf(opened),
-        saved: () => {},
-        failed: (reason) => {
-          throw new Error(reason);
-        },
-        conflict: async () => false,
-        reload: async () => "refused",
+    const saver = saving(zipStore(zip.home, opened), {
+      snapshot: () => opened.editor.snapshot(),
+      source: () => filesOf(opened),
+      saved: () => {},
+      failed: (reason) => {
+        throw new Error(reason);
       },
-    );
+      conflict: async () => false,
+      reload: async () => "refused",
+    });
     const images = Object.entries(opened.board.elements).flatMap(([id, { kind }]) =>
       kind.type === "image" ? [id] : [],
     );
@@ -309,6 +306,33 @@ describe("reader", () => {
     expect(await saver.flush()).toBe(true);
     expect(await opened.folder.list(3)).not.toContain(`assets/${assets[0]}`);
     await saver.stop();
+  });
+});
+
+describe("a ZIP file saved in place", () => {
+  it("keeps readable an image that an undo brings back once a save left it out, then holds it again", async () => {
+    const zip = zipInPlace(new Uint8Array(readFileSync(join(SAMPLES, "demo.zip"))));
+    const { opened } = (await open(async () => zipFolder(await zip.home.reread()), new Map()))!;
+    const store = zipStore(zip.home, opened);
+    const source = () => filesOf(opened);
+    const save = async (touched: string[]) => {
+      const snapshot = opened.editor.snapshot();
+      try {
+        return await store.save(snapshot, touched, source);
+      } finally {
+        snapshot.free();
+      }
+    };
+    const images = Object.entries(opened.board.elements).flatMap(([id, { kind }]) =>
+      kind.type === "image" && kind.asset === ASSET ? [id] : [],
+    );
+    expect(await save(opened.editor.remove(images))).toBe(true);
+    expect(await opened.folder.list(3)).not.toContain(`assets/${ASSET}`);
+    expect(await save(opened.editor.undo())).toBe(true);
+    expect(await opened.folder.list(3)).toContain(`assets/${ASSET}`);
+    await expect(readAsset(filesOf(opened), ASSET, NATURAL)).resolves.toMatchObject({
+      asset: ASSET,
+    });
   });
 });
 

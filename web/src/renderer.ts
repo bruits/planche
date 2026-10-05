@@ -101,6 +101,9 @@ export interface Renderer {
   load(bitmaps: Map<string, ImageBitmap>): void;
   /** The asset as the canvas holds it, in place of any before. */
   setImage(asset: string, canvas: HTMLCanvasElement): void;
+  holds(asset: string): boolean;
+  /** Frees the asset's texture, which its images draw without from then on. */
+  release(asset: string): void;
   /** The frames the bytes of a loaded asset hold. Throws when they do not decode. */
   animate(asset: string, bytes: Bytes): Playing;
   /**
@@ -191,6 +194,15 @@ async function on(
     }
     items = undefined;
   };
+  // The next upload takes the texture's index, so no item may name it from then on.
+  const drop = (textures: Map<string, number>, key: string) => {
+    const texture = textures.get(key);
+    if (texture !== undefined) {
+      renderer.release(texture);
+      textures.delete(key);
+      items = undefined;
+    }
+  };
   return {
     backend: renderer.backend,
     canvas: output,
@@ -214,6 +226,8 @@ async function on(
     setImage(asset, canvas) {
       replace(images, asset, canvas);
     },
+    holds: (asset) => images.has(asset),
+    release: (asset) => drop(images, asset),
     animate(asset, bytes) {
       const animation = new Animation(bytes);
       return {
@@ -232,14 +246,7 @@ async function on(
     setText(id, canvas) {
       replace(texts, id, canvas);
     },
-    dropText(id) {
-      const texture = texts.get(id);
-      if (texture !== undefined) {
-        renderer.release(texture);
-        texts.delete(id);
-        items = undefined;
-      }
-    },
+    dropText: (id) => drop(texts, id),
     place(next) {
       placed = next;
       items = undefined;

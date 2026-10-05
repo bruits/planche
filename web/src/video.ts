@@ -220,7 +220,13 @@ export function videos(again: () => void, changed: () => void, failed: () => voi
       if (clips.size === 0) {
         return;
       }
-      const shown = shownAssets(board, camera, viewport, runs);
+      // Only with its texture, which an undo brings back a moment after the image.
+      const shown = shownAssets(
+        board,
+        camera,
+        viewport,
+        (asset) => runs(asset) && renderer.holds(asset),
+      );
       const largest = [...shown].toSorted(([, a], [, b]) => b - a).slice(0, MOST_PLAYING);
       const playing = new Set(largest.map(([asset]) => asset));
       const now = performance.now();

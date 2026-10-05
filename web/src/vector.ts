@@ -49,6 +49,8 @@ export interface Vectors {
   keep(asset: string, picture: Picture): void;
   /** Rasterises the assets that show at a zoom they were not rasterised for. */
   update(board: Board, renderer: Renderer, camera: Camera, viewport: Viewport): void;
+  /** Forgets `asset`, whose texture is freed. */
+  drop(asset: string): void;
   /**
    * `asset` on a canvas of its own, at `density` pixels per pixel of its natural size, fewer where
    * it would not fit a texture. Nothing is kept. `undefined` for an asset not rasterised.
@@ -87,12 +89,6 @@ export function vectors(again: () => void): Vectors {
           visible.add(kind.asset);
         }
       }
-      // One that no image shows any more drops as one out of view does, until an undo brings it back.
-      for (const [asset, done] of rasterised) {
-        if (!wanted.has(asset)) {
-          wanted.set(asset, done);
-        }
-      }
       for (const [asset, here] of wanted) {
         const { natural } = pictures.get(asset)!;
         const longest = Math.max(natural.width, natural.height);
@@ -115,6 +111,10 @@ export function vectors(again: () => void): Vectors {
         renderer.setImage(asset, canvas);
         rasterised.set(asset, density);
       }
+    },
+    drop(asset) {
+      pictures.delete(asset);
+      rasterised.delete(asset);
     },
     drawn(asset, density) {
       const drawing = pictures.get(asset);

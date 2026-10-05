@@ -84,12 +84,19 @@ struct Out {
     return out;
 }
 
+/// Linear light as the sRGB values the surface takes as they are.
+fn encoded(linear: vec3f) -> vec3f {
+    let light = max(linear, vec3f(0.0));
+    let curved = 1.055 * pow(light, vec3f(1.0 / 2.4)) - 0.055;
+    return select(curved, light * 12.92, light <= vec3f(0.0031308));
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
     let color = textureSample(image, image_sampler, in.crop.xy + clamp(in.parts, vec2f(0.0), vec2f(1.0)) * in.crop.zw);
     let luma = dot(color.rgb, vec3f(0.2126, 0.7152, 0.0722));
     let away = ellipse((in.parts - 0.5) * in.size, in.size * 0.5);
     let shown = select(1.0, clamp(0.5 - away, 0.0, 1.0), in.elliptical > 0.5);
-    return vec4f(mix(color.rgb, vec3f(luma), in.grey), color.a * shown * in.opacity);
+    return vec4f(encoded(mix(color.rgb, vec3f(luma), in.grey)), color.a * shown * in.opacity);
 }
 "#;
 
@@ -382,7 +389,9 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f };
 }
 "#;
 
-const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// Read in linear light, so that mipmaps and filtering keep an image's brightness. Texts read
+/// only the alpha, which stays linear.
+const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// Floats per item in [`Renderer::draw`]: its kind, which is 0 for an image, 1 for a stroke, and
 /// 2 for a text, its texture or -1, then its instance, whose last float is its opacity from 0 to
 /// 1, whatever its kind.
@@ -482,7 +491,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
     let mut config = surface
         .get_default_config(&adapter, width, height)
         .ok_or_else(|| JsError::new("the canvas cannot be drawn to"))?;
-    // Textures hold sRGB bytes as they are, which an sRGB surface would encode again.
+    // Every pipeline writes sRGB values, which an sRGB surface would encode again.
     if let Some(format) = capabilities.formats.iter().find(|format| !format.is_srgb()) {
         config.format = *format;
     }

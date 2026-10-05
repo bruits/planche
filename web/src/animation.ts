@@ -107,7 +107,14 @@ export function animations(again: () => void, changed: () => void): Animations {
       if (clips.size === 0) {
         return;
       }
-      const shown = shownAssets(board, camera, viewport, (asset) => clips.has(asset));
+      // Only with its texture, which a frame drawn without would take as the last one, and which
+      // an undo brings back a moment after the image.
+      const shown = shownAssets(
+        board,
+        camera,
+        viewport,
+        (asset) => clips.has(asset) && renderer.holds(asset),
+      );
       const now = performance.now();
       let next = Infinity;
       // The most overdue first, so that one a frame had no time left for goes first in the next.
