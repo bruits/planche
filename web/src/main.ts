@@ -108,6 +108,8 @@ const AGENT = "planche.agent";
 const ON_TOP = "planche.ontop";
 /** Where the browser remembers that videos play only while the pointer is on them. */
 const HOVER_PLAY = "planche.hoverplay";
+/** Where the browser remembers that the style card stays open. */
+const KEEP_STYLE = "planche.keepstyle";
 const ZOOM_STEP = 1.25;
 /** What the zoom's menu zooms to at once. */
 const ZOOMS = [0.25, 0.5, 1, 2, 4];
@@ -335,6 +337,7 @@ let hintsShown = recall(HINTS) !== "hidden";
 let agentsAllowed = false;
 let onTop = false;
 let hoverPlay = recall(HOVER_PLAY) === "on";
+let styleKept = recall(KEEP_STYLE) === "on";
 let arranging = false;
 let copying: { key: string; png: Promise<Blob> } | undefined;
 /** Copies as PNG asked for, so that one cancelled clears no later one's message. */
@@ -954,6 +957,15 @@ const commands = {
       refreshBar();
     },
   },
+  keepStyle: {
+    label: "Keep style open",
+    run: () => {
+      styleKept = !styleKept;
+      remember(KEEP_STYLE, styleKept ? "on" : undefined);
+      styleCard.keepOpen(styleKept);
+      refreshBar();
+    },
+  },
   measurements: {
     label: "Measurements",
     run: () => {
@@ -1051,6 +1063,7 @@ const SWITCHES = new Map<Command, () => boolean>([
   [commands.alwaysOnTop, () => onTop],
   [commands.compact, () => compact],
   [commands.hoverPlay, () => hoverPlay],
+  [commands.keepStyle, () => styleKept],
   [commands.agentAccess, () => agentsAllowed],
 ]);
 /** Whether each is the one in use among those that exclude each other. */
@@ -1084,7 +1097,7 @@ const WITHIN = new Map<Command, string>(
       ["Grid", [commands.plain, commands.grid, commands.dots, commands.snap]],
       ["Theme", [commands.light, commands.dark, commands.system, commands.highContrast]],
       ["View", [commands.hints, commands.measurements, commands.alwaysOnTop, commands.compact]],
-      ["Settings", [commands.hoverPlay, commands.agentAccess]],
+      ["Settings", [commands.hoverPlay, commands.keepStyle, commands.agentAccess]],
       ["Colour", colourCommands],
     ] satisfies [string, Command[]][]
   ).flatMap(([name, members]) => members.map((member): [Command, string] => [member, name])),
@@ -1231,6 +1244,7 @@ new ResizeObserver(() => {
   styleCard.frame();
   pictureCard.frame();
 }).observe(byId("toolbar"));
+styleCard.keepOpen(styleKept);
 const picker = sampler(
   {
     read: readBoard,
@@ -1563,6 +1577,7 @@ function savesToFiles(): boolean {
 function settings(): Entry {
   return submenu("Settings", [
     stated(commands.hoverPlay),
+    stated(commands.keepStyle),
     ...(platform.agent ? [stated(commands.agentAccess)] : []),
   ]);
 }

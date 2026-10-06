@@ -27,6 +27,14 @@ function titled(name: string): string | null | undefined {
   return document.querySelector(`.style-card button[aria-label="${name}"]`)?.getAttribute("title");
 }
 
+function panel(): HTMLElement {
+  return document.querySelector<HTMLElement>(".style-card")!;
+}
+
+function chip(): HTMLElement {
+  return document.querySelector<HTMLElement>(".style-chip")!;
+}
+
 function slider(): HTMLInputElement {
   return document.querySelector<HTMLInputElement>('.style-card input[type="range"]')!;
 }
@@ -445,6 +453,61 @@ describe("the card of an image and an arrow", () => {
     select([OTHER]);
     shown.paste();
     expect(kind(OTHER)).toMatchObject({ colour: "red" });
+  });
+});
+
+describe("the card as the selection goes", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("closes once nothing is selected", () => {
+    const { shown, select } = opened();
+    select([]);
+    select([IMAGE]);
+    expect(shown.isOpen()).toBe(false);
+    expect(chip().hidden).toBe(false);
+  });
+
+  it("shows again once something is selected when kept open, without taking the focus", () => {
+    const { shown, select } = opened();
+    shown.keepOpen(true);
+    select([]);
+    expect(panel().hidden).toBe(true);
+    select([IMAGE]);
+    expect(shown.isOpen()).toBe(true);
+    expect(chip().hidden).toBe(true);
+    expect(panel().contains(document.activeElement)).toBe(false);
+  });
+
+  it("stays closed when kept open but closed", () => {
+    const { shown, select } = opened();
+    shown.keepOpen(true);
+    shown.close();
+    select([]);
+    select([IMAGE]);
+    expect(shown.isOpen()).toBe(false);
+  });
+
+  it("opens as it is kept open, and stays so until nothing is selected once no longer", () => {
+    const { shown, select } = opened();
+    shown.close();
+    shown.keepOpen(true);
+    expect(shown.isOpen()).toBe(true);
+    shown.keepOpen(false);
+    expect(shown.isOpen()).toBe(true);
+    select([]);
+    select([IMAGE]);
+    expect(shown.isOpen()).toBe(false);
+  });
+
+  it("closes once no longer kept open while nothing is selected", () => {
+    const { shown, select } = opened();
+    shown.keepOpen(true);
+    select([]);
+    shown.keepOpen(false);
+    select([IMAGE]);
+    expect(shown.isOpen()).toBe(false);
   });
 });
 

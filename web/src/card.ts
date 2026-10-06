@@ -1,9 +1,9 @@
 // A chip under the selection, which opens a card of its style in its place, as the keys do. Once
-// open, it follows the selection from one element to the next, until Esc or a press on nothing
-// closes it. While a gesture scales, stretches, or turns the selection, what it reads shows there
-// instead. Its buttons set what applies to every element selected, and that becomes the style of
-// what their tools draw next, unless ⌥ is held. A lone image shows what it is, and its caption and
-// source to write in.
+// open, it follows the selection from one element to the next, until Esc closes it, or a press on
+// nothing unless it is kept open. While a gesture scales, stretches, or turns the selection, what
+// it reads shows there instead. Its buttons set what applies to every element selected, and that
+// becomes the style of what their tools draw next, unless ⌥ is held. A lone image shows what it
+// is, and its caption and source to write in.
 
 import {
   among,
@@ -147,6 +147,11 @@ export interface Card {
   /** Its first button takes the focus when `focus`. */
   open(focus: boolean): void;
   close(): void;
+  /**
+   * Opens it when `on`, and then nothing selected leaves it open, until it is closed or no longer
+   * kept open.
+   */
+  keepOpen(on: boolean): void;
   /** What applies to every element selected. */
   common(): Setting[];
   /** Theirs, `undefined` when they differ. */
@@ -220,6 +225,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   );
 
   let open = false;
+  let kept = false;
   /** What the card shows, so that it only builds again once that changed, and at which zoom, as sizes go by it. */
   let built = "";
   let filledAt: number | undefined;
@@ -814,6 +820,12 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       beneath(shown, corners, host.floor());
     }
   };
+  const refresh = () => {
+    if (!kept && !host.busy() && targets().length === 0) {
+      open = false;
+    }
+    show();
+  };
 
   return {
     frame() {
@@ -825,12 +837,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
         place(shown);
       }
     },
-    refresh() {
-      if (!host.busy() && targets().length === 0) {
-        open = false;
-      }
-      show();
-    },
+    refresh,
     isOpen: () => open && !panel.hidden,
     open(focus) {
       open = true;
@@ -843,6 +850,11 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       if (had) {
         chip.focus();
       }
+    },
+    keepOpen(on) {
+      kept = on;
+      open ||= on;
+      refresh();
     },
     common,
     value,
