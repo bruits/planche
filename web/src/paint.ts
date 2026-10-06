@@ -43,10 +43,11 @@ export function lightPaints(): Paints {
   return paints(probe);
 }
 
-/** As CSS writes it, following the theme where the palette's colours do. */
-export function css(paint: Paint, host: HTMLElement): string {
-  if (typeof paint !== "string") {
-    const [red, green, blue] = paints(host)(paint).map((channel) => Math.round(channel * 255));
+/** As CSS writes it, following the theme where the palette's colours do, in greys when `grey`. */
+export function css(paint: Paint, host: HTMLElement, grey = false): string {
+  if (grey || typeof paint !== "string") {
+    const colours = grey ? greyed(paints(host)) : paints(host);
+    const [red, green, blue] = colours(paint).map((channel) => Math.round(channel * 255));
     return `rgb(${red} ${green} ${blue})`;
   }
   return paint.startsWith("#") && !forced()
@@ -73,12 +74,29 @@ export function linear(encoded: number): number {
   return encoded <= 0.04045 ? encoded / 12.92 : ((encoded + 0.055) / 1.055) ** 2.4;
 }
 
+/** The sRGB value of linear light, both from 0 to 1. */
+export function encode(light: number): number {
+  return light <= 0.0031308 ? light * 12.92 : 1.055 * light ** (1 / 2.4) - 0.055;
+}
+
+/** Of linear red, green, and blue, which greyscale keeps. */
+export function luminance(red: number, green: number, blue: number): number {
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+/** As `paints`, each as the grey an image in greyscale turns it. */
+export function greyed(colours: Paints): Paints {
+  return (paint) => {
+    const [red, green, blue] = colours(paint).map(linear);
+    return Array<number>(3).fill(encode(luminance(red!, green!, blue!)));
+  };
+}
+
 /** The sticky notes' ink, or white where that would not show. */
 function readable(on: number[], ink: number[]): number[] {
-  const light = on.map(linear);
-  const luminance = 0.2126 * light[0]! + 0.7152 * light[1]! + 0.0722 * light[2]!;
+  const [red, green, blue] = on.map(linear);
   // Where black and white contrast alike with it.
-  return luminance > 0.18 ? ink : [1, 1, 1];
+  return luminance(red!, green!, blue!) > 0.18 ? ink : [1, 1, 1];
 }
 
 let read: ((colour: string) => number[]) | undefined;

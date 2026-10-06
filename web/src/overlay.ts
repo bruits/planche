@@ -87,9 +87,15 @@ export function dotted(box: Point[], zoom: number): boolean {
 
 /**
  * As a CSS `cursor`, arrows along which `grab` drags `box`, or curled around the corner it turns
- * from, turned with the box by steps of 15°.
+ * from, turned with the box by steps of 15°, as it shows when `mirrored`.
  */
-export function cursor(grab: Grab, box: Point[]): string {
+export function cursor(grab: Grab, box: Point[], mirrored = false): string {
+  if (mirrored) {
+    // Its corners still clockwise from the top-left, as they show.
+    const shown = [box[1]!, box[0]!, box[3]!, box[2]!].map(({ x, y }) => ({ x: -x, y }));
+    const at = grab.kind === "side" ? (4 - grab.at) % 4 : grab.at ^ 1;
+    return cursor({ kind: grab.kind, at }, shown);
+  }
   // Across its top, which its corners and sides keep their angles to, whatever its proportions.
   const across = direction(box[0]!, box[1]!);
   if (grab.kind === "turn") {

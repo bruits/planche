@@ -217,6 +217,12 @@ body {
   pointer-events: none;
 }
 
+/* The pins, placed as the board shows, keep their text readable. */
+#viewport.mirrored > canvas,
+#viewport.mirrored > svg {
+  transform: scaleX(-1);
+}
+
 /* Over the board and its selection, where only the pins take the pointer. */
 #viewport > .pins {
   z-index: 2;
@@ -1082,6 +1088,11 @@ body {
 .loupe canvas {
   display: block;
   image-rendering: pixelated;
+}
+
+/* As the board shows, which the pixels it reads are not. */
+:root:has(#viewport.mirrored) .loupe canvas {
+  transform: scaleX(-1);
 }
 
 .loupe .lens::after {

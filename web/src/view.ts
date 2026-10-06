@@ -17,7 +17,8 @@ export interface View {
   step(): void;
   /**
    * Draws at once, without waiting for a frame, which a hidden window never gets. The canvas holds
-   * the drawing until this task ends. `undefined` when nothing is shown.
+   * the drawing until this task ends, in the board's own colours, and never mirrored. `undefined`
+   * when nothing is shown.
    */
   drawNow(): HTMLCanvasElement | undefined;
   /** Where on the board a point of the page is, `undefined` when nothing is shown. */
@@ -36,6 +37,15 @@ export interface View {
   zoomBy(factor: number): void;
   /** Whether the main button pans, as the hand tool makes it. */
   hand(on: boolean): void;
+  /** Whether it shows the board in greys, which only the window does. */
+  grey(on: boolean): void;
+  greyed(): boolean;
+  /**
+   * Whether it shows the board mirrored left to right, about its centre, which only the window
+   * does. The pointer acts on what shows under it.
+   */
+  mirror(on: boolean): void;
+  mirrored(): boolean;
   pans(event: MouseEvent): boolean;
   panning(): boolean;
 }
@@ -68,21 +78,23 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
   let drawing = false;
   let panning: number | undefined;
   let hand = false;
+  let greyed = false;
+  let mirrored = false;
   /** Safari's pinch, as the scale it has reached, `undefined` when none is under way. */
   let pinching: number | undefined;
   const size = () => ({ width: host.clientWidth, height: host.clientHeight });
-  const paint = () => {
+  const paint = (grey: boolean) => {
     if (!shown) {
       return undefined;
     }
     frame(shown.camera, size());
-    shown.renderer.draw(shown.camera);
+    shown.renderer.draw(shown.camera, grey);
     painted();
     return shown.renderer.canvas;
   };
   const draw = () => {
     try {
-      paint();
+      paint(greyed);
     } catch (error) {
       failed(error);
     }
@@ -109,10 +121,20 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
     drawing = true;
     step();
   };
+  /** Where on the page the board shows what `clientX` is over. */
+  const across = (clientX: number) => {
+    if (!mirrored) {
+      return clientX;
+    }
+    const box = host.getBoundingClientRect();
+    return box.left + box.right - clientX;
+  };
+  /** Which way a move across the page goes across the board. */
+  const sideways = () => (mirrored ? -1 : 1);
   const zoomAt = (factor: number, clientX: number, clientY: number) => {
     if (shown) {
       const box = host.getBoundingClientRect();
-      shown.camera = zoomAbout(shown.camera, factor, clientX - box.left, clientY - box.top);
+      shown.camera = zoomAbout(shown.camera, factor, across(clientX) - box.left, clientY - box.top);
       redraw();
     }
   };
@@ -137,7 +159,7 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
         [dx, dy] = [dy, 0];
       }
       const { x, y, zoom } = shown.camera;
-      shown.camera = { x: x + dx / zoom, y: y + dy / zoom, zoom };
+      shown.camera = { x: x + (sideways() * dx) / zoom, y: y + dy / zoom, zoom };
       redraw();
     },
     { passive: false },
@@ -175,7 +197,8 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
   host.addEventListener("pointermove", (event) => {
     if (shown && event.pointerId === panning) {
       const { x, y, zoom } = shown.camera;
-      shown.camera = { x: x - event.movementX / zoom, y: y - event.movementY / zoom, zoom };
+      const dx = sideways() * event.movementX;
+      shown.camera = { x: x - dx / zoom, y: y - event.movementY / zoom, zoom };
       redraw();
     }
   });
@@ -228,14 +251,20 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
     },
     redraw,
     step,
-    drawNow: paint,
+    drawNow() {
+      const canvas = paint(false);
+      if (greyed) {
+        redraw();
+      }
+      return canvas;
+    },
     at({ clientX, clientY }) {
       if (!shown) {
         return undefined;
       }
       const { x, y, zoom } = shown.camera;
       const box = host.getBoundingClientRect();
-      return { x: x + (clientX - box.left) / zoom, y: y + (clientY - box.top) / zoom };
+      return { x: x + (across(clientX) - box.left) / zoom, y: y + (clientY - box.top) / zoom };
     },
     client(point) {
       if (!shown) {
@@ -243,7 +272,10 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
       }
       const { x, y, zoom } = shown.camera;
       const box = host.getBoundingClientRect();
-      return { clientX: box.left + (point.x - x) * zoom, clientY: box.top + (point.y - y) * zoom };
+      return {
+        clientX: across(box.left + (point.x - x) * zoom),
+        clientY: box.top + (point.y - y) * zoom,
+      };
     },
     centre() {
       if (!shown) {
@@ -268,6 +300,18 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
       hand = on;
       host.classList.toggle("hand", on);
     },
+    grey(on) {
+      greyed = on;
+      redraw();
+    },
+    greyed: () => greyed,
+    mirror(on) {
+      mirrored = on;
+      host.classList.toggle("mirrored", on);
+      // As what lies over the board follows it on each frame.
+      redraw();
+    },
+    mirrored: () => mirrored,
     pans,
     panning: () => panning !== undefined,
   };

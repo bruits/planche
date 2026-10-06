@@ -70,3 +70,33 @@ describe("the colours the renderer takes", () => {
     expect([...floats.subarray(STRIDE + 9, STRIDE + 12)]).toEqual([0, 0, 0]);
   });
 });
+
+describe("the board in greys the renderer takes", () => {
+  const image: Placed = {
+    kind: "image",
+    asset: "a",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    texture: { x: 0, y: 0, width: 1, height: 1 },
+    rotation: 0,
+    greyscale: false,
+    elliptical: false,
+    opacity: 1,
+  };
+  const both = (grey: boolean) =>
+    packed([fill(false), image], new Map([["a", 0]]), new Map(), () => [1, 0, 0], undefined, grey);
+
+  it("draws each colour as its grey, and each image in greyscale", () => {
+    const floats = both(true);
+    const [red, green, blue] = floats.subarray(9, 12);
+    expect(red).toBeCloseTo(127 / 255, 2);
+    expect([green, blue]).toEqual([red, red]);
+    // Its flag after its kind, texture, frame, rotation, and the part of its texture it shows.
+    expect(floats[STRIDE + 11]).toBe(1);
+  });
+
+  it("keeps their own colours otherwise", () => {
+    const floats = both(false);
+    expect([...floats.subarray(9, 12)]).toEqual([1, 0, 0]);
+    expect(floats[STRIDE + 11]).toBe(0);
+  });
+});

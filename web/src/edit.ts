@@ -631,7 +631,7 @@ export function edits(
     const held = holding();
     const grab = corners && (held ?? over);
     overlay.grab(grab, held !== undefined);
-    const shown = grab && cursor(grab, corners);
+    const shown = grab && cursor(grab, corners, view.mirrored());
     view.host.classList.toggle("over-handle", shown !== undefined);
     if (shown) {
       view.host.style.setProperty("--handle-cursor", shown);
@@ -1442,9 +1442,11 @@ export function edits(
         field.bubble(at);
       }
     } else if (holdsText(kind) && zoom !== undefined) {
-      const at = view.client({ x: kind.frame.x, y: kind.frame.y });
+      // From its left as it shows.
+      const left = view.mirrored() ? kind.frame.x + kind.frame.width : kind.frame.x;
+      const at = view.client({ x: left, y: kind.frame.y });
       if (at) {
-        field.follow(kind, at, zoom);
+        field.follow(kind, at, zoom, { mirrored: view.mirrored(), grey: view.greyed() });
       }
     }
   };
@@ -1735,7 +1737,8 @@ export function edits(
     nudging.add(event.key);
     try {
       adjust((editor, touched) => {
-        const by = { x: towards.x * step, y: towards.y * step };
+        // Along the arrow as the board shows.
+        const by = { x: (view.mirrored() ? -towards.x : towards.x) * step, y: towards.y * step };
         touched.push(...core.transform(editor, ids, { place: { by }, settle: grid }));
       });
     } catch (error) {

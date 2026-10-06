@@ -97,7 +97,13 @@ function page(
     const kind = core.element(opened.editor, STICKY)?.kind;
     return kind?.type === "sticky" ? { x: kind.frame.x, y: kind.frame.y } : undefined;
   };
-  return { opened, editing, hooks, host, pointer, at };
+  return { opened, editing, hooks, host, viewport, pointer, at };
+}
+
+/** As the page shows a board mirrored across a viewport 400 CSS pixels wide. */
+function mirrored(host: HTMLElement, viewport: ReturnType<typeof view>) {
+  host.getBoundingClientRect = () => new DOMRect(0, 0, 400, 300);
+  viewport.mirror(true);
 }
 
 /** Pressed on the page, `type` "keydown" or "keyup", and whether something took it. */
@@ -140,6 +146,7 @@ function nextFrame(): Promise<number> {
 
 describe("edits", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     document.body.replaceChildren();
   });
 
@@ -168,6 +175,30 @@ describe("edits", () => {
     expect(at()).toEqual({ x: 30, y: 0 });
     editing.undo();
     expect(at()).toEqual({ x: 0, y: 0 });
+  });
+
+  it("moves the selection as the pointer goes over a mirrored board", () => {
+    const { host, viewport, pointer, at } = page();
+    mirrored(host, viewport);
+    pointer("pointerdown", 350, 50);
+    pointer("pointermove", 330, 60);
+    pointer("pointerup", 330, 60);
+    expect(at()).toEqual({ x: 20, y: 10 });
+  });
+
+  it("writes in a mirrored board's note where it shows, mirrored as it draws", () => {
+    // As happy-dom measures no text.
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      font: "",
+      measureText: () => ({ width: 0, fontBoundingBoxAscent: 0, fontBoundingBoxDescent: 0 }),
+    } as unknown as CanvasRenderingContext2D);
+    const { editing, host, viewport } = page();
+    mirrored(host, viewport);
+    editing.write(STICKY);
+    const field = document.querySelector<HTMLTextAreaElement>("textarea.writer")!;
+    // From 0 to 100 on the board, so from 300 to 400 on the page.
+    expect(field.style.left).toBe("300px");
+    expect(field.style.transform).toBe("scaleX(-1) rotate(0deg)");
   });
 
   it("keeps a move made before the frame when the pointer lets go", () => {
@@ -507,6 +538,15 @@ describe("nudging", () => {
     key("keydown", { key: "ArrowUp", shiftKey: true });
     key("keyup", { key: "ArrowUp" });
     expect(at()).toEqual({ x: 0.5, y: -5 });
+  });
+
+  it("moves the selection along the arrow as a mirrored board shows", () => {
+    const { editing, host, viewport, at } = page();
+    mirrored(host, viewport);
+    editing.select([STICKY]);
+    key("keydown", { key: "ArrowRight" });
+    key("keyup", { key: "ArrowRight" });
+    expect(at()).toEqual({ x: -1, y: 0 });
   });
 
   it("moves by the grid's step while snapping to the grid shown", () => {

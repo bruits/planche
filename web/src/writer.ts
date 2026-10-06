@@ -10,8 +10,16 @@ import { FONT, LINE_HEIGHT, face, layout, paint, type Holder } from "./text.js";
 export interface Writer {
   /** Calls `input` with each change, and `done` once it closes. */
   open(content: string, input: (content: string) => void, done: () => void): void;
-  /** Over `kind`, whose frame's top-left is at `at` on the page, `zoom` CSS pixels per board unit. */
-  follow(kind: Holder, at: { clientX: number; clientY: number }, zoom: number): void;
+  /**
+   * Over `kind`, whose frame's top-left as it shows is at `at` on the page, `zoom` CSS pixels per
+   * board unit, mirrored left to right and in greys as the board shows.
+   */
+  follow(
+    kind: Holder,
+    at: { clientX: number; clientY: number },
+    zoom: number,
+    shown?: { mirrored: boolean; grey: boolean },
+  ): void;
   /** As the bubble of a comment pinned at `at` on the page, as tall as what it holds. */
   bubble(at: { clientX: number; clientY: number }): void;
   close(): void;
@@ -69,7 +77,12 @@ export function writer(board: HTMLElement): Writer {
       field.focus();
       field.setSelectionRange(content.length, content.length);
     },
-    follow(kind, { clientX, clientY }, zoom) {
+    follow(
+      kind,
+      { clientX, clientY },
+      zoom,
+      { mirrored, grey } = { mirrored: false, grey: false },
+    ) {
       const { frame, rotation, text } = kind;
       const size = text.font_size * zoom;
       const { area, align, top } = layout(kind);
@@ -91,9 +104,9 @@ export function writer(board: HTMLElement): Writer {
         "text-decoration": text.strike ? "line-through" : "none",
         "text-align": { left: "left", centre: "center", right: "right" }[align],
         // Faded as the renderer fades it, but for the caret, which would be hard to find.
-        color: `color-mix(in srgb, ${css(paint(kind), board)} ${opacityOf(kind) * 100}%, transparent)`,
-        "caret-color": css(paint(kind), board),
-        transform: `rotate(${rotation}deg)`,
+        color: `color-mix(in srgb, ${css(paint(kind), board, grey)} ${opacityOf(kind) * 100}%, transparent)`,
+        "caret-color": css(paint(kind), board, grey),
+        transform: `${mirrored ? "scaleX(-1) " : ""}rotate(${rotation}deg)`,
       });
       field.classList.remove("bubble");
       field.setAttribute("aria-label", "Text");

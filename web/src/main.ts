@@ -113,6 +113,8 @@ const KEEP_STYLE = "planche.keepstyle";
 const ZOOM_STEP = 1.25;
 /** What the zoom's menu zooms to at once. */
 const ZOOMS = [0.25, 0.5, 1, 2, 4];
+/** Each side for the other, as a mirrored board shows them. */
+const MIRRORED_SIDES: Partial<Record<Alignment, Alignment>> = { left: "right", right: "left" };
 /** Left around images added, in CSS pixels, past the zones outside their corners that turn them. */
 const ADDED_MARGIN = 48;
 /** How far right and down a duplicate lies from what it copies, at least, in CSS pixels. */
@@ -139,7 +141,7 @@ const viewport = view(byId("viewport"), {
   frame(camera, size) {
     bar.zoomed();
     overlaid.frame(camera, size);
-    comments.frame(camera);
+    comments.frame(camera, viewport.mirrored() ? size : undefined);
     editing.follow();
     styleCard.frame();
     pictureCard.frame();
@@ -424,7 +426,8 @@ const turn = (label: string, degrees: number, key: string): Command => ({
     (opened && core.bounds(opened.editor, editing.selection())
       ? undefined
       : "Comments do not turn"),
-  run: () => editing.rotate(degrees),
+  // As the board shows.
+  run: () => editing.rotate(viewport.mirrored() ? -degrees : degrees),
 });
 const arrangement = (label: string, order: Ordering): Command => ({
   label,
@@ -435,7 +438,7 @@ const alignment = (label: string, to: Alignment, key: string): Command => ({
   label,
   keys: [{ key, alt: true }],
   unavailable: () => (editing.selection().length < 2 ? "Select two elements or more" : undefined),
-  run: () => editing.align(to),
+  run: () => editing.align(viewport.mirrored() ? (MIRRORED_SIDES[to] ?? to) : to),
 });
 const distribution = (label: string, axis: Axis, key: string): Command => ({
   label,
@@ -975,6 +978,18 @@ const commands = {
       showMetrics();
     },
   },
+  greyBoard: {
+    label: "Greyscale board",
+    keys: [{ key: "g", code: "KeyG", command: true, alt: true }],
+    run: () => viewport.grey(!viewport.greyed()),
+    once: true,
+  },
+  mirrorBoard: {
+    label: "Mirror board",
+    keys: [{ key: "f", code: "KeyF", command: true, alt: true }],
+    run: () => viewport.mirror(!viewport.mirrored()),
+    once: true,
+  },
   style: {
     label: () => (styleCard.isOpen() ? "Hide style" : "Show style"),
     keys: [{ key: "s", shift: true }],
@@ -1060,6 +1075,8 @@ const SWITCHES = new Map<Command, () => boolean>([
   [commands.highContrast, () => appearance.highContrast()],
   [commands.hints, () => hintsShown],
   [commands.measurements, () => !measurements.hidden],
+  [commands.greyBoard, () => viewport.greyed()],
+  [commands.mirrorBoard, () => viewport.mirrored()],
   [commands.alwaysOnTop, () => onTop],
   [commands.compact, () => compact],
   [commands.hoverPlay, () => hoverPlay],
@@ -1096,7 +1113,17 @@ const WITHIN = new Map<Command, string>(
       ],
       ["Grid", [commands.plain, commands.grid, commands.dots, commands.snap]],
       ["Theme", [commands.light, commands.dark, commands.system, commands.highContrast]],
-      ["View", [commands.hints, commands.measurements, commands.alwaysOnTop, commands.compact]],
+      [
+        "View",
+        [
+          commands.greyBoard,
+          commands.mirrorBoard,
+          commands.hints,
+          commands.measurements,
+          commands.alwaysOnTop,
+          commands.compact,
+        ],
+      ],
       ["Settings", [commands.hoverPlay, commands.keepStyle, commands.agentAccess]],
       ["Colour", colourCommands],
     ] satisfies [string, Command[]][]
@@ -1527,6 +1554,7 @@ function views(): Entry {
   return submenu(
     "View",
     sectioned([
+      [stated(commands.greyBoard), stated(commands.mirrorBoard)],
       [
         stated(commands.hints),
         stated(commands.measurements),
@@ -1971,7 +1999,7 @@ function relevant(entries: Entry[]): Entry[] {
 }
 
 /**
- * The pixels around the device pixel under `at` as the board shows them, from the textures the
+ * The pixels around the device pixel under `at` as the board draws them, from the textures the
  * window already holds.
  */
 async function readBoard(at: { clientX: number; clientY: number }): Promise<ImageData | undefined> {
@@ -1982,13 +2010,16 @@ async function readBoard(at: { clientX: number; clientY: number }): Promise<Imag
   const origin = viewport.host.getBoundingClientRect();
   const scale = camera.zoom * devicePixelRatio;
   const half = Math.floor(ACROSS / 2);
-  const [x, y] = [at.clientX - origin.left, at.clientY - origin.top].map(
-    (offset) => Math.floor(offset * devicePixelRatio) - half,
+  const [left, top] = [at.clientX - origin.left, at.clientY - origin.top].map((offset) =>
+    Math.floor(offset * devicePixelRatio),
   );
+  // The canvas's own, as it shows mirrored.
+  const across = viewport.mirrored() ? renderer.canvas.width - 1 - left! : left!;
+  const [x, y] = [across - half, top! - half];
   return renderer.render({
     area: {
-      x: camera.x + x! / scale,
-      y: camera.y + y! / scale,
+      x: camera.x + x / scale,
+      y: camera.y + y / scale,
       width: ACROSS / scale,
       height: ACROSS / scale,
     },

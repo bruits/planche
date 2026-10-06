@@ -10,7 +10,7 @@ const ZOOMED = 7;
 const OFFSET = 18;
 
 export interface SamplerHost {
-  /** The `ACROSS` pixels square around the device pixel under `at`, as the board shows them. */
+  /** The `ACROSS` pixels square around the device pixel under `at`, as the board draws them. */
   read(at: { clientX: number; clientY: number }): Promise<ImageData | undefined>;
   /** Once a colour is picked. */
   picked(colour: `#${string}`): void;

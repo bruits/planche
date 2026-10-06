@@ -3,7 +3,7 @@
 // renderer leaves them out. A press on a pin or its text reaches the board as a press on its
 // comment, and keys pressed on a focused pin write in it.
 
-import type { Camera } from "./camera.js";
+import type { Camera, Viewport } from "./camera.js";
 import type { Board, Point } from "./core.js";
 
 export interface Pins {
@@ -12,7 +12,8 @@ export interface Pins {
    * left to the field that writes it.
    */
   show(board: Board, selected: string[], writing?: string): void;
-  frame(camera: Camera): void;
+  /** Mirrored left to right across the viewport `mirrored` when given, as the board shows. */
+  frame(camera: Camera, mirrored?: Viewport): void;
   /** Until the next board shows. */
   clear(): void;
 }
@@ -72,11 +73,13 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
     { comment: HTMLElement; pin: HTMLElement; text: HTMLElement; at: Point }
   >();
   let camera: Camera | undefined;
+  let mirrored: Viewport | undefined;
   /** The comment whose pin keys pressed, while it is written in. */
   let returning: string | undefined;
   const place = ({ comment, at }: { comment: HTMLElement; at: Point }) => {
     if (camera) {
-      const [x, y] = [(at.x - camera.x) * camera.zoom, (at.y - camera.y) * camera.zoom];
+      const [left, y] = [(at.x - camera.x) * camera.zoom, (at.y - camera.y) * camera.zoom];
+      const x = mirrored ? mirrored.width - left : left;
       comment.style.setProperty("transform", `translate(${x}px, ${y}px)`);
     }
   };
@@ -188,8 +191,9 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
         stop(undefined);
       }
     },
-    frame(next) {
+    frame(next, across) {
       camera = next;
+      mirrored = across;
       layer.hidden = false;
       shown.forEach(place);
     },

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { paints } from "./paint.js";
+import { css, greyed, paints } from "./paint.js";
 
 /** The bytes of a colour as `#rrggbb` or `rgb(r, g, b)`, which is all these tests fill with. */
 function bytes(colour: string): number[] {
@@ -51,5 +51,38 @@ describe("paints", () => {
   it("keeps an own colour on a host out of forced colours", () => {
     const painted = paints(host("color: rgb(0, 0, 255); forced-color-adjust: none"));
     expect(painted("#ff0000")).toEqual([1, 0, 0]);
+  });
+});
+
+describe("css", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => context());
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.replaceChildren();
+  });
+
+  it("writes an own colour as it is, or as its grey", () => {
+    const shown = host("color: rgb(0, 0, 0)");
+    expect(css("#ff0000", shown)).toBe("#ff0000");
+    expect(css("#ff0000", shown, true)).toBe("rgb(127 127 127)");
+  });
+});
+
+describe("greyed paints", () => {
+  it("turn a colour to the grey of its luminance in linear light, as an image in greyscale does", () => {
+    const [red, green, blue] = greyed(() => [1, 0, 0])("ink");
+    expect(red).toBeCloseTo(127 / 255, 2);
+    expect([green, blue]).toEqual([red, red]);
+  });
+
+  it("leave a grey as it is", () => {
+    for (const channel of greyed(() => [0.5, 0.5, 0.5])("ink")) {
+      expect(channel).toBeCloseTo(0.5, 6);
+    }
   });
 });

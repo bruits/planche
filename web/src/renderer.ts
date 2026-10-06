@@ -3,7 +3,7 @@
 import type { Camera } from "./camera.js";
 import * as core from "./core.js";
 import type { Background, Bytes, Item, Rect, Size } from "./core.js";
-import { lightPaints, paints, reader, type Paint, type Paints } from "./paint.js";
+import { greyed, lightPaints, paints, reader, type Paint, type Paints } from "./paint.js";
 import start, { Animation, create as createWgpu, type Readback } from "./wasm/renderer.js";
 
 /** Where a text draws, from its texture, turned clockwise, in degrees, around its frame's centre. */
@@ -87,7 +87,8 @@ export interface Renderer {
   backdrop(background: Background): void;
   /** Reads the paints again, once the theme changed. */
   restyle(): void;
-  draw(camera: Camera): void;
+  /** In greys when `grey`, every image as greyscale turns it. */
+  draw(camera: Camera, grey?: boolean): void;
   /** The picture, opaque unless `transparent`. Without a frame to wait for, so it works in a hidden window. */
   render(shot: Shot): Promise<ImageData>;
   /** In CSS pixels. */
@@ -156,7 +157,11 @@ async function on(
   let background: Background = "plain";
   /** Packed at the next draw, as uploads and releases move the textures that items name. */
   let items: Float32Array | undefined;
-  const pack = () => (items = packed(placed, images, texts, painted, light));
+  let packedGrey = false;
+  const pack = (grey: boolean) => {
+    packedGrey = grey;
+    return (items = packed(placed, images, texts, painted, light, grey));
+  };
   const replace = (textures: Map<string, number>, key: string, canvas: HTMLCanvasElement) => {
     const before = textures.get(key);
     textures.set(key, renderer.uploadCanvas(canvas));
@@ -232,14 +237,15 @@ async function on(
       strength = gridStrength(host);
       items = undefined;
     },
-    draw(camera) {
+    draw(camera, grey = false) {
       const { x, y, zoom } = camera;
+      const ink = (grey ? greyed(painted) : painted)("ink");
       renderer.draw(
         x,
         y,
         zoom * devicePixelRatio,
-        items ?? pack(),
-        grid(background, camera, painted("ink"), strength, devicePixelRatio),
+        items !== undefined && packedGrey === grey ? items : pack(grey),
+        grid(background, camera, ink, strength, devicePixelRatio),
       );
     },
     async render({
@@ -327,14 +333,19 @@ async function on(
   };
 }
 
-/** Without the items whose texture is not uploaded, as drawing one would panic and kill the module. */
+/**
+ * Without the items whose texture is not uploaded, as drawing one would panic and kill the module.
+ * In greys when `grey`.
+ */
 export function packed(
   placed: Placed[],
   images: Map<string, number>,
   texts: Map<string, number>,
   painted: Paints,
   light: Paints = painted,
+  grey = false,
 ): Float32Array {
+  const [own, lit] = grey ? [greyed(painted), greyed(light)] : [painted, light];
   let strokes = 0;
   const shown = placed.flatMap((item) => {
     const texture =
@@ -346,11 +357,11 @@ export function packed(
     if (texture === undefined) {
       return [];
     }
-    const colours = item.light ? light : painted;
+    const colours = item.light ? lit : own;
     const rows =
       item.kind === "stroke"
         ? segments(item, strokes++, colours)
-        : [floats(item, texture, colours)];
+        : [floats(item, texture, colours, grey)];
     return rows.map((values) => ({ values, opacity: item.opacity }));
   });
   const items = new Float32Array(shown.length * STRIDE);
@@ -401,12 +412,13 @@ function floats(
   item: Exclude<Placed, { kind: "stroke" }>,
   texture: number,
   colours: Paints,
+  grey: boolean,
 ): number[] {
   switch (item.kind) {
     case "image": {
       const { frame, texture: shown } = item;
       const quad = [frame.x, frame.y, frame.width, frame.height, item.rotation];
-      const flags = [item.greyscale ? 1 : 0, item.elliptical ? 1 : 0];
+      const flags = [item.greyscale || grey ? 1 : 0, item.elliptical ? 1 : 0];
       return [KINDS.image, texture, ...quad, shown.x, shown.y, shown.width, shown.height, ...flags];
     }
     case "text": {

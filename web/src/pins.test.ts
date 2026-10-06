@@ -29,6 +29,16 @@ const shown = (id: string) =>
 describe("pins", () => {
   afterEach(() => document.body.replaceChildren());
 
+  it("lie where the board shows their comments, mirrored or not", () => {
+    const shownOn = layer();
+    const camera = { x: -10, y: 0, zoom: 2 };
+    shownOn.show(board({ a: comment("Here") }), []);
+    shownOn.frame(camera);
+    expect(shown("a").style.transform).toBe("translate(20px, 0px)");
+    shownOn.frame(camera, { width: 300, height: 200 });
+    expect(shown("a").style.transform).toBe("translate(280px, 0px)");
+  });
+
   it("shows a comment as a pin named after its first line, its text beside the pin describing it", () => {
     layer().show(board({ a: comment(`${"A".repeat(50)}\nAnd more`) }), []);
     const pin = shown("a").querySelector<HTMLButtonElement>(".pin")!;
