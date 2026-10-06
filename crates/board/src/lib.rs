@@ -404,6 +404,8 @@ pub enum ElementKind {
     /// Drawn freehand, through `points`, which lie within its frame from 0 to 1 across and down,
     /// so that moving, scaling, or turning it leaves them as they are. One point draws a dot.
     Stroke {
+        #[serde(default, skip_serializing_if = "is_default")]
+        tip: Tip,
         frame: Rect,
         #[serde(serialize_with = "without_negative_zero")]
         rotation: f64,
@@ -479,10 +481,10 @@ impl ElementKind {
     /// stroke is reached as a medium one would be.
     pub(crate) fn stroke_width(&self) -> f64 {
         match self {
-            Self::Shape { weight, .. }
-            | Self::Arrow { weight, .. }
-            | Self::Line { weight, .. }
-            | Self::Stroke { weight, .. } => weight.width(),
+            Self::Shape { weight, .. } | Self::Arrow { weight, .. } | Self::Line { weight, .. } => {
+                weight.width()
+            }
+            Self::Stroke { tip, weight, .. } => tip.width(*weight),
             _ => Weight::Medium.width(),
         }
     }
@@ -617,6 +619,7 @@ impl ElementKind {
             } => from.is_finite() && to.is_finite(),
             // Ink off its frame would pass what the frame bounds.
             Self::Stroke {
+                tip: _,
                 frame,
                 rotation,
                 points,
@@ -860,8 +863,9 @@ pub enum Paper {
     #[default]
     Yellow,
     Pink,
-    Blue,
+    Orange,
     Green,
+    Blue,
     Lilac,
 }
 
@@ -876,14 +880,44 @@ pub enum Weight {
 }
 
 impl Weight {
-    pub(crate) const WIDEST: f64 = Self::Thick.width();
-
     /// In board units, which scaling leaves alone.
     pub const fn width(self) -> f64 {
         match self {
             Self::Thin => 1.0,
             Self::Medium => 2.0,
             Self::Thick => 4.0,
+        }
+    }
+}
+
+/// What draws a stroke.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum Tip {
+    #[default]
+    Pen,
+    /// In bright colours of its own, the ink drawing yellow.
+    Highlighter,
+}
+
+impl Tip {
+    /// The widest any stroke draws, which reaching for one must cover.
+    pub(crate) const WIDEST: f64 = Self::Highlighter.width(Weight::Thick);
+
+    /// In board units, which scaling leaves alone.
+    pub const fn width(self, weight: Weight) -> f64 {
+        match self {
+            Self::Pen => weight.width(),
+            Self::Highlighter => weight.width() * 8.0,
+        }
+    }
+
+    /// How much of what it draws shows, from 0 to 1, before its element's opacity scales it.
+    pub const fn opacity(self) -> f64 {
+        match self {
+            Self::Pen => 1.0,
+            Self::Highlighter => 0.4,
         }
     }
 }
@@ -1365,6 +1399,7 @@ mod tests {
             unreachable!()
         };
         let drawn = |frame, rotation, points| ElementKind::Stroke {
+            tip: Tip::Pen,
             frame,
             rotation,
             points,
@@ -1446,6 +1481,7 @@ mod tests {
 
     pub(crate) fn stroke() -> ElementKind {
         ElementKind::Stroke {
+            tip: Tip::Pen,
             frame: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -1728,5 +1764,37 @@ mod tests {
                 assert_eq!(hasher.finish(), whole, "{length} bytes by {piece}");
             }
         }
+    }
+
+    #[test]
+    fn a_stroke_writes_its_tip_only_when_a_highlighter() {
+        let ElementKind::Stroke {
+            frame,
+            rotation,
+            points,
+            colour,
+            weight,
+            opacity,
+            ..
+        } = stroke()
+        else {
+            unreachable!()
+        };
+        assert!(serde_json::to_value(stroke()).unwrap().get("tip").is_none());
+        let highlighter = ElementKind::Stroke {
+            tip: Tip::Highlighter,
+            frame,
+            rotation,
+            points,
+            colour,
+            weight,
+            opacity,
+        };
+        let written = serde_json::to_value(&highlighter).unwrap();
+        assert_eq!(written["tip"], "highlighter");
+        assert_eq!(
+            serde_json::from_value::<ElementKind>(written).unwrap(),
+            highlighter
+        );
     }
 }

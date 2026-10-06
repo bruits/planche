@@ -3,7 +3,7 @@
 // the browser remembers it.
 
 import * as core from "./core.js";
-import type { Align, Colour, Dash, Fill, Heads, Kind, Paper, Weight } from "./core.js";
+import type { Align, Colour, Dash, Fill, Heads, Kind, Paint, Paper, Weight } from "./core.js";
 import type { Draw } from "./edit.js";
 import { recall, remember } from "./preferences.js";
 import { fitted, holdsText, isBlank } from "./text.js";
@@ -24,11 +24,20 @@ export const PALETTE: { colour: Colour; label: string }[] = [
   { colour: "violet", label: "Violet" },
 ];
 
+/** The palette's colour at `at` as a highlighter draws it, named after what it draws. */
+export function highlight(at: number): { paint: Paint; label: string } {
+  const paint = core.highlighted(PALETTE[at]!.colour);
+  const name = paint.replace(/^highlight-/, "");
+  return { paint, label: name.charAt(0).toUpperCase() + name.slice(1) };
+}
+
+/** Set by the same keys as the palette's colours, each in its colour's hue. */
 export const PAPERS: { paper: Paper; label: string }[] = [
   { paper: "yellow", label: "Yellow paper" },
   { paper: "pink", label: "Pink paper" },
-  { paper: "blue", label: "Blue paper" },
+  { paper: "orange", label: "Orange paper" },
   { paper: "green", label: "Green paper" },
+  { paper: "blue", label: "Blue paper" },
   { paper: "lilac", label: "Lilac paper" },
 ];
 
@@ -162,8 +171,9 @@ export function toolOf(kind: Kind): Draw | undefined {
     case "line":
     case "note":
     case "sticky":
-    case "stroke":
       return kind.type;
+    case "stroke":
+      return kind.tip ?? "pen";
     default:
       return undefined;
   }
@@ -226,7 +236,8 @@ export function styles(): Styles {
 /** What the browser remembers, but anything the core would refuse, as storage may hold anything. */
 function recalled(): Partial<Record<Draw, Style>> {
   const tools: Draw[] = [
-    "stroke",
+    "pen",
+    "highlighter",
     "arrow",
     "line",
     "rectangle",

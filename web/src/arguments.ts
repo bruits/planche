@@ -92,7 +92,7 @@ opacity?: number, } | { "type": "line", from: Point, to: Point, group?: string, 
 /**
  * In percent, whole by default.
  */
-opacity?: number, } | { "type": "stroke", points: Array<Point>, group?: string, colour?: Colour, weight?: Weight, 
+opacity?: number, } | { "type": "stroke", tip?: Tip, points: Array<Point>, group?: string, colour?: Colour, weight?: Weight, 
 /**
  * In percent, whole by default.
  */
@@ -136,7 +136,7 @@ caption?: string,
  */
 group?: string, };
 
-export type Paper = "yellow" | "pink" | "blue" | "green" | "lilac";
+export type Paper = "yellow" | "pink" | "orange" | "green" | "blue" | "lilac";
 
 export type Pixels = { x: number, y: number, width: number, height: number, };
 
@@ -157,6 +157,8 @@ ids: Array<string>,
 frame?: boolean, };
 
 export type ShapeKind = "rectangle" | "ellipse" | "cross";
+
+export type Tip = "pen" | "highlighter";
 
 export type TransformArguments = { ids: Array<string>, 
 /**
@@ -223,7 +225,7 @@ crop?: Pixels,
  */
 crop_shape?: CropShape, 
 /**
- * For a note, a shape, an arrow, a line, or a pen stroke, a colour of the palette, which each
+ * For a note, a shape, an arrow, a line, or a stroke, a colour of the palette, which each
  * theme draws its own way, or `#rrggbb`, which every theme draws alike.
  */
 colour?: Colour, 
@@ -232,7 +234,7 @@ colour?: Colour,
  */
 paper?: Paper, 
 /**
- * For a shape, an arrow, a line, or a pen stroke.
+ * For a shape, an arrow, a line, or a stroke.
  */
 weight?: Weight, 
 /**

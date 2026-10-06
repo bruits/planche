@@ -100,11 +100,21 @@ describe("write", () => {
     expect(read.elements[id]?.kind).not.toHaveProperty("points");
   });
 
+  it("adds a highlighter stroke as an agent asks for one", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const stroke = { type: "stroke", tip: "highlighter", points: [{ x: 10, y: 20 }] };
+    const { added } = (await write("add", { elements: [stroke] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    expect(opened.board.elements[added[0]!.id]?.kind).toMatchObject({ tip: "highlighter" });
+  });
+
   it("refuses a pen stroke with no point plainly, and changes nothing", async () => {
     const opened = untitled();
     const { writing } = page(opened);
     const adding = write("add", { elements: [{ type: "stroke", points: [] }] }, writing, later());
-    await expect(adding).rejects.toThrow("A pen stroke needs a point");
+    await expect(adding).rejects.toThrow("A stroke needs a point");
     expect(opened.board.elements).toEqual({});
   });
 

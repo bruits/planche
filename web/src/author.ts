@@ -411,12 +411,12 @@ function kindOf(editor: Editor, element: NewElement, zoom: number, stick: boolea
     }
     case "stroke":
       if (element.points.length === 0) {
-        throw new Error("A pen stroke needs a point");
+        throw new Error("A stroke needs a point");
       }
       return styled(
-        core.strokeKind(element.points, 0),
+        core.strokeKind(element.points, 0, element.tip),
         element,
-        (field) => new Error(`A new pen stroke takes no ${field}`),
+        (field) => new Error(`A new stroke takes no ${field}`),
       );
     case "comment":
       if (!element.text.trim()) {

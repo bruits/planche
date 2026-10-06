@@ -705,7 +705,7 @@ async fn calls_too_large_are_refused() {
     let refused = relayed("add", json!({ "elements": [stroke] }))
         .await
         .unwrap_err();
-    assert_eq!(refused, "A pen stroke holds 2000 points at most");
+    assert_eq!(refused, "A stroke holds 2000 points at most");
 }
 
 #[tokio::test]
@@ -725,6 +725,7 @@ async fn a_style_reaches_the_web_app_as_the_agent_gave_it() {
         { "type": "arrow", "from": { "x": 0.0, "y": 0.0 }, "to": { "x": 1.0, "y": 0.0 }, "dash": "dashed", "heads": "both" },
         { "type": "line", "from": { "x": 0.0, "y": 0.0 }, "to": { "x": 1.0, "y": 0.0 }, "weight": "thin" },
         { "type": "stroke", "points": [{ "x": 0.0, "y": 0.0 }, { "x": 4.0, "y": 2.0 }], "colour": "violet", "weight": "thick", "opacity": 40 },
+        { "type": "stroke", "tip": "highlighter", "points": [{ "x": 0.0, "y": 0.0 }] },
     ]);
     let args = relayed("add", json!({ "elements": elements }))
         .await

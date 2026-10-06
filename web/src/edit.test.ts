@@ -592,7 +592,7 @@ describe("the pen", () => {
   });
 
   it("draws each position the pointer passed, smoothed, as one edit that leaves it to draw again", async () => {
-    const { opened, editing, hooks, host, pointer } = page([], { drawing: () => "stroke" });
+    const { opened, editing, hooks, host, pointer } = page([], { drawing: () => "pen" });
     pointer("pointerdown", 200, 200);
     // Merged into one move, as engines may send them.
     const passed = [
@@ -623,7 +623,7 @@ describe("the pen", () => {
   });
 
   it("leaves a dot for a click", () => {
-    const { opened, pointer } = page([], { drawing: () => "stroke" });
+    const { opened, pointer } = page([], { drawing: () => "pen" });
     pointer("pointerdown", 200, 200);
     pointer("pointerup", 200, 200);
     expect(strokes(opened)).toMatchObject([
@@ -632,7 +632,7 @@ describe("the pen", () => {
   });
 
   it("draws straight from where it was pressed, by steps of 45°, while ⇧ is held", async () => {
-    const { opened, pointer } = page([], { drawing: () => "stroke" });
+    const { opened, pointer } = page([], { drawing: () => "pen" });
     pointer("pointerdown", 200, 200);
     pointer("pointermove", 260, 300, { shiftKey: true });
     await nextFrame();
@@ -643,7 +643,7 @@ describe("the pen", () => {
   });
 
   it("draws nothing once the press is lost", async () => {
-    const { opened, hooks, pointer } = page([], { drawing: () => "stroke" });
+    const { opened, hooks, pointer } = page([], { drawing: () => "pen" });
     pointer("pointerdown", 200, 200);
     pointer("pointermove", 300, 300);
     await nextFrame();
@@ -657,7 +657,7 @@ describe("the pen", () => {
     const group = "c".repeat(32);
     const { opened, editing, pointer } = page(
       [[other, { ...sticky, frame: { x: 300, y: 40, width: 100, height: 100 } }]],
-      { drawing: () => "stroke" },
+      { drawing: () => "pen" },
     );
     editing.select([STICKY, other]);
     editing.group(group);
@@ -672,7 +672,7 @@ describe("the pen", () => {
   });
 
   it("lets go of the selection once pressed", () => {
-    const { editing, pointer } = page([], { drawing: () => "stroke" });
+    const { editing, pointer } = page([], { drawing: () => "pen" });
     editing.select([STICKY]);
     pointer("pointerdown", 200, 200);
     expect(editing.selection()).toEqual([]);
@@ -680,7 +680,7 @@ describe("the pen", () => {
   });
 
   it("turns straight, or back, as ⇧ is pressed or let go while the pointer stays still", async () => {
-    const { opened, hooks, pointer } = page([], { drawing: () => "stroke" });
+    const { opened, hooks, pointer } = page([], { drawing: () => "pen" });
     const shown = () => vi.mocked(hooks.inked).mock.lastCall?.[0]?.points.length;
     pointer("pointerdown", 200, 200);
     pointer("pointermove", 260, 300);
@@ -696,8 +696,18 @@ describe("the pen", () => {
     expect(stroke?.points).toHaveLength(4);
   });
 
+  it("draws as a highlighter wide and see-through, in its yellow, while pressed and once let go", () => {
+    const { opened, hooks, pointer } = page([], { drawing: () => "highlighter" });
+    pointer("pointerdown", 200, 200);
+    expect(hooks.inked).toHaveBeenLastCalledWith(
+      expect.objectContaining({ width: 16, paint: "highlight-yellow", opacity: 0.4 }),
+    );
+    pointer("pointerup", 200, 200);
+    expect(strokes(opened)).toMatchObject([{ tip: "highlighter" }]);
+  });
+
   it("forgets what it was drawing once its board goes", () => {
-    const { opened, editing, hooks, pointer } = page([], { drawing: () => "stroke" });
+    const { opened, editing, hooks, pointer } = page([], { drawing: () => "pen" });
     pointer("pointerdown", 200, 200);
     expect(hooks.inked).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "stroke" }));
     editing.reset();
@@ -720,7 +730,7 @@ describe("the end of a press", () => {
   });
 
   it("keeps what the pen drew when the capture goes just before the button is released", async () => {
-    const { opened, host, pointer } = page([], { drawing: () => "stroke" });
+    const { opened, host, pointer } = page([], { drawing: () => "pen" });
     pointer("pointerdown", 200, 200);
     pointer("pointermove", 300, 250);
     await nextFrame();
@@ -740,7 +750,7 @@ describe("the end of a press", () => {
   });
 
   it("gives up what it drew when the capture goes while the button is held", async () => {
-    const { opened, host, pointer } = page([], { drawing: () => "stroke" });
+    const { opened, host, pointer } = page([], { drawing: () => "pen" });
     pointer("pointerdown", 200, 200);
     pointer("pointermove", 300, 250);
     await nextFrame();

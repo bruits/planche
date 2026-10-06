@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use board::{
     Alignment, AssetId, Axis, Board, Colour, Copied, ElementId, ElementKind, GRID_STEP, GridLevel,
-    Order, Point, Rect, Restack, Side, Size, Style, Transform, Weight,
+    Order, Point, Rect, Restack, Side, Size, Style, Tip, Transform, Weight,
 };
 use format::{save, zip};
 use js_sys::{Map, Uint8Array};
@@ -552,18 +552,32 @@ pub fn file_depth() -> usize {
     format::DEPTH
 }
 
-/// A pen stroke as JSON, through `points`, each across then down in board units, framed by them,
-/// without those that stray less than `tolerance` from the line through the others.
+/// A stroke of `tip`, a pen's when `undefined`, as JSON, through `points`, each across then down
+/// in board units, framed by them, without those that stray less than `tolerance` from the line
+/// through the others.
 #[wasm_bindgen(js_name = strokeKind)]
-pub fn stroke_kind(points: &[f64], tolerance: f64) -> Result<String, JsError> {
+pub fn stroke_kind(points: &[f64], tolerance: f64, tip: Option<String>) -> Result<String, JsError> {
     let (pairs, odd) = points.as_chunks::<2>();
     if !odd.is_empty() {
         return Err(JsError::new("A stroke's points are pairs of numbers"));
     }
+    let tip: Tip = tip
+        .map(|tip| serde_json::from_value(tip.into()))
+        .transpose()?
+        .unwrap_or_default();
     let points: Vec<Point> = pairs.iter().map(|&[x, y]| Point { x, y }).collect();
     Ok(serde_json::to_string(&ElementKind::stroke(
-        &points, tolerance,
+        tip, &points, tolerance,
     ))?)
+}
+
+/// What `kind`, as JSON, draws on its own, as JSON, its text as no element's.
+#[wasm_bindgen(js_name = drawnKind)]
+pub fn drawn_kind(kind: &str) -> Result<String, JsError> {
+    let kind: ElementKind = serde_json::from_str(kind)?;
+    Ok(serde_json::to_string(
+        &kind.drawn(ElementId::from_random(0)),
+    )?)
 }
 
 /// How wide an arrow, a line, a shape, or a pen stroke of `weight` draws, in board units, as the

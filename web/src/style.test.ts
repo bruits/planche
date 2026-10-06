@@ -22,6 +22,8 @@ const bold: Kind = {
   text: { content: "Hi", font_size: 20, bold: true },
 };
 const sticky: Kind = { type: "sticky", frame, rotation: 0, text: { content: "", font_size: 20 } };
+const pen: Kind = { type: "stroke", frame, rotation: 0, points: [0, 1, 1, 0] };
+const highlighter: Kind = { ...pen, tip: "highlighter" };
 /** Text fits what holds it as a font of fixed widths would. */
 const measure = (text: string) => ({
   width: text.length * 50,
@@ -141,6 +143,14 @@ describe("a style", () => {
     const line: Kind = { ...arrow, type: "line" };
     expect(dressed.dressed(line, 1)).toEqual(line);
     expect(dressed.dressed(shape("cross"), 1)).toEqual(shape("cross"));
+  });
+
+  it("keeps the highlighter's style apart from the pen's, once the browser is opened again", () => {
+    styles().learn([highlighter], { colour: "red" });
+    styles().learn([pen], { colour: "blue" });
+    const reopened = styles();
+    expect(reopened.dressed(highlighter, 1)).toEqual({ ...highlighter, colour: "red" });
+    expect(reopened.dressed(pen, 1)).toEqual({ ...pen, colour: "blue" });
   });
 
   it("dresses a blank shape in the text style its tool learnt, for what is written in it later", () => {

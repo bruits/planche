@@ -8,7 +8,7 @@ use serde::{Serialize, Serializer};
 use crate::geometry::stroke_points;
 use crate::{
     AssetId, Board, Colour, CropShape, Dash, ElementId, ElementKind, Fill, Heads, ImageEdits,
-    Paper, Point, Rect, Shape, Size, Text, Weight,
+    Paper, Point, Rect, Shape, Size, Text, Tip, Weight,
 };
 
 /// The longest an arrow's head is, in board units, then in widths of its stroke, and the most of
@@ -85,13 +85,20 @@ pub enum Item {
     },
 }
 
-/// A colour, or a sticky note's paper, which stays whatever the theme.
+/// A colour, or a sticky note's paper, which stays whatever the theme, or a highlighter's bright
+/// version of a colour of the palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts", ts(type = "Colour | `paper-${Paper}`"))]
+#[cfg_attr(
+    feature = "ts",
+    ts(
+        type = r#"Colour | `paper-${Paper}` | `highlight-${"yellow" | Exclude<Colour, "ink" | `#${string}`>}`"#
+    )
+)]
 pub enum Paint {
     Colour(Colour),
     Paper(Paper),
+    Highlight(Colour),
 }
 
 impl Serialize for Paint {
@@ -102,12 +109,16 @@ impl Serialize for Paint {
                 let name = match paper {
                     Paper::Yellow => "yellow",
                     Paper::Pink => "pink",
-                    Paper::Blue => "blue",
+                    Paper::Orange => "orange",
                     Paper::Green => "green",
+                    Paper::Blue => "blue",
                     Paper::Lilac => "lilac",
                 };
                 serializer.collect_str(&format_args!("paper-{name}"))
             }
+            Self::Highlight(Colour::Ink) => serializer.collect_str("highlight-yellow"),
+            Self::Highlight(colour @ Colour::Rgb(_)) => serializer.collect_str(colour),
+            Self::Highlight(colour) => serializer.collect_str(&format_args!("highlight-{colour}")),
         }
     }
 }
@@ -122,6 +133,15 @@ impl Board {
         if let Some(element) = self.elements.get(&id) {
             drawn(id, &element.kind, crossed_out, &mut items);
         }
+        items
+    }
+}
+
+impl ElementKind {
+    /// What it draws, as [`Board::drawn`] says, as element `id`.
+    pub fn drawn(&self, id: ElementId) -> Vec<Item> {
+        let mut items = Vec::new();
+        drawn(id, self, &BTreeSet::new(), &mut items);
         items
     }
 }
@@ -257,6 +277,7 @@ fn drawn(
             ..
         } => items.push(line(*from, *to, *colour, *weight, *dash, opacity)),
         ElementKind::Stroke {
+            tip,
             frame,
             rotation,
             points,
@@ -265,9 +286,12 @@ fn drawn(
             ..
         } => items.push(Item::Stroke {
             points: stroke_points(frame, *rotation, points),
-            width: weight.width(),
-            paint: Paint::Colour(*colour),
-            opacity,
+            width: tip.width(*weight),
+            paint: match tip {
+                Tip::Pen => Paint::Colour(*colour),
+                Tip::Highlighter => Paint::Highlight(*colour),
+            },
+            opacity: opacity * tip.opacity(),
         }),
         ElementKind::Comment { .. } | ElementKind::Group => {}
     }
@@ -577,8 +601,9 @@ mod tests {
         for paper in [
             Paper::Yellow,
             Paper::Pink,
-            Paper::Blue,
+            Paper::Orange,
             Paper::Green,
+            Paper::Blue,
             Paper::Lilac,
         ] {
             let name = serde_json::to_value(paper).unwrap();
@@ -603,6 +628,7 @@ mod tests {
             unreachable!()
         };
         let turned = ElementKind::Stroke {
+            tip: Tip::Pen,
             frame: FRAME,
             rotation: 180.0,
             points,
@@ -634,5 +660,41 @@ mod tests {
             (*width, *paint, *opacity),
             (2.0, Paint::Colour(Colour::Ink), 0.4)
         );
+    }
+
+    #[test]
+    fn a_highlighter_draws_wide_and_see_through_in_its_bright_version_of_the_colour() {
+        let ElementKind::Stroke {
+            frame,
+            rotation,
+            points,
+            ..
+        } = stroke()
+        else {
+            unreachable!()
+        };
+        let highlighter = |colour| ElementKind::Stroke {
+            tip: Tip::Highlighter,
+            frame,
+            rotation,
+            points: points.clone(),
+            colour,
+            weight: Weight::Medium,
+            opacity: Opacity::new(50).unwrap(),
+        };
+        let look = |colour| match &drawn(highlighter(colour))[..] {
+            [
+                Item::Stroke {
+                    width,
+                    paint,
+                    opacity,
+                    ..
+                },
+            ] => (*width, serde_json::to_value(paint).unwrap(), *opacity),
+            drawn => panic!("{drawn:?}"),
+        };
+        assert_eq!(look(Colour::Ink), (16.0, "highlight-yellow".into(), 0.2));
+        assert_eq!(look(Colour::Red).1, "highlight-red");
+        assert_eq!(look(Colour::Rgb([1, 2, 254])).1, "#0102fe");
     }
 }

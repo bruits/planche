@@ -14,6 +14,7 @@ import type {
   Rect,
   Restack,
   Size,
+  Tip,
 } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
@@ -60,7 +61,7 @@ import {
   type Command,
   type Shortcut,
 } from "./commands.js";
-import { CROP_KEYS, edits, type Draw, type Pen } from "./edit.js";
+import { CROP_KEYS, edits, isTip, type Draw, type Pen } from "./edit.js";
 import { message } from "./errors.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
@@ -80,7 +81,7 @@ import { create, type Placed, type Renderer } from "./renderer.js";
 import { ACROSS, sampler } from "./sampler.js";
 import { showing } from "./showing.js";
 import { png, still } from "./still.js";
-import { PALETTE, PAPERS, styles } from "./style.js";
+import { PALETTE, PAPERS, highlight, styles } from "./style.js";
 import { loadFont, texts } from "./text.js";
 import { theme, type Scheme } from "./theme.js";
 import { toolbar, type Button } from "./toolbar.js";
@@ -440,7 +441,8 @@ const palette = (label: string, to: Scheme): Command => ({
 /** The palette's colour, or a sticky note's paper, at `at`. */
 const colourCommand = (at: number): Command => ({
   label: () =>
-    (styleCard.common().includes("paper") ? PAPERS[at]?.label : undefined) ?? PALETTE[at]!.label,
+    (styleCard.common().includes("paper") ? PAPERS[at]?.label : undefined) ??
+    (styleCard.highlighting() ? highlight(at) : PALETTE[at]!).label,
   keys: [{ key: String(at + 1), code: `Digit${at + 1}` }],
   unavailable() {
     const can = styleCard.common();
@@ -495,11 +497,17 @@ const commands = {
     unavailable: noneShown,
     run: () => useTool("eraser"),
   },
-  stroke: {
+  pen: {
     label: "Pen",
     keys: [{ key: "d" }],
     unavailable: noneShown,
-    run: () => useTool("stroke"),
+    run: () => useTool("pen"),
+  },
+  highlighter: {
+    label: "Highlighter",
+    keys: [{ key: "d", shift: true }],
+    unavailable: noneShown,
+    run: () => useTool("highlighter"),
   },
   arrow: {
     label: "Arrow",
@@ -1048,10 +1056,17 @@ const bar = toolbar(
     [
       { command: commands.select, icon: "pointer", pressed: () => tool === "select" },
       { command: commands.hand, icon: "hand", pressed: () => tool === "hand" },
-      drawing("stroke", "pencil"),
-      { command: commands.eraser, icon: "eraser", pressed: () => tool === "eraser" },
+      { command: commands.addImages, icon: "photo" },
     ],
     [
+      {
+        label: "Pens and eraser",
+        tools: [
+          drawing("pen", "pencil"),
+          drawing("highlighter", "highlighter"),
+          { command: commands.eraser, icon: "eraser", pressed: () => tool === "eraser" },
+        ],
+      },
       {
         label: "Shapes",
         tools: [
@@ -1070,7 +1085,6 @@ const bar = toolbar(
           drawing("comment", "message"),
         ],
       },
-      { command: commands.addImages, icon: "photo" },
     ],
     [
       {
@@ -1109,7 +1123,10 @@ const styleCard = card(
     current: () => opened,
     selection: () => editing.selection(),
     box: () => editing.box(),
-    tool: () => (penStyling() ? look.dressed(core.strokeKind([{ x: 0, y: 0 }], 0), 1) : undefined),
+    tool: () => {
+      const tip = penStyling();
+      return tip && look.dressed(core.strokeKind([{ x: 0, y: 0 }], 0, tip), 1);
+    },
     client: (point) => viewport.client(point),
     zoom: () => viewport.zoom(),
     busy,
@@ -1329,7 +1346,7 @@ function drawTool(): Draw | undefined {
 function useTool(next: typeof tool): void {
   tool = next;
   // So that the card shows the pen's style.
-  if (tool === "stroke") {
+  if (isTip(tool)) {
     editing.select([]);
   }
   viewport.hand(tool === "hand" || spaceHeld);
@@ -1339,8 +1356,9 @@ function useTool(next: typeof tool): void {
   styleCard.refresh();
 }
 
-function penStyling(): boolean {
-  return tool === "stroke" && editing.selection().length === 0;
+/** The tip whose style the card sets, with nothing selected. */
+function penStyling(): Tip | undefined {
+  return isTip(tool) && editing.selection().length === 0 ? tool : undefined;
 }
 
 /** What draws, with what the pen draws while pressed over it. */
@@ -1679,7 +1697,7 @@ function hint(): string {
   if (tool === "eraser") {
     return `Click or drag over what to erase · a drag spares the image or note it starts on · ${escapeKey} to select again`;
   }
-  if (tool === "stroke") {
+  if (isTip(tool)) {
     return `Drag to draw, or click for a dot · hold ${stepKey} to draw straight, by steps of 45° · ${escapeKey} to select again`;
   }
   if (tool === "arrow") {

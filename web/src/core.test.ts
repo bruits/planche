@@ -98,7 +98,7 @@ const kinds: [string, Kind][] = [
     [`a ${colour} line`, line({ colour })],
     [`a ${colour} pen stroke`, stroke({ colour })],
   ]),
-  ...(["pink", "blue", "green", "lilac"] as const).map((paper): [string, Kind] => [
+  ...(["pink", "orange", "green", "blue", "lilac"] as const).map((paper): [string, Kind] => [
     `${paper} paper`,
     sticky({ paper }),
   ]),
@@ -112,6 +112,7 @@ const kinds: [string, Kind][] = [
     [`a ${weight} line`, line({ weight })],
     [`a ${weight} pen stroke`, stroke({ weight })],
   ]),
+  ["a highlighter stroke", stroke({ tip: "highlighter" })],
   ["a dashed shape", shape({ dash: "dashed" })],
   ["a dashed arrow", arrow({ dash: "dashed" })],
   ["a dashed line", line({ dash: "dashed" })],
@@ -142,7 +143,7 @@ const defaults: [string, Kind, Kind][] = [
   ["yellow paper", sticky({ paper: "yellow" }), sticky()],
   ["a medium shape", shape({ weight: "medium" }), shape()],
   ["a medium line", line({ weight: "medium" }), line()],
-  ["an ink pen stroke", stroke({ colour: "ink", weight: "medium" }), stroke()],
+  ["an ink pen stroke", stroke({ tip: "pen", colour: "ink", weight: "medium" }), stroke()],
   [
     "a pen stroke's points kept to a hundred thousandth of its frame",
     stroke({ points: [0.123456789, 1, 0.123457, 1, 1, 0.5] }),

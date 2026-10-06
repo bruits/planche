@@ -12,6 +12,7 @@ import init, {
   assetPath,
   checkedColour,
   checkedStyle,
+  drawnKind as drawnAlone,
   fileDepth,
   frameDelay,
   gridLevel as level,
@@ -62,6 +63,7 @@ import type {
   Size,
   Style,
   Text,
+  Tip,
   Transform,
   Weight,
 } from "./wasm/bindings.js";
@@ -115,6 +117,7 @@ export type {
   Size,
   Style,
   Text,
+  Tip,
   Transform,
   Weight,
 };
@@ -201,12 +204,21 @@ export function setCropShape(editor: Editor, ids: string[], shape: CropShape): s
 }
 
 /**
- * A pen stroke through `points`, in board units, framed by them, without those that stray less
- * than `tolerance` from the line through the others.
+ * A stroke of `tip`, a pen's when `undefined`, through `points`, in board units, framed by them,
+ * without those that stray less than `tolerance` from the line through the others.
  */
-export function strokeKind(points: Point[], tolerance: number): Extract<Kind, { type: "stroke" }> {
+export function strokeKind(
+  points: Point[],
+  tolerance: number,
+  tip?: Tip,
+): Extract<Kind, { type: "stroke" }> {
   const flat = Float64Array.from(points.flatMap(({ x, y }) => [x, y]));
-  return JSON.parse(stroked(flat, tolerance)) as Extract<Kind, { type: "stroke" }>;
+  return JSON.parse(stroked(flat, tolerance, tip)) as Extract<Kind, { type: "stroke" }>;
+}
+
+/** What `kind` draws on its own, as an element of the board would. */
+export function drawnKind(kind: Kind): Item[] {
+  return JSON.parse(drawnAlone(JSON.stringify(kind))) as Item[];
 }
 
 const widths = new Map<Weight | undefined, number>();
@@ -217,6 +229,25 @@ export function strokeWidth(weight?: Weight): number {
   if (found === undefined) {
     found = width(weight);
     widths.set(weight, found);
+  }
+  return found;
+}
+
+const highlights = new Map<Colour, Paint>();
+
+/** As a highlighter draws `painted`. */
+export function highlighted(painted: Colour): Paint {
+  let found = highlights.get(painted);
+  if (found === undefined) {
+    const [stroke] = drawnKind({
+      ...strokeKind([{ x: 0, y: 0 }], 0, "highlighter"),
+      colour: painted,
+    });
+    if (stroke?.kind !== "stroke") {
+      throw new Error("A highlighter draws no stroke");
+    }
+    found = stroke.paint;
+    highlights.set(painted, found);
   }
   return found;
 }

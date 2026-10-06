@@ -19,10 +19,11 @@
 // otherwise. Holding ⌘, or Ctrl elsewhere than macOS, keeps things from sticking and the grid from
 // pulling, but for a move only once under way, as pressing an element with it toggles the element
 // instead. The eraser removes what a click would select, or all that a drag passes over but what
-// it starts within, in one edit. The pen draws where the pointer goes, smoothed, or a dot for a
-// click, or a straight line from where it was pressed while ⇧ is held, as one edit once let go,
-// and stays the tool. The arrow keys move the selection by a pixel, or ten while ⇧ is held, or
-// by the grid's step while snapping to the grid shown, as one edit until let go.
+// it starts within, in one edit. The pen and the highlighter draw where the pointer goes,
+// smoothed, or a dot for a click, or a straight line from where it was pressed while ⇧ is held, as
+// one edit once let go, and stay the tool. The arrow keys move the selection by a pixel, or ten
+// while ⇧ is held, or by the grid's step while snapping to the grid shown, as one edit until let
+// go.
 // Cropping shows an image whole, what its crop leaves out dimmed, and its edges and corners drag
 // the crop, or its inside moves it, until Enter or a press elsewhere crops it, or Escape leaves it
 // as it was. Holding ⇧ keeps the crop's proportions as its edges and corners drag it, X turns it
@@ -48,6 +49,7 @@ import type {
   Restack,
   Side,
   Size,
+  Tip,
 } from "./core.js";
 import { among, anchors, newId, nudge, renamed } from "./board.js";
 import { cursor, dotted, type Crop, type Grab, type Overlay } from "./overlay.js";
@@ -96,7 +98,7 @@ export interface Editing {
 
 /** What a press draws, while a tool to draw is in use. */
 export type Draw =
-  | "stroke"
+  | Tip
   | "arrow"
   | "line"
   | "rectangle"
@@ -153,10 +155,12 @@ export interface Reading {
 type Keys = Pick<MouseEvent, "shiftKey" | "altKey" | "metaKey" | "ctrlKey">;
 
 /** What a press draws by its two ends. */
-type Shaped = Exclude<Draw, "stroke">;
+type Shaped = Exclude<Draw, Tip>;
 
 type Segment = Extract<Kind, { type: "arrow" | "line" }>;
 const SEGMENTS = new Set<string>(["arrow", "line"] satisfies Segment["type"][]);
+/** Keyed by each tip, so that one left out fails to compile. */
+const TIPS = { pen: true, highlighter: true } satisfies Record<Tip, true>;
 type Comment = Extract<Kind, { type: "comment" }>;
 /** Which edges of a crop a grip drags, in parts of its width and height, none at ½. */
 const GRIPS: [number, number][] = [
@@ -361,7 +365,7 @@ type Press =
       id: string;
       dragging: boolean;
     }
-  /** `line` the pointer's way so far, smoothed, `at` where it went last, `dressed` its style. */
+  /** `line` the pointer's way so far, smoothed, `at` where it went last, `ink` how it draws. */
   | {
       kind: "pen";
       pointer: number;
@@ -369,7 +373,8 @@ type Press =
       line: Point[];
       at: Point;
       dragging: boolean;
-      dressed: Extract<Kind, { type: "stroke" }>;
+      tip: Tip;
+      ink: Pen;
     }
   | {
       kind: "end";
@@ -902,15 +907,15 @@ export function edits(
       return;
     }
     const shape = drawing();
-    if (shape === "stroke") {
-      const dressed = styled(core.strokeKind([at], 0), zoom);
-      if (dressed.type !== "stroke") {
+    if (isTip(shape)) {
+      const [ink] = core.drawnKind(styled(core.strokeKind([at], 0, shape), zoom));
+      if (ink?.kind !== "stroke") {
         return;
       }
-      press = { kind: "pen", pointer, start: at, line: [at], at, dragging: false, dressed };
+      press = { kind: "pen", pointer, start: at, line: [at], at, dragging: false, tip: shape, ink };
       selected = new Set();
       show();
-      inked(inking(dressed, [at]));
+      inked(ink);
       view.host.setPointerCapture(pointer);
       return;
     }
@@ -1229,7 +1234,7 @@ export function edits(
         return;
       }
       case "pen":
-        inked(inking(press.dressed, inkLine(editor, press, held.shiftKey)));
+        inked({ ...press.ink, points: inkLine(editor, press, held.shiftKey) });
         return;
       case "draw": {
         // Pinned where it was pressed.
@@ -1410,7 +1415,7 @@ export function edits(
     }
     const { editor } = editing;
     const line = inkLine(editor, pen, keys?.shiftKey ?? false);
-    const kind = styled(core.strokeKind(line, PEN_TOLERANCE / zoom), zoom);
+    const kind = styled(core.strokeKind(line, PEN_TOLERANCE / zoom, pen.tip), zoom);
     edit(editing, editor.add(newId(), entered, JSON.stringify(kind)));
   };
 
@@ -2174,6 +2179,10 @@ function isSegment(kind: Kind | undefined): kind is Segment {
   return SEGMENTS.has(kind?.type ?? "");
 }
 
+export function isTip(tool: string | undefined): tool is Tip {
+  return tool !== undefined && Object.hasOwn(TIPS, tool);
+}
+
 function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -2330,16 +2339,5 @@ function rect(from: Point, to: Point): Rect {
     y: Math.min(from.y, to.y),
     width: Math.abs(to.x - from.x),
     height: Math.abs(to.y - from.y),
-  };
-}
-
-/** What the pen draws through `points`, in the style it was `dressed` in, as the board would. */
-function inking(dressed: Extract<Kind, { type: "stroke" }>, points: Point[]): Pen {
-  return {
-    kind: "stroke",
-    points,
-    width: core.strokeWidth(dressed.weight),
-    paint: dressed.colour ?? "ink",
-    opacity: (dressed.opacity ?? 100) / 100,
   };
 }

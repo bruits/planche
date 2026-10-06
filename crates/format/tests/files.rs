@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use board::{
     Align, Alignment, AssetHasher, AssetId, Background, Board, Colour, CropShape, Dash, Editor,
     Element, ElementId, ElementKind, Fill, Heads, ImageEdits, Opacity, Paper, Point, Rect, Restack,
-    Shape, Size, Text, Weight, ZIndex,
+    Shape, Size, Text, Tip, Weight, ZIndex,
 };
 use format::save::{Known, Save};
 use format::{Error, Files, zip};
@@ -196,6 +196,7 @@ fn sample() -> Board {
                 group: None,
                 z: z("a7"),
                 kind: ElementKind::Stroke {
+                    tip: Tip::Pen,
                     frame: frame(60.0, 20.0),
                     rotation: 0.0,
                     points: vec![

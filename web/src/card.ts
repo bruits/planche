@@ -22,6 +22,7 @@ import {
   type Command,
   type Shortcut,
 } from "./commands.js";
+import * as core from "./core.js";
 import type { Colour, CropShape, Kind, Point } from "./core.js";
 import type { Reading } from "./edit.js";
 import { message } from "./errors.js";
@@ -35,6 +36,7 @@ import {
   PAPERS,
   RECENT,
   SIZES,
+  highlight,
   restyled,
   settings,
   stepped,
@@ -155,6 +157,8 @@ export interface Card {
   resize(larger: boolean): void;
   /** Whether every element selected is an image. */
   images(): boolean;
+  /** Whether each element selected that takes a colour is drawn with a highlighter. */
+  highlighting(): boolean;
   copy(): void;
   paste(): void;
   canPaste(): boolean;
@@ -246,6 +250,13 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   const alone = () => loneImage(host.current()?.board, host.selection());
   /** Of the targets, those that have a style, which comments lack. */
   const styled = () => targets().filter(({ kind }) => settings(kind).length > 0);
+  const highlighting = () => {
+    const all = styled().filter(({ kind }) => settings(kind).includes("colour"));
+    return (
+      all.length > 0 &&
+      all.every(({ kind }) => kind.type === "stroke" && kind.tip === "highlighter")
+    );
+  };
   /** Of what they take, as an image, which takes only opacity, narrows nothing. */
   const common = (): Setting[] => {
     const all = styled();
@@ -387,7 +398,10 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     const made = document.createElement("div");
     made.className = "slider";
     made.classList.toggle("mixed", shown === undefined);
-    const tint = value("colour") ?? (paper ? `paper-${paper}` : "ink");
+    const colour = value("colour");
+    const tint = highlighting()
+      ? core.highlighted(colour ?? "ink")
+      : (colour ?? (paper ? `paper-${paper}` : "ink"));
     made.style.setProperty("--tint", css(tint, panel));
     const track = document.createElement("div");
     track.className = "track";
@@ -688,16 +702,20 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       element.style.setProperty("grid-column", String(column));
       made.append(element);
     };
-    PALETTE.forEach(({ colour, label }, at) =>
+    const highlights = highlighting();
+    PALETTE.forEach(({ colour, label }, at) => {
+      const shown = highlights ? highlight(at) : { paint: colour, label };
       place(
-        button(label, swatch(colour, "palette"), (event) => set({ colour }, event.altKey), {
-          pressed: current === colour,
-          shortcut: commands.colours[at]?.keys?.[0],
-        }),
+        button(
+          shown.label,
+          swatch(shown.paint, "palette"),
+          (event) => set({ colour }, event.altKey),
+          { pressed: current === colour, shortcut: commands.colours[at]?.keys?.[0] },
+        ),
         1,
         at + 1,
-      ),
-    );
+      );
+    });
     const own = store.picked().slice(0, RECENT);
     own.forEach((colour, at) =>
       place(
@@ -883,6 +901,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     },
     common,
     value,
+    highlighting,
     set,
     resize(larger) {
       const zoom = host.zoom();

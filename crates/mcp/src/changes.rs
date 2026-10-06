@@ -201,6 +201,7 @@ pub enum NewElement {
     },
     /// Drawn freehand through `points`, in order. One point draws a dot.
     Stroke {
+        tip: Option<Tip>,
         #[schemars(length(min = 1, max = MOST_POINTS))]
         points: Vec<Point>,
         group: Option<String>,
@@ -261,9 +262,21 @@ impl<'de> Deserialize<'de> for Colour {
 pub enum Paper {
     Yellow,
     Pink,
-    Blue,
+    Orange,
     Green,
+    Blue,
     Lilac,
+}
+
+/// A pen by default. A highlighter draws eight times as wide and see-through, in bright colours
+/// of its own, the ink drawing yellow.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+pub enum Tip {
+    Pen,
+    Highlighter,
 }
 
 /// Of strokes, medium by default.
@@ -357,12 +370,12 @@ pub struct Update {
     pub crop: Option<Pixels>,
     /// For an image.
     pub crop_shape: Option<CropShape>,
-    /// For a note, a shape, an arrow, a line, or a pen stroke, a colour of the palette, which each
+    /// For a note, a shape, an arrow, a line, or a stroke, a colour of the palette, which each
     /// theme draws its own way, or `#rrggbb`, which every theme draws alike.
     pub colour: Option<Colour>,
     /// For a sticky note.
     pub paper: Option<Paper>,
-    /// For a shape, an arrow, a line, or a pen stroke.
+    /// For a shape, an arrow, a line, or a stroke.
     pub weight: Option<Weight>,
     /// For a shape, an arrow, or a line.
     pub dash: Option<Dash>,
@@ -510,7 +523,7 @@ fn long(value: &Value) -> Option<String> {
                         Some(format!("A {key} holds {MOST_LABEL} characters at most"))
                     }
                     ("points", Value::Array(points)) if points.len() > MOST_POINTS => {
-                        Some(format!("A pen stroke holds {MOST_POINTS} points at most"))
+                        Some(format!("A stroke holds {MOST_POINTS} points at most"))
                     }
                     _ => long(value),
                 })

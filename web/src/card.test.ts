@@ -4,6 +4,7 @@ import { imageKind, untitled } from "./board.js";
 import { card, type CardCommands } from "./card.js";
 import type { Command } from "./commands.js";
 import * as core from "./core.js";
+import type { Tip } from "./core.js";
 import { styles } from "./style.js";
 
 const IMAGE = "a".repeat(32);
@@ -380,6 +381,16 @@ describe("the card of an image and an arrow", () => {
     localStorage.clear();
   });
 
+  it("shows a highlighter's colours as it draws them, though an image is selected with it", () => {
+    const { board, select } = opened();
+    const line = [ORIGIN, { x: 50, y: 50 }];
+    board.editor.add(OTHER, undefined, JSON.stringify(core.strokeKind(line, 0, "highlighter")));
+    board.board = core.board(board.editor);
+    select([IMAGE, OTHER]);
+    expect(button("Ink")).toBeNull();
+    expect(button("Yellow").getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("offers what the arrow takes, as an image narrows it to nothing but opacity", () => {
     const { shown, kind } = both();
     expect(shown.common()).toEqual(expect.arrayContaining(["colour", "opacity"]));
@@ -441,11 +452,11 @@ function refused(): never {
   throw new Error("The pen's style is no edit");
 }
 
-/** The card with the pen in use and nothing selected, over a board with nothing on it. */
-function inking() {
+/** The card with the `tip` in use and nothing selected, over a board with nothing on it. */
+function inking(tip: Tip = "pen") {
   const board = untitled();
   const store = styles();
-  const pen = () => store.dressed(core.strokeKind([ORIGIN], 0), 1);
+  const pen = () => store.dressed(core.strokeKind([ORIGIN], 0, tip), 1);
   card(
     {
       current: () => board,
@@ -502,5 +513,15 @@ describe("the card of the pen", () => {
     expect(pen()).toMatchObject({ colour: "orange", weight: "thick", opacity: 40 });
     expect(button("Orange").getAttribute("aria-pressed")).toBe("true");
     expect(board.editor.canUndo()).toBe(false);
+  });
+
+  it("shows a highlighter's colours as it draws them, its ink yellow, which stays its own", () => {
+    const { pen } = inking("highlighter");
+    expect(button("Ink")).toBeNull();
+    button("Yellow").click();
+    expect(pen()).toMatchObject({ tip: "highlighter" });
+    expect(pen()).not.toHaveProperty("colour");
+    button("Red").click();
+    expect(pen()).toMatchObject({ tip: "highlighter", colour: "red" });
   });
 });

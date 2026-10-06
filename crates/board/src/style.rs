@@ -313,7 +313,7 @@ fn set<T>(part: &mut T, to: Option<T>) {
 mod tests {
     use super::*;
     use crate::tests::{arrow, stroke as pen};
-    use crate::{AssetId, ImageEdits, Point, Rect, Size};
+    use crate::{AssetId, ImageEdits, Point, Rect, Size, Tip};
 
     fn frame() -> Rect {
         Rect {
@@ -594,6 +594,7 @@ mod tests {
             unreachable!()
         };
         let drawn = |points: &[(f64, f64)]| ElementKind::Stroke {
+            tip: Tip::Pen,
             frame,
             rotation,
             points: points.iter().map(|&(x, y)| Point { x, y }).collect(),

@@ -54,12 +54,20 @@
   --green: #2b8a3e;
   --blue: #1c6ed6;
   --violet: #6f42dc;
-  /* Sticky notes keep their papers and their ink in either theme. */
-  --paper-yellow: #fde68a;
-  --paper-pink: #fbcfe8;
-  --paper-blue: #bfdbfe;
-  --paper-green: #bbf7d0;
-  --paper-lilac: #ddd6fe;
+  /* As a highlighter draws the palette, bright under its own translucency, in either theme. */
+  --highlight-yellow: #ffe100;
+  --highlight-red: #ff4d6d;
+  --highlight-orange: #ff9500;
+  --highlight-green: #2fe05a;
+  --highlight-blue: #19b5ff;
+  --highlight-violet: #a259ff;
+  /* Sticky notes keep their papers and their ink in either theme, pale in the highlighters' hues. */
+  --paper-yellow: #feeb85;
+  --paper-pink: #ffd1d3;
+  --paper-orange: #ffd5b0;
+  --paper-green: #c1ebc3;
+  --paper-blue: #bce4ff;
+  --paper-lilac: #e3d6ff;
   --sticky-ink: #1d1d22;
   /* A comment's pin, and how wide it grows to show its text. */
   --pin: 28px;
@@ -106,6 +114,12 @@
   --green: #1b6e2d;
   --blue: #0b4fb3;
   --violet: #5523c0;
+  --highlight-yellow: #ffd000;
+  --highlight-red: #ff1f4b;
+  --highlight-orange: #ff7a00;
+  --highlight-green: #00c43a;
+  --highlight-blue: #0091ff;
+  --highlight-violet: #8a2eff;
 }
 
 :root[data-theme="dark"][data-contrast="high"] {
@@ -123,6 +137,12 @@
   --green: #9be8ad;
   --blue: #a6ccff;
   --violet: #cbb8ff;
+  --highlight-yellow: #fff04d;
+  --highlight-red: #ff7a92;
+  --highlight-orange: #ffb04d;
+  --highlight-green: #6cff8f;
+  --highlight-blue: #6fd0ff;
+  --highlight-violet: #c49aff;
 }
 
 [hidden] {
@@ -1252,6 +1272,12 @@ body {
     --green: CanvasText;
     --blue: CanvasText;
     --violet: CanvasText;
+    --highlight-yellow: CanvasText;
+    --highlight-red: CanvasText;
+    --highlight-orange: CanvasText;
+    --highlight-green: CanvasText;
+    --highlight-blue: CanvasText;
+    --highlight-violet: CanvasText;
   }
 
   .bar button[aria-pressed="true"] {

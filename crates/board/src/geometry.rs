@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::f64::consts::{FRAC_1_SQRT_2, TAU};
 
 use crate::{
-    Board, CropShape, ElementId, ElementKind, Fill, ImageEdits, Point, Rect, Shape, Text, Weight,
+    Board, CropShape, ElementId, ElementKind, Fill, ImageEdits, Point, Rect, Shape, Text, Tip,
 };
 
 /// The most points [`Board::hit_along`] tries, so that however long the way, it stays quick.
@@ -44,7 +44,7 @@ impl Board {
             .collect();
         // What `hits` finds lies within reach of the frame or the segment, and a whole stroke
         // keeps rounding at the edge from dropping it.
-        let reach = tolerance + Weight::WIDEST;
+        let reach = tolerance + Tip::WIDEST;
         let around = Rect {
             x: from.x.min(to.x) - reach,
             y: from.y.min(to.y) - reach,
@@ -269,9 +269,9 @@ pub(crate) fn corners(rect: &Rect, degrees: f64) -> [Point; 4] {
 }
 
 impl ElementKind {
-    /// A pen stroke through `points`, in board units, framed by them and styled as it comes,
+    /// A stroke of `tip` through `points`, in board units, framed by them and styled as it comes,
     /// without the points that stray less than `tolerance` from the line through the others.
-    pub fn stroke(points: &[Point], tolerance: f64) -> Self {
+    pub fn stroke(tip: Tip, points: &[Point], tolerance: f64) -> Self {
         let kept = simplified(points, tolerance);
         let frame = around(&kept).unwrap_or(Rect {
             x: 0.0,
@@ -281,6 +281,7 @@ impl ElementKind {
         });
         let part = |offset: f64, extent: f64| if extent == 0.0 { 0.0 } else { offset / extent };
         Self::Stroke {
+            tip,
             frame,
             rotation: 0.0,
             points: kept
@@ -531,15 +532,23 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
         } if frame.width != 0.0 && frame.height != 0.0 => {
             ellipse_touches(frame, *rotation, area, true)
         }
+        // As `hits` reaches it.
         ElementKind::Stroke {
             frame,
             rotation,
             points,
             ..
         } => {
-            overlap(&corners(frame, *rotation), area) && {
+            let reach = kind.stroke_width() / 2.0;
+            let grown = Rect {
+                x: frame.x - reach,
+                y: frame.y - reach,
+                width: frame.width + 2.0 * reach,
+                height: frame.height + 2.0 * reach,
+            };
+            overlap(&corners(&grown, *rotation), area) && {
                 let area = area.map(|corner| corner.turned(frame.centre(), -rotation));
-                pieces(&upright(frame, points)).any(|piece| overlap(piece, &area))
+                pieces(&upright(frame, points)).any(|piece| within(piece, &area, reach))
             }
         }
         ElementKind::Comment { at, .. } => {
@@ -637,6 +646,23 @@ fn ellipse_touches(frame: &Rect, degrees: f64, area: &[Point; 4], filled: bool) 
     let origin = Point { x: 0.0, y: 0.0 };
     let reaches = inside(&unit, origin) || edges(&unit).any(|(a, b)| distance(origin, a, b) <= 1.0);
     reaches && (filled || !unit.iter().all(|corner| corner.x.hypot(corner.y) < 1.0))
+}
+
+/// Whether the segment through `piece`, or its one point, comes within `reach` of `area`.
+fn within(piece: &[Point], area: &[Point; 4], reach: f64) -> bool {
+    let (a, b) = (piece[0], piece[piece.len() - 1]);
+    // Apart, two segments are nearest at an end of one of them.
+    overlap(piece, area)
+        || edges(area).any(|(c, d)| {
+            [
+                distance(a, c, d),
+                distance(b, c, d),
+                distance(c, a, b),
+                distance(d, a, b),
+            ]
+            .into_iter()
+            .any(|apart| apart <= reach)
+        })
 }
 
 fn diagonals(corners: &[Point; 4]) -> impl Iterator<Item = (Point, Point)> + '_ {
@@ -804,7 +830,7 @@ fn edges(shape: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
 mod tests {
     use super::*;
     use crate::tests::{board, element, id, stroke};
-    use crate::{AssetId, Colour, Dash, Fill, Heads, ImageEdits, Paper, Size, Text};
+    use crate::{AssetId, Colour, Dash, Fill, Heads, ImageEdits, Paper, Size, Text, Weight};
 
     fn image(x: f64, y: f64, width: f64, height: f64, rotation: f64) -> ElementKind {
         ElementKind::Image {
@@ -866,6 +892,7 @@ mod tests {
             unreachable!()
         };
         ElementKind::Stroke {
+            tip: Tip::Pen,
             frame,
             rotation,
             points: points.iter().map(|&(x, y)| point(x, y)).collect(),
@@ -881,7 +908,7 @@ mod tests {
     fn a_pen_stroke_is_framed_by_its_points_without_those_that_stray_too_little() {
         let through = |points: &[(f64, f64)], tolerance| {
             let points: Vec<Point> = points.iter().map(|&(x, y)| point(x, y)).collect();
-            ElementKind::stroke(&points, tolerance)
+            ElementKind::stroke(Tip::Pen, &points, tolerance)
         };
         assert_eq!(
             through(
@@ -1715,5 +1742,61 @@ mod tests {
             Some(corners.map(|(x, y)| point(x, y)).to_vec())
         );
         assert_eq!(board.bounds(&[id(1)]), Some(area(0.0, 0.0, 100.0, 100.0)));
+    }
+
+    #[test]
+    fn an_eraser_reaches_a_highlighter_across_its_whole_width() {
+        let mut thick = pen(area(0.0, 50.0, 100.0, 0.0), 0.0, &[(0.0, 0.0), (1.0, 0.0)]);
+        if let ElementKind::Stroke { tip, weight, .. } = &mut thick {
+            *tip = Tip::Highlighter;
+            *weight = Weight::Thick;
+        }
+        let board = board([(1, element(None, "a0", thick))]);
+        // 32 wide, so 16 either side of its line.
+        assert_eq!(
+            board.hit_along(point(50.0, 64.0), point(60.0, 64.0), 1.0),
+            [id(1)]
+        );
+        assert!(
+            board
+                .hit_along(point(50.0, 70.0), point(60.0, 70.0), 1.0)
+                .is_empty()
+        );
+        assert_eq!(board.hit(point(20.0, 35.0), 0.0), Some(id(1)));
+    }
+
+    #[test]
+    fn an_eraser_reaches_a_thick_highlighter_wherever_a_press_does_at_the_edge_of_its_reach() {
+        let frame = area(
+            -0.009023655283600718,
+            1.5694030589546863,
+            0.41477325621366834,
+            0.7719154333905969,
+        );
+        let mut thick = pen(frame, 0.0, &[(0.0, 0.0), (1.0, 0.0)]);
+        if let ElementKind::Stroke { tip, weight, .. } = &mut thick {
+            *tip = Tip::Highlighter;
+            *weight = Weight::Thick;
+        }
+        let board = board([(1, element(None, "a0", thick))]);
+        // Exactly at its reach, where rounding may tip it either side.
+        let (edge, tolerance) = (
+            point(20.10508710353183, 1.5694030589546863),
+            3.69933750260176,
+        );
+        assert_eq!(board.hit(edge, tolerance), Some(id(1)));
+        assert_eq!(board.hit_along(edge, edge, tolerance), [id(1)]);
+    }
+
+    #[test]
+    fn an_area_touches_a_highlighter_across_its_whole_width() {
+        let mut medium = pen(area(0.0, 50.0, 100.0, 0.0), 0.0, &[(0.0, 0.0), (1.0, 0.0)]);
+        if let ElementKind::Stroke { tip, .. } = &mut medium {
+            *tip = Tip::Highlighter;
+        }
+        let board = board([(1, element(None, "a0", medium))]);
+        // 16 wide, so 8 either side of its line.
+        assert_eq!(board.touching(area(40.0, 53.0, 20.0, 4.0)), [id(1)]);
+        assert!(board.touching(area(40.0, 59.0, 20.0, 4.0)).is_empty());
     }
 }
