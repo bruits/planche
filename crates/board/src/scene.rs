@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 use serde::{Serialize, Serializer};
 
+use crate::geometry::stroke_points;
 use crate::{
     AssetId, Board, Colour, CropShape, Dash, ElementId, ElementKind, Fill, Heads, ImageEdits,
     Paper, Point, Rect, Shape, Size, Text, Weight,
@@ -71,6 +72,14 @@ pub enum Item {
     Fill {
         frame: Rect,
         rotation: f64,
+        paint: Paint,
+        opacity: f64,
+    },
+    /// A pen stroke through `points`, round at its ends and joins, which shades each pixel once
+    /// however it crosses itself.
+    Stroke {
+        points: Vec<Point>,
+        width: f64,
         paint: Paint,
         opacity: f64,
     },
@@ -247,6 +256,19 @@ fn drawn(
             dash,
             ..
         } => items.push(line(*from, *to, *colour, *weight, *dash, opacity)),
+        ElementKind::Stroke {
+            frame,
+            rotation,
+            points,
+            colour,
+            weight,
+            ..
+        } => items.push(Item::Stroke {
+            points: stroke_points(frame, *rotation, points),
+            width: weight.width(),
+            paint: Paint::Colour(*colour),
+            opacity,
+        }),
         ElementKind::Comment { .. } | ElementKind::Group => {}
     }
 }
@@ -291,7 +313,7 @@ fn shown(natural: Size, edits: &ImageEdits) -> Rect {
 mod tests {
     use super::*;
     use crate::Opacity;
-    use crate::tests::{board, element, id};
+    use crate::tests::{board, element, id, stroke};
 
     const FRAME: Rect = Rect {
         x: 10.0,
@@ -567,5 +589,50 @@ mod tests {
         }
         assert_eq!(written(Paint::Colour(Colour::Violet)), "violet");
         assert_eq!(written(Paint::Colour(Colour::Rgb([1, 2, 254]))), "#0102fe");
+    }
+
+    #[test]
+    fn a_pen_stroke_draws_its_points_where_its_frame_turns_them_and_fades_whole() {
+        let ElementKind::Stroke {
+            colour,
+            weight,
+            points,
+            ..
+        } = stroke()
+        else {
+            unreachable!()
+        };
+        let turned = ElementKind::Stroke {
+            frame: FRAME,
+            rotation: 180.0,
+            points,
+            colour,
+            weight,
+            opacity: Opacity::new(40).unwrap(),
+        };
+        let [
+            Item::Stroke {
+                points,
+                width,
+                paint,
+                opacity,
+            },
+        ] = &drawn(turned)[..]
+        else {
+            panic!()
+        };
+        // Upright at (10, 120), (110, 20), and (210, 120), half turned around (110, 70).
+        let expected = [(210.0, 20.0), (110.0, 120.0), (10.0, 20.0)];
+        for (point, (x, y)) in points.iter().zip(expected) {
+            assert!(
+                (point.x - x).abs() < 1e-9 && (point.y - y).abs() < 1e-9,
+                "{point:?}"
+            );
+        }
+        assert_eq!(points.len(), 3);
+        assert_eq!(
+            (*width, *paint, *opacity),
+            (2.0, Paint::Colour(Colour::Ink), 0.4)
+        );
     }
 }

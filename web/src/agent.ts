@@ -243,7 +243,7 @@ async function render(
   return { area: covered, pixels_per_unit: image.width / covered.width, image };
 }
 
-function elements(opened: Opened, ids: unknown): Record<string, Element> {
+function elements(opened: Opened, ids: unknown): Record<string, unknown> {
   if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
     throw new Error("ids must be a list of element ids");
   }
@@ -251,5 +251,14 @@ function elements(opened: Opened, ids: unknown): Record<string, Element> {
   if (unknown.length > 0) {
     throw new Error(`${opened.folder.name} has no element ${unknown.join(", ")}`);
   }
-  return Object.fromEntries(ids.map((id) => [id, opened.board.elements[id]!]));
+  return Object.fromEntries(ids.map((id) => [id, read(opened.board.elements[id]!)]));
+}
+
+/** Its points would fill a reader's context for nothing a picture of it does not show. */
+function read(element: Element): unknown {
+  if (element.kind.type !== "stroke") {
+    return element;
+  }
+  const { points, ...kind } = element.kind;
+  return { ...element, kind: { ...kind, point_count: points.length / 2 } };
 }

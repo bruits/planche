@@ -67,6 +67,7 @@ function page(
     hovered() {},
     pointed() {},
     stepped() {},
+    inked: vi.fn<Hooks["inked"]>(),
   };
   let gone = false;
   leaving.push(() => (gone = true));
@@ -575,5 +576,132 @@ describe("nudging", () => {
     key("keydown", { key: "ArrowRight" });
     key("keyup", { key: "ArrowRight" });
     expect(core.element(opened.editor, note)?.kind).toMatchObject({ target: IMAGE });
+  });
+});
+
+function strokes(opened: ReturnType<typeof page>["opened"]) {
+  return Object.values(opened.board.elements).flatMap(({ kind }) =>
+    kind.type === "stroke" ? [kind] : [],
+  );
+}
+
+describe("the pen", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("draws each position the pointer passed, smoothed, as one edit that leaves it to draw again", async () => {
+    const { opened, editing, hooks, host, pointer } = page([], { drawing: () => "stroke" });
+    pointer("pointerdown", 200, 200);
+    // Merged into one move, as engines may send them.
+    const passed = [
+      new PointerEvent("pointermove", { clientX: 100, clientY: 300, pointerId: 1 }),
+      new PointerEvent("pointermove", { clientX: 300, clientY: 300, pointerId: 1 }),
+    ];
+    host.dispatchEvent(
+      new PointerEvent("pointermove", {
+        clientX: 300,
+        clientY: 300,
+        pointerId: 1,
+        bubbles: true,
+        coalescedEvents: passed,
+      }),
+    );
+    await nextFrame();
+    expect(hooks.inked).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "stroke" }));
+    pointer("pointerup", 300, 300);
+    expect(hooks.inked).toHaveBeenLastCalledWith(undefined);
+    // Halfway to each position from the last point, (150, 250), then (225, 275), which lies on
+    // the line from there to (300, 300), where it was let go.
+    const [stroke] = strokes(opened);
+    expect(stroke?.frame).toEqual({ x: 150, y: 200, width: 150, height: 100 });
+    expect(stroke?.points).toEqual([0.33333, 0, 0, 0.5, 1, 1]);
+    expect(editing.selection()).toEqual([]);
+    editing.undo();
+    expect(strokes(opened)).toEqual([]);
+  });
+
+  it("leaves a dot for a click", () => {
+    const { opened, pointer } = page([], { drawing: () => "stroke" });
+    pointer("pointerdown", 200, 200);
+    pointer("pointerup", 200, 200);
+    expect(strokes(opened)).toMatchObject([
+      { frame: { x: 200, y: 200, width: 0, height: 0 }, points: [0, 0] },
+    ]);
+  });
+
+  it("draws straight from where it was pressed, by steps of 45°, while ⇧ is held", async () => {
+    const { opened, pointer } = page([], { drawing: () => "stroke" });
+    pointer("pointerdown", 200, 200);
+    pointer("pointermove", 260, 300, { shiftKey: true });
+    await nextFrame();
+    pointer("pointerup", 300, 290, { shiftKey: true });
+    const [stroke] = strokes(opened);
+    expect(stroke?.points).toHaveLength(4);
+    expect(stroke?.frame.width).toBeCloseTo(stroke?.frame.height ?? 0);
+  });
+
+  it("draws nothing once the press is lost", async () => {
+    const { opened, hooks, pointer } = page([], { drawing: () => "stroke" });
+    pointer("pointerdown", 200, 200);
+    pointer("pointermove", 300, 300);
+    await nextFrame();
+    pointer("pointercancel", 300, 300);
+    expect(strokes(opened)).toEqual([]);
+    expect(hooks.inked).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("puts what it draws in the group gone into", async () => {
+    const other = "b".repeat(32);
+    const group = "c".repeat(32);
+    const { opened, editing, pointer } = page(
+      [[other, { ...sticky, frame: { x: 300, y: 40, width: 100, height: 100 } }]],
+      { drawing: () => "stroke" },
+    );
+    editing.select([STICKY, other]);
+    editing.group(group);
+    editing.goInside();
+    pointer("pointerdown", 200, 300);
+    pointer("pointermove", 260, 360);
+    await nextFrame();
+    pointer("pointerup", 260, 360);
+    const drawn = Object.values(opened.board.elements).filter(({ kind }) => kind.type === "stroke");
+    expect(drawn).toMatchObject([{ group }]);
+    expect(editing.entered()).toBe(group);
+  });
+
+  it("lets go of the selection once pressed", () => {
+    const { editing, pointer } = page([], { drawing: () => "stroke" });
+    editing.select([STICKY]);
+    pointer("pointerdown", 200, 200);
+    expect(editing.selection()).toEqual([]);
+    pointer("pointerup", 200, 200);
+  });
+
+  it("turns straight, or back, as ⇧ is pressed or let go while the pointer stays still", async () => {
+    const { opened, hooks, pointer } = page([], { drawing: () => "stroke" });
+    const shown = () => vi.mocked(hooks.inked).mock.lastCall?.[0]?.points.length;
+    pointer("pointerdown", 200, 200);
+    pointer("pointermove", 260, 300);
+    await nextFrame();
+    expect(shown()).toBe(3);
+    key("keydown", { key: "Shift", shiftKey: true });
+    expect(shown()).toBe(2);
+    key("keyup", { key: "Shift" });
+    expect(shown()).toBe(3);
+    key("keydown", { key: "Shift", shiftKey: true });
+    pointer("pointerup", 260, 300);
+    const [stroke] = strokes(opened);
+    expect(stroke?.points).toHaveLength(4);
+  });
+
+  it("forgets what it was drawing once its board goes", () => {
+    const { opened, editing, hooks, pointer } = page([], { drawing: () => "stroke" });
+    pointer("pointerdown", 200, 200);
+    expect(hooks.inked).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "stroke" }));
+    editing.reset();
+    expect(hooks.inked).toHaveBeenLastCalledWith(undefined);
+    pointer("pointerup", 200, 200);
+    expect(strokes(opened)).toEqual([]);
   });
 });

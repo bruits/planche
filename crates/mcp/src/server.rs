@@ -170,7 +170,8 @@ impl<R: Relay> Server<R> {
     }
 
     /// Elements of the open board by id, in full, as the board's files hold them, which leave a
-    /// style out where it is as it comes.
+    /// style out where it is as it comes. A pen stroke gives its `point_count` instead of its
+    /// points, which `render` shows.
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     async fn elements(
         &self,
@@ -222,8 +223,8 @@ impl<R: Relay> Server<R> {
         }
     }
 
-    /// Adds notes, sticky notes, shapes, arrows, lines, and comments on top of the board, in
-    /// order, in their style, and gives their ids and bounds.
+    /// Adds notes, sticky notes, shapes, arrows, lines, pen strokes, and comments on top of the
+    /// board, in order, in their style, and gives their ids and bounds.
     #[tool(annotations(
         read_only_hint = false,
         destructive_hint = false,
@@ -399,7 +400,7 @@ impl<R: Relay> ServerHandler for Server<R> {
             .with_server_info(Implementation::new("planche", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Reads and edits the board open in Planche, a board of reference images, notes, \
-                 sticky notes, shapes, arrows, lines, and comments, in groups. Positions are in board \
+                 sticky notes, shapes, arrows, lines, pen strokes, and comments, in groups. Positions are in board \
                  units, with y going down, and rotations clockwise in degrees. Each change undoes in \
                  one step, waits up to 10 seconds for the user to finish a drag, a text, or a crop, \
                  and is saved a moment later, as the user's are. A style left as it comes is left \

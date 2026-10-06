@@ -123,6 +123,11 @@ const LINE: &[Setting] = &[
     Setting::Dash,
     Setting::Opacity,
 ];
+const STROKE: &[Setting] = &[Setting::Colour, Setting::Weight, Setting::Opacity];
+
+/// How finely a pen stroke's points are kept, in parts of its frame, a hundredth of a board unit
+/// across a frame of a thousand.
+const POINT_PARTS: f64 = 100_000.0;
 
 impl ElementKind {
     /// The parts of a style it takes, those of its text even while it holds none. A cross fills
@@ -138,6 +143,7 @@ impl ElementKind {
             Self::Shape { .. } => SHAPE,
             Self::Arrow { .. } => ARROW,
             Self::Line { .. } => LINE,
+            Self::Stroke { .. } => STROKE,
             Self::Image { .. } => IMAGE,
             Self::Comment { .. } | Self::Group => &[],
         }
@@ -208,6 +214,10 @@ impl ElementKind {
                 set(weight, style.weight);
                 set(dash, style.dash);
             }
+            Self::Stroke { colour, weight, .. } => {
+                set(colour, style.colour);
+                set(weight, style.weight);
+            }
             Self::Image { .. } | Self::Comment { .. } | Self::Group => {}
         }
         if let Some(opacity) = self.opacity_mut() {
@@ -239,6 +249,13 @@ impl ElementKind {
         {
             *fill = Fill::default();
         }
+        if let Self::Stroke { points, .. } = &mut self {
+            for point in points.iter_mut() {
+                point.x = (point.x * POINT_PARTS).round() / POINT_PARTS;
+                point.y = (point.y * POINT_PARTS).round() / POINT_PARTS;
+            }
+            points.dedup();
+        }
         self
     }
 
@@ -257,7 +274,8 @@ impl ElementKind {
             | Self::Sticky { opacity, .. }
             | Self::Shape { opacity, .. }
             | Self::Arrow { opacity, .. }
-            | Self::Line { opacity, .. } => Some(*opacity),
+            | Self::Line { opacity, .. }
+            | Self::Stroke { opacity, .. } => Some(*opacity),
             Self::Comment { .. } | Self::Group => None,
         }
     }
@@ -269,7 +287,8 @@ impl ElementKind {
             | Self::Sticky { opacity, .. }
             | Self::Shape { opacity, .. }
             | Self::Arrow { opacity, .. }
-            | Self::Line { opacity, .. } => Some(opacity),
+            | Self::Line { opacity, .. }
+            | Self::Stroke { opacity, .. } => Some(opacity),
             Self::Comment { .. } | Self::Group => None,
         }
     }
@@ -293,7 +312,7 @@ fn set<T>(part: &mut T, to: Option<T>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::arrow;
+    use crate::tests::{arrow, stroke as pen};
     use crate::{AssetId, ImageEdits, Point, Rect, Size};
 
     fn frame() -> Rect {
@@ -383,7 +402,7 @@ mod tests {
     }
 
     /// Of every kind, each with every part of its style as it comes.
-    fn plain_kinds() -> [ElementKind; 10] {
+    fn plain_kinds() -> [ElementKind; 11] {
         [
             note(None),
             sticky(),
@@ -392,6 +411,7 @@ mod tests {
             shape(Shape::Cross, Fill::Hollow),
             arrow(),
             line(),
+            pen(),
             image(),
             comment(),
             ElementKind::Group,
@@ -512,6 +532,10 @@ mod tests {
                 ..stroke
             },
             stroke,
+            Style {
+                dash: None,
+                ..stroke
+            },
             whole,
             Style::default(),
             Style::default(),
@@ -554,6 +578,37 @@ mod tests {
         // Unset parts stay as they were.
         let right = note(Some(Align::Right));
         assert_eq!(right.clone().with_style(&Style::default()), right);
+    }
+
+    #[test]
+    fn a_pen_stroke_keeps_its_points_to_a_hundred_thousandth_of_its_frame_without_repeats() {
+        let ElementKind::Stroke {
+            frame,
+            rotation,
+            colour,
+            weight,
+            opacity,
+            ..
+        } = pen()
+        else {
+            unreachable!()
+        };
+        let drawn = |points: &[(f64, f64)]| ElementKind::Stroke {
+            frame,
+            rotation,
+            points: points.iter().map(|&(x, y)| Point { x, y }).collect(),
+            colour,
+            weight,
+            opacity,
+        };
+        let kept = drawn(&[
+            (0.123_456_789, 1.0),
+            (0.123_457_1, 0.999_999_9),
+            (0.5, -0.000_001),
+        ])
+        .canonical();
+        assert_eq!(kept, drawn(&[(0.123_46, 1.0), (0.5, 0.0)]));
+        assert_eq!(kept.clone().canonical(), kept);
     }
 
     #[test]

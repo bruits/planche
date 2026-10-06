@@ -446,15 +446,30 @@ export function stacked(
 
 /**
  * What draws, back to front, but the text of `hidden`, which is being written. Images of the
- * `crossedOut` assets show where they lie, crossed out.
+ * `crossedOut` assets show where they lie, crossed out. `adding` stacks where an element added to
+ * its `group`, or to the board without one, would.
  */
 export function placed(
   opened: Opened,
   texts: Pick<Texts, "placed">,
   hidden?: string,
   crossedOut?: ReadonlySet<string>,
+  adding?: { item: Placed; group: string | undefined },
 ): Placed[] {
-  return placing(stacked(opened, crossedOut), opened.board, texts, hidden);
+  const { board } = opened;
+  const place = (order: string[]) =>
+    placing(stacked(opened, crossedOut, order), board, texts, hidden);
+  if (!adding) {
+    return place(board.draw_order);
+  }
+  const { draw_order: order } = board;
+  const chosen = new Set(adding.group === undefined ? [] : [adding.group]);
+  // On top of what the group holds, which stacks right after it.
+  const end =
+    adding.group === undefined
+      ? order.length
+      : order.findLastIndex((id) => among(board, id, chosen)) + 1;
+  return [...place(order.slice(0, end)), adding.item, ...place(order.slice(end))];
 }
 
 /** What `items` draw, their texts as `texts` lays them out, but that of `hidden` and those not laid out. */

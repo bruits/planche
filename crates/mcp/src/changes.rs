@@ -13,6 +13,8 @@ use serde_json::Value;
 
 pub const MOST_IDS: usize = 100;
 pub const MOST_ELEMENTS: usize = 50;
+/// What a line drawn by hand holds once its nearly straight runs are dropped, and more.
+const MOST_POINTS: usize = 2_000;
 pub const MOST_IMAGES: usize = 12;
 /// What a page holds of a few large photos at once, read and passed on whole.
 const MOST_FILE: u64 = 25 << 20;
@@ -197,6 +199,17 @@ pub enum NewElement {
         #[schemars(range(min = 1, max = 100))]
         opacity: Option<u8>,
     },
+    /// Drawn freehand through `points`, in order. One point draws a dot.
+    Stroke {
+        #[schemars(length(min = 1, max = MOST_POINTS))]
+        points: Vec<Point>,
+        group: Option<String>,
+        colour: Option<Colour>,
+        weight: Option<Weight>,
+        /// In percent, whole by default.
+        #[schemars(range(min = 1, max = 100))]
+        opacity: Option<u8>,
+    },
     /// Pinned at `at`.
     Comment {
         at: Point,
@@ -344,12 +357,12 @@ pub struct Update {
     pub crop: Option<Pixels>,
     /// For an image.
     pub crop_shape: Option<CropShape>,
-    /// For a note, a shape, an arrow, or a line, a colour of the palette, which each theme draws
-    /// its own way, or `#rrggbb`, which every theme draws alike.
+    /// For a note, a shape, an arrow, a line, or a pen stroke, a colour of the palette, which each
+    /// theme draws its own way, or `#rrggbb`, which every theme draws alike.
     pub colour: Option<Colour>,
     /// For a sticky note.
     pub paper: Option<Paper>,
-    /// For a shape, an arrow, or a line.
+    /// For a shape, an arrow, a line, or a pen stroke.
     pub weight: Option<Weight>,
     /// For a shape, an arrow, or a line.
     pub dash: Option<Dash>,
@@ -495,6 +508,9 @@ fn long(value: &Value) -> Option<String> {
                         if text.chars().count() > MOST_LABEL =>
                     {
                         Some(format!("A {key} holds {MOST_LABEL} characters at most"))
+                    }
+                    ("points", Value::Array(points)) if points.len() > MOST_POINTS => {
+                        Some(format!("A pen stroke holds {MOST_POINTS} points at most"))
                     }
                     _ => long(value),
                 })

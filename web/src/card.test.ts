@@ -75,6 +75,7 @@ function opened(source?: string) {
     {
       current: () => board,
       selection: () => selected,
+      tool: () => undefined,
       box: () => [
         { x: 0, y: 0 },
         { x: 160, y: 0 },
@@ -433,5 +434,73 @@ describe("the card of an image and an arrow", () => {
     select([OTHER]);
     shown.paste();
     expect(kind(OTHER)).toMatchObject({ colour: "red" });
+  });
+});
+
+function refused(): never {
+  throw new Error("The pen's style is no edit");
+}
+
+/** The card with the pen in use and nothing selected, over a board with nothing on it. */
+function inking() {
+  const board = untitled();
+  const store = styles();
+  const pen = () => store.dressed(core.strokeKind([ORIGIN], 0), 1);
+  card(
+    {
+      current: () => board,
+      selection: () => [],
+      tool: pen,
+      box: () => undefined,
+      client: ({ x, y }) => ({ clientX: x, clientY: y }),
+      zoom: () => 1,
+      busy: () => false,
+      reading: () => undefined,
+      floor: () => 800,
+      apply: refused,
+      adjust: refused,
+      finishAdjusting() {},
+      adjusting: () => false,
+      pick() {},
+      explain() {},
+      say() {},
+    },
+    store,
+    {
+      colours: [],
+      bold: command(),
+      italic: command(),
+      strike: command(),
+      greyscale: command(),
+      flipHorizontally: command(),
+      flipVertically: command(),
+      crop: command(),
+      rectangularCrop: command(),
+      ellipticalCrop: command(),
+      openSource: command(),
+      open: command(),
+    },
+  ).open(false);
+  return { board, pen };
+}
+
+function button(name: string): HTMLButtonElement {
+  return document.querySelector<HTMLButtonElement>(`.style-card button[aria-label="${name}"]`)!;
+}
+
+describe("the card of the pen", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    localStorage.clear();
+  });
+
+  it("sets what the pen draws next, as no edit, and shows it at once", () => {
+    const { board, pen } = inking();
+    button("Orange").click();
+    button("Thick stroke").click();
+    slide(40, { release: true });
+    expect(pen()).toMatchObject({ colour: "orange", weight: "thick", opacity: 40 });
+    expect(button("Orange").getAttribute("aria-pressed")).toBe("true");
+    expect(board.editor.canUndo()).toBe(false);
   });
 });

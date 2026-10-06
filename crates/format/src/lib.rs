@@ -42,7 +42,10 @@ pub enum Error {
     },
     #[error("`{0}` is not named after a valid id")]
     InvalidName(String),
-    #[error("element {0} holds a NaN, an infinity, or a font size that is not positive")]
+    #[error(
+        "element {0} holds a NaN, an infinity, a font size that is not positive, or a stroke with \
+         no point or one off its frame"
+    )]
     Invalid(ElementId),
     #[error(
         "asset {0} does not match its digest; if the board lives in Git, is Git LFS installed?"

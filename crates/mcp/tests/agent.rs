@@ -700,6 +700,12 @@ async fn calls_too_large_are_refused() {
         .await
         .unwrap_err();
     assert_eq!(refused, "A caption holds 2000 characters at most");
+    let point = json!({ "x": 0.0, "y": 0.0 });
+    let stroke = json!({ "type": "stroke", "points": vec![point; 2_001] });
+    let refused = relayed("add", json!({ "elements": [stroke] }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused, "A pen stroke holds 2000 points at most");
 }
 
 #[tokio::test]
@@ -718,6 +724,7 @@ async fn a_style_reaches_the_web_app_as_the_agent_gave_it() {
         { "type": "shape", "x": 0.0, "y": 0.0, "text": "Key light", "colour": "blue", "weight": "thick", "dash": "dashed", "fill": "tint", "bold": true, "align": "left" },
         { "type": "arrow", "from": { "x": 0.0, "y": 0.0 }, "to": { "x": 1.0, "y": 0.0 }, "dash": "dashed", "heads": "both" },
         { "type": "line", "from": { "x": 0.0, "y": 0.0 }, "to": { "x": 1.0, "y": 0.0 }, "weight": "thin" },
+        { "type": "stroke", "points": [{ "x": 0.0, "y": 0.0 }, { "x": 4.0, "y": 2.0 }], "colour": "violet", "weight": "thick", "opacity": 40 },
     ]);
     let args = relayed("add", json!({ "elements": elements }))
         .await

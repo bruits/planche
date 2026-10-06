@@ -57,6 +57,13 @@ const line = (more: Partial<Extract<Kind, { type: "line" }>> = {}): Kind => ({
   to: { x: 100, y: 50 },
   ...more,
 });
+const stroke = (more: Partial<Extract<Kind, { type: "stroke" }>> = {}): Kind => ({
+  type: "stroke",
+  frame,
+  rotation: 0,
+  points: [0, 1, 0.5, 0, 1, 0.75],
+  ...more,
+});
 
 const colours: Colour[] = ["red", "orange", "green", "blue", "violet", "#12ab9f"];
 
@@ -72,6 +79,8 @@ const kinds: [string, Kind][] = [
   ["a shape", shape()],
   ["an arrow", arrow()],
   ["a line", line()],
+  ["a pen stroke", stroke()],
+  ["a dot", stroke({ points: [0, 0] })],
   ["a comment", { type: "comment", at: { x: 5, y: 6 }, text: "Why?" }],
   ...(["bold", "italic", "strike"] as const).map((style): [string, Kind] => [
     `${style} text`,
@@ -87,6 +96,7 @@ const kinds: [string, Kind][] = [
     [`a ${colour} shape`, shape({ colour })],
     [`a ${colour} arrow`, arrow({ colour })],
     [`a ${colour} line`, line({ colour })],
+    [`a ${colour} pen stroke`, stroke({ colour })],
   ]),
   ...(["pink", "blue", "green", "lilac"] as const).map((paper): [string, Kind] => [
     `${paper} paper`,
@@ -100,6 +110,7 @@ const kinds: [string, Kind][] = [
     [`a ${weight} shape`, shape({ weight })],
     [`a ${weight} arrow`, arrow({ weight })],
     [`a ${weight} line`, line({ weight })],
+    [`a ${weight} pen stroke`, stroke({ weight })],
   ]),
   ["a dashed shape", shape({ dash: "dashed" })],
   ["a dashed arrow", arrow({ dash: "dashed" })],
@@ -131,6 +142,12 @@ const defaults: [string, Kind, Kind][] = [
   ["yellow paper", sticky({ paper: "yellow" }), sticky()],
   ["a medium shape", shape({ weight: "medium" }), shape()],
   ["a medium line", line({ weight: "medium" }), line()],
+  ["an ink pen stroke", stroke({ colour: "ink", weight: "medium" }), stroke()],
+  [
+    "a pen stroke's points kept to a hundred thousandth of its frame",
+    stroke({ points: [0.123456789, 1, 0.123457, 1, 1, 0.5] }),
+    stroke({ points: [0.12346, 1, 1, 0.5] }),
+  ],
   ["a solid arrow", arrow({ dash: "solid" }), arrow()],
   ["an arrow headed at its end", arrow({ heads: "end" }), arrow()],
   ["a hollow shape", shape({ fill: "hollow" }), shape()],
@@ -172,6 +189,7 @@ describe("the core", () => {
     });
     expect(core.plain(arrow())).toEqual({ ...parts, heads: "end" });
     expect(core.plain(line())).toEqual(parts);
+    expect(core.plain(stroke())).toEqual({ colour: "ink", weight: "medium", opacity: 100 });
     expect(core.plain(image())).toEqual({ opacity: 100 });
   });
 

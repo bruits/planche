@@ -66,7 +66,10 @@ pub enum Error {
     StuckToItself(ElementId),
     #[error("element {0} cannot change kind")]
     KindChanged(ElementId),
-    #[error("element {0} would hold a NaN, an infinity, or a font size that is not positive")]
+    #[error(
+        "element {0} would hold a NaN, an infinity, a font size that is not positive, or a stroke \
+         with no point or one off its frame"
+    )]
     Invalid(ElementId),
     #[error("only two elements or more of the same group can be grouped")]
     CannotGroup,
@@ -398,6 +401,22 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "is_default")]
         opacity: Opacity,
     },
+    /// Drawn freehand, through `points`, which lie within its frame from 0 to 1 across and down,
+    /// so that moving, scaling, or turning it leaves them as they are. One point draws a dot.
+    Stroke {
+        frame: Rect,
+        #[serde(serialize_with = "without_negative_zero")]
+        rotation: f64,
+        #[serde(with = "flat_points")]
+        #[cfg_attr(feature = "ts", ts(type = "number[]"))]
+        points: Vec<Point>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        colour: Colour,
+        #[serde(default, skip_serializing_if = "is_default")]
+        weight: Weight,
+        #[serde(default, skip_serializing_if = "is_default")]
+        opacity: Opacity,
+    },
     /// Pinned at `at`, and shown at one size on screen, whatever the zoom, so it covers nothing
     /// on the board.
     Comment {
@@ -456,13 +475,14 @@ impl ElementKind {
         }
     }
 
-    /// How wide an arrow, a line, or a shape draws its strokes, in board units. What draws none
-    /// is reached as a medium stroke would be.
+    /// How wide an arrow, a line, a shape, or a pen stroke draws, in board units. What draws no
+    /// stroke is reached as a medium one would be.
     pub(crate) fn stroke_width(&self) -> f64 {
         match self {
-            Self::Shape { weight, .. } | Self::Arrow { weight, .. } | Self::Line { weight, .. } => {
-                weight.width()
-            }
+            Self::Shape { weight, .. }
+            | Self::Arrow { weight, .. }
+            | Self::Line { weight, .. }
+            | Self::Stroke { weight, .. } => weight.width(),
             _ => Weight::Medium.width(),
         }
     }
@@ -529,8 +549,9 @@ impl ElementKind {
         }
     }
 
-    /// JSON cannot hold a NaN or an infinity, and text of no size cannot be laid out. Fields
-    /// are destructured in full, so a new one fails to compile until it is checked here.
+    /// JSON cannot hold a NaN or an infinity, text of no size cannot be laid out, and a pen
+    /// stroke draws at least one point, within its frame. Fields are destructured in full, so a
+    /// new one fails to compile until it is checked here.
     pub fn is_valid(&self) -> bool {
         match self {
             Self::Image {
@@ -594,6 +615,23 @@ impl ElementKind {
                 dash: _,
                 opacity: _,
             } => from.is_finite() && to.is_finite(),
+            // Ink off its frame would pass what the frame bounds.
+            Self::Stroke {
+                frame,
+                rotation,
+                points,
+                colour: _,
+                weight: _,
+                opacity: _,
+            } => {
+                let within = |part: f64| (0.0..=1.0).contains(&part);
+                frame.is_finite()
+                    && rotation.is_finite()
+                    && !points.is_empty()
+                    && points
+                        .iter()
+                        .all(|point| within(point.x) && within(point.y))
+            }
             Self::Comment {
                 at,
                 text: _,
@@ -1050,6 +1088,33 @@ fn without_negative_zero<S: Serializer>(
     serializer.serialize_f64(value + 0.0)
 }
 
+/// A pen stroke's points as one list of numbers, each point's across then down, as pretty JSON
+/// writes each number on a line of its own.
+mod flat_points {
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use crate::Point;
+
+    pub fn serialize<S: Serializer>(points: &[Point], serializer: S) -> Result<S::Ok, S::Error> {
+        // `-0.0` would write apart from `0.0`.
+        serializer.collect_seq(
+            points
+                .iter()
+                .flat_map(|point| [point.x + 0.0, point.y + 0.0]),
+        )
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Point>, D::Error> {
+        let numbers = Vec::<f64>::deserialize(deserializer)?;
+        let (pairs, odd) = numbers.as_chunks::<2>();
+        if !odd.is_empty() {
+            return Err(D::Error::custom("a stroke's points are pairs of numbers"));
+        }
+        Ok(pairs.iter().map(|&[x, y]| Point { x, y }).collect())
+    }
+}
+
 /// Ids name files, so each has a single spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Hex<const N: usize>([u8; N]);
@@ -1287,6 +1352,67 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_pen_stroke_draws_at_least_one_point_within_its_frame() {
+        let ElementKind::Stroke {
+            frame,
+            colour,
+            weight,
+            opacity,
+            ..
+        } = stroke()
+        else {
+            unreachable!()
+        };
+        let drawn = |frame, rotation, points| ElementKind::Stroke {
+            frame,
+            rotation,
+            points,
+            colour,
+            weight,
+            opacity,
+        };
+        let at = |x, y| Point { x, y };
+        let flat = Rect {
+            height: 0.0,
+            ..frame
+        };
+        assert!(drawn(frame, 0.0, vec![at(0.5, 0.5)]).is_valid());
+        assert!(drawn(flat, 30.0, vec![at(0.0, 0.0), at(1.0, 0.0)]).is_valid());
+        for kind in [
+            drawn(frame, 0.0, vec![]),
+            drawn(frame, 0.0, vec![at(1.5, 0.5)]),
+            drawn(frame, 0.0, vec![at(0.5, -0.1)]),
+            drawn(frame, 0.0, vec![at(f64::NAN, 0.5)]),
+            drawn(frame, f64::INFINITY, vec![at(0.5, 0.5)]),
+            drawn(
+                Rect {
+                    x: f64::NAN,
+                    ..frame
+                },
+                0.0,
+                vec![at(0.5, 0.5)],
+            ),
+        ] {
+            assert!(!kind.is_valid(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_pen_stroke_writes_its_points_as_one_list_of_numbers() {
+        let mut written = serde_json::to_value(stroke()).unwrap();
+        assert_eq!(
+            written["points"],
+            serde_json::json!([0.0, 1.0, 0.5, 0.0, 1.0, 1.0])
+        );
+        assert_eq!(
+            serde_json::from_value::<ElementKind>(written.clone()).unwrap(),
+            stroke()
+        );
+        written["points"] = serde_json::json!([0.0, 1.0, 0.5]);
+        assert!(serde_json::from_value::<ElementKind>(written).is_err());
+    }
+
     pub(crate) fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
@@ -1314,6 +1440,26 @@ mod tests {
             weight: Weight::Medium,
             dash: Dash::Solid,
             heads: Heads::End,
+            opacity: Default::default(),
+        }
+    }
+
+    pub(crate) fn stroke() -> ElementKind {
+        ElementKind::Stroke {
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 50.0,
+            },
+            rotation: 0.0,
+            points: vec![
+                Point { x: 0.0, y: 1.0 },
+                Point { x: 0.5, y: 0.0 },
+                Point { x: 1.0, y: 1.0 },
+            ],
+            colour: Colour::Ink,
+            weight: Weight::Medium,
             opacity: Default::default(),
         }
     }

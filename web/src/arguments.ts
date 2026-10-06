@@ -92,6 +92,10 @@ opacity?: number, } | { "type": "line", from: Point, to: Point, group?: string, 
 /**
  * In percent, whole by default.
  */
+opacity?: number, } | { "type": "stroke", points: Array<Point>, group?: string, colour?: Colour, weight?: Weight, 
+/**
+ * In percent, whole by default.
+ */
 opacity?: number, } | { "type": "comment", at: Point, text: string, group?: string, };
 
 export type NewImage = { 
@@ -219,8 +223,8 @@ crop?: Pixels,
  */
 crop_shape?: CropShape, 
 /**
- * For a note, a shape, an arrow, or a line, a colour of the palette, which each theme draws
- * its own way, or `#rrggbb`, which every theme draws alike.
+ * For a note, a shape, an arrow, a line, or a pen stroke, a colour of the palette, which each
+ * theme draws its own way, or `#rrggbb`, which every theme draws alike.
  */
 colour?: Colour, 
 /**
@@ -228,7 +232,7 @@ colour?: Colour,
  */
 paper?: Paper, 
 /**
- * For a shape, an arrow, or a line.
+ * For a shape, an arrow, a line, or a pen stroke.
  */
 weight?: Weight, 
 /**

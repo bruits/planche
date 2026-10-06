@@ -60,7 +60,7 @@ import {
   type Command,
   type Shortcut,
 } from "./commands.js";
-import { CROP_KEYS, edits, type Draw } from "./edit.js";
+import { CROP_KEYS, edits, type Draw, type Pen } from "./edit.js";
 import { message } from "./errors.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
@@ -76,7 +76,7 @@ import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE, onScreen } from "./raster.js";
 import { drawnOver, exported, pictureName, render } from "./render.js";
 import type { Saving } from "./save.js";
-import { create, type Renderer } from "./renderer.js";
+import { create, type Placed, type Renderer } from "./renderer.js";
 import { ACROSS, sampler } from "./sampler.js";
 import { showing } from "./showing.js";
 import { png, still } from "./still.js";
@@ -135,7 +135,7 @@ const viewport = view(byId("viewport"), {
       animated.update(opened.board, renderer, camera, size);
       films.update(opened.board, renderer, camera, size);
       if (lettering.update(opened.board, renderer, camera, size, editing.writing())) {
-        renderer.place(placed(opened, lettering, editing.writing(), crossedOut));
+        renderer.place(drawnNow(opened));
       }
     }
   },
@@ -179,6 +179,13 @@ const editing = edits(viewport, overlaid, () => opened, {
   sampling: () => picker.sampling() !== undefined,
   drawn: () => useTool("select"),
   styled: (kind, zoom) => look.dressed(kind, zoom),
+  inked(stroke) {
+    inking = stroke;
+    if (opened) {
+      renderer?.place(drawnNow(opened));
+      viewport.redraw();
+    }
+  },
   selecting: () => tool === "select" && !spaceHeld && picker.sampling() === undefined,
   hovered: () => refreshBar(),
   pointed(id) {
@@ -249,7 +256,7 @@ const present = showing({
     created.backdrop(next.board.background);
     details.set("renderer", created.backend);
     renderer = created;
-    created.place(placed(next, lettering, editing.writing(), crossedOut));
+    created.place(drawnNow(next));
     viewport.show(created, camera ?? fit(extent(next), viewport.size()));
     editing.rehover();
     refreshBar();
@@ -295,6 +302,8 @@ let halfDrawn = false;
 /** On the desktop, a second export to the same file would take over the first one's draft. */
 let exporting = false;
 let tool: "select" | "hand" | "eraser" | Draw = "select";
+/** What the pen draws while pressed, over the board. */
+let inking: Pen | undefined;
 /** Left out of the board, it starts as the board's background suggests. */
 let snapping = false;
 /** The assets whose images show crossed out, as this machine cannot decode or play them. */
@@ -320,6 +329,8 @@ type Ordering = (opened: Opened, ids: string[]) => Order | Promise<Order>;
 const loadingBoard = () => (life.loading() ? "A board is opening" : undefined);
 const noBoard = () => (opened === undefined ? "No board is open yet" : undefined);
 const noneSelected = () => (editing.selection().length === 0 ? "Nothing is selected" : undefined);
+/** With nothing selected, the pen's style is what styling sets. */
+const nothingToStyle = () => (penStyling() ? undefined : noneSelected());
 const unexportable = () => {
   const ids = editing.selection();
   if (ids.length === 0) {
@@ -437,7 +448,7 @@ const colourCommand = (at: number): Command => ({
       return PAPERS[at] ? undefined : `Sticky notes come in ${PAPERS.length} papers`;
     }
     return (
-      noneSelected() ??
+      nothingToStyle() ??
       (can.includes("colour") ? undefined : "Not everything selected takes a colour")
     );
   },
@@ -483,6 +494,12 @@ const commands = {
     keys: [{ key: "e" }],
     unavailable: noneShown,
     run: () => useTool("eraser"),
+  },
+  stroke: {
+    label: "Pen",
+    keys: [{ key: "d" }],
+    unavailable: noneShown,
+    run: () => useTool("stroke"),
   },
   arrow: {
     label: "Arrow",
@@ -907,7 +924,7 @@ const commands = {
     label: () => (styleCard.isOpen() ? "Hide style" : "Show style"),
     keys: [{ key: "s", shift: true }],
     unavailable: () =>
-      noneSelected() ??
+      nothingToStyle() ??
       (styleCard.common().length > 0 || styleCard.images()
         ? undefined
         : "Comments and groups have no style"),
@@ -1031,6 +1048,7 @@ const bar = toolbar(
     [
       { command: commands.select, icon: "pointer", pressed: () => tool === "select" },
       { command: commands.hand, icon: "hand", pressed: () => tool === "hand" },
+      drawing("stroke", "pencil"),
       { command: commands.eraser, icon: "eraser", pressed: () => tool === "eraser" },
     ],
     [
@@ -1091,6 +1109,7 @@ const styleCard = card(
     current: () => opened,
     selection: () => editing.selection(),
     box: () => editing.box(),
+    tool: () => (penStyling() ? look.dressed(core.strokeKind([{ x: 0, y: 0 }], 0), 1) : undefined),
     client: (point) => viewport.client(point),
     zoom: () => viewport.zoom(),
     busy,
@@ -1309,10 +1328,25 @@ function drawTool(): Draw | undefined {
 
 function useTool(next: typeof tool): void {
   tool = next;
+  // So that the card shows the pen's style.
+  if (tool === "stroke") {
+    editing.select([]);
+  }
   viewport.hand(tool === "hand" || spaceHeld);
   viewport.host.classList.toggle("drawing", drawTool() !== undefined);
   viewport.host.classList.toggle("erasing", tool === "eraser");
   refreshBar();
+  styleCard.refresh();
+}
+
+function penStyling(): boolean {
+  return tool === "stroke" && editing.selection().length === 0;
+}
+
+/** What draws, with what the pen draws while pressed over it. */
+function drawnNow(board: Opened): Placed[] {
+  const adding = inking && { item: inking, group: editing.entered() };
+  return placed(board, lettering, editing.writing(), crossedOut, adding);
 }
 
 function holdSpace(held: boolean): void {
@@ -1645,6 +1679,9 @@ function hint(): string {
   if (tool === "eraser") {
     return `Click or drag over what to erase · a drag spares the image or note it starts on · ${escapeKey} to select again`;
   }
+  if (tool === "stroke") {
+    return `Drag to draw, or click for a dot · hold ${stepKey} to draw straight, by steps of 45° · ${escapeKey} to select again`;
+  }
   if (tool === "arrow") {
     return `Drag from where the arrow starts to where it points · hold ${stepKey} to keep to steps of 45° · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;
   }
@@ -1961,7 +1998,7 @@ async function show(next: Opened, camera?: Camera): Promise<void> {
 function crossOut(into: Renderer, asset: string): void {
   crossedOut = new Set([...crossedOut, asset]);
   if (opened) {
-    into.place(placed(opened, lettering, editing.writing(), crossedOut));
+    into.place(drawnNow(opened));
   }
 }
 
@@ -2139,7 +2176,7 @@ function changed(touched: string[]): void {
   }
   const undrawn = refresh(opened, touched);
   renderer?.backdrop(opened.board.background);
-  renderer?.place(placed(opened, lettering, editing.writing(), crossedOut));
+  renderer?.place(drawnNow(opened));
   life.touched(touched);
   present.edited(undrawn);
   viewport.redraw();

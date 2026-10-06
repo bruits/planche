@@ -213,8 +213,8 @@ impl Rect {
     }
 }
 
-/// What an element draws over, as a convex polygon or a segment. `None` for a comment or a
-/// group.
+/// What an element draws over, as a convex polygon or a segment, its frame for a pen stroke, whose
+/// line would close into a polygon. `None` for a comment or a group.
 fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
     match kind {
         ElementKind::Image {
@@ -227,6 +227,9 @@ fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
             frame, rotation, ..
         }
         | ElementKind::Shape {
+            frame, rotation, ..
+        }
+        | ElementKind::Stroke {
             frame, rotation, ..
         } => Some(corners(frame, *rotation).to_vec()),
         ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
@@ -265,6 +268,90 @@ pub(crate) fn corners(rect: &Rect, degrees: f64) -> [Point; 4] {
         .map(|(x, y)| Point { x, y }.turned(rect.centre(), degrees))
 }
 
+impl ElementKind {
+    /// A pen stroke through `points`, in board units, framed by them and styled as it comes,
+    /// without the points that stray less than `tolerance` from the line through the others.
+    pub fn stroke(points: &[Point], tolerance: f64) -> Self {
+        let kept = simplified(points, tolerance);
+        let frame = around(&kept).unwrap_or(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        });
+        let part = |offset: f64, extent: f64| if extent == 0.0 { 0.0 } else { offset / extent };
+        Self::Stroke {
+            frame,
+            rotation: 0.0,
+            points: kept
+                .iter()
+                .map(|point| Point {
+                    x: part(point.x - frame.x, frame.width),
+                    y: part(point.y - frame.y, frame.height),
+                })
+                .collect(),
+            colour: Default::default(),
+            weight: Default::default(),
+            opacity: Default::default(),
+        }
+        .canonical()
+    }
+}
+
+/// The ends of `points`, and each point further than `tolerance` from the line between those
+/// kept around it (Ramer–Douglas–Peucker).
+fn simplified(points: &[Point], tolerance: f64) -> Vec<Point> {
+    let Some(last) = points.len().checked_sub(1) else {
+        return Vec::new();
+    };
+    let mut kept = vec![false; points.len()];
+    kept[0] = true;
+    kept[last] = true;
+    let mut pending = vec![(0, last)];
+    while let Some((first, last)) = pending.pop() {
+        let (far, off) = (first + 1..last)
+            .map(|at| (at, distance(points[at], points[first], points[last])))
+            .fold(
+                (first, 0.0),
+                |most, each| if each.1 > most.1 { each } else { most },
+            );
+        if off > tolerance {
+            kept[far] = true;
+            pending.extend([(first, far), (far, last)]);
+        }
+    }
+    points
+        .iter()
+        .zip(kept)
+        .filter_map(|(point, kept)| kept.then_some(*point))
+        .collect()
+}
+
+/// Where a pen stroke's points lie on the board.
+pub(crate) fn stroke_points(frame: &Rect, rotation: f64, points: &[Point]) -> Vec<Point> {
+    upright(frame, points)
+        .into_iter()
+        .map(|point| point.turned(frame.centre(), rotation))
+        .collect()
+}
+
+/// A pen stroke's points on the board before its frame turns.
+fn upright(frame: &Rect, points: &[Point]) -> Vec<Point> {
+    points
+        .iter()
+        .map(|part| Point {
+            x: frame.x + part.x * frame.width,
+            y: frame.y + part.y * frame.height,
+        })
+        .collect()
+}
+
+/// Each segment of the line through `line`, or its one point, as a dot draws.
+fn pieces(line: &[Point]) -> impl Iterator<Item = &[Point]> {
+    let dot = (line.len() == 1).then_some(line);
+    dot.into_iter().chain(line.windows(2))
+}
+
 /// Strokes reach half their width beyond the line they follow, and a shape's fill or text fills
 /// it.
 pub(crate) fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
@@ -290,6 +377,19 @@ pub(crate) fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
         } => near_edges(&corners(frame, *rotation), point, reach) || covers(kind, point),
         ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
             distance(point, *from, *to) <= reach
+        }
+        // Against its frame first, which holds its many points.
+        ElementKind::Stroke {
+            frame,
+            rotation,
+            points,
+            ..
+        } => {
+            near(&corners(frame, *rotation), point, reach) && {
+                let point = point.turned(frame.centre(), -rotation);
+                pieces(&upright(frame, points))
+                    .any(|piece| distance(point, piece[0], piece[piece.len() - 1]) <= reach)
+            }
         }
         ElementKind::Image {
             frame,
@@ -328,6 +428,7 @@ pub(crate) fn covers(kind: &ElementKind, point: Point) -> bool {
                 },
             ..
         } => within_ellipse(frame, *rotation, point),
+        ElementKind::Stroke { .. } => false,
         _ => shape(kind).is_some_and(|shape| inside(&shape, point)),
     }
 }
@@ -429,6 +530,17 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
             ..
         } if frame.width != 0.0 && frame.height != 0.0 => {
             ellipse_touches(frame, *rotation, area, true)
+        }
+        ElementKind::Stroke {
+            frame,
+            rotation,
+            points,
+            ..
+        } => {
+            overlap(&corners(frame, *rotation), area) && {
+                let area = area.map(|corner| corner.turned(frame.centre(), -rotation));
+                pieces(&upright(frame, points)).any(|piece| overlap(piece, &area))
+            }
         }
         ElementKind::Comment { at, .. } => {
             around(area).is_some_and(|upright| upright.contains(*at))
@@ -691,7 +803,7 @@ fn edges(shape: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{board, element, id};
+    use crate::tests::{board, element, id, stroke};
     use crate::{AssetId, Colour, Dash, Fill, Heads, ImageEdits, Paper, Size, Text};
 
     fn image(x: f64, y: f64, width: f64, height: f64, rotation: f64) -> ElementKind {
@@ -741,6 +853,115 @@ mod tests {
             width,
             height,
         }
+    }
+
+    fn pen(frame: Rect, rotation: f64, points: &[(f64, f64)]) -> ElementKind {
+        let ElementKind::Stroke {
+            colour,
+            weight,
+            opacity,
+            ..
+        } = stroke()
+        else {
+            unreachable!()
+        };
+        ElementKind::Stroke {
+            frame,
+            rotation,
+            points: points.iter().map(|&(x, y)| point(x, y)).collect(),
+            colour,
+            weight,
+            opacity,
+        }
+    }
+
+    const U: [(f64, f64); 4] = [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0)];
+
+    #[test]
+    fn a_pen_stroke_is_framed_by_its_points_without_those_that_stray_too_little() {
+        let through = |points: &[(f64, f64)], tolerance| {
+            let points: Vec<Point> = points.iter().map(|&(x, y)| point(x, y)).collect();
+            ElementKind::stroke(&points, tolerance)
+        };
+        assert_eq!(
+            through(
+                &[(10.0, 20.0), (60.0, 20.5), (110.0, 20.0), (110.0, 70.0)],
+                1.0
+            ),
+            pen(
+                area(10.0, 20.0, 100.0, 50.0),
+                0.0,
+                &[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]
+            )
+        );
+        assert_eq!(
+            through(&[(10.0, 20.0), (60.0, 20.5), (110.0, 20.0)], 0.1),
+            pen(
+                area(10.0, 20.0, 100.0, 0.5),
+                0.0,
+                &[(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)]
+            )
+        );
+        assert_eq!(
+            through(&[(5.0, 5.0)], 1.0),
+            pen(area(5.0, 5.0, 0.0, 0.0), 0.0, &[(0.0, 0.0)])
+        );
+        assert!(!through(&[], 1.0).is_valid());
+    }
+
+    #[test]
+    fn a_pen_stroke_is_hit_along_its_line_but_neither_in_its_hollow_nor_across_its_opening() {
+        let u = pen(area(0.0, 0.0, 100.0, 100.0), 0.0, &U);
+        // Medium, so a unit either side.
+        assert!(hits(&u, point(0.0, 50.0), 0.0));
+        assert!(hits(&u, point(50.0, 101.0), 0.0));
+        assert!(!hits(&u, point(50.0, 102.0), 0.0));
+        assert!(!hits(&u, point(50.0, 50.0), 0.0));
+        assert!(!hits(&u, point(50.0, 0.0), 3.0));
+        assert!(!covers(&u, point(50.0, 50.0)));
+    }
+
+    #[test]
+    fn a_pen_stroke_is_hit_where_it_draws_once_turned() {
+        // The diagonal of a 100 by 20 frame, turned a quarter, runs from (60, -40) to (40, 60).
+        let turned = pen(area(0.0, 0.0, 100.0, 20.0), 90.0, &[(0.0, 0.0), (1.0, 1.0)]);
+        for drawn in [point(60.0, -40.0), point(50.0, 10.0), point(40.0, 60.0)] {
+            assert!(hits(&turned, drawn, 0.0), "{drawn:?}");
+        }
+        for upright in [point(0.0, 0.0), point(100.0, 20.0)] {
+            assert!(!hits(&turned, upright, 0.0), "{upright:?}");
+        }
+    }
+
+    #[test]
+    fn a_flat_pen_stroke_and_a_dot_are_hit_within_their_width() {
+        let flat = pen(area(0.0, 50.0, 100.0, 0.0), 0.0, &[(0.0, 0.0), (1.0, 0.0)]);
+        assert!(hits(&flat, point(50.0, 50.5), 0.0));
+        assert!(!hits(&flat, point(50.0, 52.0), 0.0));
+        let dot = pen(area(10.0, 10.0, 0.0, 0.0), 0.0, &[(0.0, 0.0)]);
+        assert!(hits(&dot, point(10.9, 10.0), 0.0));
+        assert!(!hits(&dot, point(12.0, 10.0), 0.0));
+        assert!(touches(&dot, &corners(&area(5.0, 5.0, 10.0, 10.0), 0.0)));
+    }
+
+    #[test]
+    fn an_area_touches_a_pen_stroke_by_its_line_only() {
+        let board = board([(
+            1,
+            element(None, "a0", pen(area(0.0, 0.0, 100.0, 100.0), 0.0, &U)),
+        )]);
+        assert!(board.touching(area(40.0, 40.0, 20.0, 20.0)).is_empty());
+        assert_eq!(board.touching(area(40.0, 90.0, 20.0, 20.0)), [id(1)]);
+        // An eraser's way through its hollow, then across its bottom.
+        assert!(
+            board
+                .hit_along(point(30.0, 30.0), point(70.0, 30.0), 2.0)
+                .is_empty()
+        );
+        assert_eq!(
+            board.hit_along(point(50.0, 80.0), point(50.0, 120.0), 2.0),
+            [id(1)]
+        );
     }
 
     #[test]
@@ -1480,5 +1701,19 @@ mod tests {
         assert_eq!(board.outline(id(5)), Some(Vec::new()));
         assert_eq!(board.outline(id(9)), None);
         assert_eq!(board.bounds(&[id(5)]), None);
+    }
+
+    #[test]
+    fn a_pen_stroke_outlines_its_frame_and_not_its_line() {
+        let board = board([(
+            1,
+            element(None, "a0", pen(area(0.0, 0.0, 100.0, 100.0), 0.0, &U)),
+        )]);
+        let corners = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+        assert_eq!(
+            board.outline(id(1)),
+            Some(corners.map(|(x, y)| point(x, y)).to_vec())
+        );
+        assert_eq!(board.bounds(&[id(1)]), Some(area(0.0, 0.0, 100.0, 100.0)));
     }
 }

@@ -333,6 +333,43 @@ fn dashed_ellipse(local: vec2f, half: vec2f, base: f32, away: f32) -> f32 {
     let stroke = clamp(in.radius - away + 0.5, 0.0, 1.0);
     return vec4f(in.colour, (stroke + filled * (1.0 - stroke)) * in.opacity);
 }
+
+/// How much a line without dashes covers the pixel, as `fs` measures it.
+fn covered(in: Out) -> f32 {
+    let away = length(vec2f(in.local.x - clamp(in.local.x, 0.0, in.size.x), in.local.y));
+    return clamp(in.radius - away + 0.5, 0.0, 1.0);
+}
+
+struct Once {
+    @location(0) colour: vec4f,
+    @builtin(frag_depth) depth: f32,
+};
+
+/// The lines of a see-through pen stroke draw each pixel once, as the one that covers it most.
+/// `fs_clear` starts the depth and the stencil over under them, `fs_cover` leaves in the depth
+/// how much they cover each pixel at most, and `fs_once` draws the first that covers it as much,
+/// as the stencil then turns the others away.
+@fragment fn fs_clear(in: Out) -> Once {
+    return Once(vec4f(0.0), 1.0);
+}
+
+@fragment fn fs_cover(in: Out) -> Once {
+    let cover = covered(in);
+    if cover <= 0.0 {
+        discard;
+    }
+    return Once(vec4f(0.0), 1.0 - cover);
+}
+
+/// A hair nearer than `fs_cover` puts it, so that the same coverage, measured again, passes
+/// however it rounds.
+@fragment fn fs_once(in: Out) -> Once {
+    let cover = covered(in);
+    if cover <= 0.0 {
+        discard;
+    }
+    return Once(vec4f(in.colour, cover * in.opacity), max(1.0 - cover - 1e-5, 0.0));
+}
 "#;
 
 /// Lines `spacing` apart, or dots where they cross, over the whole viewport. Every `step`th
@@ -392,18 +429,25 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f };
 /// Read in linear light, so that mipmaps and filtering keep an image's brightness. Texts read
 /// only the alpha, which stays linear.
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
-/// Floats per item in [`Renderer::draw`]: its kind, which is 0 for an image, 1 for a stroke, and
-/// 2 for a text, its texture or -1, then its instance, whose last float is its opacity from 0 to
-/// 1, whatever its kind.
+/// Floats per item in [`Renderer::draw`]: its kind, which is 0 for an image, 1 for a stroke, 2
+/// for a text, and 3 for a line of a see-through pen stroke, its texture or -1, then its instance,
+/// whose last float is its opacity from 0 to 1, whatever its kind.
 ///
 /// An image's instance is its x, y, width, height, rotation, the crop's x, y, width, and height
 /// in texture coordinates, which a negative size flips, 1 to draw in greys or 0, and 1 to show
 /// the ellipse that fills it or 0. A text's is its x, y, width, height, rotation, colour, and
 /// padding. A stroke's is the shape, geometry, rotation, width, colour, and extra that [`STROKES`]
-/// reads. Colours are red, green, and blue from 0 to 1.
+/// reads. Colours are red, green, and blue from 0 to 1. A pen stroke's lines come one after the
+/// other, as lines from each of its points to the next, whose extra tells them from the stroke's
+/// next to them, and when see-through, they draw [`ONCE`].
 const STRIDE: usize = 14;
 const IMAGE: f32 = 0.0;
 const STROKE: f32 = 1.0;
+/// The lines of a see-through pen stroke, which together cover each pixel once, as the
+/// `fs_clear`, `fs_cover`, and `fs_once` of [`STROKES`] draw them.
+const ONCE: f32 = 3.0;
+/// For drawing pen strokes [`ONCE`], which every pipeline of a pass must declare.
+const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 /// Bytes per instance, which every kind shares, as WebGL2 finds instances by one stride.
 const INSTANCE: u64 = (STRIDE as u64 - 2) * 4;
 const fn opacity(location: u32) -> wgpu::VertexAttribute {
@@ -429,12 +473,17 @@ pub struct Renderer {
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    quads: wgpu::RenderPipeline,
-    texts: wgpu::RenderPipeline,
-    strokes: wgpu::RenderPipeline,
-    grid: wgpu::RenderPipeline,
+    /// For a pass without the depth and the stencil, which no frame needs until it holds a
+    /// see-through pen stroke, and one with them, which then holds its [`ONCE`] lines too.
+    plain: Pipelines,
+    deep: Pipelines,
+    /// To clear, to cover, then to draw a see-through pen stroke, in that order.
+    once: [wgpu::RenderPipeline; 3],
     blit: wgpu::RenderPipeline,
     image_layout: wgpu::BindGroupLayout,
+    /// The window's, as large as its canvas, made at the first draw that needs it at that size,
+    /// and kept, as a stroke coming in and out of view would make it again and again.
+    depth: Option<wgpu::Texture>,
     camera: wgpu::Buffer,
     camera_group: wgpu::BindGroup,
     grid_uniform: wgpu::Buffer,
@@ -447,6 +496,13 @@ pub struct Renderer {
     webgpu: bool,
     /// wgpu's default is to panic, which would leave the page waiting on a dead module.
     error: Arc<Mutex<Option<String>>>,
+}
+
+struct Pipelines {
+    quads: wgpu::RenderPipeline,
+    texts: wgpu::RenderPipeline,
+    strokes: wgpu::RenderPipeline,
+    grid: wgpu::RenderPipeline,
 }
 
 struct Texture {
@@ -565,61 +621,103 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         write_mask: wgpu::ColorWrites::ALL,
     };
     let [rect, degrees, crop, grey, elliptical] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x4, 3 => Float32, 4 => Float32];
-    let quads = pipeline(
-        &device,
-        &[CAMERA, ELLIPSE, QUADS].concat(),
-        &[&camera_layout, &image_layout],
-        &[Some(wgpu::VertexBufferLayout {
-            array_stride: INSTANCE,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[rect, degrees, crop, grey, elliptical, opacity(5)],
-        })],
-        target.clone(),
-    );
+    let quads_module = module(&device, &[CAMERA, ELLIPSE, QUADS].concat());
+    let quad_attributes = [rect, degrees, crop, grey, elliptical, opacity(5)];
     let [rect, degrees, colour] =
         wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x3];
-    let texts = pipeline(
-        &device,
-        &[CAMERA, TEXT].concat(),
-        &[&camera_layout, &image_layout],
-        &[Some(wgpu::VertexBufferLayout {
-            array_stride: INSTANCE,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[rect, degrees, colour, opacity(3)],
-        })],
-        target.clone(),
-    );
+    let texts_module = module(&device, &[CAMERA, TEXT].concat());
+    let text_attributes = [rect, degrees, colour, opacity(3)];
     let [shape, geometry, degrees, width, colour, extra] = wgpu::vertex_attr_array![0 => Float32, 1 => Float32x4, 2 => Float32, 3 => Float32, 4 => Float32x3, 5 => Float32];
-    let strokes = pipeline(
+    let strokes_module = module(&device, &[CAMERA, ELLIPSE, STROKES].concat());
+    let stroke_attributes = [
+        shape,
+        geometry,
+        degrees,
+        width,
+        colour,
+        wgpu::VertexAttribute {
+            shader_location: 6,
+            ..extra
+        },
+        opacity(5),
+    ];
+    let stroking = |target, depth, fragment| {
+        pipeline(
+            &device,
+            &strokes_module,
+            &[&camera_layout],
+            &[Some(wgpu::VertexBufferLayout {
+                array_stride: INSTANCE,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &stroke_attributes,
+            })],
+            target,
+            depth,
+            fragment,
+        )
+    };
+    let grid_module = module(&device, &[CAMERA, GRID].concat());
+    // The same modules for both, which WebGL2 links once.
+    let pipelines = |depth: Option<wgpu::DepthStencilState>| {
+        let instanced = |attributes| {
+            [Some(wgpu::VertexBufferLayout {
+                array_stride: INSTANCE,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes,
+            })]
+        };
+        Pipelines {
+            quads: pipeline(
+                &device,
+                &quads_module,
+                &[&camera_layout, &image_layout],
+                &instanced(&quad_attributes),
+                target.clone(),
+                depth.clone(),
+                "fs",
+            ),
+            texts: pipeline(
+                &device,
+                &texts_module,
+                &[&camera_layout, &image_layout],
+                &instanced(&text_attributes),
+                target.clone(),
+                depth.clone(),
+                "fs",
+            ),
+            strokes: stroking(target.clone(), depth.clone(), "fs"),
+            grid: pipeline(
+                &device,
+                &grid_module,
+                &[&camera_layout, &camera_layout],
+                &[],
+                target.clone(),
+                depth,
+                "fs",
+            ),
+        }
+    };
+    let plain = pipelines(None);
+    let deep = pipelines(Some(depth(Depth::Ignored)));
+    let unseen = wgpu::ColorTargetState {
+        format: config.format,
+        blend: None,
+        write_mask: wgpu::ColorWrites::empty(),
+    };
+    let once = [
+        stroking(unseen.clone(), Some(depth(Depth::Clear)), "fs_clear"),
+        stroking(unseen, Some(depth(Depth::Cover)), "fs_cover"),
+        stroking(target, Some(depth(Depth::Once)), "fs_once"),
+    ];
+    let blit = pipeline(
         &device,
-        &[CAMERA, ELLIPSE, STROKES].concat(),
-        &[&camera_layout],
-        &[Some(wgpu::VertexBufferLayout {
-            array_stride: INSTANCE,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[
-                shape,
-                geometry,
-                degrees,
-                width,
-                colour,
-                wgpu::VertexAttribute {
-                    shader_location: 6,
-                    ..extra
-                },
-                opacity(5),
-            ],
-        })],
-        target.clone(),
-    );
-    let grid = pipeline(
-        &device,
-        &[CAMERA, GRID].concat(),
-        &[&camera_layout, &camera_layout],
+        &module(&device, BLIT),
+        &[&image_layout],
         &[],
-        target,
+        TEXTURE_FORMAT.into(),
+        None,
+        "fs",
     );
-    let blit = pipeline(&device, BLIT, &[&image_layout], &[], TEXTURE_FORMAT.into());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
@@ -633,12 +731,12 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         queue,
         surface,
         config,
-        quads,
-        texts,
-        strokes,
-        grid,
+        plain,
+        deep,
+        once,
         blit,
         image_layout,
+        depth: None,
         camera,
         camera_group,
         grid_uniform,
@@ -744,6 +842,9 @@ impl Renderer {
         self.config.width = width.max(1);
         self.config.height = height.max(1);
         self.surface.configure(&self.device, &self.config);
+        if let Some(depth) = self.depth.take() {
+            depth.destroy();
+        }
     }
 
     /// `zoom` is in device pixels per board unit, `items` holds [`STRIDE`] floats per item,
@@ -762,11 +863,25 @@ impl Renderer {
             other => return Err(JsError::new(&format!("no frame to draw: {other:?}"))),
         };
         let view = frame.texture.create_view(&Default::default());
+        let size = frame.texture.size();
+        let depth = if holds_once(items) {
+            if self.depth.as_ref().is_none_or(|depth| depth.size() != size) {
+                let made = depth_texture(&self.device, size);
+                if let Some(old) = self.depth.replace(made) {
+                    old.destroy();
+                }
+            }
+            self.depth
+                .as_ref()
+                .map(|depth| depth.create_view(&Default::default()))
+        } else {
+            None
+        };
         let viewport = [self.config.width as f32, self.config.height as f32];
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.record(
             &mut encoder,
-            &view,
+            (&view, depth.as_ref()),
             wgpu::Color::TRANSPARENT,
             [x, y, zoom, viewport[0], viewport[1]],
             items,
@@ -837,6 +952,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let depth = holds_once(items).then(|| depth_texture(&self.device, target.size()));
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let clear = wgpu::Color {
             r: f64::from(red),
@@ -846,7 +962,13 @@ impl Renderer {
         };
         self.record(
             &mut encoder,
-            &target.create_view(&Default::default()),
+            (
+                &target.create_view(&Default::default()),
+                depth
+                    .as_ref()
+                    .map(|depth| depth.create_view(&Default::default()))
+                    .as_ref(),
+            ),
             clear,
             [x, y, zoom, width as f32, height as f32],
             items,
@@ -867,6 +989,9 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
         // Submitted work outlives its textures' destruction.
         target.destroy();
+        if let Some(depth) = depth {
+            depth.destroy();
+        }
         let mapped = Arc::new(Mutex::new(None));
         let slot = Arc::clone(&mapped);
         buffer
@@ -1053,7 +1178,7 @@ impl Renderer {
     fn record(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
+        (target, depth): (&wgpu::TextureView, Option<&wgpu::TextureView>),
         clear: wgpu::Color,
         [x, y, zoom, width, height]: [f32; 5],
         items: &[f32],
@@ -1084,10 +1209,15 @@ impl Renderer {
             .collect();
         self.queue.write_buffer(&self.instances, 0, &instances);
 
-        let mut pass = begin(encoder, target, wgpu::LoadOp::Clear(clear));
+        let pipelines = if depth.is_some() {
+            &self.deep
+        } else {
+            &self.plain
+        };
+        let mut pass = begin(encoder, target, depth, wgpu::LoadOp::Clear(clear));
         pass.set_bind_group(0, &self.camera_group, &[]);
         if !grid.is_empty() {
-            pass.set_pipeline(&self.grid);
+            pass.set_pipeline(&pipelines.grid);
             pass.set_bind_group(1, &self.grid_group, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -1098,19 +1228,33 @@ impl Renderer {
         let mut at = 0;
         while at < items.len() {
             let [kind, texture, ..] = items[at];
+            if kind == ONCE {
+                let stroke = items[at][STRIDE - 2];
+                let run = items[at..]
+                    .iter()
+                    .take_while(|item| item[0] == ONCE && item[STRIDE - 2] == stroke)
+                    .count();
+                for pipeline in &self.once {
+                    pass.set_pipeline(pipeline);
+                    pass.draw(0..4, at as u32..(at + run) as u32);
+                }
+                drawing = None;
+                at += run;
+                continue;
+            }
             let (pipeline, run) = if kind == STROKE {
                 let run = items[at..]
                     .iter()
                     .take_while(|item| item[0] == STROKE)
                     .count();
-                (&self.strokes, run)
+                (&pipelines.strokes, run)
             } else if let Some(Some(texture)) = self.textures.get(texture as usize) {
                 pass.set_bind_group(1, &texture.group, &[]);
                 (
                     if kind == IMAGE {
-                        &self.quads
+                        &pipelines.quads
                     } else {
-                        &self.texts
+                        &pipelines.texts
                     },
                     1,
                 )
@@ -1208,6 +1352,7 @@ impl Renderer {
             let mut pass = begin(
                 &mut encoder,
                 &target,
+                None,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             );
             pass.set_pipeline(&self.blit);
@@ -1229,17 +1374,22 @@ fn check_grid(grid: &[f32]) -> Result<(), JsError> {
     }
 }
 
+fn module(device: &wgpu::Device, shader: &str) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(shader.into()),
+    })
+}
+
 fn pipeline(
     device: &wgpu::Device,
-    shader: &str,
+    module: &wgpu::ShaderModule,
     layouts: &[&wgpu::BindGroupLayout],
     buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
     target: wgpu::ColorTargetState,
+    depth_stencil: Option<wgpu::DepthStencilState>,
+    fragment: &str,
 ) -> wgpu::RenderPipeline {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: None,
-        source: wgpu::ShaderSource::Wgsl(shader.into()),
-    });
     let layouts: Vec<Option<&wgpu::BindGroupLayout>> = layouts.iter().copied().map(Some).collect();
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -1250,14 +1400,14 @@ fn pipeline(
         label: None,
         layout: Some(&layout),
         vertex: wgpu::VertexState {
-            module: &module,
+            module,
             entry_point: Some("vs"),
             compilation_options: Default::default(),
             buffers,
         },
         fragment: Some(wgpu::FragmentState {
-            module: &module,
-            entry_point: Some("fs"),
+            module,
+            entry_point: Some(fragment),
             compilation_options: Default::default(),
             targets: &[Some(target)],
         }),
@@ -1265,7 +1415,7 @@ fn pipeline(
             topology: wgpu::PrimitiveTopology::TriangleStrip,
             ..Default::default()
         },
-        depth_stencil: None,
+        depth_stencil,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -1275,6 +1425,7 @@ fn pipeline(
 fn begin<'a>(
     encoder: &'a mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
+    depth: Option<&wgpu::TextureView>,
     load: wgpu::LoadOp<wgpu::Color>,
 ) -> wgpu::RenderPass<'a> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1288,10 +1439,92 @@ fn begin<'a>(
                 store: wgpu::StoreOp::Store,
             },
         })],
-        depth_stencil_attachment: None,
+        depth_stencil_attachment: depth.map(|view| wgpu::RenderPassDepthStencilAttachment {
+            view,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(1.0),
+                store: wgpu::StoreOp::Discard,
+            }),
+            stencil_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(0),
+                store: wgpu::StoreOp::Discard,
+            }),
+        }),
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
+    })
+}
+
+/// What a pipeline does with the depth and the stencil, which only [`ONCE`] uses.
+enum Depth {
+    Ignored,
+    /// Starts both over, as far, and none.
+    Clear,
+    /// Keeps the nearest.
+    Cover,
+    /// Draws where as near as what was kept, the first time only.
+    Once,
+}
+
+fn depth(use_: Depth) -> wgpu::DepthStencilState {
+    let stencil = |compare, pass_op| {
+        let face = wgpu::StencilFaceState {
+            compare,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op,
+        };
+        wgpu::StencilState {
+            front: face,
+            back: face,
+            read_mask: 0xff,
+            write_mask: 0xff,
+        }
+    };
+    let (write, compare, stencil) = match use_ {
+        Depth::Ignored => (false, wgpu::CompareFunction::Always, Default::default()),
+        Depth::Clear => (
+            true,
+            wgpu::CompareFunction::Always,
+            stencil(wgpu::CompareFunction::Always, wgpu::StencilOperation::Zero),
+        ),
+        Depth::Cover => (true, wgpu::CompareFunction::Less, Default::default()),
+        Depth::Once => (
+            false,
+            wgpu::CompareFunction::LessEqual,
+            stencil(
+                wgpu::CompareFunction::Equal,
+                wgpu::StencilOperation::IncrementClamp,
+            ),
+        ),
+    };
+    wgpu::DepthStencilState {
+        format: DEPTH,
+        depth_write_enabled: Some(write),
+        depth_compare: Some(compare),
+        stencil,
+        bias: Default::default(),
+    }
+}
+
+/// Whether `items` hold a see-through pen stroke, which only a pass with the depth and the
+/// stencil draws.
+fn holds_once(items: &[f32]) -> bool {
+    let (items, _) = items.as_chunks::<STRIDE>();
+    items.iter().any(|item| item[0] == ONCE)
+}
+
+fn depth_texture(device: &wgpu::Device, size: wgpu::Extent3d) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: DEPTH,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
     })
 }
 

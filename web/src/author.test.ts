@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { answer as reply, type Reading } from "./agent.js";
 import { write, type Writing } from "./author.js";
 import { untitled, type Opened } from "./board.js";
 import * as core from "./core.js";
@@ -64,6 +65,47 @@ describe("write", () => {
     const [drawn, written] = answer.added.map(({ id }) => opened.board.elements[id]?.kind);
     expect(drawn).toMatchObject(arrow);
     expect(written).toMatchObject(comment);
+  });
+
+  it("adds a pen stroke through an agent's points, framed by them, read back without them", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const points = [
+      { x: 10, y: 20 },
+      { x: 60, y: 45 },
+      { x: 110, y: 70 },
+      { x: 110, y: 20 },
+    ];
+    const stroke = { type: "stroke", points, colour: "red" };
+    const { added } = (await write("add", { elements: [stroke] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const id = added[0]!.id;
+    // The second point lies on the line from the first to the third.
+    expect(opened.board.elements[id]?.kind).toEqual({
+      type: "stroke",
+      frame: { x: 10, y: 20, width: 100, height: 50 },
+      rotation: 0,
+      points: [0, 0, 1, 1, 1, 0],
+      colour: "red",
+    });
+    const reading = { ...writing, unsaved: () => false } as unknown as Reading & Writing;
+    const read = (await reply(
+      { id: 1, tool: "elements", args: { ids: [id] }, deadline: later() },
+      reading,
+    )) as {
+      elements: Record<string, { kind: Record<string, unknown> }>;
+    };
+    expect(read.elements[id]?.kind).toMatchObject({ type: "stroke", point_count: 3 });
+    expect(read.elements[id]?.kind).not.toHaveProperty("points");
+  });
+
+  it("refuses a pen stroke with no point plainly, and changes nothing", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const adding = write("add", { elements: [{ type: "stroke", points: [] }] }, writing, later());
+    await expect(adding).rejects.toThrow("A pen stroke needs a point");
+    expect(opened.board.elements).toEqual({});
   });
 
   it("changes nothing when an agent names an element the board lacks", async () => {

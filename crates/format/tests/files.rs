@@ -15,6 +15,7 @@ const NOTE: ElementId = ElementId::from_random(3);
 const ELLIPSE: ElementId = ElementId::from_random(4);
 const ARROW: ElementId = ElementId::from_random(5);
 const STICKY: ElementId = ElementId::from_random(6);
+const STROKE: ElementId = ElementId::from_random(12);
 const IMAGE: &[u8] = b"not really a PNG";
 
 fn frame(width: f64, height: f64) -> Rect {
@@ -189,6 +190,25 @@ fn sample() -> Board {
                 },
             },
         ),
+        (
+            STROKE,
+            Element {
+                group: None,
+                z: z("a7"),
+                kind: ElementKind::Stroke {
+                    frame: frame(60.0, 20.0),
+                    rotation: 0.0,
+                    points: vec![
+                        Point { x: 0.0, y: 1.0 },
+                        Point { x: 0.25, y: 0.0 },
+                        Point { x: 1.0, y: 0.5 },
+                    ],
+                    colour: Colour::Blue,
+                    weight: Weight::Thin,
+                    opacity: Default::default(),
+                },
+            },
+        ),
     ];
     Board {
         elements: elements.into_iter().collect(),
@@ -239,7 +259,7 @@ fn restacking_rewrites_one_file() {
     let order = format::read(&after).unwrap().draw_order();
     assert_eq!(
         order,
-        [1, 2, 3, 4, 5, 6, 7, 8, 9].map(ElementId::from_random)
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 12].map(ElementId::from_random)
     );
 }
 
@@ -249,7 +269,7 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
     fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
-    let cases: [(Edit, &[u128]); 20] = [
+    let cases: [(Edit, &[u128]); 24] = [
         (
             |editor| editor.add(id(10), None, note(None, "New").kind),
             &[10],
@@ -315,6 +335,25 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
         // The cross lies whole on the note, and the comment off the ellipse it sticks to, on
         // the sticky note.
         (|editor| editor.land(&[id(8), id(9)]), &[8, 9]),
+        (|editor| editor.translate(&[STROKE], 8.0, -8.0), &[12]),
+        (
+            |editor| editor.scale(&[STROKE], Point { x: 0.0, y: 0.0 }, 1.5),
+            &[12],
+        ),
+        (
+            |editor| editor.rotate(&[STROKE], Point { x: 5.0, y: 5.0 }, 90.0),
+            &[12],
+        ),
+        (
+            |editor| {
+                let mut kind = editor.board().elements[&STROKE].kind.clone();
+                if let ElementKind::Stroke { points, .. } = &mut kind {
+                    points.push(Point { x: 1.0, y: 1.0 });
+                }
+                editor.update(STROKE, kind)
+            },
+            &[12],
+        ),
     ];
     for (edit, touched) in cases {
         let mut editor = Editor::new(sample());
@@ -545,6 +584,39 @@ fn an_element_is_plain_json() {
       "content": "Warm light from the left",
       "font_size": 20.0
     }
+  }
+}
+"#
+    );
+}
+
+#[test]
+fn a_pen_stroke_writes_each_number_of_its_points_on_a_line() {
+    let files = format::write(&sample()).unwrap();
+    let stroke = String::from_utf8(files[&format!("elements/{STROKE}.json")].clone()).unwrap();
+    assert_eq!(
+        stroke,
+        r#"{
+  "z": "a7",
+  "kind": {
+    "type": "stroke",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 60.0,
+      "height": 20.0
+    },
+    "rotation": 0.0,
+    "points": [
+      0.0,
+      1.0,
+      0.25,
+      0.0,
+      1.0,
+      0.5
+    ],
+    "colour": "blue",
+    "weight": "thin"
   }
 }
 "#

@@ -203,6 +203,8 @@ function reach(items: Placed[]): Rect | undefined {
         return corners(item.frame, item.rotation);
       case "line":
         return [item.from, item.to].flatMap((end) => around(end, item.width / 2));
+      case "stroke":
+        return item.points.flatMap((point) => around(point, item.width / 2));
       case "arrow":
         return [item.from, item.to, ...barbs(item)].flatMap((end) => around(end, item.width / 2));
       case "outline": {

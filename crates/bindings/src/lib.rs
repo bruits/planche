@@ -552,8 +552,22 @@ pub fn file_depth() -> usize {
     format::DEPTH
 }
 
-/// How wide an arrow, a line, or a shape of `weight` draws, in board units, as the core hits it.
-/// A medium one when `undefined`, as a weight left as it comes is.
+/// A pen stroke as JSON, through `points`, each across then down in board units, framed by them,
+/// without those that stray less than `tolerance` from the line through the others.
+#[wasm_bindgen(js_name = strokeKind)]
+pub fn stroke_kind(points: &[f64], tolerance: f64) -> Result<String, JsError> {
+    let (pairs, odd) = points.as_chunks::<2>();
+    if !odd.is_empty() {
+        return Err(JsError::new("A stroke's points are pairs of numbers"));
+    }
+    let points: Vec<Point> = pairs.iter().map(|&[x, y]| Point { x, y }).collect();
+    Ok(serde_json::to_string(&ElementKind::stroke(
+        &points, tolerance,
+    ))?)
+}
+
+/// How wide an arrow, a line, a shape, or a pen stroke of `weight` draws, in board units, as the
+/// core hits it. A medium one when `undefined`, as a weight left as it comes is.
 #[wasm_bindgen(js_name = strokeWidth)]
 pub fn stroke_width(weight: Option<String>) -> Result<f64, JsError> {
     let weight: Weight = weight

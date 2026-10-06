@@ -19,8 +19,10 @@
 // otherwise. Holding ⌘, or Ctrl elsewhere than macOS, keeps things from sticking and the grid from
 // pulling, but for a move only once under way, as pressing an element with it toggles the element
 // instead. The eraser removes what a click would select, or all that a drag passes over but what
-// it starts within, in one edit. The arrow keys move the selection by a pixel, or ten while ⇧ is
-// held, or by the grid's step while snapping to the grid shown, as one edit until let go.
+// it starts within, in one edit. The pen draws where the pointer goes, smoothed, or a dot for a
+// click, or a straight line from where it was pressed while ⇧ is held, as one edit once let go,
+// and stays the tool. The arrow keys move the selection by a pixel, or ten while ⇧ is held, or
+// by the grid's step while snapping to the grid shown, as one edit until let go.
 // Cropping shows an image whole, what its crop leaves out dimmed, and its edges and corners drag
 // the crop, or its inside moves it, until Enter or a press elsewhere crops it, or Escape leaves it
 // as it was. Holding ⇧ keeps the crop's proportions as its edges and corners drag it, X turns it
@@ -38,6 +40,7 @@ import type {
   Copied,
   CropShape,
   Editor,
+  Item,
   Kind,
   Order,
   Point,
@@ -79,6 +82,12 @@ export const STICKY_SIZE = 200;
 export const NOTE_WIDTH = 240;
 /** Of the text drawn or placed, in CSS pixels. */
 export const FONT_SIZE = 20;
+/** How far apart the pointer's positions are for the pen to take them, in CSS pixels. */
+const PEN_SPACING = 1;
+/** How far each point of the pen's line goes toward the pointer, the rest smoothing it. */
+const PEN_FOLLOW = 0.5;
+/** How far a point of the pen's line may stray from the line through the others and be dropped, in CSS pixels. */
+const PEN_TOLERANCE = 0.25;
 
 export interface Editing {
   editor: Editor;
@@ -87,6 +96,7 @@ export interface Editing {
 
 /** What a press draws, while a tool to draw is in use. */
 export type Draw =
+  | "stroke"
   | "arrow"
   | "line"
   | "rectangle"
@@ -116,6 +126,8 @@ export interface Hooks {
   drawn(): void;
   /** What a press draws, in the style its tool draws in, at `zoom` CSS pixels per board unit. */
   styled(kind: Kind, zoom: number): Kind;
+  /** What the pen draws while pressed, `undefined` once let go. */
+  inked(stroke: Pen | undefined): void;
   /** Whether a press selects, with no tool that draws, erases, pans, or picks a colour. */
   selecting(): boolean;
   /** Once what of the selection the pointer is on, or a press holds, changed. */
@@ -129,6 +141,8 @@ export interface Hooks {
   stepped(steps: number[], moves: number): void;
 }
 
+export type Pen = Extract<Item, { kind: "stroke" }>;
+
 /** A size, a share of an image's own size, or an angle, as a gesture shows it. */
 export interface Reading {
   text: string;
@@ -137,6 +151,9 @@ export interface Reading {
 }
 
 type Keys = Pick<MouseEvent, "shiftKey" | "altKey" | "metaKey" | "ctrlKey">;
+
+/** What a press draws by its two ends. */
+type Shaped = Exclude<Draw, "stroke">;
 
 type Segment = Extract<Kind, { type: "arrow" | "line" }>;
 const SEGMENTS = new Set<string>(["arrow", "line"] satisfies Segment["type"][]);
@@ -340,9 +357,19 @@ type Press =
       pointer: number;
       start: Point;
       ends?: [Point, Point];
-      shape: Draw;
+      shape: Shaped;
       id: string;
       dragging: boolean;
+    }
+  /** `line` the pointer's way so far, smoothed, `at` where it went last, `dressed` its style. */
+  | {
+      kind: "pen";
+      pointer: number;
+      start: Point;
+      line: Point[];
+      at: Point;
+      dragging: boolean;
+      dressed: Extract<Kind, { type: "stroke" }>;
     }
   | {
       kind: "end";
@@ -395,6 +422,7 @@ export function edits(
     hovered,
     pointed,
     stepped,
+    inked,
   }: Hooks,
 ): Edits {
   let selected = new Set<string>();
@@ -874,6 +902,18 @@ export function edits(
       return;
     }
     const shape = drawing();
+    if (shape === "stroke") {
+      const dressed = styled(core.strokeKind([at], 0), zoom);
+      if (dressed.type !== "stroke") {
+        return;
+      }
+      press = { kind: "pen", pointer, start: at, line: [at], at, dragging: false, dressed };
+      selected = new Set();
+      show();
+      inked(inking(dressed, [at]));
+      view.host.setPointerCapture(pointer);
+      return;
+    }
     if (shape) {
       press = { kind: "draw", pointer, start: at, shape, id: newId(), dragging: false };
       view.host.setPointerCapture(pointer);
@@ -948,6 +988,13 @@ export function edits(
     if (event.pointerId !== press.pointer) {
       return;
     }
+    if (press.kind === "pen") {
+      // Each position since the last move, which the engine may have merged into it.
+      const passed = "getCoalescedEvents" in event ? event.getCoalescedEvents() : [];
+      for (const each of passed.length > 0 ? passed : [event]) {
+        ink(press, each);
+      }
+    }
     // Once a frame, as some engines send several moves a frame, each as costly to carry.
     moved = event;
     movesBehind += 1;
@@ -1002,6 +1049,28 @@ export function edits(
     // With the keys held now, which may have changed since the move.
     drag(editing, at, zoom, keys ?? event);
   };
+  const ink = (pen: Extract<Press, { kind: "pen" }>, event: PointerEvent) => {
+    const at = view.at(event);
+    const zoom = view.zoom();
+    if (!at || !zoom || distance(at, pen.at) * zoom < PEN_SPACING) {
+      return;
+    }
+    const previous = pen.line.at(-1)!;
+    pen.line.push({
+      x: previous.x + (at.x - previous.x) * PEN_FOLLOW,
+      y: previous.y + (at.y - previous.y) * PEN_FOLLOW,
+    });
+    pen.at = at;
+    pen.dragging ||= distance(at, pen.start) * zoom >= DRAG;
+  };
+  const inkLine = (editor: Editor, pen: Extract<Press, { kind: "pen" }>, straight: boolean) => {
+    if (!pen.dragging) {
+      return [pen.start];
+    }
+    return straight
+      ? [pen.start, core.landEnd(editor, pen.at, { around: pen.start }).at]
+      : [...pen.line, pen.at];
+  };
   /** To `at`, as wide for its height as it was when pressed while `keep`. */
   const dragCrop = (editing: Editing, at: Point, keep: boolean) => {
     const kind = cropping && editing.board.elements[cropping.id]?.kind;
@@ -1023,6 +1092,7 @@ export function edits(
         press?.kind === "stretch" ||
         press?.kind === "rotate" ||
         press?.kind === "end" ||
+        press?.kind === "pen" ||
         (press?.kind === "draw" && SEGMENTS.has(press.shape));
       // Unless a move waits for the frame, which takes the keys then.
       if (held && modifier && editing && last && zoom && !moved) {
@@ -1158,6 +1228,9 @@ export function edits(
         showTargets(editor, editor.targetsOf(ids));
         return;
       }
+      case "pen":
+        inked(inking(press.dressed, inkLine(editor, press, held.shiftKey)));
+        return;
       case "draw": {
         // Pinned where it was pressed.
         if (press.shape === "comment") {
@@ -1238,6 +1311,8 @@ export function edits(
       overlay.marquee(undefined);
     } else if (press.kind === "draw") {
       finishDrawing(press, completed);
+    } else if (press.kind === "pen") {
+      finishInking(press, completed);
     } else if (press.kind === "erase") {
       const editing = current();
       if (editing && !completed) {
@@ -1324,6 +1399,21 @@ export function edits(
     }
   };
 
+  /** Adds what the pen drew unless the press was lost, leaving it unselected to draw on. */
+  const finishInking = (pen: Extract<Press, { kind: "pen" }>, completed: boolean) => {
+    // Before the stroke draws, which would otherwise show twice for a frame.
+    inked(undefined);
+    const editing = current();
+    const zoom = view.zoom();
+    if (!editing || !zoom || !completed) {
+      return;
+    }
+    const { editor } = editing;
+    const line = inkLine(editor, pen, keys?.shiftKey ?? false);
+    const kind = styled(core.strokeKind(line, PEN_TOLERANCE / zoom), zoom);
+    edit(editing, editor.add(newId(), entered, JSON.stringify(kind)));
+  };
+
   const follow = () => {
     const kind = written && current()?.board.elements[written.id]?.kind;
     const zoom = view.zoom();
@@ -1395,6 +1485,9 @@ export function edits(
         seen = event;
       }
       if (event.pointerId === press?.pointer) {
+        if (type === "pointerup" && press.kind === "pen") {
+          ink(press, event);
+        }
         release(type === "pointerup");
       }
     });
@@ -1835,6 +1928,7 @@ export function edits(
     undo: () => run((editing) => edit(editing, editing.editor.undo(), true)),
     redo: () => run((editing) => edit(editing, editing.editor.redo(), true)),
     reset() {
+      inked(undefined);
       selected = new Set();
       entered = undefined;
       // Its board is gone, and its gesture with it.
@@ -2014,7 +2108,7 @@ function extended(kind: Holder, side: number, by: number, least: number): Holder
 }
 
 /** Between two corners of its frame, from one end to the other, or pinned at `from`, with text of `size`. */
-function shaped(shape: Draw, from: Point, to: Point, size: number): Kind {
+function shaped(shape: Shaped, from: Point, to: Point, size: number): Kind {
   const text = { content: "", font_size: size };
   const frame = rect(from, to);
   switch (shape) {
@@ -2035,7 +2129,7 @@ function shaped(shape: Draw, from: Point, to: Point, size: number): Kind {
  * As a click at `at` places it: centred there, but a note, whose first line starts there, and a
  * comment, pinned there.
  */
-function placed(shape: Draw, at: Point, zoom: number): Kind {
+function placed(shape: Shaped, at: Point, zoom: number): Kind {
   const size = FONT_SIZE / zoom;
   if (shape === "comment") {
     return shaped(shape, at, at, size);
@@ -2233,5 +2327,16 @@ function rect(from: Point, to: Point): Rect {
     y: Math.min(from.y, to.y),
     width: Math.abs(to.x - from.x),
     height: Math.abs(to.y - from.y),
+  };
+}
+
+/** What the pen draws through `points`, in the style it was `dressed` in, as the board would. */
+function inking(dressed: Extract<Kind, { type: "stroke" }>, points: Point[]): Pen {
+  return {
+    kind: "stroke",
+    points,
+    width: core.strokeWidth(dressed.weight),
+    paint: dressed.colour ?? "ink",
+    opacity: (dressed.opacity ?? 100) / 100,
   };
 }

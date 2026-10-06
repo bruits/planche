@@ -162,6 +162,7 @@ export function toolOf(kind: Kind): Draw | undefined {
     case "line":
     case "note":
     case "sticky":
+    case "stroke":
       return kind.type;
     default:
       return undefined;
@@ -224,7 +225,16 @@ export function styles(): Styles {
 
 /** What the browser remembers, but anything the core would refuse, as storage may hold anything. */
 function recalled(): Partial<Record<Draw, Style>> {
-  const tools: Draw[] = ["arrow", "line", "rectangle", "ellipse", "cross", "note", "sticky"];
+  const tools: Draw[] = [
+    "stroke",
+    "arrow",
+    "line",
+    "rectangle",
+    "ellipse",
+    "cross",
+    "note",
+    "sticky",
+  ];
   const stored = parsed(recall(STYLES)) as Partial<Record<Draw, unknown>> | undefined;
   return Object.fromEntries(
     tools.flatMap((tool) => {

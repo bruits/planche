@@ -93,6 +93,11 @@ export interface CardHost {
   selection(): string[];
   /** Clockwise from its top-left, on the board. */
   box(): Point[] | undefined;
+  /**
+   * What the tool in use draws, in its style, while nothing is selected, whose style the card
+   * then sets for what it draws next. `undefined` for a tool whose style shows on what it drew.
+   */
+  tool(): Kind | undefined;
   client(point: Point): { clientX: number; clientY: number } | undefined;
   zoom(): number | undefined;
   /** Whether a gesture or some writing is under way, which it hides for. */
@@ -219,11 +224,18 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   /** With whether the alignment it holds is only the one its holder takes by default. */
   let copied: { style: Style; natural: boolean } | undefined;
 
-  /** The elements selected, and those of the groups selected, but the groups themselves. */
+  /**
+   * The elements selected, and those of the groups selected, but the groups themselves, or else
+   * what the tool draws, which no element holds yet.
+   */
   const targets = (): { id: string; kind: Kind }[] => {
     const opened = host.current();
     if (!opened) {
       return [];
+    }
+    const drawn = host.tool();
+    if (drawn) {
+      return [{ id: "", kind: drawn }];
     }
     const { board } = opened;
     const chosen = new Set(host.selection());
@@ -279,6 +291,12 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     if (zoom === undefined || all.length === 0) {
       return [];
     }
+    if (host.tool() !== undefined) {
+      if (style.colour !== undefined) {
+        store.pick(style.colour);
+      }
+      return all;
+    }
     edit((editor, touched) => {
       for (const { id, kind } of all) {
         const next = restyled(kind, each(kind), zoom);
@@ -294,11 +312,19 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   };
   const set = (style: Style, only = false) => {
     const all = restyle(style);
-    if (all.length > 0 && !only) {
-      store.learn(
+    if (all.length > 0 && (!only || host.tool() !== undefined)) {
+      learn(
         all.map(({ kind }) => kind),
         style,
       );
+    }
+  };
+  /** What draws `kinds` draws in `style` from now on. */
+  const learn = (kinds: Kind[], style: Style) => {
+    store.learn(kinds, style);
+    // No edit tells it so.
+    if (host.tool() !== undefined) {
+      show();
     }
   };
 
@@ -414,8 +440,8 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
         input.blur();
       }
       host.finishAdjusting();
-      if (!only) {
-        store.learn(
+      if (!only || host.tool() !== undefined) {
+        learn(
           targets().map(({ kind }) => kind),
           { opacity: Number(input.value) },
         );
@@ -796,16 +822,25 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     chip.hidden = true;
     panel.hidden = true;
   };
-  /** Under the selection, or above it where the toolbar leaves no room under it. */
+  /**
+   * Under the selection, or above it where the toolbar leaves no room under it, or above the
+   * toolbar for the tool's style.
+   */
   const place = (shown: HTMLElement) => {
+    const { width, height } = shown.getBoundingClientRect();
+    const floor = Math.min(innerHeight, host.floor());
+    if (host.tool() !== undefined) {
+      const left = clamp(innerWidth / 2 - width / 2, MARGIN, innerWidth - width - MARGIN);
+      shown.style.setProperty("left", `${left}px`);
+      shown.style.setProperty("top", `${Math.max(MARGIN, floor - height - MARGIN)}px`);
+      return;
+    }
     const corners = host.box()?.map((corner) => host.client(corner));
     if (!corners || corners.some((corner) => corner === undefined)) {
       return;
     }
     const xs = corners.map((corner) => corner!.clientX);
     const ys = corners.map((corner) => corner!.clientY);
-    const { width, height } = shown.getBoundingClientRect();
-    const floor = Math.min(innerHeight, host.floor());
     const left = clamp(
       (Math.min(...xs) + Math.max(...xs)) / 2 - width / 2,
       MARGIN,

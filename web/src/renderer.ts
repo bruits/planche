@@ -90,8 +90,11 @@ export interface Renderer {
 const READBACK_TIME = 15_000;
 /** Floats per item, as `draw` reads them, those an item leaves out being zeros. */
 const STRIDE = 14;
-/** As the renderer tells its items apart. */
-const KINDS = { image: 0, stroke: 1, text: 2 };
+/**
+ * As the renderer tells its items apart. The segments of a see-through pen stroke draw `once`,
+ * each pixel taking the one that covers it most, which needs them told from another stroke's.
+ */
+const KINDS = { image: 0, stroke: 1, text: 2, once: 3 };
 /** As the renderer tells its strokes apart. */
 const SHAPES = { line: 0, rectangle: 1, ellipse: 2, fill: 3, cross: 4, arrow: 6 };
 /** How wide a line of the grid is, or a dot across, in CSS pixels, and how much of the ink it takes. */
@@ -310,12 +313,13 @@ async function on(
 }
 
 /** Without the items whose texture is not uploaded, as drawing one would panic and kill the module. */
-function packed(
+export function packed(
   placed: Placed[],
   images: Map<string, number>,
   texts: Map<string, number>,
   painted: Paints,
 ): Float32Array {
+  let strokes = 0;
   const shown = placed.flatMap((item) => {
     const texture =
       item.kind === "image"
@@ -323,9 +327,14 @@ function packed(
         : item.kind === "text"
           ? texts.get(item.id)
           : -1;
-    return texture === undefined
-      ? []
-      : [{ values: floats(item, texture, painted), opacity: item.opacity }];
+    if (texture === undefined) {
+      return [];
+    }
+    const rows =
+      item.kind === "stroke"
+        ? segments(item, strokes++, painted)
+        : [floats(item, texture, painted)];
+    return rows.map((values) => ({ values, opacity: item.opacity }));
   });
   const items = new Float32Array(shown.length * STRIDE);
   shown.forEach(({ values, opacity }, at) => {
@@ -333,6 +342,24 @@ function packed(
     items[(at + 1) * STRIDE - 1] = opacity;
   });
   return items;
+}
+
+/**
+ * A pen stroke as lines from each point to the next, or one from its point to itself, which draws
+ * a dot. Opaque, they may overlap where they meet.
+ */
+function segments(
+  { points, width, paint, opacity }: Extract<Placed, { kind: "stroke" }>,
+  serial: number,
+  colours: Paints,
+): number[][] {
+  const kind = opacity < 1 ? KINDS.once : KINDS.stroke;
+  const rgb = colours(paint);
+  const ends = points.length > 1 ? points.slice(1) : points;
+  return ends.map((to, at) => {
+    const from = points[at]!;
+    return [kind, -1, SHAPES.line, from.x, from.y, to.x, to.y, 0, width, ...rgb, serial];
+  });
 }
 
 /**
@@ -353,7 +380,11 @@ function turn(): Promise<void> {
 }
 
 /** As the renderer lays out its items: its kind, its texture, then its instance, but its opacity. */
-function floats(item: Placed, texture: number, colours: Paints): number[] {
+function floats(
+  item: Exclude<Placed, { kind: "stroke" }>,
+  texture: number,
+  colours: Paints,
+): number[] {
   switch (item.kind) {
     case "image": {
       const { frame, texture: shown } = item;

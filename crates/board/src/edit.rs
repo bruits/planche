@@ -518,7 +518,8 @@ impl Editor {
                 if let ElementKind::Image { rotation, .. }
                 | ElementKind::Note { rotation, .. }
                 | ElementKind::Sticky { rotation, .. }
-                | ElementKind::Shape { rotation, .. } = kind
+                | ElementKind::Shape { rotation, .. }
+                | ElementKind::Stroke { rotation, .. } = kind
                 {
                     *rotation = 0.0;
                 }
@@ -561,7 +562,8 @@ impl Editor {
                 ElementKind::Image { frame, .. }
                 | ElementKind::Note { frame, .. }
                 | ElementKind::Sticky { frame, .. }
-                | ElementKind::Shape { frame, .. } => {
+                | ElementKind::Shape { frame, .. }
+                | ElementKind::Stroke { frame, .. } => {
                     let mut centre = frame.centre();
                     scaled(&mut centre);
                     frame.width *= factor;
@@ -601,6 +603,9 @@ impl Editor {
             }
             | ElementKind::Shape {
                 frame, rotation, ..
+            }
+            | ElementKind::Stroke {
+                frame, rotation, ..
             } => {
                 let centre = frame.centre().turned(pivot, degrees);
                 frame.x = centre.x - frame.width / 2.0;
@@ -623,7 +628,8 @@ impl Editor {
             ElementKind::Image { frame, .. }
             | ElementKind::Note { frame, .. }
             | ElementKind::Sticky { frame, .. }
-            | ElementKind::Shape { frame, .. } => {
+            | ElementKind::Shape { frame, .. }
+            | ElementKind::Stroke { frame, .. } => {
                 for value in [
                     &mut frame.x,
                     &mut frame.y,
@@ -1397,7 +1403,8 @@ fn shift(kind: &mut ElementKind, dx: f64, dy: f64) {
         ElementKind::Image { frame, .. }
         | ElementKind::Note { frame, .. }
         | ElementKind::Sticky { frame, .. }
-        | ElementKind::Shape { frame, .. } => {
+        | ElementKind::Shape { frame, .. }
+        | ElementKind::Stroke { frame, .. } => {
             frame.x += dx;
             frame.y += dy;
         }
@@ -1434,7 +1441,7 @@ fn set(board: &mut Board, id: ElementId, element: Option<Element>) {
 mod tests {
     use super::*;
     use crate::stick::Surface;
-    use crate::tests::{arrow, board, element, id};
+    use crate::tests::{arrow, board, element, id, stroke};
     use crate::{Colour, Dash, Fill, Heads, Rect, Text, Weight};
 
     fn note(x: f64) -> ElementKind {
@@ -3881,5 +3888,40 @@ mod tests {
         assert_at(at, 300.0, 190.0);
         editor.undo();
         assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn moving_scaling_and_turning_a_pen_stroke_leave_its_points_and_its_width_alone() {
+        let mut editor = Editor::new(board([(1, element(None, "a0", stroke()))]));
+        let origin = Point { x: 0.0, y: 0.0 };
+        editor.translate(&ids([1]), 10.0, 20.0).unwrap();
+        editor.scale(&ids([1]), origin, 2.0).unwrap();
+        editor.rotate(&ids([1]), origin, 90.0).unwrap();
+        assert_eq!(editor.flip(&ids([1]), true).unwrap(), []);
+        let ElementKind::Stroke {
+            frame,
+            rotation,
+            points,
+            weight,
+            ..
+        } = &editor.board().elements[&id(1)].kind
+        else {
+            unreachable!()
+        };
+        let ElementKind::Stroke {
+            points: drawn,
+            weight: chosen,
+            ..
+        } = stroke()
+        else {
+            unreachable!()
+        };
+        assert_eq!((points, weight), (&drawn, &chosen));
+        assert_eq!((frame.width, frame.height, *rotation), (200.0, 100.0, 90.0));
+        editor.straighten(&ids([1])).unwrap();
+        let ElementKind::Stroke { rotation, .. } = &editor.board().elements[&id(1)].kind else {
+            unreachable!()
+        };
+        assert_eq!(*rotation, 0.0);
     }
 }

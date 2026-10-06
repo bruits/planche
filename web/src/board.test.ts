@@ -21,6 +21,7 @@ import {
 } from "./board.js";
 import * as core from "./core.js";
 import type { Bytes, Kind } from "./core.js";
+import type { Placed } from "./renderer.js";
 import type { Slices, ZipHome } from "./platform.js";
 import { saving, zipStore } from "./save.js";
 import { zipFolder } from "./zip.js";
@@ -122,6 +123,14 @@ function holding(kinds: Kind[]) {
   return { opened, ids };
 }
 
+function level(y: number): Kind {
+  return { type: "line", from: { x: 0, y }, to: { x: 100, y } };
+}
+
+function heights(shown: Placed[]): (number | undefined)[] {
+  return shown.map((each) => (each.kind === "line" ? each.from.y : undefined));
+}
+
 describe("placed", () => {
   const frame = { x: 0, y: 0, width: 100, height: 50 };
   const none = { placed: () => undefined };
@@ -143,6 +152,28 @@ describe("placed", () => {
     for (const shown of [placed(opened, texts, sticky), placed(opened, none)]) {
       expect(shown.map(({ kind }) => kind)).toEqual(["fill", "line"]);
     }
+  });
+
+  it("stacks what is being added where an element added to its group goes, under what lies above", () => {
+    const { opened, ids } = holding([level(0), level(10)]);
+    const group = newId();
+    refresh(opened, opened.editor.group(group, ids));
+    refresh(opened, opened.editor.add(newId(), undefined, JSON.stringify(level(20))));
+    const item: Placed = {
+      kind: "line",
+      from: { x: 0, y: 99 },
+      to: { x: 1, y: 99 },
+      width: 1,
+      paint: "ink",
+      dashed: false,
+      opacity: 1,
+    };
+    expect(heights(placed(opened, none, undefined, undefined, { item, group }))).toEqual([
+      0, 10, 99, 20,
+    ]);
+    expect(heights(placed(opened, none, undefined, undefined, { item, group: undefined }))).toEqual(
+      [0, 10, 20, 99],
+    );
   });
 
   it("draws an element anew once an edit touches it, and its images once other assets are crossed out", () => {

@@ -137,6 +137,23 @@ describe("what a picture of the selection covers", () => {
     });
   });
 
+  it("takes in half a stroke past each point of a pen stroke", () => {
+    const half = core.strokeWidth("thick") / 2;
+    const stroke: Kind = {
+      type: "stroke",
+      frame: { x: 10, y: 20, width: 100, height: 50 },
+      rotation: 0,
+      points: [0, 1, 0.5, 0, 1, 1],
+      weight: "thick",
+    };
+    expect(bounds({ a: stroke })).toEqual({
+      x: 10 - half,
+      y: 20 - half,
+      width: 100 + 2 * half,
+      height: 50 + 2 * half,
+    });
+  });
+
   it("reaches as far across as an arrow's heads spread, at both ends when it has two", () => {
     const arrow: Kind = {
       type: "arrow",

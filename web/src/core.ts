@@ -26,6 +26,7 @@ import init, {
   snapScaleToGrid as snapScale,
   snapToGrid as snap,
   sizedSvg as sized,
+  strokeKind as stroked,
   strokeWidth as width,
   plainStyle,
   styleSettings,
@@ -197,6 +198,15 @@ export function setBackground(editor: Editor, to: Background): void {
 
 export function setCropShape(editor: Editor, ids: string[], shape: CropShape): string[] {
   return editor.setCropShape(ids, JSON.stringify(shape));
+}
+
+/**
+ * A pen stroke through `points`, in board units, framed by them, without those that stray less
+ * than `tolerance` from the line through the others.
+ */
+export function strokeKind(points: Point[], tolerance: number): Extract<Kind, { type: "stroke" }> {
+  const flat = Float64Array.from(points.flatMap(({ x, y }) => [x, y]));
+  return JSON.parse(stroked(flat, tolerance)) as Extract<Kind, { type: "stroke" }>;
 }
 
 const widths = new Map<Weight | undefined, number>();
