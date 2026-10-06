@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use serde::{Serialize, Serializer};
 
-use crate::geometry::stroke_points;
+use crate::geometry::{smoothed, stroke_points};
 use crate::{
     AssetId, Board, Colour, CropShape, Dash, ElementId, ElementKind, Fill, Heads, ImageEdits,
     Paper, Point, Rect, Shape, Size, Text, Tip, Weight,
@@ -285,7 +285,7 @@ fn drawn(
             weight,
             ..
         } => items.push(Item::Stroke {
-            points: stroke_points(frame, *rotation, points),
+            points: smoothed(&stroke_points(frame, *rotation, points), tip.width(*weight)),
             width: tip.width(*weight),
             paint: match tip {
                 Tip::Pen => Paint::Colour(*colour),
@@ -617,6 +617,30 @@ mod tests {
     }
 
     #[test]
+    fn a_stroke_draws_round_where_it_bends_gently() {
+        let bent = ElementKind::stroke(
+            Tip::Pen,
+            &[
+                Point { x: 0.0, y: 0.0 },
+                Point { x: 100.0, y: 0.0 },
+                Point { x: 200.0, y: 30.0 },
+            ],
+            0.0,
+        );
+        let [Item::Stroke { points, .. }] = &drawn(bent)[..] else {
+            panic!()
+        };
+        assert!(points.len() > 3, "{points:?}");
+        assert_eq!(
+            (points.first(), points.last()),
+            (
+                Some(&Point { x: 0.0, y: 0.0 }),
+                Some(&Point { x: 200.0, y: 30.0 })
+            )
+        );
+    }
+
+    #[test]
     fn a_pen_stroke_draws_its_points_where_its_frame_turns_them_and_fades_whole() {
         let ElementKind::Stroke {
             colour,
@@ -632,6 +656,7 @@ mod tests {
             frame: FRAME,
             rotation: 180.0,
             points,
+            target: None,
             colour,
             weight,
             opacity: Opacity::new(40).unwrap(),
@@ -678,6 +703,7 @@ mod tests {
             frame,
             rotation,
             points: points.clone(),
+            target: None,
             colour,
             weight: Weight::Medium,
             opacity: Opacity::new(50).unwrap(),

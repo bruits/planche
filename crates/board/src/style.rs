@@ -598,6 +598,7 @@ mod tests {
             frame,
             rotation,
             points: points.iter().map(|&(x, y)| Point { x, y }).collect(),
+            target: None,
             colour,
             weight,
             opacity,

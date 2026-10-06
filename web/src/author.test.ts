@@ -110,6 +110,36 @@ describe("write", () => {
     expect(opened.board.elements[added[0]!.id]?.kind).toMatchObject({ tip: "highlighter" });
   });
 
+  it("sticks a stroke drawn whole on a filled shape to it, unless the agent says not to", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      font: "",
+      measureText: measure,
+    } as unknown as CanvasRenderingContext2D);
+    const opened = untitled();
+    const { writing } = page(opened);
+    const shape = { type: "shape", x: 0, y: 0, width: 100, height: 100, fill: "solid" };
+    const stroke = {
+      type: "stroke",
+      points: [
+        { x: 20, y: 20 },
+        { x: 80, y: 60 },
+      ],
+    };
+    const add = async (stick: boolean) => {
+      const { added } = (await write(
+        "add",
+        { elements: [shape, stroke], stick },
+        writing,
+        later(),
+      )) as { added: { id: string }[] };
+      return added.map(({ id }) => id);
+    };
+    const [filled, stuck] = await add(true);
+    expect(opened.board.elements[stuck!]?.kind).toMatchObject({ target: filled });
+    const [, free] = await add(false);
+    expect(opened.board.elements[free!]?.kind).not.toHaveProperty("target");
+  });
+
   it("refuses a pen stroke with no point plainly, and changes nothing", async () => {
     const opened = untitled();
     const { writing } = page(opened);

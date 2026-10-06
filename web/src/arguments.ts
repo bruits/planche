@@ -3,8 +3,8 @@
 
 export type AddArguments = { elements: Array<NewElement>, 
 /**
- * Whether what lies on an element sticks to it, and follows it: notes, stickies, shapes and
- * comments as a whole, and each end of an arrow or a line. True by default.
+ * Whether what lies on an element sticks to it, and follows it: notes, stickies, shapes,
+ * strokes, and comments as a whole, and each end of an arrow or a line. True by default.
  */
 stick?: boolean, };
 

@@ -75,7 +75,7 @@ pub enum Placement {
     To(Point),
 }
 
-/// What becomes of the notes, sticky notes, shapes, and comments set down.
+/// What becomes of the notes, sticky notes, shapes, strokes, and comments set down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -295,8 +295,8 @@ impl Editor {
         self.record(step)
     }
 
-    /// Sticks each note, sticky note, shape, and comment among the elements, with those of the
-    /// groups among them, to what it lies on whole, or frees it when it lies on nothing.
+    /// Sticks each note, sticky note, shape, stroke, and comment among the elements, with those of
+    /// the groups among them, to what it lies on whole, or frees it when it lies on nothing.
     pub fn land(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
         let landing: Vec<ElementId> = self
             .with_descendants(ids)?
@@ -314,8 +314,8 @@ impl Editor {
         self.stick_whole(targets)
     }
 
-    /// Frees each note, sticky note, shape, and comment among the elements, with those of the
-    /// groups among them, from what it sticks to.
+    /// Frees each note, sticky note, shape, stroke, and comment among the elements, with those of
+    /// the groups among them, from what it sticks to.
     pub fn unstick(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
         let stuck = self
             .with_descendants(ids)?
@@ -492,24 +492,39 @@ impl Editor {
     }
 
     /// Turns each element, with those of the groups among them, upright around its own centre.
-    /// What sticks to them follows, then turns upright in its turn, so that each keeps to its
-    /// pixel.
+    /// What sticks to them follows, and among them then turns upright in its turn, so that each
+    /// keeps to its pixel, but for a stroke, drawn as it lies on what it sticks to, which only
+    /// follows when that ends up turned.
     pub fn straighten(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
         let mut pending = self.with_descendants(ids)?;
         // Turning one would turn all its elements at once, those it holds back included.
         pending.retain(|id| !matches!(self.board.elements[id].kind, ElementKind::Group));
+        let straightened = pending.clone();
+        let turns = |id: &ElementId| {
+            held_by(&self.board, *id)
+                .find(|target| straightened.contains(target))
+                .is_some_and(|target| {
+                    matches!(
+                        &self.board.elements[&target].kind,
+                        ElementKind::Image { rotation, .. }
+                            | ElementKind::Note { rotation, .. }
+                            | ElementKind::Sticky { rotation, .. }
+                            | ElementKind::Shape { rotation, .. }
+                            if *rotation != 0.0
+                    )
+                })
+        };
+        pending.retain(|id| {
+            !matches!(self.board.elements[id].kind, ElementKind::Stroke { .. }) || !turns(id)
+        });
         // Each element turns around its own centre, which following would take as a turn of all
         // alike, so what sticks to another turns after it, on a scratch editor.
         let mut turning = Editor::new(self.board.clone());
         let mut touched = BTreeSet::new();
         while !pending.is_empty() {
             let board = &turning.board;
-            let carried = |id: &ElementId| {
-                iter::successors(board.elements[id].kind.target(), |target| {
-                    board.elements.get(target)?.kind.target()
-                })
-                .any(|target| pending.contains(&target))
-            };
+            let carried =
+                |id: &ElementId| held_by(board, *id).any(|target| pending.contains(&target));
             let (later, now): (BTreeSet<ElementId>, BTreeSet<ElementId>) =
                 pending.iter().partition(|id| carried(id));
             pending = later;
@@ -1437,12 +1452,19 @@ fn set(board: &mut Board, id: ElementId, element: Option<Element>) {
     };
 }
 
+/// What the element sticks to whole, then what that sticks to, and so on.
+fn held_by(board: &Board, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+    iter::successors(board.elements[&id].kind.target(), |target| {
+        board.elements.get(target)?.kind.target()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::stick::Surface;
     use crate::tests::{arrow, board, element, id, stroke};
-    use crate::{Colour, Dash, Fill, Heads, Rect, Text, Weight};
+    use crate::{Colour, Dash, Fill, Heads, Rect, Text, Tip, Weight};
 
     fn note(x: f64) -> ElementKind {
         ElementKind::Note {
@@ -3319,6 +3341,105 @@ mod tests {
     }
 
     #[test]
+    fn straightened_with_its_image_a_stroke_keeps_its_points_on_their_pixels() {
+        let mut image = picture(0.0, 0.0);
+        if let ElementKind::Image { rotation, .. } = &mut image {
+            *rotation = 30.0;
+        }
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", image)),
+            (
+                2,
+                element(None, "a1", on(line((60.0, 80.0), (140.0, 120.0)), 1)),
+            ),
+        ]));
+        let pixels = |editor: &Editor| {
+            let ElementKind::Stroke {
+                frame,
+                rotation,
+                points,
+                ..
+            } = &editor.board().elements[&id(2)].kind
+            else {
+                unreachable!()
+            };
+            crate::geometry::stroke_points(frame, *rotation, points)
+                .into_iter()
+                .map(|point| editor.board().pixel_at(id(1), point).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let before = pixels(&editor);
+
+        editor.straighten(&ids([1, 2])).unwrap();
+        for (after, before) in pixels(&editor).into_iter().zip(before) {
+            assert_at(after, before.x, before.y);
+        }
+        assert_eq!(editor.board().elements[&id(2)].kind.target(), Some(id(1)));
+        assert_sound(&editor);
+    }
+
+    #[test]
+    fn a_stroke_straightens_upright_unless_what_it_sticks_to_turns_with_it() {
+        let turned = |bits, x| {
+            let mut stroke = on(line((x + 60.0, 80.0), (x + 140.0, 120.0)), bits);
+            if let ElementKind::Stroke { rotation, .. } = &mut stroke {
+                *rotation = 25.0;
+            }
+            stroke
+        };
+        let tilted = |x| {
+            let mut image = picture(x, 0.0);
+            if let ElementKind::Image { rotation, .. } = &mut image {
+                *rotation = 30.0;
+            }
+            image
+        };
+        let upright = |x, bits| on(framed(x + 40.0, 40.0, 120.0, 120.0), bits);
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (2, element(None, "a1", turned(1, 0.0))),
+            (3, element(None, "a2", turned(1, 0.0))),
+            (4, element(None, "a3", tilted(300.0))),
+            // Upright on the turned image, which it follows then stands back up.
+            (5, element(None, "a4", upright(300.0, 4))),
+            (6, element(None, "a5", turned(5, 300.0))),
+            (7, element(None, "a6", tilted(600.0))),
+            // Upright on the turned image, which it follows, left turned.
+            (8, element(None, "a7", upright(600.0, 7))),
+            (9, element(None, "a8", turned(8, 600.0))),
+        ]));
+        let rotation = |editor: &Editor, bits| {
+            let ElementKind::Stroke { rotation, .. } = editor.board().elements[&id(bits)].kind
+            else {
+                unreachable!()
+            };
+            rotation
+        };
+        assert_eq!(editor.straighten(&ids([1, 2])).unwrap(), ids([2]));
+        assert_eq!(editor.straighten(&ids([3])).unwrap(), ids([3]));
+        editor.straighten(&ids([4, 5, 6])).unwrap();
+        editor.straighten(&ids([7, 9])).unwrap();
+        assert_eq!(
+            [2, 3, 6, 9].map(|bits| rotation(&editor, bits)),
+            [0.0, 0.0, 0.0, 355.0]
+        );
+        assert_sound(&editor);
+    }
+
+    #[test]
+    fn a_stroke_stuck_to_a_note_scales_with_it() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", framed(0.0, 0.0, 200.0, 100.0))),
+            (
+                2,
+                element(None, "a1", on(line((40.0, 40.0), (60.0, 50.0)), 1)),
+            ),
+        ]));
+        editor.scale(&ids([1]), point(0.0, 0.0), 2.0).unwrap();
+        assert_stroke_placed(&editor, 2, 1, [80.0, 80.0, 40.0, 20.0], 0.0, AS_DRAWN);
+    }
+
+    #[test]
     fn straightened_down_a_chain_what_sticks_keeps_to_the_same_place_on_what_it_sticks_to() {
         let mut image = picture(0.0, 0.0);
         if let ElementKind::Image { rotation, .. } = &mut image {
@@ -3887,6 +4008,272 @@ mod tests {
         };
         assert_at(at, 300.0, 190.0);
         editor.undo();
+        assert_eq!(editor.board(), &before);
+    }
+
+    fn line(from: (f64, f64), to: (f64, f64)) -> ElementKind {
+        ElementKind::stroke(
+            Tip::Highlighter,
+            &[point(from.0, from.1), point(to.0, to.1)],
+            0.0,
+        )
+    }
+
+    fn assert_stroke_placed(
+        editor: &Editor,
+        bits: u128,
+        target: u128,
+        frame: [f64; 4],
+        rotation: f64,
+        drawn: [(f64, f64); 2],
+    ) {
+        let ElementKind::Stroke {
+            frame: at,
+            rotation: turned,
+            points,
+            target: sticks_to,
+            ..
+        } = &editor.board().elements[&id(bits)].kind
+        else {
+            unreachable!()
+        };
+        let placed = [at.x, at.y, at.width, at.height, *turned];
+        let expected = [frame[0], frame[1], frame[2], frame[3], rotation];
+        assert!(
+            placed
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| (a - b).abs() < 1e-9),
+            "{placed:?} is not {expected:?}"
+        );
+        assert_eq!(points, &drawn.map(|(x, y)| point(x, y)));
+        assert_eq!(*sticks_to, Some(id(target)));
+    }
+
+    const AS_DRAWN: [(f64, f64); 2] = [(0.0, 0.0), (1.0, 1.0)];
+
+    #[test]
+    fn a_stroke_stuck_to_an_image_moves_scales_and_turns_with_it_as_drawn() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (
+                2,
+                element(None, "a1", on(line((40.0, 40.0), (60.0, 50.0)), 1)),
+            ),
+        ]));
+        let before = editor.board().clone();
+
+        assert_eq!(editor.translate(&ids([1]), 10.0, 5.0).unwrap(), ids([1, 2]));
+        assert_stroke_placed(&editor, 2, 1, [50.0, 45.0, 20.0, 10.0], 0.0, AS_DRAWN);
+        editor
+            .scale(&ids([1]), Point { x: 10.0, y: 5.0 }, 2.0)
+            .unwrap();
+        assert_stroke_placed(&editor, 2, 1, [90.0, 85.0, 40.0, 20.0], 0.0, AS_DRAWN);
+        editor
+            .rotate(&ids([1]), Point { x: 210.0, y: 205.0 }, 90.0)
+            .unwrap();
+        assert_stroke_placed(&editor, 2, 1, [300.0, 95.0, 40.0, 20.0], 90.0, AS_DRAWN);
+        assert_eq!(
+            editor.board().elements[&id(2)].kind.stroke_width(),
+            Tip::Highlighter.width(Weight::Medium)
+        );
+        assert_sound(&editor);
+
+        for _ in 0..3 {
+            assert_eq!(editor.undo(), ids([1, 2]));
+        }
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn a_stroke_stuck_to_a_flipped_image_mirrors_with_it() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (
+                2,
+                element(None, "a1", on(line((40.0, 40.0), (60.0, 50.0)), 1)),
+            ),
+        ]));
+        editor.flip(&ids([1]), true).unwrap();
+        let across = [(1.0, 0.0), (0.0, 1.0)];
+        assert_stroke_placed(&editor, 2, 1, [140.0, 40.0, 20.0, 10.0], 0.0, across);
+        editor.flip(&ids([1]), false).unwrap();
+        let both = [(1.0, 1.0), (0.0, 0.0)];
+        assert_stroke_placed(&editor, 2, 1, [140.0, 150.0, 20.0, 10.0], 0.0, both);
+        assert_eq!(editor.remove(&ids([1])).unwrap(), ids([1, 2]));
+        assert_eq!(editor.board().elements[&id(2)].kind.target(), None);
+    }
+
+    #[test]
+    fn a_stroke_stuck_to_a_flipping_image_keeps_each_point_on_its_pixel() {
+        let shown = |degrees, shape| {
+            let mut image = picture(0.0, 0.0);
+            if let ElementKind::Image {
+                rotation, edits, ..
+            } = &mut image
+            {
+                *rotation = degrees;
+                edits.crop_shape = shape;
+            }
+            image
+        };
+        let mut turned = line((40.0, 40.0), (70.0, 30.0));
+        if let ElementKind::Stroke { rotation, .. } = &mut turned {
+            *rotation = 30.0;
+        }
+        // Within the upper left quarter of the circle.
+        let arc: Vec<Point> = (0..=9)
+            .map(|step| {
+                let angle = (180.0 + 10.0 * f64::from(step)).to_radians();
+                point(100.0 + 95.0 * angle.cos(), 100.0 + 95.0 * angle.sin())
+            })
+            .collect();
+        for (image, stroke) in [
+            // Along an edge of the turned image.
+            (
+                shown(45.0, CropShape::Rectangle),
+                line((110.0, -20.0), (220.0, 90.0)),
+            ),
+            (shown(0.0, CropShape::Rectangle), turned),
+            (
+                shown(0.0, CropShape::Ellipse),
+                ElementKind::stroke(Tip::Pen, &arc, 0.0),
+            ),
+        ] {
+            let mut editor = Editor::new(board([
+                (1, element(None, "a0", image)),
+                (2, element(None, "a1", stroke)),
+            ]));
+            assert_eq!(editor.land(&ids([2])).unwrap(), ids([2]));
+            let pixels = |editor: &Editor| {
+                let ElementKind::Stroke {
+                    frame,
+                    rotation,
+                    points,
+                    ..
+                } = &editor.board().elements[&id(2)].kind
+                else {
+                    unreachable!()
+                };
+                crate::geometry::stroke_points(frame, *rotation, points)
+                    .into_iter()
+                    .map(|point| editor.board().pixel_at(id(1), point).unwrap())
+                    .collect::<Vec<_>>()
+            };
+            let before = pixels(&editor);
+            for horizontally in [true, false] {
+                editor.flip(&ids([1]), horizontally).unwrap();
+                for (after, before) in pixels(&editor).into_iter().zip(&before) {
+                    assert_at(after, before.x, before.y);
+                }
+                let elements = &editor.board().elements;
+                assert!(crate::geometry::holds(
+                    &elements[&id(1)].kind,
+                    &elements[&id(2)].kind
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn landing_sticks_a_stroke_whose_line_lies_whole_on_a_surface() {
+        // A diamond around (100, 100), each corner about 141 away.
+        let mut turned = picture(0.0, 0.0);
+        if let ElementKind::Image { rotation, .. } = &mut turned {
+            *rotation = 45.0;
+        }
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", turned)),
+            // Along an edge, the corner of its frame off the image.
+            (2, element(None, "a1", line((110.0, -20.0), (220.0, 90.0)))),
+            (3, element(None, "a2", line((150.0, 100.0), (260.0, 100.0)))),
+            // Drawn below it.
+            (4, element(None, "Zz", line((90.0, 90.0), (110.0, 110.0)))),
+        ]));
+        assert_eq!(editor.land(&ids([2, 3, 4])).unwrap(), ids([2]));
+        let target = |bits| editor.board().elements[&id(bits)].kind.target();
+        assert_eq!([2, 3, 4].map(target), [Some(id(1)), None, None]);
+        assert_sound(&editor);
+    }
+
+    #[test]
+    fn landing_on_an_image_shown_as_an_ellipse_takes_a_stroke_by_its_points_as_turned() {
+        let mut shown = picture(0.0, 0.0);
+        if let ElementKind::Image { edits, .. } = &mut shown {
+            edits.crop_shape = CropShape::Ellipse;
+        }
+        // Upright, it reaches above the picture. Turned around (100, 40), it lies across it.
+        let mut across = line((95.0, -10.0), (105.0, 90.0));
+        if let ElementKind::Stroke { rotation, .. } = &mut across {
+            *rotation = 90.0;
+        }
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", shown)),
+            // Within the curve, the corner of its frame out of it.
+            (2, element(None, "a1", line((20.0, 100.0), (100.0, 20.0)))),
+            // Within the picture's frame, an end out of its curve.
+            (3, element(None, "a2", line((100.0, 100.0), (190.0, 190.0)))),
+            (4, element(None, "a3", across)),
+        ]));
+        assert_eq!(editor.land(&ids([2, 3, 4])).unwrap(), ids([2, 4]));
+        let target = |bits| editor.board().elements[&id(bits)].kind.target();
+        assert_eq!([2, 3, 4].map(target), [Some(id(1)), None, Some(id(1))]);
+        assert_sound(&editor);
+    }
+
+    #[test]
+    fn a_dot_and_a_flat_stroke_land_and_follow_a_scale_and_a_turn() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    ElementKind::stroke(Tip::Pen, &[point(50.0, 50.0)], 0.0),
+                ),
+            ),
+            (3, element(None, "a2", line((40.0, 150.0), (80.0, 150.0)))),
+        ]));
+        let before = editor.board().clone();
+        let drawn = |editor: &Editor, bits| {
+            let kind = &editor.board().elements[&id(bits)].kind;
+            let ElementKind::Stroke {
+                frame,
+                rotation,
+                points,
+                ..
+            } = kind
+            else {
+                unreachable!()
+            };
+            let points = crate::geometry::stroke_points(frame, *rotation, points);
+            (points, kind.target())
+        };
+        let assert_drawn = |editor: &Editor, bits, expected: &[(f64, f64)]| {
+            let (points, target) = drawn(editor, bits);
+            assert!(
+                points.len() == expected.len()
+                    && points.iter().zip(expected).all(|(at, &(x, y))| {
+                        (at.x - x).abs() < 1e-9 && (at.y - y).abs() < 1e-9
+                    }),
+                "{points:?} is not {expected:?}"
+            );
+            assert_eq!(target, Some(id(1)));
+        };
+
+        assert_eq!(editor.land(&ids([2, 3])).unwrap(), ids([2, 3]));
+        editor.scale(&ids([1]), point(0.0, 0.0), 2.0).unwrap();
+        assert_drawn(&editor, 2, &[(100.0, 100.0)]);
+        assert_drawn(&editor, 3, &[(80.0, 300.0), (160.0, 300.0)]);
+        editor.rotate(&ids([1]), point(200.0, 200.0), 90.0).unwrap();
+        assert_drawn(&editor, 2, &[(300.0, 100.0)]);
+        assert_drawn(&editor, 3, &[(100.0, 80.0), (100.0, 160.0)]);
+        assert_sound(&editor);
+
+        for _ in 0..3 {
+            editor.undo();
+        }
         assert_eq!(editor.board(), &before);
     }
 

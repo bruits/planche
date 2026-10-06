@@ -412,6 +412,9 @@ pub enum ElementKind {
         #[serde(with = "flat_points")]
         #[cfg_attr(feature = "ts", ts(type = "number[]"))]
         points: Vec<Point>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        target: Option<ElementId>,
         #[serde(default, skip_serializing_if = "is_default")]
         colour: Colour,
         #[serde(default, skip_serializing_if = "is_default")]
@@ -441,7 +444,7 @@ impl ElementKind {
     }
 
     /// Whether the end of an arrow or a line can stick to it, or a note, a sticky note, a shape,
-    /// or a comment whole, which takes a frame.
+    /// a stroke, or a comment whole, which takes a frame.
     pub fn is_target(&self) -> bool {
         matches!(
             self,
@@ -453,7 +456,11 @@ impl ElementKind {
     pub(crate) fn sticks_whole(&self) -> bool {
         matches!(
             self,
-            Self::Note { .. } | Self::Sticky { .. } | Self::Shape { .. } | Self::Comment { .. }
+            Self::Note { .. }
+                | Self::Sticky { .. }
+                | Self::Shape { .. }
+                | Self::Stroke { .. }
+                | Self::Comment { .. }
         )
     }
 
@@ -489,12 +496,13 @@ impl ElementKind {
         }
     }
 
-    /// The element a note, a sticky note, a shape, or a comment sticks to whole.
+    /// The element a note, a sticky note, a shape, a stroke, or a comment sticks to whole.
     pub(crate) fn target(&self) -> Option<ElementId> {
         match self {
             Self::Note { target, .. }
             | Self::Sticky { target, .. }
             | Self::Shape { target, .. }
+            | Self::Stroke { target, .. }
             | Self::Comment { target, .. } => *target,
             _ => None,
         }
@@ -505,6 +513,7 @@ impl ElementKind {
             Self::Note { target, .. }
             | Self::Sticky { target, .. }
             | Self::Shape { target, .. }
+            | Self::Stroke { target, .. }
             | Self::Comment { target, .. } => Some(target),
             _ => None,
         }
@@ -623,6 +632,7 @@ impl ElementKind {
                 frame,
                 rotation,
                 points,
+                target: _,
                 colour: _,
                 weight: _,
                 opacity: _,
@@ -1403,6 +1413,7 @@ mod tests {
             frame,
             rotation,
             points,
+            target: None,
             colour,
             weight,
             opacity,
@@ -1494,6 +1505,7 @@ mod tests {
                 Point { x: 0.5, y: 0.0 },
                 Point { x: 1.0, y: 1.0 },
             ],
+            target: None,
             colour: Colour::Ink,
             weight: Weight::Medium,
             opacity: Default::default(),
@@ -1786,6 +1798,7 @@ mod tests {
             frame,
             rotation,
             points,
+            target: None,
             colour,
             weight,
             opacity,

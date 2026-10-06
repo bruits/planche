@@ -94,8 +94,8 @@ pub struct NewImage {
 pub struct AddArguments {
     #[schemars(length(min = 1, max = MOST_ELEMENTS))]
     pub elements: Vec<NewElement>,
-    /// Whether what lies on an element sticks to it, and follows it: notes, stickies, shapes and
-    /// comments as a whole, and each end of an arrow or a line. True by default.
+    /// Whether what lies on an element sticks to it, and follows it: notes, stickies, shapes,
+    /// strokes, and comments as a whole, and each end of an arrow or a line. True by default.
     pub stick: Option<bool>,
 }
 
@@ -199,7 +199,8 @@ pub enum NewElement {
         #[schemars(range(min = 1, max = 100))]
         opacity: Option<u8>,
     },
-    /// Drawn freehand through `points`, in order. One point draws a dot.
+    /// Drawn freehand along `points`, in order, rounding each turn but those sharper than 70°.
+    /// One point draws a dot.
     Stroke {
         tip: Option<Tip>,
         #[schemars(length(min = 1, max = MOST_POINTS))]

@@ -1,8 +1,8 @@
-//! What sticks to elements: the ends of arrows and lines, and notes, sticky notes, shapes, and
-//! comments whole. Each keeps to the same point of what its element draws, which it follows
-//! wherever the element goes: a pixel of the picture for an image, a point of the frame for an
-//! end, and a point as far from the frame's top-left corner, in widths of it, for what sticks
-//! whole, which turns, scales, and mirrors with it too.
+//! What sticks to elements: the ends of arrows and lines, and notes, sticky notes, shapes,
+//! strokes, and comments whole. Each keeps to the same point of what its element draws, which it
+//! follows wherever the element goes: a pixel of the picture for an image, a point of the frame
+//! for an end, and a point as far from the frame's top-left corner, in widths of it, for what
+//! sticks whole, which turns, scales, and mirrors with it too, a stroke's drawing included.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4};
@@ -128,8 +128,8 @@ fn angled(point: Point, around: Point) -> Point {
     }
 }
 
-/// Where notes, sticky notes, shapes, and comments land, one after another, each seeing where
-/// those before it landed, so that none lands on what sticks to it.
+/// Where notes, sticky notes, shapes, strokes, and comments land, one after another, each seeing
+/// where those before it landed, so that none lands on what sticks to it.
 pub(crate) struct Landing<'a> {
     board: &'a Board,
     /// With the bounds of each element's surface, which hold whatever lands on it.
@@ -166,9 +166,10 @@ impl<'a> Landing<'a> {
         let kind = &board.elements.get(&id)?.kind;
         let below = match kind {
             ElementKind::Comment { .. } => &self.order[..],
-            ElementKind::Note { .. } | ElementKind::Sticky { .. } | ElementKind::Shape { .. } => {
-                &self.order[..*self.places.get(&id)?]
-            }
+            ElementKind::Note { .. }
+            | ElementKind::Sticky { .. }
+            | ElementKind::Shape { .. }
+            | ElementKind::Stroke { .. } => &self.order[..*self.places.get(&id)?],
             _ => return None,
         };
         let anchor = anchor(kind)?;
@@ -289,8 +290,8 @@ impl Motion {
         }
     }
 
-    /// A note, a sticky note, a shape, or a comment stuck to it whole, moved along. `None` when
-    /// float arithmetic overflows.
+    /// A note, a sticky note, a shape, a stroke, or a comment stuck to it whole, moved along.
+    /// `None` when float arithmetic overflows.
     pub(crate) fn element(&self, kind: &ElementKind) -> Option<ElementKind> {
         let mut kind = kind.clone();
         match &mut kind {
@@ -311,43 +312,77 @@ impl Motion {
                 rotation,
                 text,
                 ..
+            } => text.font_size *= self.frame(frame, rotation)?,
+            // Its points mirror as its picture flips, which a turn alone cannot do. Its width
+            // stays, as scaling it alone leaves it.
+            ElementKind::Stroke {
+                frame,
+                rotation,
+                points,
+                ..
             } => {
-                let (before, after) = match self {
-                    Self::Shift(_) => {
-                        let at = self.point(Point {
-                            x: frame.x,
-                            y: frame.y,
-                        })?;
-                        (frame.x, frame.y) = (at.x, at.y);
-                        return kind.is_valid().then_some(kind);
+                self.frame(frame, rotation)?;
+                let (across, down) = self.mirrors();
+                for point in points {
+                    if across {
+                        point.x = 1.0 - point.x;
                     }
-                    Self::Stretch { .. } => {
-                        let centre = self.map(frame.centre(), true)?;
-                        frame.x = centre.x - frame.width / 2.0;
-                        frame.y = centre.y - frame.height / 2.0;
-                        return kind.is_valid().then_some(kind);
+                    if down {
+                        point.y = 1.0 - point.y;
                     }
-                    Self::Map { before, after } => (before, after),
-                };
-                let centre = self.map(frame.centre(), true)?;
-                // Across only, so that what grows down to fit its text scales nothing on it.
-                let scale = after.scale() / before.scale();
-                let scale = if scale.is_finite() && scale > 0.0 {
-                    scale
-                } else {
-                    1.0
-                };
-                frame.width *= scale;
-                frame.height *= scale;
-                frame.x = centre.x - frame.width / 2.0;
-                frame.y = centre.y - frame.height / 2.0;
-                text.font_size *= scale;
-                *rotation = after.turned(before, *rotation);
+                }
             }
             ElementKind::Comment { at, .. } => *at = self.map(*at, true)?,
             _ => return None,
         }
+        // As mirrored points may stray from a hundred thousandth.
+        let kind = kind.canonical();
         kind.is_valid().then_some(kind)
+    }
+
+    /// Whether what sticks to it mirrors, across and down, as its picture flips.
+    fn mirrors(&self) -> (bool, bool) {
+        let Self::Map { before, after } = self else {
+            return (false, false);
+        };
+        let ((across, down), (now_across, now_down)) = (before.flips(), after.flips());
+        (across != now_across, down != now_down)
+    }
+
+    /// Moves `frame` along, turning `rotation` with it, and gives how much it scaled. `None` when
+    /// float arithmetic overflows.
+    fn frame(&self, frame: &mut Rect, rotation: &mut f64) -> Option<f64> {
+        let (before, after) = match self {
+            Self::Shift(_) => {
+                let at = self.point(Point {
+                    x: frame.x,
+                    y: frame.y,
+                })?;
+                (frame.x, frame.y) = (at.x, at.y);
+                return Some(1.0);
+            }
+            Self::Stretch { .. } => {
+                let centre = self.map(frame.centre(), true)?;
+                frame.x = centre.x - frame.width / 2.0;
+                frame.y = centre.y - frame.height / 2.0;
+                return Some(1.0);
+            }
+            Self::Map { before, after } => (before, after),
+        };
+        let centre = self.map(frame.centre(), true)?;
+        // Across only, so that what grows down to fit its text scales nothing on it.
+        let scale = after.scale() / before.scale();
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        frame.width *= scale;
+        frame.height *= scale;
+        frame.x = centre.x - frame.width / 2.0;
+        frame.y = centre.y - frame.height / 2.0;
+        *rotation = after.turned(before, *rotation);
+        Some(scale)
     }
 }
 

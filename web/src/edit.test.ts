@@ -2,7 +2,7 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { refresh, untitled } from "./board.js";
 import * as core from "./core.js";
-import type { Kind } from "./core.js";
+import type { Kind, Point } from "./core.js";
 import { edits, type Edits, type Hooks } from "./edit.js";
 import { closeMenu, openMenu } from "./menu.js";
 import { overlay } from "./overlay.js";
@@ -77,7 +77,7 @@ function page(
     type: string,
     clientX: number,
     clientY: number,
-    { shiftKey = false, altKey = false } = {},
+    { shiftKey = false, altKey = false, free = false } = {},
   ) =>
     host.dispatchEvent(
       new PointerEvent(type, {
@@ -85,6 +85,9 @@ function page(
         clientY,
         shiftKey,
         altKey,
+        // ⌘ on macOS, Ctrl elsewhere.
+        metaKey: free,
+        ctrlKey: free,
         button: 0,
         pointerId: 1,
         bubbles: true,
@@ -683,15 +686,16 @@ describe("the pen", () => {
     const { opened, hooks, pointer } = page([], { drawing: () => "pen" });
     const shown = () => vi.mocked(hooks.inked).mock.lastCall?.[0]?.points.length;
     pointer("pointerdown", 200, 200);
-    pointer("pointermove", 260, 300);
+    pointer("pointermove", 300, 200);
+    pointer("pointermove", 300, 300);
     await nextFrame();
-    expect(shown()).toBe(3);
+    expect(shown()).toBeGreaterThan(2);
     key("keydown", { key: "Shift", shiftKey: true });
     expect(shown()).toBe(2);
     key("keyup", { key: "Shift" });
-    expect(shown()).toBe(3);
+    expect(shown()).toBeGreaterThan(2);
     key("keydown", { key: "Shift", shiftKey: true });
-    pointer("pointerup", 260, 300);
+    pointer("pointerup", 300, 300);
     const [stroke] = strokes(opened);
     expect(stroke?.points).toHaveLength(4);
   });
@@ -704,6 +708,46 @@ describe("the pen", () => {
     );
     pointer("pointerup", 200, 200);
     expect(strokes(opened)).toMatchObject([{ tip: "highlighter" }]);
+  });
+
+  it("sticks what it draws whole on the sticky note to it, as one edit, unless ⌘ is held", async () => {
+    const { opened, editing, pointer } = page([], { drawing: () => "pen" });
+    const draw = async (from: Point, to: Point, free = false) => {
+      pointer("pointerdown", from.x, from.y, { free });
+      pointer("pointermove", to.x, to.y, { free });
+      await nextFrame();
+      pointer("pointerup", to.x, to.y, { free });
+    };
+    await draw({ x: 20, y: 20 }, { x: 80, y: 80 });
+    await draw({ x: 50, y: 50 }, { x: 150, y: 50 });
+    await draw({ x: 20, y: 80 }, { x: 80, y: 20 }, true);
+    expect(strokes(opened).map(({ target }) => target)).toEqual([STICKY, undefined, undefined]);
+    editing.undo();
+    editing.undo();
+    editing.undo();
+    expect(strokes(opened)).toEqual([]);
+  });
+
+  it("shows while pressed the curve it draws once let go", async () => {
+    const { opened, hooks, pointer } = page([], { drawing: () => "pen" });
+    pointer("pointerdown", 200, 200);
+    for (const [x, y] of [
+      [260, 210],
+      [300, 250],
+      [310, 310],
+      [280, 360],
+    ]) {
+      pointer("pointermove", x!, y!);
+    }
+    await nextFrame();
+    const shown = vi.mocked(hooks.inked).mock.lastCall?.[0];
+    pointer("pointerup", 280, 360);
+    const [id] = Object.entries(opened.board.elements).flatMap(([each, { kind }]) =>
+      kind.type === "stroke" ? [each] : [],
+    );
+    expect(core.drawn(opened.editor, [id!], new Set())[0]).toEqual([shown]);
+    // Round between the points it keeps.
+    expect(shown?.points.length).toBeGreaterThan(strokes(opened)[0]!.points.length / 2);
   });
 
   it("forgets what it was drawing once its board goes", () => {

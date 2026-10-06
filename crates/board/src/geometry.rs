@@ -10,6 +10,13 @@ use crate::{
 
 /// The most points [`Board::hit_along`] tries, so that however long the way, it stays quick.
 const MOST_TRIES: f64 = 4096.0;
+/// How far a stroke's line turns at a point, in degrees, beyond which [`smoothed`] keeps the
+/// point a corner.
+const CORNER: f64 = 70.0;
+/// About how far each piece of a curve [`smoothed`] draws turns, in degrees.
+const PIECE: f64 = 4.0;
+/// So that a corner rounded near its limit costs the renderer little.
+const MOST_PIECES: f64 = 16.0;
 
 impl Board {
     /// The topmost element that draws at `point`, or within `tolerance` of it. A group or a
@@ -57,7 +64,7 @@ impl Board {
             .filter(|id| {
                 let kind = &self.elements[id].kind;
                 shape(kind).is_some_and(|shape| overlap(&shape, &around))
-                    && points.iter().any(|point| hits(kind, *point, tolerance))
+                    && hits_any(kind, &points, tolerance)
             })
             .collect()
     }
@@ -201,6 +208,12 @@ pub(crate) fn anchor(kind: &ElementKind) -> Option<Point> {
         ElementKind::Note { frame, .. }
         | ElementKind::Sticky { frame, .. }
         | ElementKind::Shape { frame, .. } => Some(frame.centre()),
+        ElementKind::Stroke {
+            frame,
+            rotation,
+            points,
+            ..
+        } => stroke_points(frame, *rotation, points).first().copied(),
         ElementKind::Comment { at, .. } => Some(*at),
         _ => None,
     }
@@ -291,6 +304,7 @@ impl ElementKind {
                     y: part(point.y - frame.y, frame.height),
                 })
                 .collect(),
+            target: None,
             colour: Default::default(),
             weight: Default::default(),
             opacity: Default::default(),
@@ -326,6 +340,93 @@ fn simplified(points: &[Point], tolerance: f64) -> Vec<Point> {
         .zip(kept)
         .filter_map(|(point, kept)| kept.then_some(*point))
         .collect()
+}
+
+/// A curve along `points`, which rounds each corner between the middles of its sides but those
+/// it turns sharply at, so that it stays within what they surround, in pieces that turn little
+/// enough to look round, though no more of them than its sides are long in `width`s, as more
+/// would only thicken it. Where its ends meet, it rounds that corner too.
+pub(crate) fn smoothed(points: &[Point], width: f64) -> Vec<Point> {
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+        return Vec::new();
+    };
+    let middle = |a: Point, b: Point| Point {
+        x: (a.x + b.x) / 2.0,
+        y: (a.y + b.y) / 2.0,
+    };
+    let ring = (points.len() > 3 && first == last).then(|| &points[..points.len() - 1]);
+    let (corners, ends): (Vec<[Point; 3]>, _) = match ring {
+        Some(ring) => {
+            let around = |at: usize| ring[at % ring.len()];
+            let seam = middle(around(ring.len() - 1), around(0));
+            (
+                (0..ring.len())
+                    .map(|at| [around(at + ring.len() - 1), around(at), around(at + 1)])
+                    .collect(),
+                (seam, seam),
+            )
+        }
+        None => (
+            points
+                .windows(3)
+                .map(|corner| [corner[0], corner[1], corner[2]])
+                .collect(),
+            (*first, *last),
+        ),
+    };
+    let mut curve = vec![ends.0];
+    let mut add = |point: Point| {
+        // Where one corner's curve ends, the next one's begins.
+        if curve.last() != Some(&point) {
+            curve.push(point);
+        }
+    };
+    for [before, at, after] in corners {
+        let turning = turn(before, at, after);
+        if turning > CORNER {
+            add(at);
+            continue;
+        }
+        let (from, to) = (middle(before, at), middle(at, after));
+        let most = ((apart(from, at) + apart(at, to)) / width).floor();
+        let pieces = (turning / PIECE).ceil();
+        // In one piece where it overflows, which `clamp` would panic on.
+        let pieces = if most.is_finite() && pieces.is_finite() {
+            pieces.clamp(1.0, most.clamp(1.0, MOST_PIECES))
+        } else {
+            1.0
+        };
+        for piece in 0..=pieces as usize {
+            let along = piece as f64 / pieces;
+            let (leaving, staying, arriving) = (
+                (1.0 - along) * (1.0 - along),
+                2.0 * (1.0 - along) * along,
+                along * along,
+            );
+            add(Point {
+                x: leaving * from.x + staying * at.x + arriving * to.x,
+                y: leaving * from.y + staying * at.y + arriving * to.y,
+            });
+        }
+    }
+    add(ends.1);
+    curve
+}
+
+/// How far the way from `before` through `at` to `after` turns at `at`, in degrees, none where
+/// two of them meet.
+fn turn(before: Point, at: Point, after: Point) -> f64 {
+    let (into, out) = (
+        (at.x - before.x, at.y - before.y),
+        (after.x - at.x, after.y - at.y),
+    );
+    let cross = into.0 * out.1 - into.1 * out.0;
+    let dot = into.0 * out.0 + into.1 * out.1;
+    if cross == 0.0 && dot == 0.0 {
+        0.0
+    } else {
+        cross.atan2(dot).abs().to_degrees()
+    }
 }
 
 /// Where a pen stroke's points lie on the board.
@@ -379,19 +480,7 @@ pub(crate) fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
         ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
             distance(point, *from, *to) <= reach
         }
-        // Against its frame first, which holds its many points.
-        ElementKind::Stroke {
-            frame,
-            rotation,
-            points,
-            ..
-        } => {
-            near(&corners(frame, *rotation), point, reach) && {
-                let point = point.turned(frame.centre(), -rotation);
-                pieces(&upright(frame, points))
-                    .any(|piece| distance(point, piece[0], piece[piece.len() - 1]) <= reach)
-            }
-        }
+        ElementKind::Stroke { .. } => hits_any(kind, &[point], tolerance),
         ElementKind::Image {
             frame,
             rotation,
@@ -404,6 +493,31 @@ pub(crate) fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
         } => near_ellipse(frame, *rotation, point, tolerance) || covers(kind, point),
         _ => shape(kind).is_some_and(|shape| near(&shape, point, tolerance)),
     }
+}
+
+/// Whether [`hits`] finds `kind` at any of `points`, the curve of a stroke drawn once for them
+/// all, and each tried against its frame first, which holds its many points.
+fn hits_any(kind: &ElementKind, points: &[Point], tolerance: f64) -> bool {
+    let ElementKind::Stroke {
+        frame,
+        rotation,
+        points: drawn,
+        ..
+    } = kind
+    else {
+        return points.iter().any(|point| hits(kind, *point, tolerance));
+    };
+    let width = kind.stroke_width();
+    let reach = tolerance + width / 2.0;
+    let outline = corners(frame, *rotation);
+    let mut curve = None;
+    points.iter().any(|point| {
+        near(&outline, *point, reach) && {
+            let curve = curve.get_or_insert_with(|| smoothed(&upright(frame, drawn), width));
+            let point = point.turned(frame.centre(), -rotation);
+            pieces(curve).any(|piece| distance(point, piece[0], piece[piece.len() - 1]) <= reach)
+        }
+    })
 }
 
 /// Whether `point` is within the area an element fills, besides its outline: an image's, a
@@ -548,7 +662,8 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
             };
             overlap(&corners(&grown, *rotation), area) && {
                 let area = area.map(|corner| corner.turned(frame.centre(), -rotation));
-                pieces(&upright(frame, points)).any(|piece| within(piece, &area, reach))
+                pieces(&smoothed(&upright(frame, points), kind.stroke_width()))
+                    .any(|piece| within(piece, &area, reach))
             }
         }
         ElementKind::Comment { at, .. } => {
@@ -559,7 +674,7 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
 }
 
 /// Whether what `target` covers holds the whole of what `kind` draws: its frame, the curve of an
-/// ellipse, or the pin of a comment.
+/// ellipse, the line of a stroke, or the pin of a comment.
 pub(crate) fn holds(target: &ElementKind, kind: &ElementKind) -> bool {
     match kind {
         ElementKind::Shape {
@@ -606,6 +721,16 @@ pub(crate) fn holds(target: &ElementKind, kind: &ElementKind) -> bool {
         } => corners(frame, *rotation)
             .iter()
             .all(|point| covers(target, *point)),
+        // By its points, as its frame may jut out of a target turned otherwise, and the curve it
+        // draws stays within what they surround.
+        ElementKind::Stroke {
+            frame,
+            rotation,
+            points,
+            ..
+        } => stroke_points(frame, *rotation, points)
+            .into_iter()
+            .all(|point| covers(target, point)),
         ElementKind::Comment { at, .. } => covers(target, *at),
         _ => false,
     }
@@ -896,6 +1021,7 @@ mod tests {
             frame,
             rotation,
             points: points.iter().map(|&(x, y)| point(x, y)).collect(),
+            target: None,
             colour,
             weight,
             opacity,
@@ -1742,6 +1868,129 @@ mod tests {
             Some(corners.map(|(x, y)| point(x, y)).to_vec())
         );
         assert_eq!(board.bounds(&[id(1)]), Some(area(0.0, 0.0, 100.0, 100.0)));
+    }
+
+    #[test]
+    fn a_stroke_draws_round_along_its_points_within_them_where_its_ends_meet_too() {
+        let mut around: Vec<Point> = (0..24)
+            .map(|step| {
+                let angle = f64::from(step) * 15f64.to_radians();
+                point(100.0 * angle.cos(), 100.0 * angle.sin())
+            })
+            .collect();
+        around.push(around[0]);
+        let curve = smoothed(&around, 2.0);
+        assert_eq!(curve.first(), curve.last());
+        let mut closed = curve.clone();
+        closed.push(curve[1]);
+        for piece in closed.windows(3) {
+            assert!(turn(piece[0], piece[1], piece[2]) <= PIECE, "{piece:?}");
+        }
+        // Between the circle and the middles of its sides.
+        let inner = 100.0 * 7.5f64.to_radians().cos();
+        for drawn in &curve {
+            let off = apart(*drawn, point(0.0, 0.0));
+            assert!((inner - 1e-9..=100.0 + 1e-9).contains(&off), "{drawn:?}");
+        }
+    }
+
+    #[test]
+    fn a_stroke_drawn_unevenly_stays_within_its_points() {
+        let uneven = [
+            point(0.0, 0.0),
+            point(2.0, 1.0),
+            point(60.0, 10.0),
+            point(61.0, 12.0),
+            point(120.0, 20.0),
+        ];
+        for drawn in smoothed(&uneven, 2.0) {
+            assert!(
+                (0.0..=120.0).contains(&drawn.x) && (0.0..=20.0).contains(&drawn.y),
+                "{drawn:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stroke_keeps_its_corners_its_straight_lines_and_its_dots() {
+        let square = [point(0.0, 0.0), point(100.0, 0.0), point(100.0, 100.0)];
+        assert_eq!(smoothed(&square, 2.0), square);
+        let straight = [point(0.0, 0.0), point(30.0, 40.0)];
+        assert_eq!(smoothed(&straight, 2.0), straight);
+        assert_eq!(smoothed(&[point(5.0, 5.0)], 2.0), [point(5.0, 5.0)]);
+        // As float arithmetic may leave two of its points as one once its frame is flat.
+        let flat = [point(0.0, 0.0), point(0.0, 0.0), point(10.0, 0.0)];
+        assert!(
+            smoothed(&flat, 2.0)
+                .iter()
+                .all(|drawn| drawn.y == 0.0 && (0.0..=10.0).contains(&drawn.x))
+        );
+    }
+
+    #[test]
+    fn a_closed_stroke_keeps_its_sharp_corners_where_its_ends_meet_too() {
+        let middle = point(50.0, 0.0);
+        let square = [
+            point(100.0, 0.0),
+            point(100.0, 100.0),
+            point(0.0, 100.0),
+            point(0.0, 0.0),
+            point(100.0, 0.0),
+        ];
+        assert_eq!(
+            smoothed(&square, 2.0),
+            [middle, square[0], square[1], square[2], square[3], middle]
+        );
+        // Its tip where it began and ends.
+        let drop = [
+            point(0.0, 0.0),
+            point(60.0, 20.0),
+            point(80.0, 50.0),
+            point(60.0, 80.0),
+            point(30.0, 70.0),
+            point(0.0, 0.0),
+        ];
+        let curve = smoothed(&drop, 2.0);
+        let seam = point(15.0, 35.0);
+        assert_eq!((curve.first(), curve.last()), (Some(&seam), Some(&seam)));
+        assert_eq!(curve[1], drop[0]);
+    }
+
+    #[test]
+    fn a_stroke_overflowing_the_board_is_drawn_and_missed_without_panicking() {
+        let far = pen(
+            area(1e308, 0.0, 1e308, 10.0),
+            0.0,
+            &[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)],
+        );
+        let board = board([(1, element(None, "a0", far))]);
+        assert_eq!(board.drawn(id(1), &BTreeSet::new()).len(), 1);
+        // On the one edge of its frame that does not overflow, so that its curve is drawn.
+        assert_eq!(board.hit(point(1e308, 5.0), 1.0), None);
+    }
+
+    #[test]
+    fn a_small_curl_takes_no_more_pieces_than_its_sides_are_long_in_widths() {
+        let curl = [point(0.0, 0.0), point(4.0, 1.0), point(5.0, 5.0)];
+        // About 4.1 from the middle of one side to the corner, then the other's, its ends straight.
+        let rounded = |width| smoothed(&curl, width).len() - 3;
+        assert_eq!(rounded(2.0), 2);
+        assert!(rounded(0.1) > 2);
+    }
+
+    #[test]
+    fn a_stroke_is_hit_where_its_curve_draws_and_not_on_the_corner_it_rounds() {
+        let bent = ElementKind::stroke(
+            Tip::Pen,
+            &[point(0.0, 0.0), point(100.0, 0.0), point(150.0, 86.6)],
+            0.0,
+        );
+        let board = board([(1, element(None, "a0", bent))]);
+        // Rounded from (50, 0) to (125, 43.3), through about (93.75, 10.8) at its middle.
+        assert_eq!(board.hit(point(100.0, 0.0), 1.0), None);
+        assert_eq!(board.hit(point(93.75, 10.8), 1.0), Some(id(1)));
+        assert_eq!(board.touching(area(92.0, 9.0, 4.0, 4.0)), [id(1)]);
+        assert!(board.touching(area(98.0, -2.0, 4.0, 4.0)).is_empty());
     }
 
     #[test]

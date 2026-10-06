@@ -204,6 +204,7 @@ fn sample() -> Board {
                         Point { x: 0.25, y: 0.0 },
                         Point { x: 1.0, y: 0.5 },
                     ],
+                    target: None,
                     colour: Colour::Blue,
                     weight: Weight::Thin,
                     opacity: Default::default(),
@@ -270,7 +271,7 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
     fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
-    let cases: [(Edit, &[u128]); 24] = [
+    let cases: [(Edit, &[u128]); 25] = [
         (
             |editor| editor.add(id(10), None, note(None, "New").kind),
             &[10],
@@ -336,6 +337,8 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
         // The cross lies whole on the note, and the comment off the ellipse it sticks to, on
         // the sticky note.
         (|editor| editor.land(&[id(8), id(9)]), &[8, 9]),
+        // The stroke lies whole on the note.
+        (|editor| editor.land(&[STROKE]), &[12]),
         (|editor| editor.translate(&[STROKE], 8.0, -8.0), &[12]),
         (
             |editor| editor.scale(&[STROKE], Point { x: 0.0, y: 0.0 }, 1.5),
@@ -616,6 +619,45 @@ fn a_pen_stroke_writes_each_number_of_its_points_on_a_line() {
       1.0,
       0.5
     ],
+    "colour": "blue",
+    "weight": "thin"
+  }
+}
+"#
+    );
+}
+
+#[test]
+fn a_stroke_names_what_it_sticks_to_after_its_points_and_reads_back() {
+    let mut board = sample();
+    if let ElementKind::Stroke { target, .. } = &mut board.elements.get_mut(&STROKE).unwrap().kind {
+        *target = Some(NOTE);
+    }
+    let files = format::write(&board).unwrap();
+    assert_eq!(format::read(&files).unwrap(), board);
+    let stroke = String::from_utf8(files[&format!("elements/{STROKE}.json")].clone()).unwrap();
+    assert_eq!(
+        stroke,
+        r#"{
+  "z": "a7",
+  "kind": {
+    "type": "stroke",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 60.0,
+      "height": 20.0
+    },
+    "rotation": 0.0,
+    "points": [
+      0.0,
+      1.0,
+      0.25,
+      0.0,
+      1.0,
+      0.5
+    ],
+    "target": "00000000000000000000000000000003",
     "colour": "blue",
     "weight": "thin"
   }

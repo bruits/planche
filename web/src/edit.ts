@@ -13,9 +13,9 @@
 // image, note, sticky note, or shape they land on, onto its outline when near it, and follow it
 // from then on. While ⇧ is held, the end being drawn or moved keeps to a multiple of 45° around
 // the other one, the grid pulling it along its way, and it sticks only to what it lies on. A note,
-// a sticky note, a shape, or a comment drawn, placed, moved, scaled, or turned whole onto an
-// image, a note, a sticky note, or a shape filled or holding text sticks to it and follows it too.
-// While snapping, what moves, scales, or is drawn lands on the grid's lines where near them
+// a sticky note, a shape, a stroke, or a comment drawn, placed, moved, scaled, or turned whole onto
+// an image, a note, a sticky note, or a shape filled or holding text sticks to it and follows it
+// too. While snapping, what moves, scales, or is drawn lands on the grid's lines where near them
 // otherwise. Holding ⌘, or Ctrl elsewhere than macOS, keeps things from sticking and the grid from
 // pulling, but for a move only once under way, as pressing an element with it toggles the element
 // instead. The eraser removes what a click would select, or all that a drag passes over but what
@@ -88,8 +88,12 @@ export const FONT_SIZE = 20;
 const PEN_SPACING = 1;
 /** How far each point of the pen's line goes toward the pointer, the rest smoothing it. */
 const PEN_FOLLOW = 0.5;
-/** How far a point of the pen's line may stray from the line through the others and be dropped, in CSS pixels. */
-const PEN_TOLERANCE = 0.25;
+/**
+ * How far a point of the pen's line may stray from the line through the others and be dropped, in
+ * CSS pixels, past the whole pixels a mouse moves by, which the curve through those kept would wave
+ * along.
+ */
+const PEN_TOLERANCE = 0.6;
 
 export interface Editing {
   editor: Editor;
@@ -365,7 +369,7 @@ type Press =
       id: string;
       dragging: boolean;
     }
-  /** `line` the pointer's way so far, smoothed, `at` where it went last, `ink` how it draws. */
+  /** `line` the pointer's way so far, smoothed, `at` where it went last. */
   | {
       kind: "pen";
       pointer: number;
@@ -374,7 +378,7 @@ type Press =
       at: Point;
       dragging: boolean;
       tip: Tip;
-      ink: Pen;
+      shown?: string;
     }
   | {
       kind: "end";
@@ -908,14 +912,10 @@ export function edits(
     }
     const shape = drawing();
     if (isTip(shape)) {
-      const [ink] = core.drawnKind(styled(core.strokeKind([at], 0, shape), zoom));
-      if (ink?.kind !== "stroke") {
-        return;
-      }
-      press = { kind: "pen", pointer, start: at, line: [at], at, dragging: false, tip: shape, ink };
+      press = { kind: "pen", pointer, start: at, line: [at], at, dragging: false, tip: shape };
       selected = new Set();
       show();
-      inked(ink);
+      inked(drawnStroke(stroked([at], shape, zoom)));
       view.host.setPointerCapture(pointer);
       return;
     }
@@ -1233,9 +1233,15 @@ export function edits(
         showTargets(editor, editor.targetsOf(ids));
         return;
       }
-      case "pen":
-        inked({ ...press.ink, points: inkLine(editor, press, held.shiftKey) });
+      case "pen": {
+        // Only a new point of the line, the drag starting, or ⇧ changes what shows.
+        const shown = `${press.line.length} ${press.dragging} ${held.shiftKey}`;
+        if (shown !== press.shown) {
+          press.shown = shown;
+          inked(drawnStroke(stroked(inkLine(editor, press, held.shiftKey), press.tip, zoom)));
+        }
         return;
+      }
       case "draw": {
         // Pinned where it was pressed.
         if (press.shape === "comment") {
@@ -1404,6 +1410,10 @@ export function edits(
     }
   };
 
+  /** What the pen draws through `line`, at `zoom` CSS pixels per board unit, as the board keeps it. */
+  const stroked = (line: Point[], tip: Tip, zoom: number) =>
+    styled(core.strokeKind(line, PEN_TOLERANCE / zoom, tip), zoom);
+
   /** Adds what the pen drew unless the press was lost, leaving it unselected to draw on. */
   const finishInking = (pen: Extract<Press, { kind: "pen" }>, completed: boolean) => {
     // Before the stroke draws, which would otherwise show twice for a frame.
@@ -1415,8 +1425,12 @@ export function edits(
     }
     const { editor } = editing;
     const line = inkLine(editor, pen, keys?.shiftKey ?? false);
-    const kind = styled(core.strokeKind(line, PEN_TOLERANCE / zoom, pen.tip), zoom);
-    edit(editing, editor.add(newId(), entered, JSON.stringify(kind)));
+    const kind = stroked(line, pen.tip, zoom);
+    const id = newId();
+    editor.beginGesture();
+    const touched = [...editor.add(id, entered, JSON.stringify(kind)), ...setDown(editor, [id])];
+    editor.endGesture();
+    edit(editing, touched);
   };
 
   const follow = () => {
@@ -2113,6 +2127,12 @@ function extended(kind: Holder, side: number, by: number, least: number): Holder
     ...kind,
     frame: anchored(frame, rotation, { width: frame.width, height }, [0, side === 2 ? 0 : 1]),
   };
+}
+
+/** As the board draws `kind`, which shows while the pen is pressed. */
+function drawnStroke(kind: Kind): Pen | undefined {
+  const [drawn] = core.drawnKind(kind);
+  return drawn?.kind === "stroke" ? drawn : undefined;
 }
 
 /** Between two corners of its frame, from one end to the other, or pinned at `from`, with text of `size`. */
