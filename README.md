@@ -3,21 +3,13 @@
   <img alt="Planche" src="./.github/assets/logo.svg" />
 </picture>
 
-A fast, open-source board to gather your reference images, kept as plain files you own 📌
-
-> [!IMPORTANT]
-> Planche is a working title, and nothing is released yet. The prototype is under way: see the [philosophy](./CONTRIBUTING.md#philosophy) for what it aims at, and the [technical foundation](./docs/technical/foundation.md) for what is decided.
+A cross-platform board for your references and visual research. Fast, open source, agent-ready, and stored as plain files.
 
 ## Project Structure
 
-- `crates/board/` — the board as plain data: elements, groups, and image edits
-- `crates/format/` — the board as a folder of files, and back
-- `crates/bindings/` — the core for the web app, as WASM
-- `crates/desktop/` — the desktop shell, around the web app
-- `crates/folder/` — a folder on disk, as the desktop shell reads and writes it
-- `crates/renderer/` — the renderer, on wgpu
-- `web/` — the app, which runs in a browser and in the desktop shell
+- `crates/board/` and `crates/format/` — the core, a board as plain data and as a folder of files, with no I/O so that it builds for every platform, the browser included
+- `crates/desktop/` — the desktop shell, which wraps the web app and reads and writes boards on disk through `crates/folder/`
+- `crates/mcp/` — the MCP server through which agents read and edit the board open in the desktop app
+- `web/` — the app, in TypeScript, which runs the core as WASM through `crates/bindings/` and draws boards with `crates/renderer/`, on wgpu
 - `samples/` — boards to try the app on
-- `.github/assets/` — the logo and the app icon, as SVG
-- `docs/technical/` — the [technical foundation](./docs/technical/foundation.md), and how boards [save](./docs/technical/saving.md)
-- [CONTRIBUTING.md](./CONTRIBUTING.md) — contributing guidelines and project philosophy
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — setup, each crate in detail, and the project's philosophy
