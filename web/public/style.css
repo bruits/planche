@@ -69,9 +69,10 @@
   --paper-blue: #bce4ff;
   --paper-lilac: #e3d6ff;
   --sticky-ink: #1d1d22;
-  /* A comment's pin, and how wide it grows to show its text. */
+  /* A comment's pin, how wide its text may grow, and how far from the pin it shows. */
   --pin: 28px;
   --bubble: 240px;
+  --pin-gap: 4px;
 }
 
 /* As theme.ts sets it, which follows the system unless told otherwise. */
@@ -215,69 +216,95 @@ body {
   pointer-events: none;
 }
 
-/* Placed at its comment's point, which its pin's sharp corner, at the top left, points at. */
+/* Placed at its comment's point, which its pin's centre sits on. */
 .comment {
   position: absolute;
   top: 0;
   left: 0;
 }
 
-.pin,
+/* A thumbtack's head, ringed to stand apart from any image. */
+.pin {
+  position: absolute;
+  top: calc(var(--pin) / -2);
+  left: calc(var(--pin) / -2);
+  box-sizing: border-box;
+  display: block;
+  width: var(--pin);
+  height: var(--pin);
+  padding: 0;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, rgb(255 255 255 / 65%) 0 2px, transparent 3px),
+    radial-gradient(
+      circle at 40% 35%,
+      color-mix(in srgb, var(--accent), white 20%),
+      var(--accent) 60%
+    );
+  box-shadow: 1px 2px 3px rgb(0 0 0 / 35%);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.comment .text,
 .writer.bubble {
   box-sizing: border-box;
-  border: 2px solid var(--surface);
-  border-radius: 0 calc(var(--pin) / 2) calc(var(--pin) / 2);
+  padding: 6px 12px 7px;
+  border-radius: 10px;
   font:
     14px/1.4 system-ui,
     sans-serif;
-  color: var(--surface);
-  background: var(--accent);
-  box-shadow: var(--shadow);
+  color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.pin {
-  position: absolute;
-  top: 0;
-  left: 0;
+/* In flow, so that the comment is as tall as it for the bridge, and hidden once faded, as it would
+   otherwise still take the pointer. */
+.comment .text {
+  position: relative;
+  top: calc(var(--pin) / -2);
+  left: calc(var(--pin) / 2 + var(--pin-gap));
   display: block;
   width: max-content;
-  min-width: var(--pin);
-  max-width: var(--pin);
-  min-height: var(--pin);
-  max-height: var(--pin);
-  padding: 0;
-  overflow: hidden;
-  text-align: left;
-  cursor: pointer;
-  pointer-events: auto;
-  transition:
-    max-width 150ms ease-out,
-    max-height 150ms ease-out;
-}
-
-/* Laid out at its full width from the start, so that growing only uncovers it. */
-.pin .text {
-  display: block;
-  width: max-content;
-  max-width: calc(var(--bubble) - 28px);
-  padding: 6px 12px;
-  opacity: 0;
-  transition: opacity 150ms ease-out;
-}
-
-.pins:not(.quiet) .comment:not(.writing, .blank) .pin:is(:hover, :focus-visible) {
   max-width: var(--bubble);
   max-height: 50vh;
-}
-
-.pins:not(.quiet) .comment:not(.writing, .blank) .pin:is(:hover, :focus-visible) .text {
-  opacity: 1;
-}
-
-.comment.writing .pin {
+  overflow: hidden;
+  pointer-events: auto;
   visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity 100ms ease-out,
+    visibility 0s 100ms;
+}
+
+/* From the pin's right half to the text's edge, past its corners and down to its last line, so that
+   the pointer keeps the text shown on its way. Clear of the left half, as it would otherwise cover
+   most of a pin planted just below. */
+.comment::before {
+  content: "";
+  position: absolute;
+  top: calc(var(--pin) / -2);
+  bottom: calc(var(--pin) / 2);
+  left: 0;
+  width: calc(var(--pin) / 2 + var(--pin-gap) + 10px);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, calc(100% - 10px) 100%, 0 var(--pin));
+}
+
+/* Over the pins planted later, which would otherwise cover its text. */
+.pins:not(.quiet) .comment:not(.writing, .blank):is(:hover, :has(.pin:focus-visible)) {
+  z-index: 1;
+}
+
+.pins:not(.quiet) .comment:not(.writing, .blank):is(:hover, :has(.pin:focus-visible)) .text {
+  visibility: visible;
+  opacity: 1;
+  transition-delay: 0s;
+}
+
+.pins:not(.quiet) .comment:not(.writing, .blank):is(:hover, :has(.pin:focus-visible))::before {
+  pointer-events: auto;
 }
 
 .comment.selected .pin {
@@ -296,16 +323,21 @@ body {
   outline-color: var(--text);
 }
 
-/* As the bubble grows, so that its text wraps alike. */
+/* Flat, as everything is in high contrast. */
+[data-contrast="high"] .pin {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+/* Where the text shows, as wide as it may grow, so that it wraps alike. */
 .writer.bubble {
   width: var(--bubble);
-  padding: 6px 12px;
-  caret-color: var(--surface);
+  caret-color: var(--accent);
+  transform: translate(calc(var(--pin) / 2 + var(--pin-gap)), calc(var(--pin) / -2));
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pin,
-  .pin .text,
+  .comment .text,
   .selection {
     transition: none;
   }
@@ -465,7 +497,9 @@ body {
 #message,
 #measurements,
 .menu,
-.finder {
+.finder,
+.comment .text,
+.writer.bubble {
   background: var(--surface);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
@@ -1377,10 +1411,18 @@ body {
     background: none;
   }
 
+  .comment .text,
   .writer.bubble {
     border-color: CanvasText;
     color: CanvasText;
     background: Canvas;
+  }
+
+  /* Solid, as forced colours drop the head's gradients, high contrast's flat one included. */
+  .pin,
+  [data-contrast="high"] .pin {
+    border-color: Canvas;
+    background: CanvasText;
   }
 }
 

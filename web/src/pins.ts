@@ -1,23 +1,23 @@
-// Comments, as pins over the board at one size on screen whatever the zoom, each growing into
-// its text while hovered or focused. They lie above whatever the board draws, so the
-// renderer leaves them out. A press on a pin reaches the board as a press on its comment, and
-// keys pressed on a focused one write in it.
+// Comments, as pins over the board at one size on screen whatever the zoom, each showing its
+// text beside it while hovered or focused. They lie above whatever the board draws, so the
+// renderer leaves them out. A press on a pin or its text reaches the board as a press on its
+// comment, and keys pressed on a focused pin write in it.
 
 import type { Camera } from "./camera.js";
 import type { Board, Point } from "./core.js";
 
 export interface Pins {
   /**
-   * Those of `board`, marked when they or their groups are `selected`, and the pin of `hidden`
+   * Those of `board`, marked when they or their groups are `selected`, and the text of `writing`
    * left to the field that writes it.
    */
-  show(board: Board, selected: string[], hidden?: string): void;
+  show(board: Board, selected: string[], writing?: string): void;
   frame(camera: Camera): void;
   /** Until the next board shows. */
   clear(): void;
 }
 
-/** The comment whose pin `target` is, or lies in. */
+/** The comment `target` is, or lies in. */
 export function pinned(target: EventTarget | null): string | undefined {
   return target instanceof Element
     ? target.closest<HTMLElement>(".comment")?.dataset.comment
@@ -65,7 +65,7 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
       shown[(to + shown.length) % shown.length]!.focus({ preventScroll: true });
     }
   });
-  // Esc shrinks a pin back until the pointer comes to another, as it may hide what it wants.
+  // Esc hides a pin's text until the pointer comes to another, as it may hide what it wants.
   addEventListener("keydown", (event) => event.key === "Escape" && layer.classList.add("quiet"));
   const shown = new Map<
     string,
@@ -91,9 +91,9 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
     const text = document.createElement("span");
     text.className = "text";
     text.id = `comment-${id}`;
+    text.setAttribute("role", "tooltip");
     pin.setAttribute("aria-describedby", text.id);
-    pin.append(text);
-    // The board takes the press, and a pin focused before would stay grown.
+    // The board takes the press, and a pin focused before would keep its text shown.
     comment.addEventListener("mousedown", (event) => {
       event.preventDefault();
       if (document.activeElement instanceof HTMLElement && layer.contains(document.activeElement)) {
@@ -115,12 +115,12 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
         write(id);
       }
     });
-    comment.append(pin);
+    comment.append(pin, text);
     layer.append(comment);
     return { comment, pin, text, at: { x: 0, y: 0 } };
   };
   return {
-    show(board, selected, hidden) {
+    show(board, selected, writing) {
       const chosen = new Set(selected);
       const marked = (id: string) => {
         // Boards are repaired on read, but a cycle would loop forever.
@@ -162,7 +162,7 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
           );
         }
         entry.comment.classList.toggle("selected", marked(id));
-        entry.comment.classList.toggle("writing", id === hidden);
+        entry.comment.classList.toggle("writing", id === writing);
         entry.comment.classList.toggle("blank", kind.text.trim() === "");
         // Later ones on top, as the board stacks them. Moved only when out of place, which
         // would lose the pointer's hover, and the focus.
@@ -180,7 +180,7 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
           preventScroll: true,
         });
       }
-      if (returning !== undefined && returning !== hidden) {
+      if (returning !== undefined && returning !== writing) {
         shown.get(returning)?.pin.focus({ preventScroll: true });
         returning = undefined;
       }

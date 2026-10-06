@@ -53,10 +53,12 @@ const paths = {
     "M10.2 6.3l5.8 13.7",
     "M5 20l6 -16l2 0l7 16",
   ],
-  message: [
-    "M8 9h8",
-    "M8 13h6",
-    "M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1 -3 3h-5l-5 3v-3h-2a3 3 0 0 1 -3 -3v-8a3 3 0 0 1 3 -3h12",
+  // Drawn for Planche in the same style, as Tabler has no pinned note.
+  pinnedNote: [
+    "M4 7a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+    "M13 5h5a2 2 0 0 1 2 2v11a2 2 0 0 1 -2 2h-11a2 2 0 0 1 -2 -2v-5",
+    "M9.5 13h6",
+    "M9.5 16.5h4",
   ],
   note: [
     "M13 20l7 -7",

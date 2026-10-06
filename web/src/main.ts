@@ -1082,7 +1082,7 @@ const bar = toolbar(
         tools: [
           drawing("note", "typography"),
           drawing("sticky", "note"),
-          drawing("comment", "message"),
+          drawing("comment", "pinnedNote"),
         ],
       },
     ],
