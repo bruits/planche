@@ -26,9 +26,10 @@ function page(
   more: [string, Kind][] = [],
   {
     drawing,
+    erasing,
     snapping,
     zoom = 1,
-  }: Partial<Pick<Hooks, "drawing" | "snapping">> & { zoom?: number } = {},
+  }: Partial<Pick<Hooks, "drawing" | "erasing" | "snapping">> & { zoom?: number } = {},
 ) {
   const opened = untitled();
   for (const [id, kind] of [[STICKY, sticky] as const, ...more]) {
@@ -59,7 +60,7 @@ function page(
     settled() {},
     snapping: snapping ?? (() => false),
     drawing: drawing ?? (() => undefined),
-    erasing: () => false,
+    erasing: erasing ?? (() => false),
     sampling: () => false,
     drawn() {},
     styled: (kind) => kind,
@@ -702,6 +703,49 @@ describe("the pen", () => {
     editing.reset();
     expect(hooks.inked).toHaveBeenLastCalledWith(undefined);
     pointer("pointerup", 200, 200);
+    expect(strokes(opened)).toEqual([]);
+  });
+});
+
+/** As some engines let the capture go, a moment before the release, or while still pressed. */
+function captureLost(host: HTMLElement, x: number, y: number, buttons: number) {
+  host.dispatchEvent(
+    new PointerEvent("lostpointercapture", { clientX: x, clientY: y, buttons, pointerId: 1 }),
+  );
+}
+
+describe("the end of a press", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("keeps what the pen drew when the capture goes just before the button is released", async () => {
+    const { opened, host, pointer } = page([], { drawing: () => "stroke" });
+    pointer("pointerdown", 200, 200);
+    pointer("pointermove", 300, 250);
+    await nextFrame();
+    captureLost(host, 300, 250, 0);
+    pointer("pointerup", 300, 250);
+    expect(strokes(opened)).toHaveLength(1);
+  });
+
+  it("keeps what the eraser took when the capture goes just before the button is released", async () => {
+    const { opened, host, pointer } = page([], { erasing: () => true });
+    pointer("pointerdown", 150, 50);
+    pointer("pointermove", 50, 50);
+    await nextFrame();
+    captureLost(host, 50, 50, 0);
+    pointer("pointerup", 50, 50);
+    expect(opened.board.elements).toEqual({});
+  });
+
+  it("gives up what it drew when the capture goes while the button is held", async () => {
+    const { opened, host, pointer } = page([], { drawing: () => "stroke" });
+    pointer("pointerdown", 200, 200);
+    pointer("pointermove", 300, 250);
+    await nextFrame();
+    captureLost(host, 300, 250, 1);
+    pointer("pointerup", 300, 250);
     expect(strokes(opened)).toEqual([]);
   });
 });

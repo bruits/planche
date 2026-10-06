@@ -1485,10 +1485,13 @@ export function edits(
         seen = event;
       }
       if (event.pointerId === press?.pointer) {
-        if (type === "pointerup" && press.kind === "pen") {
+        // Some engines let the capture go just before `pointerup`, once no button is held.
+        const released =
+          type === "pointerup" || (type === "lostpointercapture" && event.buttons === 0);
+        if (released && press.kind === "pen") {
           ink(press, event);
         }
-        release(type === "pointerup");
+        release(released);
       }
     });
   }
