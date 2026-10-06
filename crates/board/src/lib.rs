@@ -30,7 +30,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 pub use align::{Alignment, Axis};
-pub use animation::frame_delay;
+pub use animation::{frame_delay, frame_delays};
 pub use arrange::{Order, Side};
 pub use copy::Copied;
 pub use edit::{Editor, Placement, Restack, Scaling, Sticking, Transform};
@@ -560,9 +560,9 @@ impl ElementKind {
         }
     }
 
-    /// JSON cannot hold a NaN or an infinity, text of no size cannot be laid out, and a pen
-    /// stroke draws at least one point, within its frame. Fields are destructured in full, so a
-    /// new one fails to compile until it is checked here.
+    /// JSON cannot hold a NaN or an infinity, text of no size cannot be laid out, a pen stroke
+    /// draws at least one point, within its frame, and a trim plays from its start to a later end.
+    /// Fields are destructured in full, so a new one fails to compile until it is checked here.
     pub fn is_valid(&self) -> bool {
         match self {
             Self::Image {
@@ -575,7 +575,7 @@ impl ElementKind {
                 filename: _,
                 caption: _,
                 opacity: _,
-            } => frame.is_finite() && rotation.is_finite() && edits.is_finite(),
+            } => frame.is_finite() && rotation.is_finite() && edits.is_valid(),
             Self::Note {
                 frame,
                 rotation,
@@ -666,18 +666,83 @@ pub struct ImageEdits {
     pub greyscale: bool,
     #[serde(default, skip_serializing_if = "is_default")]
     pub crop_shape: CropShape,
+    /// What plays of an animated image or a video, whole when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub trim: Option<Trim>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub speed: Speed,
 }
 
 impl ImageEdits {
-    fn is_finite(&self) -> bool {
+    fn is_valid(&self) -> bool {
         let Self {
             crop,
             flip_horizontal: _,
             flip_vertical: _,
             greyscale: _,
             crop_shape: _,
+            trim,
+            speed: _,
         } = self;
-        crop.is_none_or(|crop| crop.is_finite())
+        crop.is_none_or(|crop| crop.is_finite()) && trim.is_none_or(|trim| trim.is_valid())
+    }
+}
+
+/// From `start` to just before `end`, in seconds of the media's own time, whatever its speed.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Trim {
+    pub start: f64,
+    pub end: f64,
+}
+
+impl Trim {
+    fn is_valid(&self) -> bool {
+        self.start.is_finite() && self.end.is_finite() && 0.0 <= self.start && self.start < self.end
+    }
+}
+
+/// How many times faster than it was made an animated image or a video plays, within what
+/// browsers play.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "number"))]
+pub struct Speed(f64);
+
+impl Speed {
+    pub const NORMAL: Self = Self(1.0);
+    const SLOWEST: f64 = 0.0625;
+    const FASTEST: f64 = 16.0;
+
+    pub fn new(times: f64) -> Option<Self> {
+        (Self::SLOWEST..=Self::FASTEST)
+            .contains(&times)
+            .then_some(Self(times))
+    }
+
+    pub fn times(self) -> f64 {
+        self.0
+    }
+}
+
+impl Default for Speed {
+    fn default() -> Self {
+        Self::NORMAL
+    }
+}
+
+impl<'de> Deserialize<'de> for Speed {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let times = f64::deserialize(deserializer)?;
+        Self::new(times).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "a speed is from {} to {} times, not {times}",
+                Self::SLOWEST,
+                Self::FASTEST
+            ))
+        })
     }
 }
 
@@ -1235,6 +1300,18 @@ mod tests {
     }
 
     #[test]
+    fn a_speed_is_one_browsers_play() {
+        let read = |json: &str| serde_json::from_str::<Speed>(json);
+        assert_eq!(read("0.25").unwrap().times(), 0.25);
+        assert_eq!(read("1").unwrap(), Speed::default());
+        for json in ["0", "-1", "0.05", "17", "\"2\""] {
+            assert!(read(json).is_err(), "{json}");
+        }
+        assert_eq!(Speed::new(f64::NAN), None);
+        assert_eq!(serde_json::to_string(&Speed::new(1.5)).unwrap(), "1.5");
+    }
+
+    #[test]
     fn an_id_has_no_other_spelling() {
         for text in [
             "00000000000000000123456789ABCDEF",
@@ -1339,6 +1416,17 @@ mod tests {
                     ..edits
                 },
             ),
+            image(
+                rect,
+                0.0,
+                ImageEdits {
+                    trim: Some(Trim {
+                        start: 0.0,
+                        end: 0.1,
+                    }),
+                    ..edits
+                },
+            ),
             note(rect, -45.0),
             sticky(rect, 0.0, 20.0),
             shape(rect, 0.0, 20.0),
@@ -1370,6 +1458,39 @@ mod tests {
                 },
             ),
             image(rect, nan, edits),
+            image(
+                rect,
+                0.0,
+                ImageEdits {
+                    trim: Some(Trim {
+                        start: 1.0,
+                        end: 1.0,
+                    }),
+                    ..edits
+                },
+            ),
+            image(
+                rect,
+                0.0,
+                ImageEdits {
+                    trim: Some(Trim {
+                        start: -0.5,
+                        end: 1.0,
+                    }),
+                    ..edits
+                },
+            ),
+            image(
+                rect,
+                0.0,
+                ImageEdits {
+                    trim: Some(Trim {
+                        start: 0.0,
+                        end: f64::INFINITY,
+                    }),
+                    ..edits
+                },
+            ),
             note(Rect { x: nan, ..rect }, 0.0),
             note(rect, f64::INFINITY),
             sticky(Rect { x: nan, ..rect }, 0.0, 20.0),

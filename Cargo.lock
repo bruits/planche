@@ -2910,7 +2910,9 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 name = "renderer"
 version = "0.0.0"
 dependencies = [
+ "board",
  "image",
+ "png 0.18.1",
  "thiserror 2.0.21",
  "wasm-bindgen",
  "wasm-bindgen-futures",

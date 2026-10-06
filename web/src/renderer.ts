@@ -31,6 +31,12 @@ export interface Playing {
    * left. Throws when it does not decode, or is not as large as the texture.
    */
   next(): number | undefined;
+  /** Past `count` frames without drawing them, fewer once none is left. How many it went past. */
+  skip(count: number): number;
+  /** The next frame, straight RGBA, for `Renderer.show` to draw, `undefined` once none is left. */
+  pixels(): Uint8Array | undefined;
+  /** How many frames it decoded since it last started, which is the next one's index. */
+  readonly position: number;
   restart(): void;
   free(): void;
 }
@@ -73,6 +79,11 @@ export interface Renderer {
   release(asset: string): void;
   /** The frames the bytes of a loaded asset hold. Throws when they do not decode. */
   animate(asset: string, bytes: Bytes): Playing;
+  /**
+   * A frame `Playing.pixels` gave, onto a loaded asset's texture. Throws when it is not as large
+   * as the texture.
+   */
+  show(asset: string, pixels: Uint8Array): void;
   /**
    * The frame the video shows, onto a loaded asset's texture. Whether it had one to show. Throws
    * when it is not as large as the texture.
@@ -212,9 +223,20 @@ async function on(
           const texture = images.get(asset);
           return texture === undefined ? undefined : renderer.advance(texture, animation);
         },
+        skip: (count) => animation.skip(count),
+        pixels: () => animation.pixels(),
+        get position() {
+          return animation.position;
+        },
         restart: () => animation.restart(),
         free: () => animation.free(),
       };
+    },
+    show(asset, pixels) {
+      const texture = images.get(asset);
+      if (texture !== undefined) {
+        renderer.show(texture, pixels);
+      }
     },
     copyVideo(asset, video) {
       const texture = images.get(asset);

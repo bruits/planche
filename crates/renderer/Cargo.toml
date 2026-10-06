@@ -12,6 +12,11 @@ crate-type = ["cdylib"]
 image = { version = "0.25", default-features = false, features = ["gif", "png", "webp"] }
 thiserror.workspace = true
 
+[dev-dependencies]
+# To check that the board times frames as they decode, an APNG's encoded as `image` decodes it.
+board.workspace = true
+png = "0.18"
+
 # Web only: native builds only decode animations, for tests.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

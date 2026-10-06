@@ -780,10 +780,39 @@ impl Renderer {
         let (numerator, denominator) = frame.delay().numer_denom_ms();
         let canvas = frame.into_buffer();
         let (width, height) = canvas.dimensions();
+        self.draw_frame(index, width, height, canvas.as_raw())?;
+        Ok(Some(f64::from(numerator) / f64::from(denominator)))
+    }
+
+    /// Draws a frame `pixels` holds, as `Animation.pixels` gives it, onto the texture, which must be
+    /// as large.
+    pub fn show(&mut self, index: u32, pixels: &[u8]) -> Result<(), JsError> {
+        let texture = self
+            .textures
+            .get(index as usize)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| JsError::new(&format!("texture {index} is not uploaded")))?;
+        let wgpu::Extent3d { width, height, .. } = texture.texture.size();
+        if pixels.len() != 4 * width as usize * height as usize {
+            return Err(JsError::new(&format!(
+                "{} bytes are no frame of a {width} by {height} texture",
+                pixels.len()
+            )));
+        }
+        self.draw_frame(index, width, height, pixels)
+    }
+
+    fn draw_frame(
+        &mut self,
+        index: u32,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result<(), JsError> {
         let texture = self.fitting(index, width, height)?;
         self.queue.write_texture(
             texture.texture.as_image_copy(),
-            canvas.as_raw(),
+            pixels,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * width),
@@ -792,7 +821,7 @@ impl Renderer {
             texture.texture.size(),
         );
         self.generate_mipmaps(&texture.texture);
-        Ok(Some(f64::from(numerator) / f64::from(denominator)))
+        Ok(())
     }
 
     /// Draws the frame `video` shows onto the texture, which must be as large. Whether it had one
@@ -1125,6 +1154,26 @@ impl Animation {
 
     pub fn restart(&mut self) -> Result<(), JsError> {
         Ok(self.0.restart()?)
+    }
+
+    /// How many frames it decoded since it last started, which is the next one's index.
+    #[wasm_bindgen(getter)]
+    pub fn position(&self) -> u32 {
+        self.0.position()
+    }
+
+    /// Past `count` frames without drawing them, fewer once none is left. How many it went past.
+    pub fn skip(&mut self, count: u32) -> Result<u32, JsError> {
+        Ok(self.0.skip(count)?)
+    }
+
+    /// The next frame, straight RGBA on its whole canvas, which `Renderer.show` draws,
+    /// `undefined` once none is left.
+    pub fn pixels(&mut self) -> Result<Option<Vec<u8>>, JsError> {
+        Ok(self
+            .0
+            .next_frame()?
+            .map(|frame| frame.into_buffer().into_raw()))
     }
 }
 

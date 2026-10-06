@@ -170,6 +170,21 @@ const defaults: [string, Kind, Kind][] = [
       edits: { crop: null, flip_horizontal: false, flip_vertical: false, greyscale: false },
     }),
   ],
+  [
+    "an image played at its own speed",
+    image({
+      edits: {
+        crop: null,
+        flip_horizontal: false,
+        flip_vertical: false,
+        greyscale: false,
+        speed: 1,
+      },
+    }),
+    image({
+      edits: { crop: null, flip_horizontal: false, flip_vertical: false, greyscale: false },
+    }),
+  ],
 ];
 
 describe("the core", () => {
@@ -258,6 +273,23 @@ describe("the core", () => {
       }
     },
   );
+
+  it("plays the trim set of an image, and the whole of it once none is", () => {
+    const editor = new core.Editor();
+    try {
+      editor.add(A, undefined, JSON.stringify(image()));
+      const trim = { start: 0.25, end: 1.5 };
+      core.setTrim(editor, [A], trim);
+      const trimmed = core.element(editor, A)?.kind;
+      expect(trimmed?.type === "image" && trimmed.edits.trim).toEqual(trim);
+      core.setTrim(editor, [A], undefined);
+      const whole = core.element(editor, A)?.kind;
+      expect(whole?.type === "image" && whole.edits).not.toHaveProperty("trim");
+      expect(() => editor.setSpeed([A], 40)).toThrow("no browser plays 40 times as fast");
+    } finally {
+      editor.free();
+    }
+  });
 
   it.each(["rectangle", "ellipse"] satisfies CropShape[])(
     "an image's crop set to a %s reads back as set",

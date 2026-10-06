@@ -15,8 +15,8 @@ use crate::crop::cropped;
 use crate::grid::settled;
 use crate::stick::{Landing, Motion, lands_on};
 use crate::{
-    AssetId, Background, Board, Copied, CropShape, Element, ElementId, ElementKind, Error, Point,
-    Rect, Result, ZIndex, angle, with_emptied,
+    AssetId, Background, Board, Copied, CropShape, Element, ElementId, ElementKind, Error,
+    ImageEdits, Point, Rect, Result, Speed, Trim, ZIndex, angle, with_emptied,
 };
 
 /// Where an element moves among the elements of its group.
@@ -150,7 +150,7 @@ impl Editor {
         if let Some(group) = group {
             self.existing_group(group)?;
         }
-        let kind = kind.canonical();
+        let kind = self.played_alike(kind.canonical());
         check_valid(id, &kind)?;
         self.check_targets(id, &kind)?;
         let siblings = self.siblings(group, &BTreeSet::new());
@@ -192,7 +192,7 @@ impl Editor {
         let mut pasted = Board::default();
         for (old, element) in &copied.elements {
             let id = renamed[old];
-            let mut kind = element.kind.clone().canonical();
+            let mut kind = self.played_alike(element.kind.clone().canonical());
             check_valid(id, &kind)?;
             for target in kind.targets_mut() {
                 *target = target.and_then(|target| renamed.get(&target).copied());
@@ -478,6 +478,28 @@ impl Editor {
         self.reshape(ids, |kind| {
             if let ElementKind::Image { edits, .. } = kind {
                 edits.crop_shape = shape;
+            }
+        })
+    }
+
+    /// Plays `trim` of each image among the elements, with those of the groups among them, the
+    /// whole of it when `None`, and as much of every other image of their assets, as an asset
+    /// plays one way wherever it shows.
+    pub fn set_trim(&mut self, ids: &[ElementId], trim: Option<Trim>) -> Result<Vec<ElementId>> {
+        let alike = self.same_assets(ids)?;
+        self.reshape(&alike, |kind| {
+            if let ElementKind::Image { edits, .. } = kind {
+                edits.trim = trim;
+            }
+        })
+    }
+
+    /// As [`Editor::set_trim`] does, for how fast they play.
+    pub fn set_speed(&mut self, ids: &[ElementId], speed: Speed) -> Result<Vec<ElementId>> {
+        let alike = self.same_assets(ids)?;
+        self.reshape(&alike, |kind| {
+            if let ElementKind::Image { edits, .. } = kind {
+                edits.speed = speed;
             }
         })
     }
@@ -1074,6 +1096,57 @@ impl Editor {
             editor.land(&landing)?;
             Ok(())
         })
+    }
+
+    fn same_assets(&self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        let assets: BTreeSet<&AssetId> = self
+            .with_descendants(ids)?
+            .into_iter()
+            .filter_map(|id| match &self.board.elements[&id].kind {
+                ElementKind::Image { asset, .. } => Some(asset),
+                _ => None,
+            })
+            .collect();
+        Ok(self
+            .board
+            .elements
+            .iter()
+            .filter(|(_, element)| {
+                matches!(&element.kind, ElementKind::Image { asset, .. } if assets.contains(asset))
+            })
+            .map(|(id, _)| *id)
+            .collect())
+    }
+
+    /// With the trim and speed every image of its asset shares.
+    fn played_alike(&self, mut kind: ElementKind) -> ElementKind {
+        if let ElementKind::Image { asset, edits, .. } = &mut kind
+            && let Some(alike) = self.played(asset)
+        {
+            edits.trim = alike.trim;
+            edits.speed = alike.speed;
+        }
+        kind
+    }
+
+    fn played(&self, asset: &AssetId) -> Option<ImageEdits> {
+        let edits = |kind: &ElementKind| match kind {
+            ElementKind::Image {
+                asset: other,
+                edits,
+                ..
+            } if other == asset => Some(*edits),
+            _ => None,
+        };
+        // Most assets show once, which spares ordering the whole board for each image added.
+        self.board
+            .elements
+            .values()
+            .find_map(|element| edits(&element.kind))?;
+        self.board
+            .draw_order()
+            .into_iter()
+            .find_map(|id| edits(&self.board.elements[&id].kind))
     }
 
     fn reshape(
@@ -1961,6 +2034,101 @@ mod tests {
         assert_eq!(editor.set_greyscale(&ids([1, 2]), true), Ok(ids([2])));
         assert_eq!(editor.set_greyscale(&ids([1, 2]), true), Ok(Vec::new()));
         assert_eq!(editor.set_greyscale(&ids([1, 2]), false), Ok(ids([1, 2])));
+    }
+
+    fn played(bytes: &[u8], edits: crate::ImageEdits) -> ElementKind {
+        ElementKind::Image {
+            asset: AssetId::of(bytes),
+            natural_size: crate::Size {
+                width: 1,
+                height: 1,
+            },
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            rotation: 0.0,
+            edits,
+            source: None,
+            filename: None,
+            caption: None,
+            opacity: Default::default(),
+        }
+    }
+
+    fn edits_of(editor: &Editor, element: u128) -> crate::ImageEdits {
+        match &editor.board().elements[&id(element)].kind {
+            ElementKind::Image { edits, .. } => *edits,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_asset_plays_one_way_wherever_it_shows() {
+        let still = crate::ImageEdits::default();
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", played(b"moving", still))),
+            (2, element(None, "a1", ElementKind::Group)),
+            (3, element(Some(2), "a0", played(b"moving", still))),
+            (4, element(None, "a2", played(b"other", still))),
+        ]));
+        let trim = Some(crate::Trim {
+            start: 0.5,
+            end: 2.0,
+        });
+        let fast = crate::Speed::new(2.0).unwrap();
+
+        assert_eq!(editor.set_trim(&ids([1]), trim), Ok(ids([1, 3])));
+        assert_eq!(editor.set_speed(&ids([2]), fast), Ok(ids([1, 3])));
+        assert_eq!(edits_of(&editor, 3).trim, trim);
+        assert_eq!(edits_of(&editor, 1).speed, fast);
+        assert_eq!(edits_of(&editor, 4), still);
+        editor.undo();
+        assert_eq!(edits_of(&editor, 1).speed, crate::Speed::NORMAL);
+        assert_eq!(edits_of(&editor, 3).trim, trim);
+    }
+
+    #[test]
+    fn an_image_added_or_pasted_plays_as_the_others_of_its_asset() {
+        let trim = Some(crate::Trim {
+            start: 0.5,
+            end: 2.0,
+        });
+        let speed = crate::Speed::new(0.5).unwrap();
+        let playing = crate::ImageEdits {
+            trim,
+            speed,
+            ..crate::ImageEdits::default()
+        };
+        let mut editor = Editor::new(board([(
+            1,
+            element(None, "a0", played(b"moving", playing)),
+        )]));
+
+        let mut added = crate::ImageEdits {
+            greyscale: true,
+            ..crate::ImageEdits::default()
+        };
+        editor.add(id(2), None, played(b"moving", added)).unwrap();
+        editor.add(id(3), None, played(b"other", added)).unwrap();
+        assert_eq!(
+            edits_of(&editor, 2),
+            crate::ImageEdits {
+                greyscale: true,
+                ..playing
+            }
+        );
+        assert_eq!(edits_of(&editor, 3), added);
+
+        added.speed = crate::Speed::new(4.0).unwrap();
+        let copied = Copied {
+            elements: BTreeMap::from([(id(9), element(None, "a0", played(b"moving", added)))]),
+        };
+        editor.paste(&copied, &renamed(&copied, 4), None).unwrap();
+        assert_eq!(edits_of(&editor, 4).speed, speed);
+        assert_eq!(edits_of(&editor, 4).trim, trim);
     }
 
     #[test]

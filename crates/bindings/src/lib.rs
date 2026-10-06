@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use board::{
     Alignment, AssetId, Axis, Board, Colour, Copied, ElementId, ElementKind, GRID_STEP, GridLevel,
-    Order, Point, Rect, Restack, Side, Size, Style, Tip, Transform, Weight,
+    Order, Point, Rect, Restack, Side, Size, Speed, Style, Tip, Transform, Weight,
 };
 use format::{save, zip};
 use js_sys::{Map, Uint8Array};
@@ -235,6 +235,25 @@ impl Editor {
             &parse(ids)?,
             serde_json::from_str(shape)?,
         )?))
+    }
+
+    /// `trim` as JSON, the whole of each when `undefined`.
+    #[wasm_bindgen(js_name = setTrim)]
+    pub fn set_trim(
+        &mut self,
+        ids: Vec<String>,
+        trim: Option<String>,
+    ) -> Result<Vec<String>, JsError> {
+        let trim = trim.map(|trim| serde_json::from_str(&trim)).transpose()?;
+        Ok(strings(self.0.set_trim(&parse(ids)?, trim)?))
+    }
+
+    /// `times` as fast as each was made, within what browsers play.
+    #[wasm_bindgen(js_name = setSpeed)]
+    pub fn set_speed(&mut self, ids: Vec<String>, times: f64) -> Result<Vec<String>, JsError> {
+        let speed = Speed::new(times)
+            .ok_or_else(|| JsError::new(&format!("no browser plays {times} times as fast")))?;
+        Ok(strings(self.0.set_speed(&parse(ids)?, speed)?))
     }
 
     #[wasm_bindgen(js_name = setGreyscale)]
@@ -766,10 +785,11 @@ pub fn sized_svg(bytes: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
     board::sized_svg(bytes, Size { width, height })
 }
 
-/// How long a frame that asks for `milliseconds` shows.
-#[wasm_bindgen(js_name = frameDelay)]
-pub fn frame_delay(milliseconds: f64) -> f64 {
-    board::frame_delay(milliseconds)
+/// How long each frame of an animated image shows, in milliseconds, `undefined` when `bytes` are
+/// not an image of more than one frame.
+#[wasm_bindgen(js_name = frameDelays)]
+pub fn frame_delays(bytes: &[u8]) -> Option<Vec<f64>> {
+    board::frame_delays(bytes)
 }
 
 /// Writes a board's ZIP file one entry at a time.

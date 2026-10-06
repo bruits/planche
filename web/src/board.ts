@@ -658,6 +658,18 @@ export function assetSizes(board: Board): Map<string, Size> {
   return sizes;
 }
 
+/** How each asset plays, as all its images do. */
+export function assetPlayback(board: Board): Map<string, Pick<core.ImageEdits, "trim" | "speed">> {
+  const played = new Map<string, Pick<core.ImageEdits, "trim" | "speed">>();
+  for (const id of board.draw_order) {
+    const { kind } = board.elements[id]!;
+    if (kind.type === "image" && !played.has(kind.asset)) {
+      played.set(kind.asset, kind.edits);
+    }
+  }
+  return played;
+}
+
 /** Throws when it is missing or does not match its digest. */
 export async function readAsset(folder: Folder, asset: string, natural: Size): Promise<Asset> {
   const bytes = await folder.read(core.assetPath(asset));

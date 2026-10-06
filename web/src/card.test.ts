@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { trimOf, type Playback } from "./animation.js";
 import { imageKind, untitled } from "./board.js";
-import { card, type CardCommands } from "./card.js";
+import { card, type CardCommands, type CardMedia } from "./card.js";
 import type { Command } from "./commands.js";
 import * as core from "./core.js";
 import type { Tip } from "./core.js";
@@ -18,10 +19,6 @@ const command = (keys?: Command["keys"]): Command => ({
   keys,
   run: vi.fn<() => void>(),
 });
-
-function field(name: string): HTMLInputElement {
-  return document.querySelector<HTMLInputElement>(`.style-card input[aria-label="${name}"]`)!;
-}
 
 function titled(name: string): string | null | undefined {
   return document.querySelector(`.style-card button[aria-label="${name}"]`)?.getAttribute("title");
@@ -55,13 +52,10 @@ function slide(percent: number, { release = false } = {}) {
   }
 }
 
-/** The card over a board holding one image, selected, which comes from `source`. */
-function opened(source?: string) {
+/** The card over a board holding one image, selected, which plays as `moving` says when given. */
+function opened(moving?: Playback) {
   const board = untitled();
-  const kind = imageKind(ASSET, { width: 320, height: 240 }, frame, {
-    filename: "cat.png",
-    source,
-  });
+  const kind = imageKind(ASSET, { width: 320, height: 240 }, frame, { filename: "cat.png" });
   board.editor.add(IMAGE, undefined, JSON.stringify(kind));
   board.board = core.board(board.editor);
   let selected = [IMAGE];
@@ -77,9 +71,28 @@ function opened(source?: string) {
     crop: command(),
     rectangularCrop: command(),
     ellipticalCrop: command([{ key: "c", alt: true }]),
-    openSource: command(),
+    play: command([{ key: "p" }]),
+    previousFrame: command([{ key: "," }]),
+    nextFrame: command([{ key: "." }]),
+    slower: command([{ key: "<" }]),
+    faster: command([{ key: ">" }]),
     open: command(),
   };
+  const media = {
+    playback: (asset: string) => (asset === ASSET ? moving : undefined),
+    play: vi.fn<CardMedia["play"]>((_, playing) => {
+      if (moving) {
+        moving.playing = playing;
+      }
+    }),
+    seek: vi.fn<CardMedia["seek"]>((_, at) => {
+      if (moving) {
+        moving.at = at;
+      }
+    }),
+    preview: vi.fn<CardMedia["preview"]>(),
+  };
+  const trimmed = vi.fn<() => void>();
   const shown = card(
     {
       current: () => board,
@@ -128,6 +141,8 @@ function opened(source?: string) {
       pick() {},
       explain() {},
       say() {},
+      media,
+      trimmed,
     },
     styles(),
     commands,
@@ -146,19 +161,12 @@ function opened(source?: string) {
     held = false;
     board.editor.endGesture();
   };
-  return { board, shown, commands, image, select, drop };
+  return { board, shown, commands, media, trimmed, image, select, drop };
 }
 
 describe("the card of a lone image", () => {
   afterEach(() => {
     document.body.replaceChildren();
-  });
-
-  it("says what it is, and how large it lies on the board", () => {
-    opened();
-    expect(document.querySelector(".style-card .facts")?.textContent).toBe(
-      "cat.png · 320 × 240 · 50%",
-    );
   });
 
   it("turns its images grey as the greyscale command does", () => {
@@ -171,95 +179,6 @@ describe("the card of a lone image", () => {
     opened();
     expect(titled("Greyscale")).toBe("Greyscale · Alt+G");
     expect(titled("Elliptical crop")).toBe("Elliptical crop · Alt+C");
-  });
-
-  it("writes its caption as one edit, and none when left blank", () => {
-    const { board, image } = opened();
-    field("Caption").value = "Morning light";
-    field("Caption").dispatchEvent(new Event("change"));
-    expect(image()?.caption).toBe("Morning light");
-    field("Caption").value = "  ";
-    field("Caption").dispatchEvent(new Event("change"));
-    expect(image()).not.toHaveProperty("caption");
-    board.editor.undo();
-    expect(image()?.caption).toBe("Morning light");
-  });
-
-  it("leaves its source as it was on Esc", () => {
-    const { image } = opened("https://example.com/cat.png");
-    field("Source").value = "elsewhere";
-    field("Source").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    field("Source").dispatchEvent(new Event("change"));
-    expect(image()?.source).toBe("https://example.com/cat.png");
-  });
-
-  it("keeps what its source is being written as when Esc ends a composition", () => {
-    const { image } = opened("https://example.com/cat.png");
-    field("Source").value = "elsewhere";
-    field("Source").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", keyCode: 229 }));
-    field("Source").dispatchEvent(new Event("change"));
-    expect(image()?.source).toBe("elsewhere");
-  });
-
-  it("opens its source only when a web page", () => {
-    const { commands } = opened("https://example.com/cat.png");
-    document.querySelector<HTMLButtonElement>('button[aria-label="Open example.com"]')!.click();
-    expect(commands.openSource.run).toHaveBeenCalledOnce();
-    document.body.replaceChildren();
-    opened("javascript:alert(1)");
-    expect(document.querySelector('button[aria-label^="Open"]:not([hidden])')).toBeNull();
-  });
-
-  // A browser saves a field as the focus moves on, to the next field or to the button pressed,
-  // which a card built again would drop.
-  it("leaves in place what the focus or a press moves on to once a field is saved", () => {
-    opened();
-    const greyscale = document.querySelector('button[aria-label="Greyscale"]')!;
-    const caption = field("Caption");
-    const source = field("Source");
-    caption.value = "Morning light";
-    caption.dispatchEvent(new Event("change"));
-    source.value = "https://other.org/cat.png";
-    source.dispatchEvent(new Event("change"));
-    expect([caption, source, greyscale].map((element) => element.isConnected)).toEqual([
-      true,
-      true,
-      true,
-    ]);
-    expect(document.querySelector('button[aria-label="Open other.org"]')).not.toBeNull();
-  });
-
-  it("keeps what is being written while the image changes from elsewhere", () => {
-    const { board, shown } = opened();
-    field("Caption").focus();
-    field("Caption").value = "Half a tho";
-    const kind = core.element(board.editor, IMAGE)!.kind;
-    if (kind.type === "image") {
-      board.editor.update(
-        IMAGE,
-        JSON.stringify({ ...kind, edits: { ...kind.edits, greyscale: true } }),
-      );
-    }
-    board.board = core.board(board.editor);
-    shown.refresh();
-    expect(document.activeElement).toBe(field("Caption"));
-    expect(field("Caption").value).toBe("Half a tho");
-  });
-
-  it("keeps its fields to the image they were built for while one is written in", () => {
-    const { board, select } = opened("https://a.example/cat.png");
-    const other = "c".repeat(32);
-    const kind = imageKind(ASSET, { width: 10, height: 10 }, frame, {
-      source: "https://b.example/dog.png",
-    });
-    board.editor.add(other, undefined, JSON.stringify(kind));
-    board.board = core.board(board.editor);
-    field("Caption").focus();
-    field("Caption").value = "Half a tho";
-    select([other]);
-    expect(field("Caption").value).toBe("Half a tho");
-    expect(field("Source").value).toBe("https://a.example/cat.png");
-    expect(document.querySelector('button[aria-label="Open a.example"]')).not.toBeNull();
   });
 
   it("fades it as its opacity slides, and as one edit once let go", () => {
@@ -340,30 +259,143 @@ describe("the card of a lone image", () => {
     const rows = [...document.querySelectorAll('.style-card [role="group"]')].map((row) =>
       row.getAttribute("aria-label"),
     );
-    expect(rows).toEqual(["Image", "Opacity", "Info"]);
+    expect(rows).toEqual(["Image", "Opacity"]);
+  });
+});
+
+function gif(): Playback {
+  return { at: 2, count: 24, playing: true, span: [0, 23], delays: Array(24).fill(100) };
+}
+
+function named(name: string): HTMLButtonElement {
+  return document.querySelector<HTMLButtonElement>(`.style-card button[aria-label="${name}"]`)!;
+}
+
+function groups(): (string | null)[] {
+  return [...document.querySelectorAll('.style-card [role="group"]')].map((row) =>
+    row.getAttribute("aria-label"),
+  );
+}
+
+function typed(target: EventTarget, name: string) {
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }),
+  );
+}
+
+describe("the card of a lone animated image", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
   });
 
-  it("lets go of a field before a press elsewhere reaches the board", () => {
-    opened();
-    field("Caption").focus();
-    field("Source").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-    expect(document.activeElement).toBe(field("Caption"));
-    const board = document.body.appendChild(document.createElement("div"));
-    let focused: Element | null = null;
-    board.addEventListener("pointerdown", () => (focused = document.activeElement));
-    board.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-    expect(focused).not.toBe(field("Caption"));
+  it("shows the frame it plays as it goes, over how it plays", () => {
+    const playback = gif();
+    const { shown } = opened(playback);
+    expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
+    expect(document.querySelector(".style-card .count")?.textContent).toBe("3 / 24");
+    expect(named("Pause")).not.toBeNull();
+    playback.at = 5;
+    playback.playing = false;
+    shown.frame();
+    expect(document.querySelector(".style-card .count")?.textContent).toBe("6 / 24");
+    expect(named("Play").title).toBe("Play · P");
   });
 
-  it("shows a caption written elsewhere", () => {
-    const { board, shown } = opened();
-    board.editor.update(
-      IMAGE,
-      JSON.stringify({ ...core.element(board.editor, IMAGE)!.kind, caption: "From an agent" }),
-    );
+  it("goes to the frame its track is dragged to, paused meanwhile", () => {
+    const playback = gif();
+    const { media } = opened(playback);
+    const track = document.querySelector<HTMLInputElement>(".style-card .scrub input")!;
+    track.dispatchEvent(new PointerEvent("pointerdown", { button: 0 }));
+    track.value = "10";
+    track.dispatchEvent(new Event("input"));
+    expect(media.seek).toHaveBeenLastCalledWith(ASSET, 10);
+    expect(media.play).toHaveBeenLastCalledWith([ASSET], false);
+    track.dispatchEvent(new PointerEvent("pointerup"));
+    expect(media.play).toHaveBeenLastCalledWith([ASSET], true);
+  });
+
+  it("steps and plays as its keys do, and plays at the normal speed again", () => {
+    const { board, commands, image, select } = opened(gif());
+    named("Previous frame").click();
+    named("Pause").click();
+    expect(commands.previousFrame.run).toHaveBeenCalledOnce();
+    expect(commands.play.run).toHaveBeenCalledOnce();
+    board.editor.setSpeed([IMAGE], 1.5);
     board.board = core.board(board.editor);
-    shown.refresh();
-    expect(field("Caption").value).toBe("From an agent");
+    select([IMAGE]);
+    expect(named("Normal speed").textContent).toBe("1.5×");
+    named("Normal speed").click();
+    expect(image()?.edits.speed).toBeUndefined();
+  });
+
+  it("dims a speed it cannot go to", () => {
+    const { commands, select } = opened(gif());
+    commands.slower.unavailable = () => "Already at the slowest";
+    select([IMAGE]);
+    expect(named("Slower").getAttribute("aria-disabled")).toBe("true");
+    expect(named("Faster").hasAttribute("aria-disabled")).toBe(false);
+  });
+
+  it("trims to what plays between its ends once done, as its frames start", () => {
+    const playback = gif();
+    const { media, image } = opened(playback);
+    named("Trim").click();
+    expect(groups()).toEqual(["Timeline", "Trim", "Image", "Opacity"]);
+    expect(media.play).toHaveBeenLastCalledWith([ASSET], false);
+    typed(named("Trim start"), "ArrowRight");
+    typed(named("Trim start"), "ArrowRight");
+    typed(named("Trim end"), "ArrowLeft");
+    expect(media.preview).toHaveBeenLastCalledWith(ASSET, [2, 22]);
+    expect(media.seek).toHaveBeenLastCalledWith(ASSET, 22);
+    expect(document.querySelector(".style-card .note")?.textContent).toBe("Loops 3–23 of 24");
+    typed(document.body, "Enter");
+    expect(image()?.edits.trim).toEqual(trimOf(playback.delays, [2, 22]));
+    expect(media.preview).toHaveBeenLastCalledWith(ASSET, undefined);
+    expect(media.play).toHaveBeenLastCalledWith([ASSET], true);
+    expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
+  });
+
+  it("tells once it starts trimming, and once it stops, which the hint follows", () => {
+    const { trimmed } = opened(gif());
+    named("Trim").click();
+    expect(trimmed).toHaveBeenCalledOnce();
+    typed(document.body, "Escape");
+    expect(trimmed).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves ↩ to a button the keys press while trimming", () => {
+    const { image } = opened(gif());
+    named("Trim").click();
+    typed(named("Trim start"), "ArrowRight");
+    const reset = named("Play every frame");
+    reset.focus();
+    typed(reset, "Enter");
+    expect(image()?.edits.trim).toBeUndefined();
+    expect(groups()).toContain("Trim");
+    // Out of trim, as the window keeps listening to each card's keys.
+    reset.blur();
+    typed(document.body, "Escape");
+  });
+
+  it("leaves the trim as it was on Esc, or once another element is selected", () => {
+    const { shown, image, select } = opened(gif());
+    named("Trim").click();
+    typed(named("Trim start"), "ArrowRight");
+    typed(document.body, "Escape");
+    expect(image()?.edits.trim).toBeUndefined();
+    expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
+    named("Trim").click();
+    typed(named("Trim start"), "ArrowRight");
+    select([]);
+    select([IMAGE]);
+    shown.open(false);
+    expect(image()?.edits.trim).toBeUndefined();
+    expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
+  });
+
+  it("shows no frames for a still image", () => {
+    opened();
+    expect(groups()).toEqual(["Image", "Opacity"]);
   });
 });
 
@@ -444,7 +476,7 @@ describe("the card of an image and an arrow", () => {
     const rows = [...document.querySelectorAll('.style-card [role="group"]')].map((row) =>
       row.getAttribute("aria-label"),
     );
-    expect(rows).toEqual(["Image", "Opacity", "Info"]);
+    expect(rows).toEqual(["Image", "Opacity"]);
   });
 
   it("copies the arrow's style", () => {
@@ -538,6 +570,8 @@ function inking(tip: Tip = "pen") {
       pick() {},
       explain() {},
       say() {},
+      media: { playback: () => undefined, play() {}, seek() {}, preview() {} },
+      trimmed() {},
     },
     store,
     {
@@ -551,7 +585,11 @@ function inking(tip: Tip = "pen") {
       crop: command(),
       rectangularCrop: command(),
       ellipticalCrop: command(),
-      openSource: command(),
+      play: command(),
+      previousFrame: command(),
+      nextFrame: command(),
+      slower: command(),
+      faster: command(),
       open: command(),
     },
   ).open(false);

@@ -23,8 +23,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Animation {
     bytes: Arc<[u8]>,
     frames: Frames<'static>,
-    /// Since it last started.
-    drawn: bool,
+    /// Frames decoded since it last started.
+    position: u32,
 }
 
 impl Animation {
@@ -34,29 +34,44 @@ impl Animation {
         Ok(Self {
             bytes,
             frames,
-            drawn: false,
+            position: 0,
         })
     }
 
     pub fn restart(&mut self) -> Result<()> {
         self.frames = frames(&self.bytes)?;
-        self.drawn = false;
+        self.position = 0;
         Ok(())
+    }
+
+    pub fn position(&self) -> u32 {
+        self.position
     }
 
     /// The next frame, on its whole canvas, `None` once none is left.
     pub fn next_frame(&mut self) -> Result<Option<Frame>> {
         match self.frames.next() {
             Some(Ok(frame)) => {
-                self.drawn = true;
+                self.position += 1;
                 Ok(Some(frame))
             }
             // A truncated GIF, or one without its trailer, ends with its last whole frame, as
             // browsers play it. Its frames go on failing.
-            Some(Err(_)) if self.drawn => Ok(None),
+            Some(Err(_)) if self.position > 0 => Ok(None),
             Some(Err(error)) => Err(error.into()),
             None => Ok(None),
         }
+    }
+
+    /// Past `count` frames, each composed as the next needs it, fewer once none is left. How
+    /// many it went past.
+    pub fn skip(&mut self, count: u32) -> Result<u32> {
+        for skipped in 0..count {
+            if self.next_frame()?.is_none() {
+                return Ok(skipped);
+            }
+        }
+        Ok(count)
     }
 }
 
@@ -128,6 +143,76 @@ mod tests {
     }
 
     #[test]
+    fn it_goes_past_frames_composed_as_shown_and_says_where_it_is() {
+        let mut animation = Animation::new(gif(&[RED, BLUE, RED])).unwrap();
+        assert_eq!(animation.skip(2).unwrap(), 2);
+        assert_eq!(animation.position(), 2);
+        assert_eq!(colours(&mut animation), [RED]);
+        animation.restart().unwrap();
+        assert_eq!(animation.skip(5).unwrap(), 3);
+        assert_eq!(animation.position(), 3);
+    }
+
+    fn decoded_delays(bytes: &[u8]) -> Vec<f64> {
+        let mut animation = Animation::new(bytes.to_vec()).unwrap();
+        let mut delays = Vec::new();
+        while let Some(frame) = animation.next_frame().unwrap() {
+            let (numerator, denominator) = frame.delay().numer_denom_ms();
+            delays.push(board::frame_delay(
+                f64::from(numerator) / f64::from(denominator),
+            ));
+        }
+        delays
+    }
+
+    #[test]
+    fn a_gif_shows_its_frames_as_long_as_the_board_says() {
+        let mut bytes = Vec::new();
+        GifEncoder::new(&mut bytes)
+            .encode_frames([30, 0, 120].map(|milliseconds| {
+                let delay = image::Delay::from_numer_denom_ms(milliseconds, 1);
+                Frame::from_parts(RgbaImage::from_pixel(2, 2, RED), 0, 0, delay)
+            }))
+            .unwrap();
+        assert_eq!(board::frame_delays(&bytes), Some(decoded_delays(&bytes)));
+    }
+
+    /// Each frame shown for `numerator / denominator` of a second, after a default image the
+    /// animation leaves out when `separate`.
+    fn apng(delays: &[(u16, u16)], separate: bool) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, 2, 2);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_animated(delays.len() as u32, 0).unwrap();
+        encoder.set_sep_def_img(separate).unwrap();
+        let mut writer = encoder.write_header().unwrap();
+        if separate {
+            writer.write_image_data(&[0; 16]).unwrap();
+        }
+        for &(numerator, denominator) in delays {
+            writer.set_frame_delay(numerator, denominator).unwrap();
+            writer
+                .write_image_data(&[255, 0, 0, 255].repeat(4))
+                .unwrap();
+        }
+        writer.finish().unwrap();
+        bytes
+    }
+
+    #[test]
+    fn a_png_shows_its_frames_as_long_as_the_board_says() {
+        for separate in [false, true] {
+            let bytes = apng(&[(1, 4), (30, 0), (0, 1)], separate);
+            assert_eq!(
+                board::frame_delays(&bytes),
+                Some(decoded_delays(&bytes)),
+                "{separate}"
+            );
+            assert_eq!(decoded_delays(&bytes).len(), 3, "{separate}");
+        }
+    }
+
+    #[test]
     fn a_gif_truncated_before_its_first_whole_frame_fails() {
         let mut bytes = gif(&[RED]);
         bytes.truncate(bytes.len() - 4);
@@ -155,12 +240,16 @@ mod tests {
 
     /// A lossy frame 2 px a side at `x`, cleared to the background once shown.
     fn lossy_frame(x: u32) -> Vec<u8> {
+        lossy_frame_for(x, 100)
+    }
+
+    fn lossy_frame_for(x: u32, milliseconds: u32) -> Vec<u8> {
         let mut data = Vec::new();
         data.extend(u24(x / 2));
         data.extend(u24(0));
         data.extend(u24(1));
         data.extend(u24(1));
-        data.extend(u24(100));
+        data.extend(u24(milliseconds));
         data.push(0b11);
         data.extend(riff(b"VP8 ", LOSSY_RED));
         riff(b"ANMF", &data)
@@ -189,6 +278,23 @@ mod tests {
             assert_eq!(second.get_pixel(2, y).0[3], 255);
             assert_eq!(second.get_pixel(3, y).0[3], 255);
         }
+    }
+
+    #[test]
+    fn a_webp_shows_its_frames_as_long_as_the_board_says() {
+        let mut header = vec![0b0001_0010, 0, 0, 0];
+        header.extend(u24(1));
+        header.extend(u24(1));
+        let mut chunks = riff(b"VP8X", &header);
+        chunks.extend(riff(b"ANIM", &[0, 0, 0, 0, 0, 0]));
+        for milliseconds in [40, 0, 250] {
+            chunks.extend(lossy_frame_for(0, milliseconds));
+        }
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend((chunks.len() as u32 + 4).to_le_bytes());
+        bytes.extend(b"WEBP");
+        bytes.extend(chunks);
+        assert_eq!(board::frame_delays(&bytes), Some(decoded_delays(&bytes)));
     }
 
     #[test]

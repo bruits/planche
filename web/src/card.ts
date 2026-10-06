@@ -2,18 +2,11 @@
 // open, it follows the selection from one element to the next, until Esc closes it, or a press on
 // nothing unless it is kept open. While a gesture scales, stretches, or turns the selection, what
 // it reads shows there instead. Its buttons set what applies to every element selected, and that
-// becomes the style of what their tools draw next, unless ⌥ is held. A lone image shows what it
-// is, and its caption and source to write in.
+// becomes the style of what their tools draw next, unless ⌥ is held. A lone animated image shows
+// its frames, to play, step through, speed up or down, and trim to the part that plays.
 
-import {
-  among,
-  loneImage,
-  MOST_LABEL,
-  setLabel,
-  webAddress,
-  type Image,
-  type Opened,
-} from "./board.js";
+import { trimOf, type Playback, type Span } from "./animation.js";
+import { among, loneImage, type Opened } from "./board.js";
 import {
   ariaKeys,
   composing,
@@ -28,7 +21,6 @@ import type { Reading } from "./edit.js";
 import { message } from "./errors.js";
 import { icon, type Icon } from "./icons.js";
 import { css, type Paint } from "./paint.js";
-import { unitsPerPixel } from "./vector.js";
 import { defaultAlignment, holdsText } from "./text.js";
 import {
   OPACITIES,
@@ -87,6 +79,8 @@ const SNAP = 3;
 
 /** From the window's edges, in CSS pixels. */
 const MARGIN = 8;
+/** How wide a range input's thumb is, in CSS pixels, which its value travels a thumb less than its track. */
+const THUMB = 14;
 /** From the selection, past the zones outside its corners that turn it, in CSS pixels. */
 const GAP = 24;
 
@@ -120,6 +114,18 @@ export interface CardHost {
   /** Names `button` in the hint while it is hovered or focused. */
   explain(button: HTMLElement, text: () => string): void;
   say(message: string): void;
+  media: CardMedia;
+  /** Once it starts trimming the lone animated image selected, or stops, which the hint tells. */
+  trimmed(): void;
+}
+
+export interface CardMedia {
+  /** `undefined` for one that does not play. */
+  playback(asset: string): Playback | undefined;
+  play(assets: string[], playing: boolean): void;
+  seek(asset: string, at: number): void;
+  /** Plays `span` of it, whatever its trim, until `undefined`. */
+  preview(asset: string, span: Span | undefined): void;
 }
 
 /** Those that share its keys, for their hints. */
@@ -134,7 +140,11 @@ export interface CardCommands {
   crop: Command;
   rectangularCrop: Command;
   ellipticalCrop: Command;
-  openSource: Command;
+  play: Command;
+  previousFrame: Command;
+  nextFrame: Command;
+  slower: Command;
+  faster: Command;
   open: Command;
 }
 
@@ -152,6 +162,8 @@ export interface Card {
    * kept open.
    */
   keepOpen(on: boolean): void;
+  /** Whether the lone animated image selected is being trimmed, until ↩ or Esc. */
+  trimming(): boolean;
   /** What applies to every element selected. */
   common(): Setting[];
   /** Theirs, `undefined` when they differ. */
@@ -197,28 +209,19 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     open = true;
     show(event.detail === 0);
   });
-  panel.addEventListener("focusout", (event) => {
-    if (event.target instanceof HTMLInputElement && event.target.closest(".info")) {
-      // Once the focus has landed where it goes, which a task waits for and a microtask does not,
-      // as what the field held back may build the card again.
-      setTimeout(() => {
-        if (!panel.hidden) {
-          fill();
-        }
-      });
-    }
-  });
-  // Written before a press elsewhere starts a gesture, which the edit would cut across.
+  // Before the board's keys, as ↩ would crop and Esc close the card.
+  // Not from a button the keys press, or a menu, which Esc closes.
   addEventListener(
-    "pointerdown",
+    "keydown",
     (event) => {
-      const active = document.activeElement;
-      if (
-        active instanceof HTMLInputElement &&
-        panel.contains(active) &&
-        !(event.target instanceof Node && panel.contains(event.target))
-      ) {
-        active.blur();
+      const focused = document.activeElement;
+      const pressing =
+        focused instanceof HTMLButtonElement && !focused.classList.contains("handle");
+      if (trimming && !pressing && !event.repeat && !event.defaultPrevented && !composing(event)) {
+        if (event.key === "Enter" || event.key === "Escape") {
+          event.preventDefault();
+          leaveTrim(event.key === "Enter");
+        }
       }
     },
     true,
@@ -229,8 +232,13 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   /** What the card shows, so that it only builds again once that changed, and at which zoom, as sizes go by it. */
   let built = "";
   let filledAt: number | undefined;
-  /** While a field's text is saved, as the focus moves on, under which the card must not build again. */
-  let saving = false;
+  /** The frames played of the lone animated image being trimmed, and whether it played before. */
+  let trimming: { id: string; asset: string; span: Span; playing: boolean } | undefined;
+  /** While a pointer moves the frame shown or an end of the trim, which the card must not build under. */
+  let dragging = false;
+  const letGo = () => {
+    dragging = false;
+  };
   /** With whether the alignment it holds is only the one its holder takes by default. */
   let copied: { style: Style; natural: boolean } | undefined;
 
@@ -254,6 +262,11 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       .map((id) => ({ id, kind: board.elements[id]!.kind }));
   };
   const alone = () => loneImage(host.current()?.board, host.selection());
+  const animated = () => {
+    const lone = alone();
+    const playback = lone && host.media.playback(lone.image.asset);
+    return lone && playback && { ...lone, playback };
+  };
   /** Of the targets, those that have a style, which comments lack. */
   const styled = () => targets().filter(({ kind }) => settings(kind).length > 0);
   const highlighting = () => {
@@ -534,6 +547,10 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     if (text.length > 0) {
       rows.push(row("Text", ...text));
     }
+    const moving = animated();
+    if (moving) {
+      rows.push(...playing(moving.image.asset, moving.image.edits.speed ?? 1, moving.playback));
+    }
     if (images()) {
       const grey = targets().every(({ kind }) => kind.type === "image" && kind.edits.greyscale);
       const shaped = (shape: CropShape) =>
@@ -583,77 +600,190 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     if (can.has("opacity")) {
       rows.push(row("Opacity", opacity()));
     }
-    const lone = alone();
-    if (lone) {
-      rows.push(info(lone.id, lone.image));
-    }
     return rows;
   };
-  const info = (id: string, image: Image) => {
-    const made = document.createElement("div");
-    made.className = "info";
-    made.setAttribute("role", "group");
-    made.setAttribute("aria-label", "Info");
-    // So that another image builds the card again, whose fields are its own.
-    made.dataset.element = id;
-    const { width, height } = image.natural_size;
-    const shown = Math.round(unitsPerPixel(image) * 100);
-    const facts = document.createElement("p");
-    facts.className = "facts";
-    facts.textContent = [image.filename, `${width} × ${height}`, `${shown}%`]
-      .filter(Boolean)
-      .join(" · ");
-    facts.title = `${width} by ${height} pixels, laid out at ${shown}% of their size`;
-    const source = field(id, "source", "Source");
-    const opener = button("Open source", icon("external"), () => commands.openSource.run(), {
-      shortcut: commands.openSource.keys?.[0],
+  /**
+   * The frames of an animated image, which its own state fills as it plays, then how it plays, or
+   * its trim being set.
+   */
+  const playing = (asset: string, speed: number, { count }: Playback) => {
+    const scrub = document.createElement("div");
+    scrub.className = "scrub";
+    scrub.classList.toggle("trimming", trimming !== undefined);
+    const rail = document.createElement("span");
+    rail.className = "rail";
+    const plays = document.createElement("span");
+    plays.className = "kept";
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = "0";
+    input.max = String(count - 1);
+    input.setAttribute("aria-label", "Frame");
+    /** Whether it played before a pointer took it to another frame, as it will once let go. */
+    let resume = false;
+    input.addEventListener("pointerdown", (event) => {
+      // The primary button alone, as the others, and ⌃ on a Mac, open the menu.
+      if (event.button === 0 && !opensMenu(event)) {
+        dragging = true;
+        resume = host.media.playback(asset)?.playing ?? false;
+        host.media.play([asset], false);
+      }
     });
-    opener.classList.add("opens");
-    source.append(opener);
-    made.append(facts, field(id, "caption", "Caption"), source);
+    input.addEventListener("input", () => host.media.seek(asset, Number(input.value)));
+    const release = () => {
+      if (dragging) {
+        dragging = false;
+        // Back to the board, as a button pressed gives it back.
+        input.blur();
+        host.media.play([asset], resume);
+      }
+    };
+    // Never left held, which would keep the card from building again.
+    for (const ending of ["pointerup", "lostpointercapture", "pointercancel", "change", "blur"]) {
+      input.addEventListener(ending, release);
+    }
+    host.explain(input, () => "Frame");
+    scrub.append(rail, plays, input);
+    if (trimming) {
+      scrub.append(end(asset, false), end(asset, true));
+    }
+    const at = document.createElement("span");
+    at.className = "count";
+    const timeline = row("Timeline", [scrub, at]);
+    if (trimming) {
+      const note = document.createElement("span");
+      note.className = "note";
+      const reset = button("Play every frame", letters("Reset"), () => trim(asset, [0, count - 1]));
+      reset.classList.add("wide");
+      const done = document.createElement("span");
+      done.className = "letters";
+      const key = document.createElement("kbd");
+      key.textContent = "↩";
+      done.append("Done", key);
+      const finish = button("Done", done, () => leaveTrim(true), { hint: "Done · ↩" });
+      finish.classList.add("primary");
+      return [timeline, row("Trim", [note, reset, finish])];
+    }
+    const step = (name: string, look: Icon, command: Command) =>
+      able(
+        button(name, icon(look), () => command.run(), { shortcut: command.keys?.[0] }),
+        command,
+      );
+    const normal = button("Normal speed", letters(`${speed}×`), () => paced(1));
+    normal.classList.add("speed");
+    const scissors = button("Trim", icon("scissors"), enterTrim);
+    scissors.classList.add("push");
+    return [
+      timeline,
+      row(
+        "Playback",
+        [
+          step("Previous frame", "previousFrame", commands.previousFrame),
+          button("Play", icon("play"), () => commands.play.run(), {
+            shortcut: commands.play.keys?.[0],
+          }),
+          step("Next frame", "nextFrame", commands.nextFrame),
+        ],
+        [
+          step("Slower", "minus", commands.slower),
+          normal,
+          step("Faster", "plus", commands.faster),
+          scissors,
+        ],
+      ),
+    ];
+  };
+  const end = (asset: string, last: boolean) => {
+    const made = button(last ? "Trim end" : "Trim start", document.createTextNode(""), () => {}, {
+      hint: `${last ? "Trim end" : "Trim start"} · drag, or ← →`,
+    });
+    made.classList.add("handle");
+    made.dataset.end = last ? "last" : "first";
+    const move = (at: number) => {
+      if (!trimming) {
+        return;
+      }
+      const [first, final] = trimming.span;
+      trim(asset, last ? [first, Math.max(first, at)] : [Math.min(at, final), final], at);
+    };
+    made.addEventListener("pointerdown", (event) => {
+      if (event.button === 0 && !opensMenu(event)) {
+        event.preventDefault();
+        made.setPointerCapture(event.pointerId);
+        dragging = true;
+      }
+    });
+    made.addEventListener("pointermove", (event) => {
+      const count = host.media.playback(asset)?.count;
+      const scrub = made.parentElement;
+      if (!dragging || !made.hasPointerCapture(event.pointerId) || !count || !scrub) {
+        return;
+      }
+      const { left, width } = scrub.getBoundingClientRect();
+      // Over the thumb's centre at each frame.
+      const along = (event.clientX - left - THUMB / 2) / Math.max(1, width - THUMB);
+      move(Math.round(clamp(along, 0, 1) * (count - 1)));
+    });
+    made.addEventListener("pointerup", letGo);
+    made.addEventListener("lostpointercapture", letGo);
+    made.addEventListener("pointercancel", letGo);
+    made.addEventListener("keydown", (event) => {
+      const by = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+      if (by !== undefined && trimming) {
+        // Kept from nudging the image.
+        event.preventDefault();
+        move(trimming.span[last ? 1 : 0] + by);
+      }
+    });
     return made;
   };
-  /** Its text is set in place, which leaves a field being written in, or pressed out of, alone. */
-  const field = (id: string, name: "caption" | "source", placeholder: string) => {
-    const line = document.createElement("div");
-    line.className = "field";
-    const input = document.createElement("input");
-    input.type = "text";
-    input.name = name;
-    input.placeholder = placeholder;
-    input.setAttribute("aria-label", placeholder);
-    input.maxLength = MOST_LABEL;
-    const written = () => {
-      const kind = host.current()?.board.elements[id]?.kind;
-      return kind?.type === "image" ? (kind[name] ?? "") : "";
-    };
-    input.addEventListener("keydown", (event) => {
-      if (composing(event)) {
-        return;
-      }
-      if (event.key === "Escape") {
-        input.value = written();
-      }
-      if (event.key === "Enter" || event.key === "Escape") {
-        input.blur();
-      }
-    });
-    input.addEventListener("change", () => {
-      const kind = host.current()?.board.elements[id]?.kind;
-      if (kind?.type !== "image" || input.value === written()) {
-        return;
-      }
-      const next = { ...kind };
-      setLabel(next, name, input.value);
-      saving = true;
-      try {
-        edit((editor, touched) => touched.push(...editor.update(id, JSON.stringify(next))));
-      } finally {
-        saving = false;
-      }
-    });
-    line.append(input);
-    return line;
+  const trim = (asset: string, span: Span, at = span[0]) => {
+    const count = host.media.playback(asset)?.count ?? 0;
+    const within: Span = [clamp(span[0], 0, count - 1), clamp(span[1], 0, count - 1)];
+    if (trimming) {
+      trimming.span = within;
+    }
+    host.media.preview(asset, within);
+    host.media.seek(asset, clamp(at, within[0], within[1]));
+    live();
+  };
+  const enterTrim = () => {
+    const moving = animated();
+    if (!moving) {
+      return;
+    }
+    const { id, image, playback } = moving;
+    trimming = { id, asset: image.asset, span: playback.span, playing: playback.playing };
+    host.media.play([image.asset], false);
+    host.media.preview(image.asset, playback.span);
+    fill();
+    host.trimmed();
+  };
+  /** As set, when `keep`, or as it was. */
+  const leaveTrim = (keep: boolean) => {
+    if (!trimming) {
+      return;
+    }
+    const { id, asset, span, playing: was } = trimming;
+    trimming = undefined;
+    dragging = false;
+    host.media.preview(asset, undefined);
+    const playback = host.media.playback(asset);
+    if (keep && playback) {
+      const trimmed = trimOf(playback.delays.slice(0, playback.count), span);
+      edit((editor, touched) => touched.push(...core.setTrim(editor, [id], trimmed)));
+      host.media.seek(asset, span[0]);
+    }
+    host.media.play([asset], was);
+    show();
+    host.trimmed();
+  };
+  /** As fast as `speed` says, which every image of its asset shares. */
+  const paced = (speed: number) => {
+    const lone = alone();
+    if (lone) {
+      edit((editor, touched) => touched.push(...editor.setSpeed([lone.id], speed)));
+    }
   };
   /** The palette over the colours picked lately, column by column, and the pipette over a colour of one's own. */
   const colours = () => {
@@ -724,52 +854,72 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     filledAt = host.zoom();
     const rows = build();
     const signature = rows.map((made) => made.outerHTML).join("");
-    // Not under a field being written in, which would lose what it holds, until it is left.
-    const active = document.activeElement;
-    const writing = active instanceof HTMLInputElement && panel.contains(active.closest(".info"));
-    if (signature !== built && !writing && !saving && !host.adjusting()) {
+    if (signature !== built && !host.adjusting() && !dragging) {
       rebuild(rows, signature);
     }
-    sync();
+    live();
   };
   const rebuild = (rows: HTMLElement[], signature: string) => {
     const focused = panel.contains(document.activeElement) ? document.activeElement : null;
     const label = focused?.getAttribute("aria-label");
-    const holder = focused?.closest<HTMLElement>(".info")?.dataset.element;
     // Gone without the pointer leaving them, they would leave their hint behind.
     panel
       .querySelectorAll("button, .custom, input[type=range]")
       .forEach((old) => old.dispatchEvent(new PointerEvent("pointerleave")));
     built = signature;
     panel.replaceChildren(...rows.flatMap((made, at) => (at > 0 ? [rule(), made] : [made])));
-    sync();
-    const again = [...panel.querySelectorAll<HTMLElement>("[aria-label]")].find(
-      (element) => element.getAttribute("aria-label") === label,
-    );
-    // Not into another image's field, which would take what was being written for this one.
-    if (label && again?.closest<HTMLElement>(".info")?.dataset.element === holder) {
-      again?.focus();
+    live();
+    if (label) {
+      [...panel.querySelectorAll<HTMLElement>("[aria-label]")]
+        .find((element) => element.getAttribute("aria-label") === label)
+        ?.focus();
     }
   };
-  /** The lone image's fields and its Open button, as the board now has them. */
-  const sync = () => {
-    // The image its fields are for, which a field written in holds while the selection moves on.
-    const id = panel.querySelector<HTMLElement>(".info")?.dataset.element;
-    const kind = id === undefined ? undefined : host.current()?.board.elements[id]?.kind;
-    const image = kind?.type === "image" ? kind : undefined;
-    panel.querySelectorAll<HTMLInputElement>(".info input").forEach((input) => {
-      if (input !== document.activeElement && image) {
-        input.value = image[input.name as "caption" | "source"] ?? "";
-      }
-    });
-    const opener = panel.querySelector<HTMLButtonElement>(".info .opens");
-    const address = webAddress(image?.source);
-    if (opener) {
-      opener.hidden = address === undefined;
-      const shortcut = commands.openSource.keys?.[0];
-      const name = address ? `Open ${new URL(address).host}` : "Open source";
-      opener.setAttribute("aria-label", name);
-      opener.title = shortcut ? `${name} · ${describe(shortcut)}` : name;
+  /** The frame the lone animated image shows, and whether it plays, as they change on their own. */
+  const live = () => {
+    const moving = animated();
+    if (!moving) {
+      return;
+    }
+    const { at, count, playing: plays, span: played } = moving.playback;
+    const [first, last] = trimming?.span ?? played;
+    const along = (frame: number) =>
+      `calc(${THUMB / 2}px + (100% - ${THUMB}px) * ${frame / Math.max(1, count - 1)})`;
+    const text = `${at + 1} / ${count}`;
+    const input = panel.querySelector<HTMLInputElement>(".scrub input");
+    if (input && !dragging) {
+      input.value = String(at);
+    }
+    input?.setAttribute("aria-valuetext", text);
+    const shown = panel.querySelector(".count");
+    if (shown && shown.textContent !== text) {
+      shown.textContent = text;
+    }
+    const range = panel.querySelector<HTMLElement>(".scrub .kept");
+    range?.style.setProperty("left", along(first));
+    range?.style.setProperty(
+      "width",
+      `calc((100% - ${THUMB}px) * ${(last - first) / Math.max(1, count - 1)})`,
+    );
+    panel.querySelector(".scrub")?.classList.toggle("trimmed", first > 0 || last < count - 1);
+    panel
+      .querySelectorAll<HTMLElement>(".scrub .handle")
+      .forEach((handle) =>
+        handle.style.setProperty("left", along(handle.dataset.end === "last" ? last : first)),
+      );
+    const note = panel.querySelector(".note");
+    if (note) {
+      note.textContent = `Loops ${first + 1}–${last + 1} of ${count}`;
+    }
+    const play = panel.querySelector<HTMLButtonElement>(
+      '[aria-label="Play"], [aria-label="Pause"]',
+    );
+    const name = plays ? "Pause" : "Play";
+    if (play && play.getAttribute("aria-label") !== name) {
+      const shortcut = commands.play.keys?.[0];
+      play.setAttribute("aria-label", name);
+      play.title = shortcut ? `${name} · ${describe(shortcut)}` : name;
+      play.replaceChildren(icon(plays ? "pause" : "play"));
     }
   };
   // Not hidden by the edit its opacity holds open as it slides.
@@ -824,6 +974,9 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     if (!kept && !host.busy() && targets().length === 0) {
       open = false;
     }
+    if (trimming && animated()?.id !== trimming.id) {
+      leaveTrim(false);
+    }
     show();
   };
 
@@ -831,6 +984,8 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     frame() {
       if (!panel.hidden && host.zoom() !== filledAt) {
         fill();
+      } else if (!panel.hidden) {
+        live();
       }
       const shown = [readout, chip, panel].find((element) => !element.hidden);
       if (shown) {
@@ -845,6 +1000,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     },
     close() {
       const had = panel.contains(document.activeElement);
+      leaveTrim(false);
       open = false;
       show();
       if (had) {
@@ -856,6 +1012,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       open ||= on;
       refresh();
     },
+    trimming: () => trimming !== undefined,
     common,
     value,
     highlighting,
@@ -939,7 +1096,7 @@ export function cardButton(
   if (pressed !== undefined) {
     made.setAttribute("aria-pressed", String(pressed));
   }
-  // As the title stands then, which an Open button's address changes in place.
+  // As the title stands then, which Play and Pause change in place.
   explain(made, () => made.title);
   made.addEventListener("click", (event) => {
     press(event);
@@ -1002,6 +1159,14 @@ function swatch(paint: Paint, kind: "palette" | "own" | "paper"): HTMLSpanElemen
   const made = document.createElement("span");
   made.className = `swatch ${kind}`;
   made.style.setProperty("--swatch", css(paint, made));
+  return made;
+}
+
+/** Dimmed while `command` cannot run, as the toolbar's buttons are. */
+function able(made: HTMLButtonElement, command: Command): HTMLButtonElement {
+  if (command.unavailable?.() !== undefined) {
+    made.setAttribute("aria-disabled", "true");
+  }
   return made;
 }
 

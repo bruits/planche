@@ -18,10 +18,11 @@ import type {
 } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
-import { animations } from "./animation.js";
+import { animations, sped } from "./animation.js";
 import {
   among,
   assetSizes,
+  assetPlayback,
   assetsOf,
   centring,
   copiedAssets,
@@ -403,6 +404,46 @@ const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection(
 const selectedMoving = () =>
   selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
 const moving = (asset: string) => animated.playing(asset) || films.playing(asset);
+const selectedAnimated = () => selectedAssets().filter((asset) => animated.holds(asset));
+const framesOnly = () =>
+  noneSelected() ??
+  (selectedAnimated().length > 0 ? undefined : "Only animated images go frame by frame");
+const frameStep = (label: string, by: number, keys: Shortcut[]): Command => ({
+  label,
+  keys,
+  unavailable: framesOnly,
+  run: () => {
+    animated.step(selectedAnimated(), by);
+    refreshBar();
+  },
+});
+const speedOf = (): number => {
+  const [asset] = selectedAnimated();
+  return (
+    (asset === undefined ? undefined : opened && assetPlayback(opened.board).get(asset)?.speed) ?? 1
+  );
+};
+const pace = (label: string, faster: boolean, keys: Shortcut[]): Command => ({
+  label,
+  keys,
+  unavailable: () =>
+    framesOnly() ??
+    (sped(speedOf(), faster) === undefined
+      ? `Already at the ${faster ? "fastest" : "slowest"}`
+      : undefined),
+  run: () => {
+    const speed = sped(speedOf(), faster);
+    const assets = new Set(selectedAnimated());
+    if (speed === undefined || !opened) {
+      return;
+    }
+    // Its animated images alone, as a still selected with them takes no speed.
+    const ids = Object.entries(opened.board.elements)
+      .filter(([, { kind }]) => kind.type === "image" && assets.has(kind.asset))
+      .map(([id]) => id);
+    editing.apply((editor, touched) => touched.push(...editor.setSpeed(ids, speed)));
+  },
+});
 const restack = (label: string, to: Restack, shortcut: Shortcut): Command => ({
   label,
   keys: [shortcut],
@@ -812,6 +853,12 @@ const commands = {
     },
     once: true,
   },
+  previousFrame: frameStep("Previous frame", -1, [{ key: "," }]),
+  // AZERTY types it with Shift.
+  nextFrame: frameStep("Next frame", 1, [{ key: "." }, { key: ".", shift: true }]),
+  // US types them with Shift, AZERTY one of them without.
+  slower: pace("Slower", false, [{ key: "<" }, { key: "<", shift: true }]),
+  faster: pace("Faster", true, [{ key: ">" }, { key: ">", shift: true }]),
   sound: {
     label: () => (selectedAssets().some(films.sounding) ? "Turn sound off" : "Turn sound on"),
     keys: [{ key: "m" }],
@@ -1226,6 +1273,8 @@ const styleCard = card(
     pick: () => picker.start(false),
     explain: (element, explanation) => bar.explain(element, explanation),
     say: (said) => bar.say(said),
+    media: animated,
+    trimmed: () => refreshBar(),
   },
   look,
   {
@@ -1239,7 +1288,11 @@ const styleCard = card(
     crop: commands.crop,
     rectangularCrop: commands.rectangularCrop,
     ellipticalCrop: commands.ellipticalCrop,
-    openSource: commands.openSource,
+    play: commands.play,
+    previousFrame: commands.previousFrame,
+    nextFrame: commands.nextFrame,
+    slower: commands.slower,
+    faster: commands.faster,
     open: commands.style,
   },
 );
@@ -1801,6 +1854,9 @@ function hint(): string {
   if (editing.writing() !== undefined) {
     return `${escapeKey} or click away to finish`;
   }
+  if (styleCard.trimming()) {
+    return `Drag an end, or press ← → on it, to choose what loops · ${insideKey} when done · ${escapeKey} to leave it as it was`;
+  }
   if (editing.cropping() !== undefined) {
     const [resetKey, turnKey, guidesKey] = [
       commands.resetCrop.keys[0]!,
@@ -1901,6 +1957,13 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.play,
         commands.sound,
         commands.openSource,
+        relevantSubmenu("Frames", [
+          commands.previousFrame,
+          commands.nextFrame,
+          "separator",
+          commands.slower,
+          commands.faster,
+        ]),
         {
           ...submenu("Style", [
             commands.style,

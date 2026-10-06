@@ -927,15 +927,6 @@ body {
   text-align: right;
 }
 
-/* As wide as the rows above it, whatever its text holds. */
-.style-card .info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 2px;
-  contain: inline-size;
-}
-
 .style-card .facts {
   margin: 0;
   padding: 2px 4px;
@@ -946,28 +937,162 @@ body {
   text-overflow: ellipsis;
 }
 
-.style-card .field {
+/* Wider than the rows under it, so that the card keeps its width as they change. */
+.style-card .scrub {
+  position: relative;
   display: flex;
+  flex: 1;
   align-items: center;
-  gap: 2px;
+  min-width: 196px;
+  height: var(--button);
+  margin: 0 4px 0 6px;
 }
 
-.style-card .field input {
+.style-card .scrub .rail,
+.style-card .scrub .kept {
+  position: absolute;
+  top: calc(50% - 3px);
+  height: 6px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.style-card .scrub .rail {
+  left: 0;
+  right: 0;
+  background: var(--line);
+}
+
+.style-card .scrub:is(.trimmed, .trimming) .rail {
+  background: repeating-linear-gradient(-45deg, var(--line) 0 2px, transparent 2px 4px);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.style-card .scrub:is(.trimmed, .trimming) .kept {
+  background: color-mix(in srgb, var(--text) 26%, transparent);
+}
+
+.style-card .scrub input {
+  position: relative;
   flex: 1;
   min-width: 0;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: inherit;
+  height: 20px;
+  margin: 0;
   background: none;
-  font: inherit;
-  font-size: 13px;
+  appearance: none;
+  cursor: pointer;
 }
 
-.style-card .field input:focus-visible {
+.style-card .scrub input::-webkit-slider-runnable-track {
+  height: 6px;
+  background: none;
+}
+
+.style-card .scrub input::-moz-range-track {
+  height: 6px;
+  background: none;
+}
+
+.style-card .scrub input::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow:
+    0 0 0 2px var(--text),
+    0 1px 3px rgb(0 0 0 / 30%);
+  appearance: none;
+}
+
+.style-card .scrub input::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow:
+    0 0 0 2px var(--text),
+    0 1px 3px rgb(0 0 0 / 30%);
+}
+
+.style-card .scrub input:focus-visible {
+  border-radius: 4px;
   outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: 2px;
+}
+
+/* As wide as a pointer needs. */
+.style-card .scrub .handle {
+  position: absolute;
+  z-index: 1;
+  top: calc(50% - 10px);
+  width: 12px;
+  height: 20px;
+  margin-left: -6px;
+  border-radius: 3px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.style-card .scrub .handle:hover {
+  background: none;
+}
+
+.style-card .scrub .handle::before {
+  content: "";
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--text);
+}
+
+.style-card .scrub .handle:hover::before {
+  background: var(--accent);
+}
+
+.style-card .count,
+.style-card .note {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Wide enough for four digits a side, so that the track stays put as it plays. */
+.style-card .count {
+  min-width: 9ch;
+  padding-right: 4px;
+  text-align: right;
+}
+
+.style-card .note {
+  flex: 1;
+  padding: 0 6px;
+}
+
+.style-card button.wide {
+  width: auto;
+  min-width: var(--button);
+  padding: 0 8px;
+}
+
+.style-card button.push {
+  margin-left: auto;
+}
+
+/* As wide as its widest speed, so that the buttons around it stay put as it changes. */
+.style-card button.speed {
+  width: 52px;
+}
+
+.style-card button[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.style-card button[aria-disabled="true"]:hover {
+  background: none;
 }
 
 .style-card .custom input {
@@ -1052,12 +1177,20 @@ body {
   justify-content: center;
 }
 
-.export-card button.primary {
+.style-card button.primary {
+  width: auto;
+  padding: 0 9px;
   color: var(--accent);
   background: var(--accent-soft);
 }
 
-.export-card kbd {
+.style-card button.primary .letters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.style-card kbd {
   font: inherit;
   font-weight: 400;
   color: var(--muted);
@@ -1424,6 +1557,25 @@ body {
   }
 
   .style-card .slider .tick {
+    background: CanvasText;
+  }
+
+  .style-card .scrub .rail {
+    border: 1px solid CanvasText;
+  }
+
+  .style-card .scrub input::-webkit-slider-thumb {
+    box-sizing: border-box;
+    border: 2px solid CanvasText;
+  }
+
+  .style-card .scrub input::-moz-range-thumb {
+    box-sizing: border-box;
+    border: 2px solid CanvasText;
+  }
+
+  .style-card .scrub .kept,
+  .style-card .scrub .handle::before {
     background: CanvasText;
   }
 

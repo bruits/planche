@@ -14,7 +14,7 @@ import init, {
   checkedStyle,
   drawnKind as drawnAlone,
   fileDepth,
-  frameDelay,
+  frameDelays as delays,
   gridLevel as level,
   isAssetFile,
   isBoardFile,
@@ -50,6 +50,7 @@ import type {
   End,
   Fill,
   Heads,
+  ImageEdits,
   Item,
   Media,
   Order,
@@ -65,6 +66,7 @@ import type {
   Text,
   Tip,
   Transform,
+  Trim,
   Weight,
 } from "./wasm/bindings.js";
 
@@ -76,7 +78,6 @@ export {
   ZipWriter,
   assetPath,
   fileDepth,
-  frameDelay,
   isAssetFile,
   isBoardFile,
   isStrayElement,
@@ -104,6 +105,7 @@ export type {
   End,
   Fill,
   Heads,
+  ImageEdits,
   Item,
   Media,
   Order,
@@ -119,6 +121,7 @@ export type {
   Text,
   Tip,
   Transform,
+  Trim,
   Weight,
 };
 
@@ -201,6 +204,20 @@ export function setBackground(editor: Editor, to: Background): void {
 
 export function setCropShape(editor: Editor, ids: string[], shape: CropShape): string[] {
   return editor.setCropShape(ids, JSON.stringify(shape));
+}
+
+/** For every image of their assets too. The whole of each when `undefined`. */
+export function setTrim(editor: Editor, ids: string[], trim: Trim | undefined): string[] {
+  return editor.setTrim(ids, trim && JSON.stringify(trim));
+}
+
+/**
+ * How long each frame of an animated image shows, in milliseconds, `undefined` when `bytes` are
+ * not an image of more than one frame.
+ */
+export function frameDelays(bytes: Bytes): number[] | undefined {
+  const found = delays(bytes);
+  return found && Array.from(found);
 }
 
 /**

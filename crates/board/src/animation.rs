@@ -16,6 +16,18 @@ pub fn animation(bytes: &[u8]) -> Option<Animation> {
     gif(bytes).or_else(|| png(bytes)).or_else(|| webp(bytes))
 }
 
+/// How long each frame shows, in milliseconds, up to where a truncated file stops. `None` as for
+/// [`animation`].
+pub fn frame_delays(bytes: &[u8]) -> Option<Vec<f64>> {
+    let delays = gif_frames(bytes)
+        .map(|(delays, _)| delays)
+        .or_else(|| png(bytes).and_then(|_| png_delays(bytes.strip_prefix(PNG)?)))
+        .or_else(|| {
+            webp_frames(bytes).and_then(|(animated, _, delays)| animated.then_some(delays))
+        })?;
+    (delays.len() > 1).then(|| delays.into_iter().map(frame_delay).collect())
+}
+
 /// How long a frame shows, in milliseconds. 100 for one of 10 or less, which browsers take as
 /// meant to be as fast as they allow.
 pub fn frame_delay(milliseconds: f64) -> f64 {
@@ -32,21 +44,34 @@ fn plays(times: u32) -> Animation {
 
 const GIF_IMAGE: u8 = 0x2C;
 const GIF_EXTENSION: u8 = 0x21;
+const GIF_CONTROL: u8 = 0xF9;
 const GIF_APPLICATION: u8 = 0xFF;
 
-/// Its frames counted up to its trailer, or to where a truncated file stops, as browsers play what
-/// they received.
 fn gif(bytes: &[u8]) -> Option<Animation> {
+    let (delays, repeats) = gif_frames(bytes)?;
+    (delays.len() > 1).then(|| match repeats {
+        None => plays(1),
+        Some(0) => Animation::Forever,
+        Some(repeats) => plays(u32::from(repeats) + 1),
+    })
+}
+
+/// The delay of each of its frames, in milliseconds as written, up to its trailer, or to where a
+/// truncated file stops, as browsers play what they received, and how many times it repeats.
+fn gif_frames(bytes: &[u8]) -> Option<(Vec<f64>, Option<u16>)> {
     let rest = bytes
         .strip_prefix(b"GIF87a")
         .or_else(|| bytes.strip_prefix(b"GIF89a"))?;
     let mut rest = after_colour_table(rest.get(7..)?, *rest.get(4)?)?;
-    let mut frames = 0_u32;
+    let mut delays = Vec::new();
+    let mut delay = None;
     let mut repeats = None;
     while let Some((&block, after)) = rest.split_first() {
         let next = match block {
-            GIF_IMAGE => after_image(after).inspect(|_| frames += 1),
-            GIF_EXTENSION => after_extension(after, &mut repeats),
+            // In hundredths of a second, for this frame alone.
+            GIF_IMAGE => after_image(after)
+                .inspect(|_| delays.push(f64::from(delay.take().unwrap_or(0_u16)) * 10.0)),
+            GIF_EXTENSION => after_extension(after, &mut repeats, &mut delay),
             _ => None,
         };
         let Some(next) = next else {
@@ -54,11 +79,7 @@ fn gif(bytes: &[u8]) -> Option<Animation> {
         };
         rest = next;
     }
-    (frames > 1).then(|| match repeats {
-        None => plays(1),
-        Some(0) => Animation::Forever,
-        Some(repeats) => plays(u32::from(repeats) + 1),
-    })
+    Some((delays, repeats))
 }
 
 fn after_colour_table(bytes: &[u8], packed: u8) -> Option<&[u8]> {
@@ -75,9 +96,19 @@ fn after_image(bytes: &[u8]) -> Option<&[u8]> {
     after_sub_blocks(data.get(1..)?)
 }
 
-/// Takes how many times the animation repeats from a loop extension.
-fn after_extension<'a>(bytes: &'a [u8], repeats: &mut Option<u16>) -> Option<&'a [u8]> {
+/// Takes how many times the animation repeats from a loop extension, and how long the next frame
+/// shows from a control extension.
+fn after_extension<'a>(
+    bytes: &'a [u8],
+    repeats: &mut Option<u16>,
+    delay: &mut Option<u16>,
+) -> Option<&'a [u8]> {
     let (&label, rest) = bytes.split_first()?;
+    if label == GIF_CONTROL
+        && let Some(&[4, _, low, high]) = rest.get(..4)
+    {
+        *delay = Some(u16::from_le_bytes([low, high]));
+    }
     let looping = matches!(
         rest.get(..12),
         Some(b"\x0bNETSCAPE2.0" | b"\x0bANIMEXTS1.0")
@@ -142,14 +173,58 @@ fn png_chunks(mut rest: &[u8]) -> Option<Option<Animation>> {
     }
 }
 
+/// The delay of each frame, in milliseconds as written, up to where the chunks stop.
+fn png_delays(mut rest: &[u8]) -> Option<Vec<f64>> {
+    let mut delays = Vec::new();
+    while let Some(length) = rest
+        .get(..4)
+        .and_then(|length| usize::try_from(u32::from_be_bytes(length.try_into().ok()?)).ok())
+    {
+        let Some(end) = length.checked_add(8) else {
+            break;
+        };
+        match (rest.get(4..8), rest.get(8..end)) {
+            (Some(b"fcTL"), Some(data)) => {
+                let (Some(&[high, low]), Some(&[den_high, den_low])) =
+                    (data.get(20..22), data.get(22..24))
+                else {
+                    break;
+                };
+                let numerator = f64::from(u16::from_be_bytes([high, low]));
+                let denominator = match u16::from_be_bytes([den_high, den_low]) {
+                    // As the format says a denominator of 0 means hundredths.
+                    0 => 100.0,
+                    denominator => f64::from(denominator),
+                };
+                delays.push(numerator * 1000.0 / denominator);
+            }
+            (Some(b"IEND"), _) | (_, None) => break,
+            _ => {}
+        }
+        // Past its checksum.
+        let Some(next) = end.checked_add(4).and_then(|after| rest.get(after..)) else {
+            break;
+        };
+        rest = next;
+    }
+    Some(delays)
+}
+
 fn webp(bytes: &[u8]) -> Option<Animation> {
+    let (animated, times, delays) = webp_frames(bytes)?;
+    (animated && delays.len() > 1).then(|| plays(u32::from(times)))
+}
+
+/// Whether it is animated, how many times it plays, and the delay of each of its frames, in
+/// milliseconds as written.
+fn webp_frames(bytes: &[u8]) -> Option<(bool, u16, Vec<f64>)> {
     if bytes.get(..4)? != b"RIFF" || bytes.get(8..12)? != b"WEBP" {
         return None;
     }
     let mut rest = bytes.get(12..)?;
     let mut animated = false;
     let mut times = 0;
-    let mut frames = 0_u32;
+    let mut delays = Vec::new();
     while let Some((kind, data, next)) = riff_chunk(rest) {
         match kind {
             b"VP8X" => animated = data.first().is_some_and(|flags| flags & 0x02 != 0),
@@ -158,12 +233,19 @@ fn webp(bytes: &[u8]) -> Option<Animation> {
                     times = u16::from_le_bytes([low, high]);
                 }
             }
-            b"ANMF" => frames += 1,
+            // After its position and size, three bytes each.
+            b"ANMF" => {
+                let delay = match data.get(12..15) {
+                    Some(&[low, middle, high]) => u32::from_le_bytes([low, middle, high, 0]),
+                    _ => 0,
+                };
+                delays.push(f64::from(delay));
+            }
             _ => {}
         }
         rest = next;
     }
-    (animated && frames > 1).then(|| plays(u32::from(times)))
+    Some((animated, times, delays))
 }
 
 /// Its kind, its data, and what follows it, as chunks are padded to an even size.
@@ -200,7 +282,13 @@ mod tests {
 
     /// With a graphic control extension, and a local colour table when `local`.
     fn gif_frame(local: bool) -> Vec<u8> {
-        let mut bytes = b"\x21\xF9\x04\x00\x0A\x00\x00\x00".to_vec();
+        gif_frame_for(10, local)
+    }
+
+    fn gif_frame_for(hundredths: u16, local: bool) -> Vec<u8> {
+        let mut bytes = b"\x21\xF9\x04\x00".to_vec();
+        bytes.extend(hundredths.to_le_bytes());
+        bytes.extend([0, 0]);
         bytes.extend([GIF_IMAGE, 0, 0, 0, 0, 1, 0, 1, 0]);
         if local {
             bytes.push(0x81);
@@ -253,6 +341,24 @@ mod tests {
         assert_eq!(animation(&whole[..second + 12]), None);
     }
 
+    #[test]
+    fn a_gif_shows_each_frame_as_its_control_says_as_browsers_do() {
+        let mut bytes = gif_header();
+        for (at, hundredths) in [5, 0, 1, 12].into_iter().enumerate() {
+            bytes.extend(gif_frame_for(hundredths, at % 2 == 1));
+        }
+        // A frame without a control of its own.
+        bytes.extend(&gif_frame_for(0, false)[8..]);
+        bytes.push(0x3B);
+        assert_eq!(
+            frame_delays(&bytes),
+            Some(vec![50.0, 100.0, 100.0, 120.0, 100.0])
+        );
+        let third = gif_header().len() + 3 * gif_frame(false).len() + 4;
+        assert_eq!(frame_delays(&bytes[..third]), Some(vec![50.0, 100.0]));
+        assert_eq!(frame_delays(&gif(None, 1)), None);
+    }
+
     fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
         let mut bytes = u32::try_from(data.len()).unwrap().to_be_bytes().to_vec();
         bytes.extend(kind);
@@ -303,6 +409,36 @@ mod tests {
         assert_eq!(animation(&png(&[colour, data])), None);
     }
 
+    /// Shown for `numerator / denominator` of a second.
+    fn frame_control(numerator: u16, denominator: u16) -> Vec<u8> {
+        let mut data = vec![0; 20];
+        data.extend(numerator.to_be_bytes());
+        data.extend(denominator.to_be_bytes());
+        data.extend([0, 0]);
+        png_chunk(b"fcTL", &data)
+    }
+
+    #[test]
+    fn a_png_shows_each_frame_as_its_frame_control_says() {
+        let data = png_chunk(b"IDAT", &[0; 3]);
+        let frame = png_chunk(b"fdAT", &[0; 7]);
+        let bytes = png(&[
+            animation_control(3, 0),
+            frame_control(1, 4),
+            data.clone(),
+            frame_control(30, 0),
+            frame.clone(),
+            frame_control(0, 1),
+            frame,
+        ]);
+        assert_eq!(frame_delays(&bytes), Some(vec![250.0, 300.0, 100.0]));
+        assert_eq!(
+            frame_delays(&png(&[frame_control(1, 4), data])),
+            None,
+            "without its animation control"
+        );
+    }
+
     fn riff(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
         let mut bytes = kind.to_vec();
         bytes.extend(u32::try_from(data.len()).unwrap().to_le_bytes());
@@ -328,6 +464,18 @@ mod tests {
         bytes.extend(b"WEBP");
         bytes.extend(chunks);
         bytes
+    }
+
+    #[test]
+    fn a_webp_shows_each_frame_as_long_as_it_says() {
+        let mut bytes = webp(true, 0, 0);
+        for milliseconds in [40_u32, 0, 1500] {
+            let mut data = [0; 17];
+            data[12..15].copy_from_slice(&milliseconds.to_le_bytes()[..3]);
+            bytes.extend(riff(b"ANMF", &data));
+        }
+        assert_eq!(frame_delays(&bytes), Some(vec![40.0, 100.0, 1500.0]));
+        assert_eq!(frame_delays(&webp(false, 0, 3)), None);
     }
 
     #[test]

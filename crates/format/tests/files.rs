@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use board::{
     Align, Alignment, AssetHasher, AssetId, Background, Board, Colour, CropShape, Dash, Editor,
     Element, ElementId, ElementKind, Fill, Heads, ImageEdits, Opacity, Paper, Point, Rect, Restack,
-    Shape, Size, Text, Tip, Weight, ZIndex,
+    Shape, Size, Speed, Text, Tip, Trim, Weight, ZIndex,
 };
 use format::save::{Known, Save};
 use format::{Error, Files, zip};
@@ -76,6 +76,8 @@ fn sample() -> Board {
                         flip_vertical: false,
                         greyscale: true,
                         crop_shape: CropShape::Rectangle,
+                        trim: None,
+                        speed: Speed::NORMAL,
                     },
                     source: Some("https://example.com/harbour".to_owned()),
                     filename: Some("harbour.png".to_owned()),
@@ -271,7 +273,7 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
     fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
-    let cases: [(Edit, &[u128]); 25] = [
+    let cases: [(Edit, &[u128]); 27] = [
         (
             |editor| editor.add(id(10), None, note(None, "New").kind),
             &[10],
@@ -326,6 +328,20 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
             &[2],
         ),
         (|editor| editor.reset_crop(&[id(2)]), &[2]),
+        (
+            |editor| {
+                let trim = Trim {
+                    start: 0.25,
+                    end: 1.5,
+                };
+                editor.set_trim(&[id(1)], Some(trim))
+            },
+            &[2],
+        ),
+        (
+            |editor| editor.set_speed(&[id(2)], Speed::new(0.5).unwrap()),
+            &[2],
+        ),
         (|editor| editor.remove(&[STICKY]), &[5, 6]),
         (|editor| editor.remove(&[ELLIPSE]), &[4, 5, 9]),
         (|editor| editor.unstick(&[id(9)]), &[9]),
@@ -505,6 +521,37 @@ fn a_crop_shape_is_written_only_once_not_a_rectangle_and_reads_back() {
 
     let files = format::write(editor.board()).unwrap();
     assert_eq!(shape(&files), Some("ellipse".into()));
+    assert_eq!(format::read(&files).unwrap(), *editor.board());
+}
+
+#[test]
+fn a_trim_and_a_speed_are_written_only_once_set_and_read_back() {
+    let image = ElementId::from_random(2);
+    let mut editor = Editor::new(sample());
+    let edits = |files: &Files| {
+        let bytes = &files[&format!("elements/{image}.json")];
+        let edits = &serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["kind"]["edits"];
+        (edits.get("trim").cloned(), edits.get("speed").cloned())
+    };
+    assert_eq!(edits(&format::write(editor.board()).unwrap()), (None, None));
+
+    let trim = Trim {
+        start: 0.25,
+        end: 1.5,
+    };
+    editor.set_trim(&[image], Some(trim)).unwrap();
+    editor
+        .set_speed(&[image], Speed::new(1.5).unwrap())
+        .unwrap();
+
+    let files = format::write(editor.board()).unwrap();
+    assert_eq!(
+        edits(&files),
+        (
+            Some(serde_json::json!({ "start": 0.25, "end": 1.5 })),
+            Some(1.5.into())
+        )
+    );
     assert_eq!(format::read(&files).unwrap(), *editor.board());
 }
 
