@@ -339,49 +339,8 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     }
   };
 
-  /** Named by `name`, and explained with its `shortcut`, or `hint` for keys no shortcut says. */
-  const button = (
-    name: string,
-    content: Node,
-    press: (event: MouseEvent) => void,
-    {
-      pressed,
-      shortcut,
-      hint,
-    }: { pressed?: boolean; shortcut?: Shortcut | undefined; hint?: string } = {},
-  ) => {
-    const made = document.createElement("button");
-    made.type = "button";
-    made.setAttribute("aria-label", name);
-    const explained = shortcut ? `${name} · ${describe(shortcut)}` : (hint ?? name);
-    made.title = explained;
-    if (shortcut) {
-      made.setAttribute("aria-keyshortcuts", ariaKeys(shortcut));
-    }
-    made.append(content);
-    // Chosen, a colour shows in itself, which its button takes from its swatch.
-    if (content instanceof HTMLElement && content.classList.contains("swatch")) {
-      made.style.setProperty("--swatch", content.style.getPropertyValue("--swatch"));
-    }
-    if (pressed !== undefined) {
-      made.setAttribute("aria-pressed", String(pressed));
-    }
-    // As the title stands then, which an Open button's address changes in place.
-    host.explain(made, () => made.title);
-    made.addEventListener("click", (event) => {
-      press(event);
-      // Back to the board, as the toolbar's buttons give it back, unless the keys pressed it, even
-      // from the button built again in its place, which took its focus over.
-      if (
-        event.detail > 0 &&
-        document.activeElement instanceof HTMLElement &&
-        panel.contains(document.activeElement)
-      ) {
-        document.activeElement.blur();
-      }
-    });
-    return made;
-  };
+  const button = (name: string, content: Node, press: (event: MouseEvent) => void, extra?: Extra) =>
+    cardButton(panel, host.explain, name, content, press, extra);
   /** The buttons of one setting, which press each other off. */
   const options = <S extends Setting>(setting: S, choices: Choice<S>[]) => {
     const current = value(setting);
@@ -840,34 +799,20 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     chip.hidden = true;
     panel.hidden = true;
   };
-  /**
-   * Under the selection, or above it where the toolbar leaves no room under it, or above the
-   * toolbar for the tool's style.
-   */
+  /** Under the selection, or above the toolbar for the tool's style. */
   const place = (shown: HTMLElement) => {
-    const { width, height } = shown.getBoundingClientRect();
-    const floor = Math.min(innerHeight, host.floor());
     if (host.tool() !== undefined) {
+      const { width, height } = shown.getBoundingClientRect();
+      const floor = Math.min(innerHeight, host.floor());
       const left = clamp(innerWidth / 2 - width / 2, MARGIN, innerWidth - width - MARGIN);
       shown.style.setProperty("left", `${left}px`);
       shown.style.setProperty("top", `${Math.max(MARGIN, floor - height - MARGIN)}px`);
       return;
     }
     const corners = host.box()?.map((corner) => host.client(corner));
-    if (!corners || corners.some((corner) => corner === undefined)) {
-      return;
+    if (corners?.every((corner) => corner !== undefined)) {
+      beneath(shown, corners, host.floor());
     }
-    const xs = corners.map((corner) => corner!.clientX);
-    const ys = corners.map((corner) => corner!.clientY);
-    const left = clamp(
-      (Math.min(...xs) + Math.max(...xs)) / 2 - width / 2,
-      MARGIN,
-      innerWidth - width - MARGIN,
-    );
-    const below = Math.max(...ys) + GAP;
-    const top = below + height <= floor - MARGIN ? below : Math.min(...ys) - GAP - height;
-    shown.style.setProperty("left", `${left}px`);
-    shown.style.setProperty("top", `${clamp(top, MARGIN, floor - height - MARGIN)}px`);
   };
 
   return {
@@ -951,7 +896,90 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   };
 }
 
-function letters(text: string): HTMLSpanElement {
+export interface Extra {
+  pressed?: boolean;
+  shortcut?: Shortcut | undefined;
+  hint?: string;
+}
+
+/** A button of `panel`, which gives the focus back to the board once clicked. */
+export function cardButton(
+  panel: HTMLElement,
+  explain: CardHost["explain"],
+  name: string,
+  content: Node,
+  press: (event: MouseEvent) => void,
+  { pressed, shortcut, hint }: Extra = {},
+): HTMLButtonElement {
+  const made = document.createElement("button");
+  made.type = "button";
+  made.setAttribute("aria-label", name);
+  const explained = shortcut ? `${name} · ${describe(shortcut)}` : (hint ?? name);
+  made.title = explained;
+  if (shortcut) {
+    made.setAttribute("aria-keyshortcuts", ariaKeys(shortcut));
+  }
+  made.append(content);
+  // Chosen, a colour shows in itself, which its button takes from its swatch.
+  if (content instanceof HTMLElement && content.classList.contains("swatch")) {
+    made.style.setProperty("--swatch", content.style.getPropertyValue("--swatch"));
+  }
+  if (pressed !== undefined) {
+    made.setAttribute("aria-pressed", String(pressed));
+  }
+  // As the title stands then, which an Open button's address changes in place.
+  explain(made, () => made.title);
+  made.addEventListener("click", (event) => {
+    press(event);
+    // Back to the board, as the toolbar's buttons give it back, unless the keys pressed it, even
+    // from the button built again in its place, which took its focus over.
+    if (
+      event.detail > 0 &&
+      document.activeElement instanceof HTMLElement &&
+      panel.contains(document.activeElement)
+    ) {
+      document.activeElement.blur();
+    }
+  });
+  return made;
+}
+
+/** Where `beneath` placed something, and the bounds of the corners it placed it by. */
+export interface Placement {
+  under: boolean;
+  centre: number;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * Under `corners`, or above them where the toolbar, from `floor` down, leaves no room under them,
+ * centred across them, and within the window.
+ */
+export function beneath(
+  shown: HTMLElement,
+  corners: { clientX: number; clientY: number }[],
+  floor: number,
+): Placement {
+  const { width, height } = shown.getBoundingClientRect();
+  const bottom = Math.min(innerHeight, floor);
+  const xs = corners.map((corner) => corner.clientX);
+  const ys = corners.map((corner) => corner.clientY);
+  const around = {
+    centre: (Math.min(...xs) + Math.max(...xs)) / 2,
+    top: Math.min(...ys),
+    bottom: Math.max(...ys),
+  };
+  const left = clamp(around.centre - width / 2, MARGIN, innerWidth - width - MARGIN);
+  const below = around.bottom + GAP;
+  const under = below + height <= bottom - MARGIN;
+  const top = under ? below : around.top - GAP - height;
+  shown.style.setProperty("left", `${left}px`);
+  shown.style.setProperty("top", `${clamp(top, MARGIN, bottom - height - MARGIN)}px`);
+  return { under, ...around };
+}
+
+export function letters(text: string): HTMLSpanElement {
   const made = document.createElement("span");
   made.className = "letters";
   made.textContent = text;
@@ -965,7 +993,7 @@ function swatch(paint: Paint, kind: "palette" | "own" | "paper"): HTMLSpanElemen
   return made;
 }
 
-function row(label: string, ...groups: HTMLElement[][]): HTMLDivElement {
+export function row(label: string, ...groups: HTMLElement[][]): HTMLDivElement {
   const made = document.createElement("div");
   made.className = "row";
   made.setAttribute("role", "group");
@@ -987,13 +1015,13 @@ function separator(): HTMLElement {
   return line;
 }
 
-function rule(): HTMLElement {
+export function rule(): HTMLElement {
   const line = document.createElement("div");
   line.className = "rule";
   line.setAttribute("role", "separator");
   return line;
 }
 
-function clamp(value: number, low: number, high: number): number {
+export function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(value, Math.max(low, high)));
 }

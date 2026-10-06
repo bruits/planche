@@ -27,6 +27,7 @@ import {
   copiedAssets,
   duplicateOffset,
   decodeAsset,
+  exposing,
   extent,
   files,
   holdsImage,
@@ -63,6 +64,7 @@ import {
 } from "./commands.js";
 import { CROP_KEYS, edits, isTip, type Draw, type Pen } from "./edit.js";
 import { message } from "./errors.js";
+import { exportCard, recalled, remembered } from "./exportcard.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
 import { lifecycle } from "./lifecycle.js";
@@ -75,7 +77,15 @@ import { pinned, pins } from "./pins.js";
 import { platform } from "./platform.js";
 import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE, onScreen } from "./raster.js";
-import { drawnOver, exported, pictureName, render } from "./render.js";
+import {
+  backing,
+  drawnOver,
+  exported,
+  pictureName,
+  planned,
+  render,
+  type Options,
+} from "./render.js";
 import type { Saving } from "./save.js";
 import { create, type Placed, type Renderer } from "./renderer.js";
 import { ACROSS, sampler } from "./sampler.js";
@@ -130,13 +140,14 @@ const viewport = view(byId("viewport"), {
     comments.frame(camera);
     editing.follow();
     styleCard.frame();
+    pictureCard.frame();
     if (opened && renderer) {
       present.free();
       drawings.update(opened.board, renderer, camera, size);
       animated.update(opened.board, renderer, camera, size);
       films.update(opened.board, renderer, camera, size);
       if (lettering.update(opened.board, renderer, camera, size, editing.writing())) {
-        renderer.place(drawnNow(opened));
+        placeNow(renderer, opened);
       }
     }
   },
@@ -167,10 +178,12 @@ const editing = edits(viewport, overlaid, () => opened, {
     refreshBar();
     showComments();
     styleCard.refresh();
+    reframe();
   },
   settled() {
     refreshBar();
     styleCard.refresh();
+    reframe();
     // A drag ending draws nothing, so what it stopped drawing is freed now.
     present.free();
   },
@@ -182,8 +195,8 @@ const editing = edits(viewport, overlaid, () => opened, {
   styled: (kind, zoom) => look.dressed(kind, zoom),
   inked(stroke) {
     inking = stroke;
-    if (opened) {
-      renderer?.place(drawnNow(opened));
+    if (opened && renderer) {
+      placeNow(renderer, opened);
       viewport.redraw();
     }
   },
@@ -257,7 +270,7 @@ const present = showing({
     created.backdrop(next.board.background);
     details.set("renderer", created.backend);
     renderer = created;
-    created.place(drawnNow(next));
+    placeNow(created, next);
     viewport.show(created, camera ?? fit(extent(next), viewport.size()));
     editing.rehover();
     refreshBar();
@@ -270,6 +283,8 @@ const present = showing({
     // Once their texture is there, which they play onto.
     animated.keep([read]);
     films.keep([read]);
+    // As sharp at any size once known to be an SVG.
+    reframe();
   },
   crossOut,
   holds: (_, asset) => loaded.has(asset) || crossedOut.has(asset),
@@ -324,6 +339,8 @@ let arranging = false;
 let copying: { key: string; png: Promise<Blob> } | undefined;
 /** Copies as PNG asked for, so that one cancelled clears no later one's message. */
 let pngCopies = 0;
+/** What of the export card's picture the board last drew. */
+let exposed = "";
 
 type Ordering = (opened: Opened, ids: string[]) => Order | Promise<Order>;
 
@@ -595,17 +612,35 @@ const commands = {
     run: () => report(exportZip()),
   },
   exportPng: {
-    label: "Export the selection as PNG…",
+    label: () => (pictureCard.isOpen() ? "Hide export" : "Export the selection as PNG…"),
     keys: [{ key: "e", command: true, shift: true }],
     unavailable: unexportable,
-    run: () => report(exportPng()),
+    run: () => {
+      if (pictureCard.isOpen()) {
+        pictureCard.close();
+      } else {
+        styleCard.close();
+        // As the picture would hide what they draw or erase, which closes it again.
+        if (drawTool() !== undefined || tool === "eraser") {
+          useTool("select");
+        }
+        pictureCard.open(true);
+      }
+    },
     once: true,
+  },
+  // Before the others on its key, which it takes while the export card is open.
+  savePng: {
+    label: "Save as PNG…",
+    keys: [{ key: "enter" }],
+    unavailable: () => (pictureCard.isOpen() ? unexportable() : "Open the export card first"),
+    run: () => report(exportPng(pictureCard.options())),
   },
   copyPng: {
     label: "Copy as PNG",
     keys: [{ key: "c", shift: true, alt: true }],
     unavailable: unexportable,
-    run: copyPng,
+    run: () => copyPng(pictureCard.options()),
     once: true,
   },
   undo: {
@@ -936,7 +971,14 @@ const commands = {
       (styleCard.common().length > 0 || styleCard.images()
         ? undefined
         : "Comments and groups have no style"),
-    run: () => (styleCard.isOpen() ? styleCard.close() : styleCard.open(true)),
+    run: () => {
+      if (styleCard.isOpen()) {
+        styleCard.close();
+      } else {
+        pictureCard.close();
+        styleCard.open(true);
+      }
+    },
     once: true,
   },
   colour1: colourCommand(0),
@@ -1048,7 +1090,13 @@ const WITHIN = new Map<Command, string>(
   ).flatMap(([name, members]) => members.map((member): [Command, string] => [member, name])),
 );
 /** What only answers keys, or opens the finder. */
-const UNLISTED = new Set<Command>([commands.escape, commands.contextMenu, commands.find]);
+const UNLISTED = new Set<Command>([
+  commands.escape,
+  commands.contextMenu,
+  commands.find,
+  // The export card's own button, which says its keys.
+  commands.savePng,
+]);
 
 const bar = toolbar(
   byId("toolbar"),
@@ -1108,8 +1156,6 @@ const bar = toolbar(
     commands.save,
     commands.saveAs,
     commands.exportZip,
-    commands.exportPng,
-    commands.copyPng,
     "separator",
     grids(),
     themes(),
@@ -1129,7 +1175,8 @@ const styleCard = card(
     },
     client: (point) => viewport.client(point),
     zoom: () => viewport.zoom(),
-    busy,
+    // Its chip makes way for the export card.
+    busy: () => busy() || pictureCard.isOpen(),
     reading: () => editing.reading(),
     floor: () => bar.top(),
     apply: (work) => editing.apply(work),
@@ -1156,8 +1203,34 @@ const styleCard = card(
     open: commands.style,
   },
 );
-// As a message or a hint showing in the toolbar raises it, which the card stays above.
-new ResizeObserver(() => styleCard.frame()).observe(byId("toolbar"));
+const pictureCard = exportCard(
+  {
+    planned: (options) =>
+      opened === undefined || renderer === undefined || editing.cropping() !== undefined
+        ? undefined
+        : planned(
+            { opened, drawings, crossedOut },
+            editing.selection(),
+            options,
+            renderer.maxTextureSide,
+          ),
+    client: (point) => viewport.client(point),
+    busy,
+    floor: () => bar.top(),
+    explain: (element, explanation) => bar.explain(element, explanation),
+    changed: showPicture,
+    chose: (options) => remembered(options).forEach(([key, value]) => remember(key, value)),
+    save: (options) => report(exportPng(options)),
+    copy: copyPng,
+  },
+  recalled(recall),
+  { save: commands.savePng.keys[0]!, copy: commands.copy.keys[0]! },
+);
+// As a message or a hint showing in the toolbar raises it, which the cards stay above.
+new ResizeObserver(() => {
+  styleCard.frame();
+  pictureCard.frame();
+}).observe(byId("toolbar"));
 const picker = sampler(
   {
     read: readBoard,
@@ -1345,6 +1418,10 @@ function drawTool(): Draw | undefined {
 
 function useTool(next: typeof tool): void {
   tool = next;
+  // Whose drawing would go unseen under the picture.
+  if (drawTool() !== undefined || tool === "eraser") {
+    pictureCard.close();
+  }
   // So that the card shows the pen's style.
   if (isTip(tool)) {
     editing.select([]);
@@ -1361,8 +1438,20 @@ function penStyling(): Tip | undefined {
   return isTip(tool) && editing.selection().length === 0 ? tool : undefined;
 }
 
-/** What draws, with what the pen draws while pressed over it. */
+function placeNow(into: Renderer, board: Opened): void {
+  exposed = exposure();
+  into.place(drawnNow(board));
+}
+
+/** What draws, with what the pen draws while pressed over it, or the picture the export card frames. */
 function drawnNow(board: Opened): Placed[] {
+  const picture = pictureCard.plan();
+  if (picture) {
+    const { background } = pictureCard.options();
+    const behind = { backing: backing(picture.area, background), light: background === "white" };
+    const ids = editing.selection();
+    return exposing(board, lettering, ids, behind, editing.writing(), crossedOut);
+  }
   const adding = inking && { item: inking, group: editing.entered() };
   return placed(board, lettering, editing.writing(), crossedOut, adding);
 }
@@ -1590,15 +1679,17 @@ function useBackground(background: Background): void {
 }
 
 /**
- * Esc lets go of a colour being picked first, then of the style card, then of the tool in use,
- * which leaves the selection to act on, then of the group gone into, one level at a time, then
- * of the selection.
+ * Esc lets go of a colour being picked first, then of the style card or the export card, then of
+ * the tool in use, which leaves the selection to act on, then of the group gone into, one level
+ * at a time, then of the selection.
  */
 function escape(): void {
   if (picker.sampling()) {
     picker.end(true);
   } else if (styleCard.isOpen()) {
     styleCard.close();
+  } else if (pictureCard.isOpen()) {
+    pictureCard.close();
   } else if (tool !== "select") {
     useTool("select");
   } else if (!editing.up()) {
@@ -1674,6 +1765,10 @@ function hint(): string {
       { key: CROP_KEYS.guides },
     ].map(describe);
     return `Drag an edge or a corner to crop, holding ${stepKey} to keep its proportions, or the inside to move it · ${turnKey} to turn it · ${guidesKey} for guides · ${resetKey} to start over · ${insideKey} or click away to crop · ${escapeKey} to leave it as it was`;
+  }
+  if (pictureCard.isOpen()) {
+    const [saveKey, copyKey] = [commands.savePng.keys[0]!, commands.copy.keys[0]!].map(describe);
+    return `${saveKey} to save · ${copyKey} to copy · click with ${stepKey} to add or take out · ${escapeKey} to leave`;
   }
   const styling =
     commands.style.unavailable() === undefined
@@ -1753,7 +1848,10 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.copyPng,
         paste,
         commands.duplicate,
-        { ...commands.exportPng, label: "Export as PNG…" },
+        {
+          ...commands.exportPng,
+          label: () => (pictureCard.isOpen() ? "Hide export" : "Export as PNG…"),
+        },
         commands.remove,
         "separator",
         commands.write,
@@ -2016,8 +2114,10 @@ async function show(next: Opened, camera?: Camera): Promise<void> {
 function crossOut(into: Renderer, asset: string): void {
   crossedOut = new Set([...crossedOut, asset]);
   if (opened) {
-    into.place(drawnNow(opened));
+    placeNow(into, opened);
   }
+  // Its outline takes another frame than its image, and none of its pixels.
+  reframe();
 }
 
 /** Side by side around `at`, at their natural size unless they would not show whole, and as one edit. */
@@ -2193,8 +2293,12 @@ function changed(touched: string[]): void {
     return;
   }
   const undrawn = refresh(opened, touched);
-  renderer?.backdrop(opened.board.background);
-  renderer?.place(drawnNow(opened));
+  pictureCard.refresh();
+  overlaid.exporting(pictureCard.plan()?.area);
+  if (renderer) {
+    renderer.backdrop(opened.board.background);
+    placeNow(renderer, opened);
+  }
   life.touched(touched);
   present.edited(undrawn);
   viewport.redraw();
@@ -2227,7 +2331,7 @@ async function exportZip(): Promise<void> {
   }
 }
 
-async function exportPng(): Promise<void> {
+async function exportPng(options: Options): Promise<void> {
   if (opened === undefined) {
     return;
   }
@@ -2253,7 +2357,7 @@ async function exportPng(): Promise<void> {
       if (opened !== current) {
         throw new Error("Another board opened meanwhile");
       }
-      made = await selectionPng(current, ids);
+      made = await selectionPng(current, ids, options);
       await sink.append(new Uint8Array(await made.blob.arrayBuffer()));
     } catch (error) {
       await sink.discard().catch(() => {});
@@ -2261,18 +2365,19 @@ async function exportPng(): Promise<void> {
     }
     await sink.close();
     bar.say(`Exported ${sink.name}, ${sized(made)}`);
+    pictureCard.close();
   } finally {
     exporting = false;
   }
 }
 
-function copyPng(): void {
+function copyPng(options: Options): void {
   if (opened === undefined) {
     return;
   }
   pngCopies += 1;
   const copy = pngCopies;
-  const made = selectionPng(opened, editing.selection());
+  const made = selectionPng(opened, editing.selection(), options);
   const written = clip.copyImage(made.then(({ blob }) => blob));
   bar.say("Copying as PNG…", true);
   report(
@@ -2293,8 +2398,8 @@ interface Picture {
   capped: boolean;
 }
 
-/** The elements `ids` as the board shows them, on its background in the theme's colours. */
-async function selectionPng(current: Opened, ids: string[]): Promise<Picture> {
+/** The elements `ids` as the board shows them, as `options` frame them. */
+async function selectionPng(current: Opened, ids: string[], options: Options): Promise<Picture> {
   const scene = {
     opened: current,
     renderer: ready(),
@@ -2308,7 +2413,7 @@ async function selectionPng(current: Opened, ids: string[]): Promise<Picture> {
     current: () => opened === current && renderer === scene.renderer,
   };
   // Its images from where they lie once no save moves them.
-  const draw = () => exported(scene, ids, textures);
+  const draw = () => exported(scene, ids, textures, options);
   const saver = life.saver();
   const { canvas, capped } = await (saver ? saver.during(draw) : draw());
   return { blob: await png(canvas), size: { width: canvas.width, height: canvas.height }, capped };
@@ -2324,6 +2429,41 @@ function ready(): Renderer {
 
 function sized({ size, capped }: Picture): string {
   return `${size.width} × ${size.height}${capped ? ", scaled down to fit" : ""}`;
+}
+
+function showPicture(): void {
+  placePicture();
+  styleCard.refresh();
+  refreshBar();
+}
+
+function placePicture(): void {
+  overlaid.exporting(pictureCard.plan()?.area);
+  if (opened && renderer) {
+    placeNow(renderer, opened);
+  }
+  viewport.redraw();
+}
+
+/**
+ * What the export card frames, once the selection, or what its images show as, changed, placed
+ * again only when that changed what the board shows, which an edit placed already.
+ */
+function reframe(): void {
+  if (!pictureCard.isOpen()) {
+    return;
+  }
+  pictureCard.refresh();
+  // Closing showed the board already.
+  if (pictureCard.isOpen() && exposure() !== exposed) {
+    placePicture();
+  }
+}
+
+/** What of the export card's picture the board shows, the same while nothing changes it. */
+function exposure(): string {
+  const picture = pictureCard.plan();
+  return picture ? JSON.stringify([picture.area, editing.selection(), pictureCard.options()]) : "";
 }
 
 /** The desktop window keeps its own title, so there only the menu's button marks changes. */

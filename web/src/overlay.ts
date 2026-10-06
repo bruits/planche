@@ -1,9 +1,9 @@
 // What shows over the board without being part of it: the outlines of the selection, the dots on
 // its corners, what of it the pointer is on or holds, the outline of what a click would select,
 // the rectangle that selects, the bounds of the group gone into, the box a gesture started from,
-// the outlines of what the ends being drawn or moved stick to, and the crop of an image being
-// cropped. It lies in board space, so following the camera only moves its view box, and its
-// strokes keep their width at any zoom.
+// the outlines of what the ends being drawn or moved stick to, the crop of an image being cropped,
+// and what a picture of the selection covers. It lies in board space, so following the camera only
+// moves its view box, and its strokes keep their width at any zoom.
 
 import type { Camera, Viewport } from "./camera.js";
 import type { Point, Rect } from "./core.js";
@@ -64,6 +64,8 @@ export interface Overlay {
   targets(outlines: Float64Array[]): void;
   /** `undefined` hides it. */
   crop(crop: Crop | undefined): void;
+  /** What a picture of the selection covers, the board shaded around it, `undefined` to hide them. */
+  exporting(area: Rect | undefined): void;
 }
 
 /**
@@ -140,7 +142,15 @@ export function overlay(host: HTMLElement): Overlay {
   const cropping = document.createElementNS(SVG, "g");
   cropping.append(shade, ...guides, kept, cropGrips);
   cropping.setAttribute("display", "none");
-  svg.append(entered, targets, preview, start, selection, grips, marquee, cropping);
+  // As a crop shows its image, under the selection, which can still be moved and scaled.
+  const outside = document.createElementNS(SVG, "path");
+  outside.classList.add("crop-shade");
+  const covered = document.createElementNS(SVG, "rect");
+  covered.classList.add("crop-frame");
+  const picture = document.createElementNS(SVG, "g");
+  picture.append(outside, covered);
+  picture.setAttribute("display", "none");
+  svg.append(picture, entered, targets, preview, start, selection, grips, marquee, cropping);
   host.append(svg);
   let zoom = 1;
   let corners: Point[] | undefined;
@@ -149,6 +159,14 @@ export function overlay(host: HTMLElement): Overlay {
   let centre: Point | undefined;
   let ends: Point[] | undefined;
   let crop: Crop | undefined;
+  /** What the window shows, and what a picture covers, in board units. */
+  let seen: Rect | undefined;
+  let pictured: Rect | undefined;
+  const shadePicture = () => {
+    if (seen && pictured) {
+      outside.setAttribute("d", closed(rectangle(seen)) + closed(rectangle(pictured)));
+    }
+  };
   const placeCrop = () => {
     const size = HANDLE_SIZE / zoom;
     cropGrips.replaceChildren(...(crop?.grips ?? []).map((point) => square(point, size)));
@@ -185,10 +203,9 @@ export function overlay(host: HTMLElement): Overlay {
   };
   return {
     frame(camera, { width, height }) {
-      svg.setAttribute(
-        "viewBox",
-        `${camera.x} ${camera.y} ${width / camera.zoom} ${height / camera.zoom}`,
-      );
+      seen = { x: camera.x, y: camera.y, width: width / camera.zoom, height: height / camera.zoom };
+      svg.setAttribute("viewBox", `${seen.x} ${seen.y} ${seen.width} ${seen.height}`);
+      shadePicture();
       if (camera.zoom !== zoom) {
         zoom = camera.zoom;
         place();
@@ -261,7 +278,29 @@ export function overlay(host: HTMLElement): Overlay {
       kept.setAttribute("points", shown.kept.flatMap(({ x, y }) => [x, y]).join(" "));
       cropping.removeAttribute("display");
     },
+    exporting(area) {
+      pictured = area;
+      if (area === undefined) {
+        picture.setAttribute("display", "none");
+        return;
+      }
+      for (const name of ["x", "y", "width", "height"] as const) {
+        covered.setAttribute(name, String(area[name]));
+      }
+      shadePicture();
+      picture.removeAttribute("display");
+    },
   };
+}
+
+/** Its corners, clockwise from its top-left. */
+export function rectangle({ x, y, width, height }: Rect): Point[] {
+  return [
+    { x, y },
+    { x: x + width, y },
+    { x: x + width, y: y + height },
+    { x, y: y + height },
+  ];
 }
 
 /** The outlines as one path, but an arrow's two ends, a line that closing would draw twice. */

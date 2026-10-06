@@ -44,3 +44,29 @@ describe("the pen strokes the renderer takes", () => {
     expect(dot!.slice(3, 7)).toEqual([4, 5, 4, 5]);
   });
 });
+
+function fill(light: boolean): Placed {
+  return {
+    kind: "fill",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    rotation: 0,
+    paint: "ink",
+    opacity: 1,
+    light,
+  };
+}
+
+describe("the colours the renderer takes", () => {
+  it("are the light theme's for what draws light, whatever the theme", () => {
+    const floats = packed(
+      [fill(false), fill(true)],
+      new Map(),
+      new Map(),
+      () => [1, 1, 1],
+      () => [0, 0, 0],
+    );
+    // Its colour after its kind, texture, shape, frame, rotation, and width.
+    expect([...floats.subarray(9, 12)]).toEqual([1, 1, 1]);
+    expect([...floats.subarray(STRIDE + 9, STRIDE + 12)]).toEqual([0, 0, 0]);
+  });
+});

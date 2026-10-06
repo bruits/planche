@@ -31,7 +31,9 @@
   src: url("fonts/Inter-BoldItalic.woff2") format("woff2");
 }
 
-:root {
+/* Also for what draws in the light theme's colours, whatever the theme. */
+:root,
+.light {
   color-scheme: light;
   font:
     14px/1.4 system-ui,
@@ -96,7 +98,8 @@
   --violet: #b49bff;
 }
 
-:root[data-contrast="high"] {
+:root[data-contrast="high"],
+[data-contrast="high"] .light {
   --board: #ffffff;
   --surface: #ffffff;
   --text: #000000;
@@ -144,6 +147,12 @@
   --highlight-green: #6cff8f;
   --highlight-blue: #6fd0ff;
   --highlight-violet: #c49aff;
+}
+
+/* Its ink as its text colour, which `paint.ts` reads, and which forced colours would not keep. */
+.light {
+  color: var(--ink);
+  forced-color-adjust: none;
 }
 
 [hidden] {
@@ -996,6 +1005,58 @@ body {
   outline-offset: 2px;
 }
 
+.export-card button {
+  display: flex;
+  width: auto;
+  padding: 0 9px;
+}
+
+.export-card .letters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.export-card .swatch {
+  width: 14px;
+  height: 14px;
+}
+
+.swatch.board {
+  --swatch: var(--board);
+}
+
+.swatch.white {
+  --swatch: #ffffff;
+}
+
+.swatch.transparent {
+  background: repeating-conic-gradient(var(--line) 0 25%, var(--surface) 0 50%) 0 0 / 6px 6px;
+}
+
+.export-card .facts {
+  margin-left: auto;
+  padding-left: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.export-card .actions button {
+  flex: 1;
+  justify-content: center;
+}
+
+.export-card button.primary {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.export-card kbd {
+  font: inherit;
+  font-weight: 400;
+  color: var(--muted);
+}
+
 #viewport.sampling {
   cursor: crosshair;
 }
@@ -1299,6 +1360,8 @@ body {
   :root[data-theme="dark"],
   :root[data-contrast="high"],
   :root[data-theme="dark"][data-contrast="high"] {
+    /* As the page's own background, which a picture on the board's colour takes. */
+    --board: Canvas;
     --selected: Highlight;
     --ink: CanvasText;
     --red: CanvasText;

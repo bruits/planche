@@ -5,6 +5,7 @@ import {
   centring,
   copiedAssets,
   duplicateOffset,
+  exposing,
   files as filesOf,
   imageKind,
   newId,
@@ -206,6 +207,32 @@ describe("placed", () => {
     fetched.mockClear();
     expect(placed(opened, none, undefined, new Set())[1]).toMatchObject({ kind: "image" });
     expect(asked()).toEqual([image]);
+  });
+});
+
+describe("exposing", () => {
+  const none = { placed: () => undefined };
+  const backing: Placed = {
+    kind: "fill",
+    frame: { x: 0, y: 0, width: 100, height: 100 },
+    rotation: 0,
+    paint: "board",
+    opacity: 1,
+  };
+
+  it("draws the elements chosen, their groups' included, over what stands for the background, over the rest", () => {
+    const { opened, ids } = holding([level(0), level(10), level(20), level(30)]);
+    const group = newId();
+    refresh(opened, opened.editor.group(group, [ids[0]!, ids[2]!]));
+    const shown = exposing(opened, none, [group], { backing: [backing], light: false });
+    expect(heights(shown)).toEqual([10, 30, undefined, 0, 20]);
+    expect(shown.some((item) => item.light)).toBe(false);
+  });
+
+  it("draws the elements chosen in the light theme's colours when asked", () => {
+    const { opened, ids } = holding([level(0), level(10)]);
+    const shown = exposing(opened, none, [ids[1]!], { backing: [], light: true });
+    expect(shown.map(({ light }) => light ?? false)).toEqual([false, true]);
   });
 });
 

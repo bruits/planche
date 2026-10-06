@@ -8,7 +8,7 @@ import type * as core from "./core.js";
  * its own, alike in every theme, or what reads `on` one, as text on a solid fill. Forced colours
  * draw every colour as the ink.
  */
-export type Paint = core.Paint | "sticky-ink" | { on: core.Colour };
+export type Paint = core.Paint | "sticky-ink" | "board" | { on: core.Colour };
 
 /** Straight red, green, and blue from 0 to 1. */
 export type Paints = (paint: Paint) => number[];
@@ -33,6 +33,16 @@ export function paints(host: HTMLElement): Paints {
     typeof paint === "string" ? resolve(paint) : readable(resolve(paint.on), resolve("sticky-ink"));
 }
 
+let probe: HTMLElement | undefined;
+
+/** As `paints`, those of the light theme in its contrast, whatever the theme or forced colours. */
+export function lightPaints(): Paints {
+  probe ??= document.body.appendChild(
+    Object.assign(document.createElement("div"), { className: "light", hidden: true }),
+  );
+  return paints(probe);
+}
+
 /** As CSS writes it, following the theme where the palette's colours do. */
 export function css(paint: Paint, host: HTMLElement): string {
   if (typeof paint !== "string") {
@@ -45,7 +55,10 @@ export function css(paint: Paint, host: HTMLElement): string {
 }
 
 function resolved(paint: Exclude<Paint, { on: core.Colour }>, style: CSSStyleDeclaration): string {
-  if (paint === "ink" || (paint.startsWith("#") && forced())) {
+  if (
+    paint === "ink" ||
+    (paint.startsWith("#") && forced() && style.forcedColorAdjust !== "none")
+  ) {
     return style.color;
   }
   return paint.startsWith("#") ? paint : style.getPropertyValue(`--${paint}`);

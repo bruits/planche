@@ -3,7 +3,7 @@
 import type { Camera } from "./camera.js";
 import * as core from "./core.js";
 import type { Background, Bytes, Item, Rect, Size } from "./core.js";
-import { paints, reader, type Paint, type Paints } from "./paint.js";
+import { lightPaints, paints, reader, type Paint, type Paints } from "./paint.js";
 import start, { Animation, create as createWgpu, type Readback } from "./wasm/renderer.js";
 
 /** Where a text draws, from its texture, turned clockwise, in degrees, around its frame's centre. */
@@ -14,10 +14,15 @@ export interface Lettering {
   paint: Paint;
 }
 
-/** What the board draws, with its texts laid out. */
-export type Placed =
-  | Exclude<Item, { kind: "text" }>
-  | ({ kind: "text"; opacity: number } & Lettering);
+/**
+ * What the board draws, with its texts laid out, and fills in any paint, such as the board's, each
+ * `light` in the light theme's colours, whatever the theme.
+ */
+export type Placed = (
+  | Exclude<Item, { kind: "text" | "fill" }>
+  | ({ kind: "text"; opacity: number } & Lettering)
+  | (Omit<Extract<Item, { kind: "fill" }>, "paint"> & { paint: Paint })
+) & { light?: boolean };
 
 /** An animated image, whose frames it draws onto its asset's texture. */
 export interface Playing {
@@ -39,6 +44,10 @@ export interface Shot {
   items: Placed[];
   /** The colour behind the board, as CSS gives it. */
   background: string;
+  /** Whether nothing is behind the board, which leaves the picture see-through around it. */
+  transparent?: boolean;
+  /** Whether it draws in the light theme's colours, whatever the theme. */
+  light?: boolean;
   /** What the grid draws, the window's own unless given. */
   backdrop?: Background;
   /** Pictures that stand in, for this render only, for the textures of assets and texts. */
@@ -79,7 +88,7 @@ export interface Renderer {
   /** Reads the paints again, once the theme changed. */
   restyle(): void;
   draw(camera: Camera): void;
-  /** The picture, opaque. Without a frame to wait for, so it works in a hidden window. */
+  /** The picture, opaque unless `transparent`. Without a frame to wait for, so it works in a hidden window. */
   render(shot: Shot): Promise<ImageData>;
   /** In CSS pixels. */
   resize(width: number, height: number): void;
@@ -129,6 +138,7 @@ async function on(
 ): Promise<Renderer> {
   // Before the renderer exists, which nothing would free if this threw.
   let painted = paints(host);
+  let light = lightPaints();
   let strength = gridStrength(host);
   const output = appended(host, width, height);
   // A canvas keeps the first kind of context it gives, so a failed one is no use to the other backend.
@@ -146,7 +156,7 @@ async function on(
   let background: Background = "plain";
   /** Packed at the next draw, as uploads and releases move the textures that items name. */
   let items: Float32Array | undefined;
-  const pack = () => (items = packed(placed, images, texts, painted));
+  const pack = () => (items = packed(placed, images, texts, painted, light));
   const replace = (textures: Map<string, number>, key: string, canvas: HTMLCanvasElement) => {
     const before = textures.get(key);
     textures.set(key, renderer.uploadCanvas(canvas));
@@ -218,6 +228,7 @@ async function on(
     },
     restyle() {
       painted = paints(host);
+      light = lightPaints();
       strength = gridStrength(host);
       items = undefined;
     },
@@ -236,6 +247,8 @@ async function on(
       size: picture,
       items: shown,
       background: behind,
+      transparent = false,
+      light: lightened = false,
       backdrop = background,
       images: own,
       texts: ownTexts,
@@ -263,16 +276,18 @@ async function on(
           picture.width,
           picture.height,
           ...reader()(behind),
+          transparent ? 0 : 1,
         );
         const camera = { x: area.x, y: area.y, zoom };
         const lookup = [
           new Map([...images, ...staged]),
           new Map([...texts, ...stagedTexts]),
         ] as const;
+        const palette = lightened ? light : painted;
         readback = renderer.render(
           view,
-          packed(shown, lookup[0], lookup[1], painted),
-          grid(backdrop, camera, painted("ink"), strength, 1),
+          packed(shown, lookup[0], lookup[1], palette, light),
+          grid(backdrop, camera, palette("ink"), strength, 1),
         );
       } finally {
         [...staged.values(), ...stagedTexts.values()].forEach((texture) =>
@@ -318,6 +333,7 @@ export function packed(
   images: Map<string, number>,
   texts: Map<string, number>,
   painted: Paints,
+  light: Paints = painted,
 ): Float32Array {
   let strokes = 0;
   const shown = placed.flatMap((item) => {
@@ -330,10 +346,11 @@ export function packed(
     if (texture === undefined) {
       return [];
     }
+    const colours = item.light ? light : painted;
     const rows =
       item.kind === "stroke"
-        ? segments(item, strokes++, painted)
-        : [floats(item, texture, painted)];
+        ? segments(item, strokes++, colours)
+        : [floats(item, texture, colours)];
     return rows.map((values) => ({ values, opacity: item.opacity }));
   });
   const items = new Float32Array(shown.length * STRIDE);

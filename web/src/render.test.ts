@@ -3,12 +3,16 @@ import { newId, refresh, stacked, untitled, type Opened } from "./board.js";
 import * as core from "./core.js";
 import type { Board, Kind, Rect } from "./core.js";
 import {
+  MARGIN,
+  backing,
   drawnOver,
   exported,
   pictureName,
+  planned,
   render as forAgent,
   sizing,
   standInSide,
+  type Options,
   type Scene,
   type Textures,
 } from "./render.js";
@@ -48,6 +52,7 @@ vi.mock("./board.js", async (original) => ({
 
 const ASSET = "a".repeat(64);
 const text = { content: "Dusk", font_size: 20 };
+const AS_SHOWN: Options = { longest: undefined, background: "board", margin: false };
 
 function boardOf(kinds: Record<string, Kind>): Board {
   const ids = Object.keys(kinds);
@@ -262,6 +267,25 @@ describe("the size of a picture of the selection", () => {
     });
   });
 
+  it("takes fewer pixels along its longest side when asked, but never more than its images hold", () => {
+    expect(sizing({ width: 4000, height: 2000 }, [1], 16_384, 2048)).toEqual({
+      zoom: 2048 / 4000,
+      size: { width: 2048, height: 1024 },
+      capped: false,
+    });
+    expect(sizing({ width: 1000, height: 500 }, [1], 16_384, 4096).size).toEqual({
+      width: 1000,
+      height: 500,
+    });
+  });
+
+  it("takes the pixels asked for whole without images, as nothing in it loses sharpness", () => {
+    expect(sizing({ width: 400, height: 100 }, [], 16_384, 4096).size).toEqual({
+      width: 4096,
+      height: 1024,
+    });
+  });
+
   it("stays within what a canvas and a texture hold, and says so", () => {
     expect(sizing({ width: 10_000, height: 10_000 }, [1], 16_384)).toMatchObject({
       size: { width: 4096, height: 4096 },
@@ -279,6 +303,20 @@ describe("the size of a picture of the selection", () => {
       const { size } = sizing(area, [1], 8192);
       expect(size.width * size.height).toBeLessThanOrEqual(4096 * 4096);
       expect(Math.max(size.width, size.height)).toBeLessThanOrEqual(8192);
+    }
+  });
+
+  it("does not say a square that reaches its 4096 pixels was scaled down, past the floats' error", () => {
+    for (const side of [259.172_859_374_876_05, 2733.454_613_870_180_3]) {
+      const square = { width: side, height: side };
+      expect(sizing(square, [], 16_384, 4096)).toMatchObject({
+        size: { width: 4096, height: 4096 },
+        capped: false,
+      });
+      expect(sizing(square, [1 / (side / 4096)], 16_384)).toMatchObject({
+        size: { width: 4096, height: 4096 },
+        capped: false,
+      });
     }
   });
 });
@@ -344,7 +382,7 @@ function sceneOf(opened: Opened, render: Renderer["render"]): Scene {
 function picture(render: Renderer["render"], current: () => boolean) {
   const { opened, ids } = openedOf({ a: image({ x: 0, y: 0, width: 400, height: 200 }) });
   const textures: Textures = { holds: () => false, plays: () => false, current };
-  return { opened, made: exported(sceneOf(opened, render), [ids["a"]!], textures) };
+  return { opened, made: exported(sceneOf(opened, render), [ids["a"]!], textures, AS_SHOWN) };
 }
 
 describe("a picture of the selection", () => {
@@ -399,13 +437,125 @@ describe("a picture of the selection", () => {
     const { opened } = openedOf(kinds);
     const render = vi.fn<Renderer["render"]>().mockResolvedValue({} as ImageData);
     const textures: Textures = { holds: () => true, plays: () => false, current: () => true };
-    const { capped } = await exported(sceneOf(opened, render), opened.board.draw_order, textures);
+    const { capped } = await exported(
+      sceneOf(opened, render),
+      opened.board.draw_order,
+      textures,
+      AS_SHOWN,
+    );
     expect(fakes.decoded.map(({ asset }) => asset)).not.toContain(ASSET);
     expect(fakes.decoded).toHaveLength(5);
     for (const { cap } of fakes.decoded) {
       expect(cap).toBeCloseTo(4096 * Math.sqrt(4 / 5));
     }
     expect(capped).toBe(true);
+  });
+});
+
+describe("how a picture of the selection is framed", () => {
+  // One pixel of its own per board unit.
+  const kinds = { a: image({ x: 0, y: 0, width: 400, height: 200 }) };
+
+  it("leaves a margin around it, by its longest side", () => {
+    const { opened } = openedOf(kinds);
+    const scene = sceneOf(opened, vi.fn());
+    const margin = MARGIN * 400;
+    expect(planned(scene, opened.board.draw_order, { ...AS_SHOWN, margin: true }, 16_384)).toEqual({
+      area: { x: -margin, y: -margin, width: 400 + 2 * margin, height: 200 + 2 * margin },
+      zoom: 1,
+      size: { width: 400 + 2 * margin, height: 200 + 2 * margin },
+      capped: false,
+    });
+  });
+
+  it("scales down to what a canvas holds when the margin takes it past, the margin kept", () => {
+    // Within what a canvas holds as it is, past it with its margin.
+    const natural = { width: 4000, height: 4000 };
+    const { opened } = openedOf({
+      a: image({ x: 0, y: 0, ...natural }, { natural_size: natural }),
+    });
+    const margin = MARGIN * 4000;
+    const scene = sceneOf(opened, vi.fn());
+    expect(planned(scene, opened.board.draw_order, AS_SHOWN, 16_384)).toMatchObject({
+      size: natural,
+      capped: false,
+    });
+    const framed = planned(scene, opened.board.draw_order, { ...AS_SHOWN, margin: true }, 16_384);
+    expect(framed).toMatchObject({ size: { width: 4096, height: 4096 }, capped: true });
+    expect(framed?.area.x).toBeCloseTo(-margin);
+    expect(framed?.area.width).toBeCloseTo(4000 + 2 * margin);
+  });
+
+  it("takes the longest side asked for", () => {
+    const { opened } = openedOf(kinds);
+    const framed = planned(
+      sceneOf(opened, vi.fn()),
+      opened.board.draw_order,
+      { ...AS_SHOWN, longest: 100 },
+      16_384,
+    );
+    expect(framed?.size).toEqual({ width: 100, height: 50 });
+    expect(framed?.area).toEqual({ x: 0, y: 0, width: 400, height: 200 });
+  });
+
+  it("frames nothing of a selection that draws nothing", () => {
+    const { opened } = openedOf(kinds);
+    expect(planned(sceneOf(opened, vi.fn()), [], AS_SHOWN, 16_384)).toBeUndefined();
+  });
+});
+
+describe("the background of a picture of the selection", () => {
+  const kinds = { a: { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } } as Kind };
+
+  beforeEach(() =>
+    vi.stubGlobal("document", {
+      createElement: () => ({ getContext: () => ({ putImageData() {} }) }),
+    }),
+  );
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ["board", { background: "rgb(0, 0, 0)" }, ["transparent", "light"]],
+    ["white", { background: "#ffffff", light: true }, ["transparent"]],
+    ["transparent", { transparent: true }, ["light"]],
+  ] as const)("draws on %s", async (background, asked, left) => {
+    const { opened } = openedOf(kinds);
+    const render = vi.fn<Renderer["render"]>().mockResolvedValue({} as ImageData);
+    const textures: Textures = { holds: () => true, plays: () => false, current: () => true };
+    const options = { ...AS_SHOWN, background };
+    await exported(sceneOf(opened, render), opened.board.draw_order, textures, options);
+    const shot = render.mock.calls[0]![0];
+    expect(shot).toMatchObject({ ...asked, backdrop: "plain" });
+    for (const key of left) {
+      expect(shot).not.toHaveProperty(key);
+    }
+  });
+
+  it("shows on the board as what it covers, white or the board's colour", () => {
+    const area = { x: 10, y: 20, width: 300, height: 200 };
+    expect(backing(area, "white")).toEqual([
+      { kind: "fill", frame: area, rotation: 0, paint: "#ffffff", opacity: 1, light: true },
+    ]);
+    expect(backing(area, "board")).toEqual([
+      { kind: "fill", frame: area, rotation: 0, paint: "board", opacity: 1 },
+    ]);
+  });
+
+  it("shows none as checks over the board's colour, every other cell, within what it covers", () => {
+    // Ten units a cell, the last row a part of one.
+    const area = { x: 10, y: 20, width: 320, height: 195 };
+    const [board, ...checks] = backing(area, "transparent");
+    expect(board).toMatchObject({ paint: "board", frame: area });
+    expect(checks).toHaveLength(16 * 20);
+    for (const check of checks) {
+      expect(check).toMatchObject({ kind: "fill", paint: "ink" });
+      const { frame } = check as Extract<Placed, { kind: "fill" }>;
+      const [across, down] = [(frame.x - area.x) / 10, (frame.y - area.y) / 10];
+      expect((across + down) % 2).toBe(0);
+      expect(frame.x + frame.width).toBeLessThanOrEqual(area.x + area.width);
+      expect(frame.y + frame.height).toBeLessThanOrEqual(area.y + area.height + 1e-9);
+    }
   });
 });
 

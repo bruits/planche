@@ -1,5 +1,6 @@
 // Pictures of the board drawn off the window, for agents, and of the selection, for the user to
-// export or copy, which leave the window's canvas, camera, and textures as they are.
+// export or copy at the size, on the background, and with the margin they choose, which leave the
+// window's canvas, camera, and textures as they are.
 
 import {
   among,
@@ -17,6 +18,7 @@ import { density } from "./capture.js";
 import * as core from "./core.js";
 import type { Background, Board, Item, Point, Rect, Size } from "./core.js";
 import { LONGEST_SIDE, MOST_AREA, MOST_SIDE, overlaps } from "./raster.js";
+import type { Paint } from "./paint.js";
 import type { Lettering, Placed, Renderer } from "./renderer.js";
 import { SMALLEST_VECTOR } from "./still.js";
 import { holdsText, lettered, type Holder } from "./text.js";
@@ -65,6 +67,28 @@ export interface Sizing {
   capped: boolean;
 }
 
+/** What shows behind a picture, white drawing it in the light theme's colours. */
+export type Backing = "board" | "white" | "transparent";
+
+export interface Options {
+  /** Pixels along its longest side, at most, `undefined` for as many as its images show. */
+  longest: number | undefined;
+  background: Backing;
+  margin: boolean;
+}
+
+export interface Plan extends Sizing {
+  /** What the picture covers, in board units. */
+  area: Rect;
+}
+
+/** Left on each side of what a picture shows, per its longest side, with a margin. */
+export const MARGIN = 0.04;
+/** Checks across the longest side of a picture without a background, as the board shows it. */
+const CHECKS = 32;
+/** How much of the ink a check takes over the board. */
+const CHECKED = 0.12;
+
 /** As floats leave a frame of whole pixels a hair over them. */
 const HAIR = 1e-6;
 /** The pixels a picture's stand-ins take at most, which images stacked or cropped could pass. */
@@ -91,19 +115,79 @@ export async function render(scene: Scene, request: Request): Promise<Rendered> 
 }
 
 /**
- * The elements `ids` as the board shows them, their groups' elements included, cut to what they
- * draw over, without the grid, at the zoom at which the sharpest of their images shows all its
- * pixels. Throws when they draw nothing.
+ * The elements `ids` as the board shows them, their groups' elements included, as `options` frame
+ * them, without the grid. Throws when they draw nothing.
  */
-export async function exported(scene: Scene, ids: string[], textures: Textures): Promise<Exported> {
+export async function exported(
+  scene: Scene,
+  ids: string[],
+  textures: Textures,
+  options: Options,
+): Promise<Exported> {
   const { opened, renderer, drawings, crossedOut } = scene;
   // As it stands now, as edits landing while its assets decode replace its elements.
   const board = selected(opened.board, ids);
   const items = stacked(opened, crossedOut, board.draw_order);
-  const wanted = tight(items, board);
-  if (wanted === undefined) {
+  const side = Math.min(MOST_SIDE, renderer.maxTextureSide);
+  const laid = plan(board, items, crossedOut, drawings, options, side);
+  if (laid === undefined) {
     throw new Error("The selection draws nothing");
   }
+  const { area, zoom, size, capped } = laid;
+  const { bitmaps, shrunk } = await standIns(scene, board, area, zoom, side, textures);
+  try {
+    if (!textures.current()) {
+      throw new Error("Another board opened meanwhile");
+    }
+    const drawing: Drawing = {
+      side,
+      bitmaps,
+      backdrop: "plain",
+      ...(options.background === "white" && { background: "#ffffff", light: true }),
+      ...(options.background === "transparent" && { transparent: true }),
+    };
+    const canvas = await draw(scene, board, items, area, size, drawing);
+    return { canvas, capped: capped || shrunk };
+  } finally {
+    bitmaps.forEach(release);
+  }
+}
+
+/**
+ * What a picture of the elements `ids`, their groups' elements included, covers, and at how many
+ * pixels, as `options` frame it, within `side` pixels along its longest side. `undefined` when
+ * they draw nothing.
+ */
+export function planned(
+  { opened, drawings, crossedOut }: Pick<Scene, "opened" | "drawings" | "crossedOut">,
+  ids: string[],
+  options: Options,
+  side: number,
+): Plan | undefined {
+  const board = selected(opened.board, ids);
+  const items = stacked(opened, crossedOut, board.draw_order);
+  return plan(board, items, crossedOut, drawings, options, Math.min(MOST_SIDE, side));
+}
+
+/**
+ * Cut to what `items` draw over, with a margin if any, at the zoom at which the sharpest of their
+ * images shows all its pixels, or fewer as `options` ask.
+ */
+function plan(
+  board: Board,
+  items: Item[],
+  crossedOut: ReadonlySet<string>,
+  drawings: Pick<Vectors, "holds">,
+  options: Options,
+  side: number,
+): Plan | undefined {
+  const drawn = tight(items, board);
+  if (drawn === undefined) {
+    return undefined;
+  }
+  const wanted = options.margin
+    ? padded(drawn, MARGIN * Math.max(drawn.width, drawn.height))
+    : drawn;
   // Not those crossed out, nor vectors, which are as sharp at any zoom.
   const own = board.draw_order.flatMap((id) => {
     const { kind } = board.elements[id]!;
@@ -111,20 +195,41 @@ export async function exported(scene: Scene, ids: string[], textures: Textures):
       ? [1 / unitsPerPixel(kind)]
       : [];
   });
-  const side = Math.min(MOST_SIDE, renderer.maxTextureSide);
-  const { zoom, size, capped } = sizing(wanted, own, side);
+  const sized = sizing(wanted, own, side, options.longest);
+  const { zoom, size } = sized;
   const area = { x: wanted.x, y: wanted.y, width: size.width / zoom, height: size.height / zoom };
-  const { bitmaps, shrunk } = await standIns(scene, board, area, zoom, side, textures);
-  try {
-    if (!textures.current()) {
-      throw new Error("Another board opened meanwhile");
-    }
-    const drawing = { side, bitmaps, backdrop: "plain" } as const;
-    const canvas = await draw(scene, board, items, area, size, drawing);
-    return { canvas, capped: capped || shrunk };
-  } finally {
-    bitmaps.forEach(release);
+  return { ...sized, area };
+}
+
+/** What stands on the board for the background of a picture that covers `area`, over what it leaves out. */
+export function backing(area: Rect, background: Backing): Placed[] {
+  if (background === "white") {
+    return [{ ...filled(area, "#ffffff"), light: true }];
   }
+  const behind = [filled(area, "board")];
+  if (background === "board") {
+    return behind;
+  }
+  const cell = Math.max(area.width, area.height) / CHECKS;
+  const columns = Math.ceil(area.width / cell - HAIR);
+  const rows = Math.ceil(area.height / cell - HAIR);
+  for (let down = 0; down < rows; down += 1) {
+    for (let across = down % 2; across < columns; across += 2) {
+      const [x, y] = [across * cell, down * cell];
+      const frame = {
+        x: area.x + x,
+        y: area.y + y,
+        width: Math.min(cell, area.width - x),
+        height: Math.min(cell, area.height - y),
+      };
+      behind.push(filled(frame, "ink", CHECKED));
+    }
+  }
+  return behind;
+}
+
+function filled(frame: Rect, paint: Paint, opacity = 1): Placed {
+  return { kind: "fill", frame, rotation: 0, paint, opacity };
 }
 
 /** What the elements `ids` draw over, their groups' elements included, `undefined` when nothing. */
@@ -139,14 +244,17 @@ export function drawnOver(
 
 /**
  * Pixels per board unit for a picture of `area`, and its size, with `images` given in the pixels
- * per unit each shows all its own at.
+ * per unit each shows all its own at, and no more than `limit` along its longest side, which a
+ * picture without images takes whole, as nothing else in it loses sharpness.
  */
-export function sizing(area: Size, images: number[], side: number): Sizing {
+export function sizing(area: Size, images: number[], side: number, limit?: number): Sizing {
   const longest = Math.max(area.width, area.height);
+  const finest =
+    images.length > 0 ? images.reduce((most, each) => Math.max(most, each)) : undefined;
   const wanted =
-    images.length > 0
-      ? images.reduce((most, each) => Math.max(most, each))
-      : SMALLEST_VECTOR / longest;
+    limit === undefined
+      ? (finest ?? SMALLEST_VECTOR / longest)
+      : Math.min(finest ?? Infinity, limit / longest);
   const most = Math.min(side / longest, Math.sqrt(MOST_AREA / (area.width * area.height)));
   const zoom = Math.min(wanted, most);
   const covering = (whole: (pixels: number) => number): Size => ({
@@ -156,7 +264,7 @@ export function sizing(area: Size, images: number[], side: number): Sizing {
   // Rounded up, so that its edges show whole, unless that passes the limits.
   const size = covering((pixels) => Math.ceil(pixels - HAIR));
   const fits = size.width * size.height <= MOST_AREA && Math.max(size.width, size.height) <= side;
-  return { zoom, size: fits ? size : covering(Math.floor), capped: wanted > most };
+  return { zoom, size: fits ? size : covering(Math.floor), capped: wanted > most * (1 + HAIR) };
 }
 
 export function pictureName(board: Board, ids: string[], boardName: string): string {
@@ -372,16 +480,20 @@ interface Drawing {
   /** Bitmaps that stand in for their assets' textures. */
   bitmaps?: Map<string, ImageBitmap>;
   backdrop?: Background;
+  /** In place of the scene's. */
+  background?: string;
+  transparent?: boolean;
+  light?: boolean;
 }
 
 /** What `items` draw of `board`'s elements, where `area` overlaps them, onto a canvas of `size` pixels. */
 async function draw(
-  { renderer, drawings, background }: Scene,
+  { renderer, drawings, background: behind }: Scene,
   board: Board,
   items: Item[],
   area: Rect,
   size: Size,
-  { side, bitmaps, backdrop }: Drawing = {},
+  { side, bitmaps, backdrop, background = behind, transparent, light }: Drawing = {},
 ): Promise<HTMLCanvasElement> {
   const ids = board.draw_order;
   const zoom = size.width / area.width;
@@ -409,6 +521,8 @@ async function draw(
     size,
     items: placing(items, board, { placed: (id) => lettering.get(id) }),
     background,
+    ...(transparent && { transparent }),
+    ...(light && { light }),
     ...(backdrop && { backdrop }),
     images,
     texts,
@@ -437,7 +551,12 @@ function framed(items: Item[], board: Board, chosen: string[]): Rect {
       chosen.length === 0 ? "Give an area or some ids" : "Those elements draw nothing to show",
     );
   }
-  const { x, y, width, height } = covered;
-  const margin = Math.max(core.strokeWidth("thick"), 0.02 * Math.max(width, height));
+  return padded(
+    covered,
+    Math.max(core.strokeWidth("thick"), 0.02 * Math.max(covered.width, covered.height)),
+  );
+}
+
+function padded({ x, y, width, height }: Rect, margin: number): Rect {
   return { x: x - margin, y: y - margin, width: width + 2 * margin, height: height + 2 * margin };
 }

@@ -1,4 +1,4 @@
-// The icons of the toolbar, its menus, and the style card, from Tabler Icons
+// The icons of the toolbar, its menus, and the cards under the selection, from Tabler Icons
 // (https://tabler.io/icons), outline, on a 24 grid.
 //
 // Tabler Icons, MIT License. Copyright (c) 2020-2026 Paweł Kuna. Permission is hereby granted,
@@ -114,6 +114,25 @@ const paths = {
     "M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6",
     "M11 13l9 -9",
     "M15 4h5v5",
+  ],
+  margin: [
+    "M8 8h8v8h-8z",
+    "M4 4v.01",
+    "M8 4v.01",
+    "M12 4v.01",
+    "M16 4v.01",
+    "M20 4v.01",
+    "M4 20v.01",
+    "M8 20v.01",
+    "M12 20v.01",
+    "M16 20v.01",
+    "M20 20v.01",
+    "M20 16v.01",
+    "M20 12v.01",
+    "M20 8v.01",
+    "M4 16v.01",
+    "M4 12v.01",
+    "M4 8v.01",
   ],
 };
 

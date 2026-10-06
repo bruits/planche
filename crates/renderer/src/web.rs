@@ -463,9 +463,9 @@ const CAMERA_SIZE: u64 = 32;
 /// green, blue, and alpha from 0 to 1, width, 1 for dots or 0 for lines, step, and padding.
 const GRID_FLOATS: usize = 12;
 /// Floats of a view in [`Renderer::render`]. The x and y of the board's point at the top-left,
-/// the zoom, the width and height in pixels, and the colour behind the board's red, green, and
-/// blue from 0 to 1.
-const VIEW_FLOATS: usize = 8;
+/// the zoom, the width and height in pixels, and the colour behind the board's red, green, blue,
+/// and alpha from 0 to 1, straight.
+const VIEW_FLOATS: usize = 9;
 
 #[wasm_bindgen]
 pub struct Renderer {
@@ -902,7 +902,7 @@ impl Renderer {
         grid: &[f32],
     ) -> Result<Readback, JsError> {
         check_grid(grid)?;
-        let Ok([x, y, zoom, width, height, red, green, blue]) =
+        let Ok([x, y, zoom, width, height, red, green, blue, alpha]) =
             <[f32; VIEW_FLOATS]>::try_from(view)
         else {
             return Err(JsError::new(&format!(
@@ -954,11 +954,13 @@ impl Renderer {
         });
         let depth = holds_once(items).then(|| depth_texture(&self.device, target.size()));
         let mut encoder = self.device.create_command_encoder(&Default::default());
+        // Multiplied by its alpha, as blending over it leaves every colour.
+        let alpha = f64::from(alpha.clamp(0.0, 1.0));
         let clear = wgpu::Color {
-            r: f64::from(red),
-            g: f64::from(green),
-            b: f64::from(blue),
-            a: 1.0,
+            r: f64::from(red) * alpha,
+            g: f64::from(green) * alpha,
+            b: f64::from(blue) * alpha,
+            a: alpha,
         };
         self.record(
             &mut encoder,
@@ -1009,6 +1011,7 @@ impl Renderer {
             stride,
             swap,
             webgpu: self.webgpu,
+            opaque: alpha >= 1.0,
         };
         self.check()?;
         Ok(readback)
@@ -1038,6 +1041,8 @@ pub struct Readback {
     swap: bool,
     /// Whether its mapping is a JS array, which WebGL2 holds in the module's memory instead.
     webgpu: bool,
+    /// Whether the colour behind was, which leaves every pixel so.
+    opaque: bool,
 }
 
 #[wasm_bindgen]
@@ -1055,9 +1060,9 @@ impl Readback {
         }
     }
 
-    /// Red, green, blue, and alpha, as straight as the clear colour left them, which is opaque,
-    /// row by row from the top. Only once [`Readback::poll`] says so, and once. They cross the
-    /// module's memory a row at a time, as it never shrinks once grown.
+    /// Red, green, blue, and alpha, straight, row by row from the top. Only once
+    /// [`Readback::poll`] says so, and once. They cross the module's memory a row at a time, as it
+    /// never shrinks once grown.
     pub fn pixels(&self) -> Result<Uint8ClampedArray, JsError> {
         if !matches!(&*self.mapped.lock().expect("never poisoned"), Some(Ok(()))) {
             return Err(JsError::new("the render is not read back yet"));
@@ -1087,6 +1092,9 @@ impl Readback {
                 for pixel in line.as_chunks_mut::<4>().0 {
                     pixel.swap(0, 2);
                 }
+            }
+            if !self.opaque {
+                crate::alpha::unpremultiply(&mut line);
             }
             pixels.subarray(y * row, (y + 1) * row).copy_from(&line);
         }

@@ -472,6 +472,27 @@ export function placed(
   return [...place(order.slice(0, end)), adding.item, ...place(order.slice(end))];
 }
 
+/** As `placed`, while a picture of the elements `chosen`, their groups' elements included, shows over the board. */
+export function exposing(
+  opened: Opened,
+  texts: Pick<Texts, "placed">,
+  chosen: string[],
+  { backing, light }: { backing: Placed[]; light: boolean },
+  hidden?: string,
+  crossedOut?: ReadonlySet<string>,
+): Placed[] {
+  const { board } = opened;
+  const ids = new Set(chosen);
+  const place = (order: string[]) =>
+    placing(stacked(opened, crossedOut, order), board, texts, hidden);
+  const shown = place(board.draw_order.filter((id) => among(board, id, ids)));
+  return [
+    ...place(board.draw_order.filter((id) => !among(board, id, ids))),
+    ...backing,
+    ...(light ? shown.map((item) => ({ ...item, light })) : shown),
+  ];
+}
+
 /** What `items` draw, their texts as `texts` lays them out, but that of `hidden` and those not laid out. */
 export function placing(
   items: Item[],

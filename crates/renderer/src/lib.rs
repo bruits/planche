@@ -5,6 +5,8 @@
 //! webview hands them over, and copies those of videos the host plays.
 
 #[cfg(any(target_arch = "wasm32", test))]
+mod alpha;
+#[cfg(any(target_arch = "wasm32", test))]
 mod animation;
 #[cfg(target_arch = "wasm32")]
 mod web;
