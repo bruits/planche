@@ -1,7 +1,7 @@
 // A board just read, shown at once, then its images as each is read, checked against its digest,
-// and decoded, the largest on screen first. A board whose image cannot be read shows nothing, as
-// saving it would fail. Images whose textures were freed are read again the same way once an edit
-// brings them back, and only those that fail then show crossed out.
+// and decoded, the largest on screen first. An image whose file is missing, unlike its digest, or
+// that this machine cannot show, shows crossed out. Images whose textures were freed are read again
+// the same way once an edit brings them back.
 
 import {
   AT_ONCE,
@@ -10,6 +10,7 @@ import {
   files,
   pool,
   readAsset,
+  Unreadable,
   type Asset,
   type Decoded,
   type Opened,
@@ -57,8 +58,11 @@ export interface Host<Into> {
 }
 
 export interface Showing {
-  /** Shows a board just read, throwing why it cannot. */
-  show(next: Opened, camera?: Camera): Promise<void>;
+  /**
+   * Shows a board just read, throwing why it cannot, then says what it holds. Returns what went
+   * wrong, the images crossed out and the files left out, if anything did.
+   */
+  show(next: Opened, camera?: Camera): Promise<string | undefined>;
   /**
    * Once an edit stopped images showing the `undrawn` assets, which `free` frees unless one shows
    * them again meanwhile. Reads again those it brought back, once the board shows.
@@ -74,7 +78,34 @@ interface Wanted {
   natural: Size;
 }
 
-type Brought = "loaded" | "undecodable" | "unplayable" | "unloadable" | "undrawn";
+type Crossed = "undecodable" | "unplayable" | "unloadable" | Unreadable["reason"] | "unread";
+
+type Brought = "loaded" | "undrawn" | Crossed;
+
+/** What the board's line says of the images crossed out, one, then many, in this order. */
+const CROSSED: Record<Crossed, [string, string]> = {
+  undecodable: ["an image this machine cannot decode", "images this machine cannot decode"],
+  unplayable: ["a video this machine cannot play", "videos this machine cannot play"],
+  unloadable: ["an image this machine cannot show", "images this machine cannot show"],
+  missing: ["an image whose file is missing", "images whose files are missing"],
+  pointer: [
+    "an image left as a Git LFS pointer, so run `git lfs pull`",
+    "images left as Git LFS pointers, so run `git lfs pull`",
+  ],
+  differs: ["an image whose file differs from its digest", "images whose files differ from theirs"],
+  unread: ["an image whose file cannot be read", "images whose files cannot be read"],
+};
+
+/** Why an image read again shows crossed out. */
+const AGAIN: Record<Crossed, string> = {
+  undecodable: "this machine cannot show it",
+  unplayable: "this machine cannot play it",
+  unloadable: "this machine cannot show it",
+  missing: "its file is missing",
+  pointer: "its file is a Git LFS pointer, so run `git lfs pull`",
+  differs: "its file differs from its digest",
+  unread: "its file cannot be read",
+};
 
 /** The board shown once its first reading is over, with what draws it. */
 interface Shown<Into> {
@@ -90,10 +121,7 @@ export function showing<Into>(host: Host<Into>): Showing {
   /** The assets edits stopped showing, which other images may still show. */
   const unused = new Set<string>();
 
-  /**
-   * Reads, decodes, and loads one of the board's assets once `ready`, throwing when it cannot be
-   * read.
-   */
+  /** Reads, decodes, and loads one of the board's assets once `ready`, or crosses it out. */
   const bring = async (
     board: Opened,
     ready: Promise<Into | undefined>,
@@ -103,8 +131,20 @@ export function showing<Into>(host: Host<Into>): Showing {
   ): Promise<Brought | undefined> => {
     const reading = () => readAsset(files(board), asset, natural);
     // Saves wait only while it is read, as one may move a ZIP file's images.
-    const read = await (saving ? saving.during(reading) : reading());
-    let decoded = await host.decode(read);
+    const read = await (saving ? saving.during(reading) : reading()).catch(
+      (error: unknown): Crossed => {
+        // The app's own faults, its bugs and the core's panics, stop the board showing.
+        if (error instanceof TypeError || error instanceof WebAssembly.RuntimeError) {
+          throw error;
+        }
+        if (error instanceof Unreadable) {
+          return error.reason;
+        }
+        console.warn(`Image ${asset} cannot be read:`, error);
+        return "unread";
+      },
+    );
+    let decoded = typeof read === "string" ? undefined : await host.decode(read);
     try {
       const into = await ready;
       if (into === undefined || !live()) {
@@ -113,6 +153,10 @@ export function showing<Into>(host: Host<Into>): Showing {
       // Deleted meanwhile, it is read again once an edit brings it back.
       if (!assetSizes(board.board).has(asset)) {
         return "undrawn";
+      }
+      if (typeof read === "string") {
+        host.crossOut(into, asset);
+        return read;
       }
       if (decoded) {
         const taken = decoded;
@@ -161,8 +205,8 @@ export function showing<Into>(host: Host<Into>): Showing {
         failure = message(error);
       }
     }
-    if (brought === "undecodable" || brought === "unplayable" || brought === "unloadable") {
-      failure = `this machine cannot ${brought === "unplayable" ? "play" : "show"} it`;
+    if (brought !== undefined && brought !== "loaded" && brought !== "undrawn") {
+      failure = AGAIN[brought];
     }
     if (failure !== undefined) {
       host.say(`An image could not be read again: ${failure}`);
@@ -208,7 +252,7 @@ export function showing<Into>(host: Host<Into>): Showing {
       }
       const size = host.size();
       const firstCamera = camera ?? fit(extent(next), size);
-      // Whether an image failed the opening, which then shows nothing.
+      // Whether the app failed the opening, which then shows nothing.
       let failed = false;
       const live = () => !failed && host.opened() === next;
       const ready = host.attach(next, camera, live);
@@ -219,7 +263,7 @@ export function showing<Into>(host: Host<Into>): Showing {
       const pending = assetSizes(next.board);
       const total = pending.size;
       const visible = new Set(shownAssets(next.board, firstCamera, size, () => true).keys());
-      const crossed = { undecodable: 0, unplayable: 0, unloadable: 0 };
+      const crossed = new Map<Crossed, number>();
       let loaded = 0;
       let done = 0;
       // The largest of those that show first, as the camera moves meanwhile, then as they draw.
@@ -239,7 +283,7 @@ export function showing<Into>(host: Host<Into>): Showing {
           }
           loaded += 1;
         } else if (brought !== "undrawn") {
-          crossed[brought] += 1;
+          crossed.set(brought, (crossed.get(brought) ?? 0) + 1);
         }
         done += 1;
         if (visible.delete(wanted.asset) && visible.size === 0) {
@@ -265,11 +309,7 @@ export function showing<Into>(host: Host<Into>): Showing {
       if (total > 0) {
         host.drawn("last image", start);
       }
-      const said = [
-        ...told(crossed.undecodable, "an image", "images", "decode"),
-        ...told(crossed.unplayable, "a video", "videos", "play"),
-        ...told(crossed.unloadable, "an image", "images", "show"),
-      ];
+      const said = [...told(crossed), ...toldLeftOut(next)];
       if (said.length > 0) {
         host.say(`${summary}, ${said.join(", and ")}`);
       } else if (!empty) {
@@ -280,6 +320,7 @@ export function showing<Into>(host: Host<Into>): Showing {
         // Those that edits brought back once their turn had passed.
         reload();
       }
+      return said.length > 0 ? said.join(", and ") : undefined;
     },
     edited(undrawn) {
       for (const asset of undrawn) {
@@ -309,8 +350,24 @@ export function showing<Into>(host: Host<Into>): Showing {
   };
 }
 
-function told(count: number, one: string, many: string, why: string): string[] {
-  return count > 0 ? [`${count === 1 ? one : `${count} ${many}`} this machine cannot ${why}`] : [];
+function told(crossed: ReadonlyMap<Crossed, number>): string[] {
+  return Object.entries(CROSSED).flatMap(([why, [one, many]]) => {
+    const count = crossed.get(why as Crossed) ?? 0;
+    return count > 0 ? [count === 1 ? one : `${count} ${many}`] : [];
+  });
+}
+
+function toldLeftOut({ leftOut }: Opened): string[] {
+  const reasons = [...leftOut.values()];
+  reasons.forEach((reason) => console.warn(`Left out, as ${reason}`));
+  if (reasons.length === 0) {
+    return [];
+  }
+  return [
+    reasons.length === 1
+      ? `a file left out, as ${reasons[0]}`
+      : `${reasons.length} files left out, the first as ${reasons[0]}`,
+  ];
 }
 
 /** The largest on screen of `pending`, or else the first, which it takes out. */

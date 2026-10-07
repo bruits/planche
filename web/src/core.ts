@@ -23,6 +23,7 @@ import init, {
   isStrayElement,
   keeping as keep,
   locateZipDirectory,
+  matchesDigest,
   media as told,
   mediaStart,
   movieFrames,
@@ -40,7 +41,6 @@ import init, {
   plainStyle,
   styleSettings,
   textArea,
-  verifyAsset as verify,
   withStyle as styled,
   zipTailLength,
 } from "./wasm/bindings.js";
@@ -98,6 +98,7 @@ export {
   isBoardFile,
   isStrayElement,
   locateZipDirectory,
+  matchesDigest,
   movieFrames,
   zipTailLength,
 };
@@ -182,11 +183,6 @@ export function digestOf(bytes: Bytes): string {
   const hasher = new AssetHasher();
   feed(hasher, bytes);
   return hasher.finish();
-}
-
-/** Throws the core's error when `found`, the digest of bytes read for `asset`, is not its. */
-export function verifyAsset(asset: string, found: string): void {
-  verify(asset, found);
 }
 
 export function crc32(bytes: Bytes): number {

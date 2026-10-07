@@ -20,11 +20,17 @@ Only one window holds the session. A second window says it keeps no board for ne
 
 Planche notices when `git pull`, a sync tool, or another program changed the board's files, before each save and when its window comes back to the front. With no unsaved edits, it reads the board again and keeps your view. Otherwise it asks whether to read it again or keep your edits, which then overwrite the other program's changes.
 
-A file in `elements/` that belongs to no element, such as a sync tool's conflicted copy, is left out with a warning. Planche never deletes it.
+## When part of a board cannot be read
+
+The rest of the board opens, and Planche says what it left out.
+
+- A file in `elements/` that holds an unresolved Git conflict, is cut short, or holds a field Planche does not know is left out. Planche never writes over it or deletes it, and copies it as it is when you save the board as a folder or a ZIP file. What sticks to it or sits in it comes apart until you fix it, and Planche then reads it again. An element you edit meanwhile stays apart.
+- A file in `elements/` that belongs to no element, such as a sync tool's conflicted copy, is left out too. Planche never deletes it from a folder, but a copy or a ZIP file goes without it.
+- An image whose file is missing, or differs from the one the board recorded, shows crossed out. A Git LFS pointer is the usual cause, see [Boards in Git](#boards-in-git). You can still move or edit the image, and saves go without the missing file.
 
 ## Boards in Git
 
-Images need [Git LFS](https://git-lfs.com/). Planche gives a board's folder a `.gitattributes` when it lacks one, and puts one in each ZIP file. It sends `assets/` to Git LFS and keeps Git from changing line endings. Planche never changes a `.gitattributes` that is there. A clone made without Git LFS holds small pointer files in place of the images, and Planche refuses to open it. Install Git LFS, then run `git lfs pull`.
+Images need [Git LFS](https://git-lfs.com/). Planche gives a board's folder a `.gitattributes` when it lacks one, and puts one in each ZIP file. It sends `assets/` to Git LFS and keeps Git from changing line endings. Planche never changes a `.gitattributes` that is there. A clone made without Git LFS holds small pointer files in place of the images, which show crossed out. Install Git LFS, run `git lfs pull`, then open the board again.
 
 Each element has its own file, so branches that edit different elements merge cleanly. Planche repairs what a merge can break, such as a group nested in itself or an arrow stuck to a deleted element, when it reads the board. The same board always writes the same bytes, so only real edits show up in a diff.
 
@@ -36,8 +42,9 @@ Planche stores files in a ZIP uncompressed, since images are compressed already.
 
 ## When a board does not open
 
-- An image is missing. The board that was open stays.
-- An image's file differs from the one the board recorded, which Planche finds out as it shows the board. A Git LFS pointer is the usual cause, see [Boards in Git](#boards-in-git). The board that was open is gone by then, so a new one takes its place.
+The board that was open stays when the board picked cannot open.
+
+- Its `board.json` is missing, holds an unresolved Git conflict or a field Planche does not know, or cannot be read.
 - The board or the session was written by a newer version of Planche. A session Planche cannot read stays untouched until you open or start another board.
 - A folder Planche cannot write to opens on desktop, and each save then fails and says why. In Chromium, refusing to let the page edit a folder cancels opening it.
 

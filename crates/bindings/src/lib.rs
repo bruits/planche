@@ -22,7 +22,7 @@ const TYPES: &str = include_str!(concat!(env!("OUT_DIR"), "/types.d.ts"));
 /// ids of the elements it touched, which leaves out the background.
 #[wasm_bindgen]
 #[derive(Default)]
-pub struct Editor(board::Editor);
+pub struct Editor(board::Editor, Vec<format::LeftOut>);
 
 #[wasm_bindgen]
 impl Editor {
@@ -31,14 +31,11 @@ impl Editor {
         Self::default()
     }
 
-    /// Refuses a board missing an asset its images show, as `listed`, the paths of its folder,
-    /// has them.
-    #[wasm_bindgen(js_name = checkAssets)]
-    pub fn check_assets(&self, listed: Vec<String>) -> Result<(), JsError> {
-        Ok(format::check_assets(
-            self.0.board(),
-            listed.iter().map(String::as_str),
-        )?)
+    /// The assets that images show and `listed`, the paths of its folder, lacks, in draw order.
+    #[wasm_bindgen(js_name = missingAssets)]
+    pub fn missing_assets(&self, listed: Vec<String>) -> Vec<String> {
+        let missing = format::missing_assets(self.0.board(), listed.iter().map(String::as_str));
+        missing.into_iter().map(|asset| asset.to_string()).collect()
     }
 
     /// Reads a board from its files, all but the assets.
@@ -48,7 +45,18 @@ impl Editor {
             .zip(contents)
             .map(|(path, bytes)| (path, bytes.to_vec()))
             .collect();
-        Ok(Self(board::Editor::new(format::read(&files)?)))
+        let format::Reading { board, left_out } = format::read(&files)?;
+        Ok(Self(board::Editor::new(board), left_out))
+    }
+
+    /// The element files that reading left out, by path, each with why.
+    #[wasm_bindgen(js_name = leftOut)]
+    pub fn left_out(&self) -> Map {
+        let map = Map::new();
+        for format::LeftOut { path, error } in &self.1 {
+            map.set(&path.into(), &error.to_string().into());
+        }
+        map
     }
 
     /// The board's elements by id, its draw order, and its background.
@@ -516,8 +524,17 @@ impl Snapshot {
     /// The paths of the board's ZIP file in the order it holds them, the assets its images
     /// show included.
     #[wasm_bindgen(js_name = zipPaths)]
-    pub fn zip_paths(&self) -> Result<Vec<String>, JsError> {
-        Ok(zip::paths(&self.0)?)
+    pub fn zip_paths(
+        &self,
+        carried: Vec<String>,
+        lacking: Vec<String>,
+    ) -> Result<Vec<String>, JsError> {
+        let (carried, lacking) = (carried.iter(), lacking.iter());
+        Ok(zip::paths(
+            &self.0,
+            carried.map(String::as_str),
+            lacking.map(String::as_str),
+        )?)
     }
 }
 
@@ -553,8 +570,9 @@ impl Known {
 
     /// What makes the folder hold the board of `snapshot` and no other element, whatever
     /// another program wrote there since, once read again.
-    pub fn overwrite(&self, snapshot: &Snapshot) -> Result<Save, JsError> {
-        Ok(Save(self.0.overwrite(&snapshot.0)?))
+    pub fn overwrite(&self, snapshot: &Snapshot, left_out: Vec<String>) -> Result<Save, JsError> {
+        let left_out = left_out.iter().map(String::as_str);
+        Ok(Save(self.0.overwrite(&snapshot.0, left_out)?))
     }
 
     /// Once the board file at `path` holds `bytes`.
@@ -854,10 +872,12 @@ impl AssetHasher {
     }
 }
 
-/// `found` is the id [`AssetHasher::finish`] gave for the bytes read.
-#[wasm_bindgen(js_name = verifyAsset)]
-pub fn verify_asset(asset: &str, found: &str) -> Result<(), JsError> {
-    Ok(format::verify_asset(asset.parse()?, found.parse()?)?)
+/// Whether `digest`, of the bytes read at `path`, names the asset that the path holds.
+#[wasm_bindgen(js_name = matchesDigest)]
+pub fn matches_digest(path: &str, digest: &str) -> Result<bool, JsError> {
+    let asset =
+        format::asset_of(path).ok_or_else(|| JsError::new(&format!("`{path}` is no asset")))?;
+    Ok(asset.same_bytes(digest.parse()?))
 }
 
 #[wasm_bindgen]
@@ -973,6 +993,11 @@ impl ZipWriter {
     ) -> Result<Vec<u8>, JsError> {
         let digest = digest.map(|digest| digest.parse()).transpose()?;
         Ok(self.0.entry(path, offset(size)?, crc, digest)?)
+    }
+
+    /// As `entry` for a file kept as it was read, whose digest need not name its bytes.
+    pub fn carried(&mut self, path: &str, size: f64, crc: u32) -> Result<Vec<u8>, JsError> {
+        Ok(self.0.carried(path, offset(size)?, crc)?)
     }
 
     /// What ends the file, after the last entry.

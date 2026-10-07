@@ -23,8 +23,8 @@ export interface Host {
   >;
   /** The board shown, which `show` replaces. */
   opened(): Opened | undefined;
-  /** Shows a board just read, or throws why it cannot, such as an image unlike its digest. */
-  show(next: Opened, camera?: Camera): Promise<void>;
+  /** Shows a board just read, or throws why it cannot, then tells what went wrong, if anything. */
+  show(next: Opened, camera?: Camera): Promise<string | undefined>;
   camera(): Camera | undefined;
   /** `busy` while what it tells of goes on. */
   say(text: string, busy?: boolean): void;
@@ -330,13 +330,13 @@ export function lifecycle(host: Host): Lifecycle {
 
   /**
    * Shows a board just read, which saves itself into `place` from then on. The board it replaces
-   * saves itself on until then.
+   * saves itself on until then. Returns what went wrong showing it, if anything did.
    */
   async function settle(
     { opened: next, reading }: Read,
     place: Place,
     { camera, clear, leaving }: Settling = {},
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const store = await place.store(next, reading);
     const old = autosave;
     if (leaving) {
@@ -356,7 +356,7 @@ export function lifecycle(host: Host): Lifecycle {
     }
     autosave = store && autosaving(next, store, place);
     try {
-      await host.show(next, camera);
+      return await host.show(next, camera);
     } catch (error) {
       // A board that does not show is not open, so it saves nothing more.
       const failed = autosave;
@@ -364,12 +364,6 @@ export function lifecycle(host: Host): Lifecycle {
       await failed?.stop();
       failed?.store.free();
       throw error;
-    }
-    const strays = reading.listed.filter(core.isStrayElement);
-    if (strays.length > 0) {
-      host.say(
-        `Left out ${strays.join(", ")}, which no element owns, such as a sync tool's conflicted copy`,
-      );
     }
   }
 
@@ -420,8 +414,10 @@ export function lifecycle(host: Host): Lifecycle {
       } else if (read) {
         const { name } = read.opened.folder;
         try {
-          await settle(read, place, { camera });
-          host.say(`${name} changed on disk, so it was read again`);
+          const wrong = await settle(read, place, { camera });
+          host.say(
+            `${name} changed on disk, so it was read again${wrong ? `, with ${wrong}` : ""}`,
+          );
         } catch (error) {
           if (!(await replace(read.opened))) {
             throw error;

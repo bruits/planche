@@ -58,17 +58,32 @@ const MARK32: u32 = u32::MAX;
 /// trap.
 const MAX_RATIO: u64 = 1032;
 
-/// The paths of `board`'s ZIP file, in the order it holds them: those of [`write`] and the
-/// assets it draws, and nothing else, so that the file depends on the board alone.
+/// The paths of `board`'s ZIP file, in the order it holds them: those of [`write`], the assets
+/// it draws but `lacking`, and the `carried` element files and assets, which the board did not
+/// take or shows crossed out and the file keeps as they were. Nothing else, so that the file
+/// depends on them alone.
 ///
 /// [`write`]: crate::write
-pub fn paths(board: &Board) -> Result<Vec<String>> {
+pub fn paths<'a>(
+    board: &Board,
+    carried: impl IntoIterator<Item = &'a str>,
+    lacking: impl IntoIterator<Item = &'a str>,
+) -> Result<Vec<String>> {
     let mut paths: BTreeSet<String> = crate::write(board)?.into_keys().collect();
+    let lacking: BTreeSet<&str> = lacking.into_iter().collect();
     let assets = board
         .elements
         .values()
-        .filter_map(|element| element.kind.asset());
-    paths.extend(assets.map(crate::asset_path));
+        .filter_map(|element| element.kind.asset())
+        .map(crate::asset_path)
+        .filter(|path| !lacking.contains(path.as_str()));
+    paths.extend(assets);
+    for path in carried {
+        if !crate::is_element_file(path) && !crate::is_asset_file(path) {
+            return Err(Error::UnsafePath(path.to_owned()));
+        }
+        paths.insert(path.to_owned());
+    }
     Ok(paths.into_iter().collect())
 }
 
@@ -95,16 +110,35 @@ impl Writer {
         crc: u32,
         digest: Option<AssetId>,
     ) -> Result<Vec<u8>> {
+        self.check(path)?;
+        if path.starts_with(ASSETS) {
+            let asset = asset_of(path).ok_or_else(|| Error::InvalidName(path.to_owned()))?;
+            verify_asset(asset, digest.ok_or(Error::CorruptAsset(asset))?)?;
+        }
+        self.header(path, size, crc)
+    }
+
+    /// As [`Writer::entry`] for a file the board keeps as it was read, which an asset's digest
+    /// need not name, such as a Git LFS pointer.
+    pub fn carried(&mut self, path: &str, size: u64, crc: u32) -> Result<Vec<u8>> {
+        self.check(path)?;
+        if path.starts_with(ASSETS) && asset_of(path).is_none() {
+            return Err(Error::InvalidName(path.to_owned()));
+        }
+        self.header(path, size, crc)
+    }
+
+    fn check(&self, path: &str) -> Result<()> {
         if path != GIT_ATTRIBUTES && !is_board_path(path)? {
             return Err(Error::UnsafePath(path.to_owned()));
         }
         if self.last.as_deref().is_some_and(|last| path <= last) {
             return Err(Error::OutOfOrder(path.to_owned()));
         }
-        if path.starts_with(ASSETS) {
-            let asset = asset_of(path).ok_or_else(|| Error::InvalidName(path.to_owned()))?;
-            verify_asset(asset, digest.ok_or(Error::CorruptAsset(asset))?)?;
-        }
+        Ok(())
+    }
+
+    fn header(&mut self, path: &str, size: u64, crc: u32) -> Result<Vec<u8>> {
         let name_len = u16::try_from(path.len()).map_err(|_| Error::UnsafePath(path.to_owned()))?;
 
         // Past 4 GiB, the size goes in a ZIP64 field in both records, and the offset in the

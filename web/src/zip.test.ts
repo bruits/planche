@@ -7,7 +7,7 @@ import * as core from "./core.js";
 import type { Bytes } from "./core.js";
 import type { Folder, Sink, Slices } from "./platform.js";
 import { writeZip, zipFolder } from "./zip.js";
-import { memoryHome, sample, SAMPLES } from "../test/folders.js";
+import { lfsPointer, memoryHome, sample, SAMPLES } from "../test/folders.js";
 
 /** One of the demo's images, 12 kB. */
 const ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
@@ -115,12 +115,39 @@ describe("writeZip", () => {
     const snapshot = opened.editor.snapshot();
     const written = memorySink();
     try {
-      await expect(writeZip(snapshot, home, written.sink)).rejects.toThrow("missing");
+      await expect(writeZip(snapshot, files(opened), written.sink)).rejects.toThrow("missing");
     } finally {
       snapshot.free();
     }
     expect(written.state()).toBe("discarded");
     expect(written.bytes()).toHaveLength(0);
+  });
+});
+
+describe("writeZip, of a board missing some of its files", () => {
+  it("carries what the board left out or crosses out as it was, and goes without the rest", async () => {
+    const [sticky, middle] = [
+      "elements/b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74.json",
+      "assets/fabec7ea4f16a728b547c12f25158c75f6b48cf14db92745f92e5e9edcd36d93.jpg",
+    ];
+    const contents = sample("demo");
+    const conflicted = new TextEncoder().encode("<<<<<<< ours\n");
+    const pointer = new TextEncoder().encode(lfsPointer(contents.get(middle)!));
+    contents.set(sticky, conflicted);
+    contents.set(middle, pointer);
+    contents.delete(`assets/${ASSET}`);
+    const { opened } = (await open(async () => memoryHome("demo", contents).home, new Map()))!;
+    const snapshot = opened.editor.snapshot();
+    const written = memorySink();
+    try {
+      await writeZip(snapshot, files(opened), written.sink);
+    } finally {
+      snapshot.free();
+    }
+    const folder = await zipFolder(slices("demo.zip", new Uint8Array(written.bytes())));
+    expect(await folder.list(2)).not.toContain(`assets/${ASSET}`);
+    expect(await folder.read(sticky)).toEqual(conflicted);
+    expect(await folder.read(middle)).toEqual(pointer);
   });
 });
 

@@ -7,7 +7,7 @@ use board::{Board, ElementId};
 
 use crate::{
     Files, MANIFEST, Result, asset_path, element_file, element_id, element_path, is_asset_file,
-    is_board_file, manifest_file,
+    is_board_file, manifest_file, read_element,
 };
 
 /// A board's folder as the app last read or wrote it.
@@ -56,7 +56,7 @@ impl Known {
         let mut assets = BTreeSet::new();
         for id in touched.into_iter().collect::<BTreeSet<_>>() {
             let path = element_path(id);
-            let Some(element) = board.elements.get(&id) else {
+            let Some(element) = board.written(id) else {
                 if self.files.contains_key(&path) {
                     save.deletions.push(path);
                 }
@@ -81,14 +81,25 @@ impl Known {
     }
 
     /// What makes the folder hold `board`'s files and no other element's, whatever another
-    /// program wrote there since the app read it, as known once read again.
-    pub fn overwrite(&self, board: &Board) -> Result<Save> {
+    /// program wrote there since the app read it, as known once read again. The files that
+    /// [`crate::read`] `left_out` stay, fixed since or not, as do those it would leave out now.
+    pub fn overwrite<'a>(
+        &self,
+        board: &Board,
+        left_out: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Save> {
+        let left_out: BTreeSet<&str> = left_out.into_iter().collect();
         let mut save = self.save(board, board.elements.keys().copied())?;
         save.deletions = self
             .files
-            .keys()
-            .filter(|path| element_id(path).is_some_and(|id| !board.elements.contains_key(&id)))
-            .cloned()
+            .iter()
+            .filter(|(path, bytes)| {
+                !left_out.contains(path.as_str())
+                    && element_id(path).is_some_and(|id| {
+                        !board.elements.contains_key(&id) && read_element(id, path, bytes).is_ok()
+                    })
+            })
+            .map(|(path, _)| path.clone())
             .collect();
         Ok(save)
     }

@@ -40,7 +40,7 @@ function sticky(opened: Opened | undefined, id: string): string | undefined {
  * The app around the boards, launched with `session`, or none where another window holds it,
  * `reopen` to open again, `picked` as the board the user opens, and `target` as the folder they
  * save it as, answering `answer` when asked, and looking at the board shown from `camera`. A
- * board `fails` to show as one whose image is unlike its digest would.
+ * board `fails` to show as one would on the app's own fault, and tells the files it left out.
  */
 function app({
   session,
@@ -84,8 +84,9 @@ function app({
       shownAt.push(at);
       life.showSaved();
       if (fails?.(next)) {
-        throw new Error("an asset does not match its digest");
+        throw new Error("the app's own fault");
       }
+      return [...next.leftOut.keys()].join(", ") || undefined;
     },
     camera: () => camera,
     say: (text) => void said.push(text),
@@ -142,7 +143,7 @@ describe("lifecycle", () => {
   it("leaves a session board it cannot read as it is, and says why, until a new board starts", async () => {
     remembered({ name: "demo", unsaved: true });
     const files = sample("demo");
-    files.set(`elements/${STICKY}.json`, new TextEncoder().encode("{"));
+    files.set("board.json", new TextEncoder().encode("{"));
     const { session, files: kept } = memorySession(files);
     const before = new Map(kept);
     const { life, opened, said } = app({ session });
@@ -234,6 +235,20 @@ describe("lifecycle", () => {
 });
 
 describe("saveAs", () => {
+  it("copies into the folder picked the files a session board left out", async () => {
+    remembered({ name: "demo", unsaved: true });
+    const files = sample("demo");
+    const conflicted = new TextEncoder().encode("<<<<<<< ours\n");
+    files.set(`elements/${NOTE}.json`, conflicted);
+    const { session, files: kept } = memorySession(files);
+    const { home, files: saved } = memoryHome("target");
+    const { life } = app({ session, target: home });
+    await life.start();
+    await life.saveAs();
+    expect(saved.get(`elements/${NOTE}.json`)).toEqual(conflicted);
+    expect(kept.size).toBe(0);
+  });
+
   beforeEach(() => {
     localStorage.clear();
   });
@@ -485,7 +500,7 @@ describe("resume", () => {
 
   it("forgets a remembered folder it cannot open at launch, says why, and starts a blank board", async () => {
     const files = sample("demo");
-    files.set(STICKY_FILE, new TextEncoder().encode("{"));
+    files.set("board.json", new TextEncoder().encode("{"));
     const { home } = memoryHome("demo", files);
     const { life, opened, said, forget } = app({
       session: memorySession().session,
@@ -501,7 +516,7 @@ describe("resume", () => {
   it("forgets a remembered folder it cannot open at launch, and reopens the session's board instead", async () => {
     remembered({ name: "demo", unsaved: false });
     const files = sample("demo");
-    files.set(STICKY_FILE, new TextEncoder().encode("{"));
+    files.set("board.json", new TextEncoder().encode("{"));
     const { home } = memoryHome("elsewhere", files);
     const { life, opened, said, forget } = app({
       session: memorySession(sample("demo")).session,
@@ -616,7 +631,7 @@ describe("a board that fails to show", () => {
       edit = move;
       await life.start();
       choose(broken.home);
-      await expect(life.openFolder()).rejects.toThrow("does not match its digest");
+      await expect(life.openFolder()).rejects.toThrow("the app's own fault");
       expect(opened()?.folder.name).toBe("Untitled");
       expect(opened()?.board.draw_order).toEqual([]);
       await vi.advanceTimersByTimeAsync(60_000);
@@ -627,22 +642,45 @@ describe("a board that fails to show", () => {
     }
   });
 
-  it("keeps the open board when the board picked lacks an image", async () => {
+  it("keeps the open board when the board picked cannot be read", async () => {
     const first = memoryHome("demo", sample("demo"));
-    const lacking = sample("demo");
-    lacking.delete("assets/5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png");
+    const broken = sample("demo");
+    broken.set("board.json", new TextEncoder().encode("{"));
     const { life, opened, choose, move } = app({
       session: memorySession().session,
       picked: first.home,
     });
     await life.start();
     await life.openFolder();
-    choose(memoryHome("lacking", lacking).home);
-    await expect(life.openFolder()).rejects.toThrow("is missing");
+    choose(memoryHome("broken", broken).home);
+    await expect(life.openFolder()).rejects.toThrow("`board.json` is not valid");
     expect(opened()?.folder).toBe(first.home);
     move(STICKY);
     expect(await life.closing()).toBe(true);
     expect(first.written).toEqual([STICKY_FILE]);
+  });
+
+  it("opens a board that lacks an image, and saves it without", async () => {
+    const lacking = memoryHome("lacking", sample("demo"));
+    lacking.files.delete(`assets/${IMAGE_ASSET}`);
+    const { life, opened, move } = app({ session: memorySession().session, picked: lacking.home });
+    await life.start();
+    await life.openFolder();
+    expect(opened()?.folder).toBe(lacking.home);
+    move(IMAGE);
+    expect(await life.closing()).toBe(true);
+    expect(lacking.written).toEqual([`elements/${IMAGE}.json`]);
+  });
+
+  it("says what it left out of a board read again after another program changed it", async () => {
+    const { home, overwrite } = memoryHome("demo", sample("demo"));
+    const { life, opened, said } = app({ session: memorySession().session, picked: home });
+    await life.start();
+    await life.openFolder();
+    overwrite(STICKY_FILE, "<<<<<<< ours\n");
+    await life.saver()?.check();
+    expect(said).toContain(`demo changed on disk, so it was read again, with ${STICKY_FILE}`);
+    expect(opened()?.board.elements[STICKY]).toBeUndefined();
   });
 
   it("says why a board read again after another program changed it does not show, and leaves a blank board", async () => {
@@ -659,7 +697,7 @@ describe("a board that fails to show", () => {
     overwrite(STICKY_FILE, THEIRS);
     await life.saver()?.check();
     expect(said).toContain(
-      "demo changed on disk, and could not be read again: an asset does not match its digest",
+      "demo changed on disk, and could not be read again: the app's own fault",
     );
     expect(opened()?.folder.name).toBe("Untitled");
   });

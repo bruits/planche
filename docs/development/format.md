@@ -8,10 +8,11 @@ The format is made to live in Git. One file per element keeps merges clean and d
 
 - The same board always writes the same bytes. Nothing on that path iterates a `HashMap`.
 - An edit rewrites only the files it touches. Elements stack by a fractional z-index, so restacking one rewrites one file.
-- An asset never changes once named. The caller writes it once, before any element that draws it, and checks it against its digest on load, which catches a clone made without Git LFS.
+- An asset never changes once named. The caller writes it once, before any element that draws it, and checks it against its digest on load, which catches a clone made without Git LFS. Its images then show crossed out.
+- `read` refuses a field it does not know at every level, naming it. It leaves out an element file that holds a Git conflict or is not valid, and refuses the board only when `board.json` is. A left-out file is never written or deleted, and a ZIP file or a copy of the board takes it as it is.
 - A value at its default is left out, such as a rotation of 0 or an image's edits when it has none.
 - The caller draws element ids, as the core has no randomness.
-- `Board::repair` heals on read what a merge or a cut save can leave, such as a group cycle or an element stuck to one another branch deleted.
+- `Board::repair` heals on read what a merge or a cut save can leave, such as a group cycle or an element stuck to one another branch deleted, or to a file left out. An element it cut from what is missing is written as read until an edit changes it, so that fixing what broke brings it back.
 - Image metadata keeps a file's name without its path, and a web address without its credentials.
 
 ## ZIP files

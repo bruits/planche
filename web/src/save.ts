@@ -4,9 +4,9 @@
 
 import * as core from "./core.js";
 import type { Bytes, Files, Snapshot } from "./core.js";
-import { retain, type Opened, type Reading } from "./board.js";
+import { carried, retain, type Opened, type Reading, type Source } from "./board.js";
 import { message } from "./errors.js";
-import type { Folder, Home, ZipHome } from "./platform.js";
+import type { Home, ZipHome } from "./platform.js";
 import { writeZip, zipFolder } from "./zip.js";
 
 /** After the last change, in milliseconds. */
@@ -27,9 +27,9 @@ export interface Store {
    * last save, and its images from `source`. `false`, writing nothing, when another program
    * changed what it would write over.
    */
-  save(snapshot: Snapshot, touched: string[], source: () => Folder): Promise<boolean>;
+  save(snapshot: Snapshot, touched: string[], source: () => Source): Promise<boolean>;
   /** Writes the board of `snapshot` over whatever another program wrote. */
-  overwrite(snapshot: Snapshot, source: () => Folder): Promise<void>;
+  overwrite(snapshot: Snapshot, source: () => Source): Promise<void>;
   /** Whether another program changed the board since the app read or last wrote it. */
   changed(): Promise<boolean>;
   free(): void;
@@ -46,6 +46,8 @@ export async function folderStore(
   let stamps = new Map(session ? [] : reading?.stamps);
   // A session keeps no Git.
   let attributed = session;
+  // A folder the board was read from holds the files it left out, which another one starts without.
+  let holdsLeftOut = reading !== undefined;
 
   const changedAny = async (paths: string[]) => {
     if (session) {
@@ -71,16 +73,25 @@ export async function folderStore(
    * In the order that the core gives them, after the files a board folder starts with, which a
    * home only writes into a folder that lacks them.
    */
-  const write = async (assets: string[], files: Files, deletions: string[], source: Folder) => {
+  const write = async (assets: string[], files: Files, deletions: string[], source: Source) => {
     if (!attributed) {
       for (const [path, bytes] of core.newFiles()) {
         await home.write(path, bytes);
       }
       attributed = true;
     }
-    for (const path of assets) {
+    const lacking = new Set(source.lacking);
+    for (const path of assets.filter((asset) => !lacking.has(asset))) {
       await home.write(path, await source.read(path));
       known.copied(path);
+    }
+    if (!holdsLeftOut) {
+      for (const path of await carried(source)) {
+        const bytes = await source.read(path);
+        stamps.set(path, await home.write(path, bytes));
+        known.wrote(path, bytes);
+      }
+      holdsLeftOut = true;
     }
     for (const [path, bytes] of files) {
       stamps.set(path, await home.write(path, bytes));
@@ -122,7 +133,7 @@ export async function folderStore(
       known.free();
       known = core.known(listed, files);
       stamps = read;
-      const plan = known.overwrite(snapshot);
+      const plan = known.overwrite(snapshot, [...source().leftOut]);
       try {
         await write(plan.assets(), plan.files() as Files, plan.deletions(), source());
       } finally {
@@ -149,8 +160,9 @@ export async function folderStore(
  * assets the board shows, so those that undo or redo may bring back stay in memory.
  */
 export function zipStore(zip: ZipHome, opened: Opened): Store {
-  const rewrite = async (snapshot: Snapshot, source: () => Folder, over: boolean) => {
-    const holds = new Set(snapshot.zipPaths());
+  const rewrite = async (snapshot: Snapshot, source: () => Source, over: boolean) => {
+    const { leftOut, lacking } = source();
+    const holds = new Set(snapshot.zipPaths([...leftOut], [...lacking]));
     // While the file is as it was, as a rewrite moves what it held out of reach.
     await retain(opened, source(), (path) => holds.has(path));
     const rewriting = await zip.rewrite(over);
@@ -182,7 +194,7 @@ export function zipStore(zip: ZipHome, opened: Opened): Store {
 export interface SavingHooks {
   snapshot(): Snapshot;
   /** Where the board's images are read from, as it stands. */
-  source(): Folder;
+  source(): Source;
   saved(snapshot: Snapshot): void;
   failed(reason: string): void;
   /**

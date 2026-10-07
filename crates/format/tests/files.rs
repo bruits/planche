@@ -9,7 +9,7 @@ use board::{
     Restack, Shape, Size, Speed, Text, Tip, Trim, Weight, ZIndex,
 };
 use format::save::{Known, Save};
-use format::{Error, Files, zip};
+use format::{Error, Files, LeftOut, zip};
 
 const NOTE: ElementId = ElementId::from_random(3);
 const ELLIPSE: ElementId = ElementId::from_random(4);
@@ -245,7 +245,7 @@ fn changed(before: &Files, after: &Files) -> Vec<String> {
 fn a_board_reads_back_as_written() {
     let board = sample();
     let files = format::write(&board).unwrap();
-    let read = format::read(&files).unwrap();
+    let read = format::read(&files).unwrap().board;
     assert_eq!(read, board);
     assert_eq!(format::write(&read).unwrap(), files);
 }
@@ -272,7 +272,7 @@ fn restacking_rewrites_one_file() {
     let after = format::write(&board).unwrap();
 
     assert_eq!(changed(&before, &after), [format!("elements/{NOTE}.json")]);
-    let order = format::read(&after).unwrap().draw_order();
+    let order = format::read(&after).unwrap().board.draw_order();
     assert_eq!(
         order,
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 12].map(ElementId::from_random)
@@ -421,7 +421,7 @@ fn the_background_lives_in_the_manifest_and_only_once_chosen() {
         after["board.json"],
         b"{\n  \"version\": 1,\n  \"background\": \"dots\"\n}\n"
     );
-    assert_eq!(format::read(&after).unwrap(), *editor.board());
+    assert_eq!(format::read(&after).unwrap().board, *editor.board());
 
     editor.undo();
     assert_eq!(format::write(editor.board()).unwrap(), before);
@@ -537,7 +537,7 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
             "title": "Moods"
         })
     );
-    assert_eq!(format::read(&files).unwrap(), board);
+    assert_eq!(format::read(&files).unwrap().board, board);
 }
 
 #[test]
@@ -556,7 +556,7 @@ fn a_crop_shape_is_written_only_once_not_a_rectangle_and_reads_back() {
 
     let files = format::write(editor.board()).unwrap();
     assert_eq!(shape(&files), Some("ellipse".into()));
-    assert_eq!(format::read(&files).unwrap(), *editor.board());
+    assert_eq!(format::read(&files).unwrap().board, *editor.board());
 }
 
 #[test]
@@ -572,7 +572,7 @@ fn a_lock_is_written_only_once_set_and_reads_back() {
 
     let files = format::write(editor.board()).unwrap();
     assert_eq!(locked(&files), Some(true));
-    assert_eq!(format::read(&files).unwrap(), *editor.board());
+    assert_eq!(format::read(&files).unwrap().board, *editor.board());
 }
 
 #[test]
@@ -603,7 +603,7 @@ fn a_trim_and_a_speed_are_written_only_once_set_and_read_back() {
             Some(1.5.into())
         )
     );
-    assert_eq!(format::read(&files).unwrap(), *editor.board());
+    assert_eq!(format::read(&files).unwrap().board, *editor.board());
 }
 
 #[test]
@@ -617,8 +617,10 @@ fn a_colour_has_one_spelling() {
             &format!("\"type\": \"note\",\n    \"colour\": {colour},"),
         );
         files.insert(path.clone(), note.into_bytes());
+        let reading = format::read(&files).unwrap();
+        assert!(!reading.board.elements.contains_key(&NOTE));
         assert!(
-            matches!(format::read(&files), Err(Error::Json { path: at, .. }) if at == path),
+            matches!(&reading.left_out[..], [LeftOut { path: at, error: Error::Json { .. } }] if *at == path),
             "{colour}"
         );
     }
@@ -644,7 +646,7 @@ fn concurrent_additions_merge_cleanly() {
     );
     let mut merged = ours;
     merged.extend(theirs);
-    let merged = format::read(&merged).unwrap();
+    let merged = format::read(&merged).unwrap().board;
     assert!(merged.elements.contains_key(&mine) && merged.elements.contains_key(&yours));
 }
 
@@ -713,7 +715,7 @@ fn an_image_neither_turned_nor_edited_writes_neither() {
         "\"type\": \"image\",\n    \"rotation\": 0.0,\n    \"edits\": {},",
     );
     files.insert(path, spelled.into_bytes());
-    assert_eq!(format::read(&files).unwrap(), board);
+    assert_eq!(format::read(&files).unwrap().board, board);
 }
 
 #[test]
@@ -755,7 +757,7 @@ fn a_stroke_names_what_it_sticks_to_after_its_points_and_reads_back() {
         *target = Some(NOTE);
     }
     let files = format::write(&board).unwrap();
-    assert_eq!(format::read(&files).unwrap(), board);
+    assert_eq!(format::read(&files).unwrap().board, board);
     let stroke = String::from_utf8(files[&format!("elements/{STROKE}.json")].clone()).unwrap();
     assert_eq!(
         stroke,
@@ -872,7 +874,7 @@ fn line_endings_are_kept_out_of_git() {
             (path.clone(), text.replace('\n', "\r\n").into_bytes())
         })
         .collect();
-    assert_eq!(format::read(&crlf).unwrap(), sample());
+    assert_eq!(format::read(&crlf).unwrap().board, sample());
 }
 
 #[test]
@@ -931,7 +933,7 @@ fn equal_boards_write_the_same_bytes() {
         })
         .collect();
     assert_ne!(negated, files);
-    let read = format::read(&negated).unwrap();
+    let read = format::read(&negated).unwrap().board;
     assert_eq!(read, board);
     assert_eq!(format::write(&read).unwrap(), files);
 }
@@ -952,8 +954,12 @@ fn text_of_no_size_is_refused_on_read() {
     let note = String::from_utf8(files[&path].clone()).unwrap();
     let sizeless = note.replace(r#""font_size": 20.0"#, r#""font_size": 0.0"#);
     assert_ne!(sizeless, note);
-    files.insert(path, sizeless.into_bytes());
-    assert!(matches!(format::read(&files), Err(Error::Invalid(NOTE))));
+    files.insert(path.clone(), sizeless.into_bytes());
+    let reading = format::read(&files).unwrap();
+    assert!(!reading.board.elements.contains_key(&NOTE));
+    assert!(
+        matches!(&reading.left_out[..], [LeftOut { path: at, error: Error::Invalid(NOTE) }] if *at == path)
+    );
 }
 
 #[test]
@@ -963,7 +969,10 @@ fn an_opacity_that_would_hide_an_element_is_refused_on_read() {
     let mut note: serde_json::Value = serde_json::from_slice(&files[&path]).unwrap();
     note["kind"]["opacity"] = serde_json::json!(0);
     files.insert(path.clone(), serde_json::to_vec(&note).unwrap());
-    assert!(matches!(format::read(&files), Err(Error::Json { path: at, .. }) if at == path));
+    let reading = format::read(&files).unwrap();
+    assert!(
+        matches!(&reading.left_out[..], [LeftOut { path: at, error: Error::Json { .. } }] if *at == path)
+    );
 }
 
 #[test]
@@ -1021,9 +1030,9 @@ fn a_star_or_a_polygon_writes_its_corners_only_when_not_five_and_reads_back() {
     assert_eq!(written[3]["shape"], "polygon");
     assert_eq!(written[4]["shape"], "triangle");
     assert_eq!(written[5]["shape"], "diamond");
-    assert_eq!(format::read(&files).unwrap(), board);
+    assert_eq!(format::read(&files).unwrap().board, board);
     assert_eq!(
-        format::write(&format::read(&files).unwrap()).unwrap(),
+        format::write(&format::read(&files).unwrap().board).unwrap(),
         files
     );
 }
@@ -1037,8 +1046,9 @@ fn corners_a_star_or_a_polygon_cannot_have_are_refused_on_read() {
         shape["kind"]["shape"] = serde_json::json!("star");
         shape["kind"]["corners"] = serde_json::json!(corners);
         files.insert(path.clone(), serde_json::to_vec(&shape).unwrap());
+        let reading = format::read(&files).unwrap();
         assert!(
-            matches!(format::read(&files), Err(Error::Json { path: at, .. }) if at == path),
+            matches!(&reading.left_out[..], [LeftOut { path: at, error: Error::Json { .. } }] if *at == path),
             "{corners}"
         );
     }
@@ -1074,7 +1084,7 @@ fn stray_files_are_not_part_of_the_board() {
         assert!(!format::is_asset_file(&stray), "{stray}");
         files.insert(stray, vec![0]);
     }
-    assert_eq!(format::read(&files).unwrap(), board);
+    assert_eq!(format::read(&files).unwrap().board, board);
 }
 
 #[test]
@@ -1100,7 +1110,7 @@ fn a_conflicted_copy_is_left_out_and_told_apart() {
     assert!(format::is_stray_element(&copy));
     assert!(!format::is_stray_element(&format!("elements/{NOTE}.json")));
     files.insert(copy, files[&format!("elements/{NOTE}.json")].clone());
-    assert_eq!(format::read(&files).unwrap(), board);
+    assert_eq!(format::read(&files).unwrap().board, board);
 }
 
 #[test]
@@ -1185,28 +1195,169 @@ fn an_overwrite_leaves_the_folder_holding_this_board_alone() {
     let files = format::write(&theirs).unwrap();
     let known = Known::new(files.keys().cloned().collect::<Vec<_>>(), files);
 
-    let save = known.overwrite(&ours).unwrap();
+    let save = known.overwrite(&ours, []).unwrap();
     let written: Vec<&str> = save.files.iter().map(|(path, _)| path.as_str()).collect();
     assert_eq!(written, [format!("elements/{NOTE}.json")]);
     assert_eq!(save.deletions, [format!("elements/{added}.json")]);
 }
 
 #[test]
-fn a_damaged_element_file_is_named() {
+fn a_damaged_element_file_is_left_out_and_named() {
     let path = format!("elements/{NOTE}.json");
     let files = format::write(&sample()).unwrap();
     let good = String::from_utf8(files[&path].clone()).unwrap();
     let conflicted = format!("<<<<<<< ours\n{good}=======\n{good}>>>>>>> theirs\n");
-    for damaged in [
-        conflicted.as_bytes(),
-        &good.as_bytes()[..good.len() / 2],
-        b"",
+    for (damaged, conflict) in [
+        (conflicted.as_bytes(), true),
+        (&good.as_bytes()[..good.len() / 2], false),
+        (b"", false),
     ] {
         let mut files = files.clone();
         files.insert(path.clone(), damaged.to_vec());
+        let reading = format::read(&files).unwrap();
+        let [left_out] = &reading.left_out[..] else {
+            panic!("{:?}", reading.left_out)
+        };
+        assert_eq!(left_out.path, path);
+        assert_eq!(matches!(left_out.error, Error::Conflict(_)), conflict);
+        assert!(!reading.board.elements.contains_key(&NOTE));
+        assert_eq!(reading.board.elements.len(), sample().elements.len() - 1);
+    }
+}
+
+#[test]
+fn a_board_file_that_cannot_be_read_refuses_the_board() {
+    let files = format::write(&sample()).unwrap();
+    let good = String::from_utf8(files["board.json"].clone()).unwrap();
+    let conflicted = format!("<<<<<<< ours\n{good}=======\n{good}>>>>>>> theirs\n");
+    for (manifest, text) in [
+        (
+            conflicted.as_str(),
+            "`board.json` holds an unresolved Git conflict",
+        ),
+        (
+            r#"{ "version": 1, "unknown": 1 }"#,
+            "unknown field `unknown`",
+        ),
+        (r#"{ "version": 1"#, "EOF"),
+    ] {
+        let mut files = files.clone();
+        files.insert("board.json".to_owned(), manifest.as_bytes().to_vec());
+        let error = format::read(&files).unwrap_err();
+        assert!(error.to_string().contains(text), "{error}");
+    }
+    // A later version may hold keys this one refuses.
+    let mut files = files;
+    files.insert(
+        "board.json".to_owned(),
+        br#"{ "version": 2, "future": true }"#.to_vec(),
+    );
+    assert!(matches!(
+        format::read(&files),
+        Err(Error::UnsupportedVersion(2))
+    ));
+}
+
+#[test]
+fn an_unknown_key_leaves_the_file_out_and_names_the_key() {
+    let group = ElementId::from_random(1);
+    // Deep in a note, and in a group.
+    for (id, at) in [(NOTE, &["kind", "text"][..]), (group, &["kind"])] {
+        let path = format!("elements/{id}.json");
+        let mut files = format::write(&sample()).unwrap();
+        let mut element: serde_json::Value = serde_json::from_slice(&files[&path]).unwrap();
+        let held = at.iter().fold(&mut element, |value, key| &mut value[*key]);
+        held["glow"] = serde_json::json!("red");
+        files.insert(path.clone(), serde_json::to_vec(&element).unwrap());
+        let reading = format::read(&files).unwrap();
+        let [left_out] = &reading.left_out[..] else {
+            panic!("{:?}", reading.left_out)
+        };
+        let error = left_out.error.to_string();
         assert!(
-            matches!(format::read(&files), Err(Error::Json { path: named, .. }) if named == path)
+            error.contains("unknown field `glow`") && error.contains(&path),
+            "{error}"
         );
+    }
+}
+
+#[test]
+fn an_overwrite_never_deletes_a_file_that_is_left_out() {
+    let ours = sample();
+    let mut theirs = sample();
+    let added = ElementId::from_random(42);
+    theirs.elements.insert(added, note(None, "Theirs"));
+    // Left out when read, and fixed since.
+    let fixed = ElementId::from_random(44);
+    theirs.elements.insert(fixed, note(None, "Resolved"));
+    let mut files = format::write(&theirs).unwrap();
+    // Left out if read now.
+    let conflicted = ElementId::from_random(43);
+    files.insert(
+        format!("elements/{conflicted}.json"),
+        b"<<<<<<< ours\n".to_vec(),
+    );
+    let known = Known::new(files.keys().cloned().collect::<Vec<_>>(), files);
+
+    let left_out = format!("elements/{fixed}.json");
+    let save = known.overwrite(&ours, [left_out.as_str()]).unwrap();
+    assert_eq!(save.deletions, [format!("elements/{added}.json")]);
+}
+
+#[test]
+fn what_repair_cut_from_files_left_out_is_written_as_read_until_edited() {
+    let group = ElementId::from_random(1);
+    let mut files = format::write(&sample()).unwrap();
+    for id in [group, STICKY] {
+        files.insert(format!("elements/{id}.json"), b"<<<<<<< ours\n".to_vec());
+    }
+    let reading = format::read(&files).unwrap();
+    // Out of the group and free of the sticky note in memory, though not in their files.
+    assert_eq!(reading.board.elements[&NOTE].group, None);
+    assert!(!reading.board.repaired.is_empty());
+    let written = format::write(&reading.board).unwrap();
+    for id in reading.board.elements.keys() {
+        let path = format!("elements/{id}.json");
+        assert_eq!(written[&path], files[&path], "{path}");
+    }
+    let known = Known::new(files.keys().cloned().collect::<Vec<_>>(), files.clone());
+    let left_out = reading.left_out.iter().map(|left| left.path.as_str());
+    let kept = known.overwrite(&reading.board, left_out).unwrap();
+    assert!(kept.files.is_empty() && kept.deletions.is_empty());
+
+    let mut edited = reading.board.clone();
+    edited.elements.get_mut(&NOTE).unwrap().z = z("a9");
+    let note = &format::write(&edited).unwrap()[&format!("elements/{NOTE}.json")];
+    assert!(!String::from_utf8_lossy(note).contains("\"group\""));
+}
+
+#[test]
+fn a_cycle_broken_on_read_reads_back_as_edited() {
+    let [first, second] = [50, 51].map(ElementId::from_random);
+    // In a group another branch deleted, which they stay in once written.
+    let gone = Some(ElementId::from_random(52));
+    let mut board = Board::default();
+    for (id, target) in [(first, second), (second, first)] {
+        let mut stuck = note(gone, "Stuck");
+        if let ElementKind::Note { target: to, .. } = &mut stuck.kind {
+            *to = Some(target);
+        }
+        board.elements.insert(id, stuck);
+    }
+    let target = |board: &Board, id| match &board.elements[&id].kind {
+        ElementKind::Note { target, .. } => *target,
+        _ => unreachable!(),
+    };
+    let mut read = format::read(&format::write(&board).unwrap()).unwrap().board;
+    assert_eq!(target(&read, first), None);
+    if let ElementKind::Note { target, .. } = &mut read.elements.get_mut(&second).unwrap().kind {
+        *target = None;
+    }
+    let written = format::write(&read).unwrap();
+    assert!(String::from_utf8_lossy(&written[&format!("elements/{first}.json")]).contains("group"));
+    let again = format::read(&written).unwrap().board;
+    for id in [first, second] {
+        assert_eq!(target(&again, id), None, "{id}");
     }
 }
 
@@ -1216,7 +1367,7 @@ fn a_broken_structure_reads_back_repaired() {
     board.elements.get_mut(&NOTE).unwrap().group = Some(ElementId::from_random(99));
     // As another branch would delete it.
     board.elements.remove(&STICKY);
-    let read = format::read(&format::write(&board).unwrap()).unwrap();
+    let read = format::read(&format::write(&board).unwrap()).unwrap().board;
     assert_eq!(read.elements[&NOTE].group, None);
     let ElementKind::Arrow { to_target, .. } = &read.elements[&ARROW].kind else {
         unreachable!()
@@ -1267,7 +1418,7 @@ fn load(folder: &Path) -> Files {
 #[test]
 fn the_demo_board_reads_back_as_written() {
     let files = load(&samples().join("demo"));
-    let board = format::read(&files).unwrap();
+    let board = format::read(&files).unwrap().board;
 
     let mut written = format::write(&board).unwrap();
     let (path, bytes) = format::git_attributes();
@@ -1303,11 +1454,11 @@ fn the_demo_board_reads_back_as_written() {
 /// Zips a board the way a shell does: its files from `format::write`, its assets from
 /// `files`.
 fn zip_of(files: &Files) -> format::Result<Vec<u8>> {
-    let board = format::read(files)?;
+    let board = format::read(files)?.board;
     let written = format::write(&board)?;
     let mut writer = zip::Writer::new();
     let mut out = Vec::new();
-    for path in zip::paths(&board)? {
+    for path in zip::paths(&board, [], [])? {
         let bytes = written.get(&path).unwrap_or_else(|| &files[&path]);
         out.extend(header(&mut writer, &path, bytes)?);
         out.extend_from_slice(bytes);
@@ -1481,7 +1632,7 @@ fn a_zip_holds_only_the_board_and_the_assets_it_draws() {
     let orphan = format::asset_path(AssetId::of(b"drawn by nothing"));
     files.insert(orphan.clone(), b"drawn by nothing".to_vec());
     // First, so that Git reads it before any file it applies to.
-    assert_eq!(zip::paths(&board).unwrap()[0], ".gitattributes");
+    assert_eq!(zip::paths(&board, [], []).unwrap()[0], ".gitattributes");
 
     let unzipped = unzip(&zip_of(&files).unwrap()).unwrap();
     files.remove(&orphan);
@@ -1997,16 +2148,67 @@ fn bytes_of_another_size_are_refused_even_with_their_checksum() {
 }
 
 #[test]
-fn a_board_missing_an_asset_its_images_show_is_refused() {
+fn an_asset_the_folder_lacks_is_missing() {
     let board = sample();
     let asset = format::asset_path(AssetId::of(IMAGE));
     let listed = ["board.json", "assets/0000", asset.as_str()];
-    format::check_assets(&board, listed).unwrap();
-    let error = format::check_assets(&board, ["board.json", "assets/0000"]).unwrap_err();
-    assert!(matches!(error, Error::MissingAsset(missing) if missing == AssetId::of(IMAGE)));
+    assert!(format::missing_assets(&board, listed).is_empty());
     assert_eq!(
-        error.to_string(),
-        format!("asset {} is missing", AssetId::of(IMAGE))
+        format::missing_assets(&board, ["board.json", "assets/0000"]),
+        [AssetId::of(IMAGE)]
     );
-    format::check_assets(&Board::default(), []).unwrap();
+    assert!(format::missing_assets(&Board::default(), []).is_empty());
+}
+
+#[test]
+fn a_zip_carries_what_the_board_left_out_byte_for_byte() {
+    let board = sample();
+    let mut files = format::write(&board).unwrap();
+    let asset = format::asset_path(AssetId::of(IMAGE));
+    let pointer = b"version https://git-lfs.github.com/spec/v1\n".to_vec();
+    files.insert(asset.clone(), pointer.clone());
+    let conflicted = format!("elements/{}.json", ElementId::from_random(43));
+    files.insert(conflicted.clone(), b"<<<<<<< ours\n".to_vec());
+
+    let carried = [asset.as_str(), conflicted.as_str()];
+    let paths = zip::paths(&board, carried, []).unwrap();
+    assert!(paths.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(paths.contains(&conflicted) && paths.contains(&asset));
+
+    let mut writer = zip::Writer::new();
+    let mut out = Vec::new();
+    for path in &paths {
+        let bytes = files.get(path).unwrap();
+        let crc = zip::Crc32::of(bytes);
+        let header = if carried.contains(&path.as_str()) {
+            writer.carried(path, bytes.len() as u64, crc)
+        } else {
+            writer.entry(path, bytes.len() as u64, crc, None)
+        };
+        out.extend(header.unwrap());
+        out.extend_from_slice(bytes);
+    }
+    out.extend(writer.finish().unwrap());
+    let unzipped = unzip(&out).unwrap();
+    assert_eq!(unzipped[&conflicted], b"<<<<<<< ours\n");
+    assert_eq!(unzipped[&asset], pointer);
+
+    let mut writer = zip::Writer::new();
+    assert!(matches!(
+        writer.entry(&asset, 1, 0, Some(AssetId::of(&pointer))),
+        Err(Error::CorruptAsset(_))
+    ));
+    assert!(
+        !zip::paths(&board, [], [asset.as_str()])
+            .unwrap()
+            .contains(&asset)
+    );
+    assert!(matches!(
+        zip::paths(&board, ["../board.json"], []),
+        Err(Error::UnsafePath(_))
+    ));
+    assert!(matches!(
+        zip::Writer::new().carried("assets/not-a-digest", 0, 0),
+        Err(Error::InvalidName(_))
+    ));
 }

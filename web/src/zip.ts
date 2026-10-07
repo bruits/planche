@@ -1,7 +1,7 @@
 // A board's single ZIP file. The core says which bytes it needs, and they are read or
 // written a slice at a time, so that a large board never sits whole in memory.
 
-import { digest } from "./board.js";
+import { carried, digest, type Source } from "./board.js";
 import * as core from "./core.js";
 import type { Bytes, Snapshot } from "./core.js";
 import type { Folder, Sink, Slices } from "./platform.js";
@@ -71,20 +71,27 @@ async function inflate(path: string, data: Bytes, size: number): Promise<Bytes> 
 }
 
 /**
- * Writes the board's ZIP file into `sink`, its assets read from `folder` one at a time, and
- * returns how many files it holds. Leaves no trace when it throws.
+ * Writes the board's ZIP file into `sink`, its assets and the files it left out read from
+ * `folder` one at a time, and returns how many files it holds. Leaves no trace when it throws.
  */
-export async function writeZip(snapshot: Snapshot, folder: Folder, sink: Sink): Promise<number> {
+export async function writeZip(snapshot: Snapshot, folder: Source, sink: Sink): Promise<number> {
   let count: number;
   try {
-    const paths = snapshot.zipPaths();
+    const paths = snapshot.zipPaths(await carried(folder), [...folder.lacking]);
     const files = core.write(snapshot);
     const writer = new core.ZipWriter();
     for (const path of paths) {
       const bytes = files.get(path) ?? (await folder.read(path));
+      const [size, crc] = [bytes.length, core.crc32(bytes)];
       const found = core.isAssetFile(path) ? await digest(bytes) : undefined;
+      // An asset unlike its digest, which its images show crossed out, goes as it was read. A
+      // ZIP file's bytes passed its checksum, and those added since are named by their digest.
+      const header =
+        found === undefined || core.matchesDigest(path, found)
+          ? writer.entry(path, size, crc, found)
+          : writer.carried(path, size, crc);
       // wasm-bindgen types the bytes it copies out loosely.
-      await sink.append(writer.entry(path, bytes.length, core.crc32(bytes), found) as Bytes);
+      await sink.append(header as Bytes);
       await sink.append(bytes);
     }
     await sink.append(writer.finish() as Bytes);

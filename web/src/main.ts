@@ -2386,10 +2386,10 @@ function fleeting(): Saving | undefined {
   return (saver.store.session ? ownFiles : !ownFiles) ? saver : undefined;
 }
 
-async function show(next: Opened, camera?: Camera): Promise<void> {
+async function show(next: Opened, camera?: Camera): Promise<string | undefined> {
   halfDrawn = true;
   try {
-    await present.show(next, camera);
+    return await present.show(next, camera);
   } finally {
     halfDrawn = false;
   }

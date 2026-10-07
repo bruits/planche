@@ -10,7 +10,7 @@ A board saves a second after the last edit, or ten seconds after the first while
 
 The session is OPFS in a browser and the app's data folder on desktop. One window holds it at a time, through a Web Lock or a lock file, and only that window decides what the next launch reopens. On desktop the page reaches only paths the user picked, so the shell remembers the last board's path and grants it again at launch.
 
-In a folder the user opened, the shell writes only a board's files, deletes only element files, and never overwrites an asset. Its first save adds the board's `.gitattributes` when the folder lacks one, and never touches one there. A session gets none.
+In a folder the user opened, the shell writes only a board's files, deletes only element files, and never overwrites an asset. It never writes over or deletes an element file the board left out, and copies those files into a folder that lacks them. A save goes without the assets the folder lacked when the board opened. Its first save adds the board's `.gitattributes` when the folder lacks one, and never touches one there. A session gets none.
 
 ## How
 

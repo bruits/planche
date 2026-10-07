@@ -13,7 +13,7 @@ import type { Camera } from "./camera.js";
 import * as core from "./core.js";
 import type { Bytes } from "./core.js";
 import { showing, type Host, type Showing } from "./showing.js";
-import { memoryHome, sample } from "../test/folders.js";
+import { lfsPointer, memoryHome, sample } from "../test/folders.js";
 
 /** The demo's images, from the largest to the smallest on screen. */
 const LARGEST = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
@@ -117,18 +117,39 @@ describe("showing", () => {
     ]);
   });
 
-  it("shows nothing of a board whose image is unlike its digest, and says why it fails", async () => {
-    const { host } = view();
-    const board = await demo((files) => tamper(files, MIDDLE));
-    await expect(showing(host).show(board)).rejects.toThrow(
-      `asset ${MIDDLE} does not match its digest`,
+  it("crosses out the images whose files are missing or unlike their digests, saying why", async () => {
+    const { host, said, crossed, loaded } = view();
+    const board = await demo((files) => {
+      files.delete(`assets/${LARGEST}`);
+      tamper(files, MIDDLE);
+      const smallest = files.get(`assets/${SMALLEST}`)!;
+      files.set(`assets/${SMALLEST}`, new TextEncoder().encode(lfsPointer(smallest)));
+    });
+    const wrong = await showing(host).show(board);
+    expect(crossed.toSorted()).toEqual([LARGEST, MIDDLE, SMALLEST].toSorted());
+    expect(loaded).toEqual([]);
+    expect(wrong).toBe(
+      "an image whose file is missing, and an image left as a Git LFS pointer, so run " +
+        "`git lfs pull`, and an image whose file differs from its digest",
     );
-    expect(host.abandon).toHaveBeenCalledOnce();
+    expect(said.at(-1)).toEqual([`demo: 13 elements, ${wrong}`, undefined]);
+    expect(host.abandon).not.toHaveBeenCalled();
+  });
+
+  it("says which files it left out", async () => {
+    const { host, said } = view();
+    const board = await demo((files) => files.set(`elements/${STICKY}.json`, new Uint8Array()));
+    const wrong = await showing(host).show(board);
+    expect(wrong).toMatch(/^a file left out, as `elements\/b7d4.*\.json` is not valid: EOF/);
+    expect(said.at(-1)).toEqual([`demo: 12 elements, ${wrong}`, undefined]);
   });
 
   it("ends where it began what the user started on a board that fails to show", async () => {
     const { host } = view();
-    const board = await demo((files) => tamper(files, MIDDLE));
+    const board = await demo();
+    host.load = () => {
+      throw new TypeError("the app's own fault");
+    };
     const at = () => {
       const kind = core.element(board.editor, STICKY)?.kind;
       return kind?.type === "sticky" ? kind.frame.x : undefined;
@@ -140,7 +161,8 @@ describe("showing", () => {
       next.editor.translate([STICKY], 40, 0);
       return { kind: "renderer" };
     };
-    await expect(showing(host).show(board)).rejects.toThrow("does not match its digest");
+    await expect(showing(host).show(board)).rejects.toThrow("the app's own fault");
+    expect(host.abandon).toHaveBeenCalledOnce();
     expect(at()).toBe(before);
     expect(board.editor.canUndo()).toBe(false);
   });
@@ -214,6 +236,22 @@ describe("showing, once an image fails to load", () => {
       throw new TypeError("load is not a function");
     };
     await expect(showing(host).show(await demo())).rejects.toThrow(TypeError);
+    expect(crossed).toEqual([]);
+    expect(host.abandon).toHaveBeenCalledOnce();
+  });
+
+  it("fails the opening when the core panics reading an image", async () => {
+    const { host, crossed } = view();
+    const { home } = memoryHome("demo", sample("demo"));
+    const { read } = home;
+    home.read = async (path) => {
+      if (path === `assets/${MIDDLE}`) {
+        throw new WebAssembly.RuntimeError("unreachable");
+      }
+      return read(path);
+    };
+    const board = (await open(async () => home, new Map()))!.opened;
+    await expect(showing(host).show(board)).rejects.toThrow(WebAssembly.RuntimeError);
     expect(crossed).toEqual([]);
     expect(host.abandon).toHaveBeenCalledOnce();
   });
@@ -312,8 +350,8 @@ describe("showing images again", () => {
     await reloaded(present);
     expect(crossed).toEqual([MIDDLE]);
     expect(loaded.toSorted()).toEqual([LARGEST, SMALLEST].toSorted());
-    expect(said.at(-1)?.[0]).toContain(
-      `An image could not be read again: asset ${MIDDLE} does not match its digest`,
+    expect(said.at(-1)?.[0]).toBe(
+      "An image could not be read again: its file differs from its digest",
     );
     expect(host.abandon).not.toHaveBeenCalled();
   });

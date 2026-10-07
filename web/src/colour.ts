@@ -6,6 +6,7 @@ import {
   decode,
   files,
   readAsset,
+  Unreadable,
   release,
   type Asset,
   type Decoded,
@@ -22,8 +23,8 @@ type Colour = [number, number, number];
 const SIDE = 32;
 
 /**
- * By the id of each image among `ids`, in sRGB, but for those that show nothing opaque, and those
- * this machine cannot decode or play. Throws when an asset is missing or does not match its digest.
+ * By the id of each image among `ids`, in sRGB, but for those that show nothing opaque, those
+ * this machine cannot decode or play, and those whose files are missing or unlike their digests.
  */
 export async function meanColours(opened: Opened, ids: string[]): Promise<Record<string, Colour>> {
   const images = new Map<string, Image>();
@@ -36,7 +37,15 @@ export async function meanColours(opened: Opened, ids: string[]): Promise<Record
   const assets = new Map<string, Asset>();
   for (const { asset, natural_size } of images.values()) {
     if (!assets.has(asset)) {
-      assets.set(asset, await readAsset(files(opened), asset, natural_size));
+      const read = await readAsset(files(opened), asset, natural_size).catch((error: unknown) => {
+        if (error instanceof Unreadable) {
+          return undefined;
+        }
+        throw error;
+      });
+      if (read) {
+        assets.set(asset, read);
+      }
     }
   }
   const decoded = await decode([...assets.values()], SIDE);

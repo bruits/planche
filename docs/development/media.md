@@ -10,7 +10,7 @@ The browser decodes images off the main thread with `createImageBitmap`. It beat
 - Four images load at a time, the largest on screen first, and each shows once uploaded. 100 photos of 12 MP show their first in 0.2 s and all in 4.3 s, in Chromium on an Apple M5 Pro.
 - A texture goes once no image draws its asset. Undo, redo, or an agent bringing it back reads and decodes it again, about 60 ms a photo.
 - Mipmaps are made on the GPU into `Rgba8UnormSrgb` textures, so filtering and greyscale work in linear light.
-- An image this machine cannot decode shows crossed out. A missing asset, or one that differs from its digest, keeps the board from opening, since saving it would fail.
+- An image this machine cannot decode, whose asset is missing, or whose asset differs from its digest, shows crossed out. Only the app's own faults keep a board from showing.
 
 The next steps are set and not built. The core will plan which images stay on the GPU within a memory budget, from the camera, keeping a coarse level of every image and never evicting what shows. Levels of detail will be whole images at halving sizes, tiles will cover images past the texture limit, and caches of derived levels will stay out of the board, keyed by digest. Native decoding on desktop, more Rust decoders in WASM, GPU texture compression, and rendering in a worker come only if measurements call for them. WASM threads are out for now, as they need nightly Rust and a cross-origin isolation that WKWebView may not grant under `tauri://`. So is decoding HEIC or AVIF in Rust, for want of a decoder under a permissive licence.
 

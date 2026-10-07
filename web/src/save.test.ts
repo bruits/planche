@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { open, untitled } from "./board.js";
+import { files as filesOf, open, untitled, type Source } from "./board.js";
 import * as core from "./core.js";
-import type { Folder, Home } from "./platform.js";
+import type { Home } from "./platform.js";
 import { folderStore, saving, type Reloaded, type SavingHooks, type Store } from "./save.js";
 import { memoryHome, sample } from "../test/folders.js";
 
@@ -55,7 +55,7 @@ function hooks({ keepTheirs = false } = {}) {
   const { editor } = untitled();
   const around: SavingHooks = {
     snapshot: () => editor.snapshot(),
-    source: () => ({}) as Folder,
+    source: () => ({}) as Source,
     saved() {},
     failed: (reason) => void failed.push(reason),
     conflict: asked,
@@ -308,6 +308,8 @@ describe("saving", () => {
 
 const STICKY = "b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74";
 const NOTE = "47b0c6e291d84f138a5c3e7fd06b2491";
+const ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
+const CONFLICTED = new TextEncoder().encode("<<<<<<< ours\n");
 
 async function demo(home: Home, session = false) {
   const { opened, reading } = (await open(async () => home, new Map()))!;
@@ -315,12 +317,12 @@ async function demo(home: Home, session = false) {
   const save = async (touched: string[]) => {
     const snapshot = opened.editor.snapshot();
     try {
-      return await store.save(snapshot, touched, () => home);
+      return await store.save(snapshot, touched, () => filesOf(opened));
     } finally {
       snapshot.free();
     }
   };
-  return { editor: opened.editor, store, save };
+  return { editor: opened.editor, store, save, source: () => filesOf(opened) };
 }
 
 describe("folderStore", () => {
@@ -333,6 +335,67 @@ describe("folderStore", () => {
     const changed = [...files.keys()].filter((path) => files.get(path) !== before.get(path));
     // With the `.gitattributes` the folder lacked.
     expect(changed.toSorted()).toEqual([".gitattributes", `elements/${STICKY}.json`]);
+  });
+
+  it("never writes or deletes a file the board left out, even keeping its own changes", async () => {
+    const contents = sample("demo");
+    const resolved = contents.get(`elements/${NOTE}.json`)!;
+    contents.set(`elements/${NOTE}.json`, CONFLICTED);
+    const { home, files: held, written, removed } = memoryHome("demo", contents);
+    const { editor, store, save, source } = await demo(home);
+    expect(await save(editor.translate([STICKY], 10, 0))).toBe(true);
+    const keepMine = async () => {
+      const snapshot = editor.snapshot();
+      try {
+        await store.overwrite(snapshot, source);
+      } finally {
+        snapshot.free();
+      }
+    };
+    await keepMine();
+    expect(held.get(`elements/${NOTE}.json`)).toBe(CONFLICTED);
+    // Resolved by hand meanwhile.
+    held.set(`elements/${NOTE}.json`, resolved);
+    await keepMine();
+    expect(held.get(`elements/${NOTE}.json`)).toBe(resolved);
+    expect(written).not.toContain(`elements/${NOTE}.json`);
+    expect(removed).toEqual([]);
+  });
+
+  it("keeps its own changes once another program removed a file the board left out", async () => {
+    const contents = sample("demo");
+    contents.set(`elements/${NOTE}.json`, CONFLICTED);
+    const { home, files: held, written } = memoryHome("demo", contents);
+    const { editor, store, source } = await demo(home);
+    // As `git merge --abort` would.
+    held.delete(`elements/${NOTE}.json`);
+    editor.translate([STICKY], 10, 0);
+    const snapshot = editor.snapshot();
+    try {
+      await store.overwrite(snapshot, source);
+    } finally {
+      snapshot.free();
+    }
+    expect(written).toContain(`elements/${STICKY}.json`);
+    expect(held.has(`elements/${NOTE}.json`)).toBe(false);
+  });
+
+  it("copies into a folder the files the board left out, but not the images it lacks", async () => {
+    const contents = sample("demo");
+    contents.set(`elements/${NOTE}.json`, CONFLICTED);
+    contents.delete(`assets/${ASSET}`);
+    const { opened } = (await open(async () => memoryHome("demo", contents).home, new Map()))!;
+    const target = memoryHome("copy");
+    const store = await folderStore(target.home, undefined, false);
+    const snapshot = opened.editor.snapshot();
+    try {
+      const all = Object.keys(opened.board.elements);
+      expect(await store.save(snapshot, all, () => filesOf(opened))).toBe(true);
+    } finally {
+      snapshot.free();
+    }
+    expect(target.files.get(`elements/${NOTE}.json`)).toEqual(CONFLICTED);
+    expect(target.files.has(`assets/${ASSET}`)).toBe(false);
   });
 
   it("gives a folder lacking a board's .gitattributes one, and leaves its user's alone", async () => {

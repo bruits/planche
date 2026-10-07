@@ -26,7 +26,7 @@ import type { Placed } from "./renderer.js";
 import type { Slices, ZipHome } from "./platform.js";
 import { saving, zipStore } from "./save.js";
 import { zipFolder } from "./zip.js";
-import { memoryHome, sample, SAMPLES } from "../test/folders.js";
+import { lfsPointer, memoryHome, sample, SAMPLES } from "../test/folders.js";
 
 const bytes = (text: string): Bytes => new TextEncoder().encode(text);
 
@@ -35,11 +35,45 @@ const ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.
 const NATURAL = { width: 320, height: 240 };
 
 describe("open", () => {
-  it("refuses a board one of whose images is missing", async () => {
+  it("opens a board one of whose images is missing, which it goes without until added again", async () => {
     const files = sample("demo");
+    const held = files.get(`assets/${ASSET}`)!;
     files.delete(`assets/${ASSET}`);
     const { home } = memoryHome("demo", files);
-    await expect(open(async () => home, new Map())).rejects.toThrow(`asset ${ASSET} is missing`);
+    const { opened } = (await open(async () => home, new Map()))!;
+    expect(opened.missing).toEqual(new Set([`assets/${ASSET}`]));
+    const source = filesOf(opened);
+    expect(source.lacking).toEqual([`assets/${ASSET}`]);
+    await expect(source.read(`assets/${ASSET}`)).rejects.toMatchObject({ reason: "missing" });
+
+    opened.added.set(`assets/${ASSET}`, new Blob([held]));
+    expect(filesOf(opened).lacking).toEqual([]);
+    expect(await filesOf(opened).read(`assets/${ASSET}`)).toEqual(held);
+  });
+
+  it("leaves out the element files it cannot read, saying why, and carries only its own", async () => {
+    const files = sample("demo");
+    const [conflicted] = [...files.keys()].filter((path) => path.startsWith("elements/"));
+    const id = conflicted!.slice("elements/".length, -".json".length);
+    const theirs = new TextDecoder().decode(files.get(conflicted!));
+    files.set(conflicted!, bytes(`<<<<<<< ours\n${theirs}=======\n${theirs}>>>>>>> theirs\n`));
+    const stray = `elements/${id} (conflicted copy).json`;
+    files.set(stray, files.get(conflicted!)!);
+    const { home } = memoryHome("demo", files);
+    const { opened } = (await open(async () => home, new Map()))!;
+    expect(opened.board.elements[id]).toBeUndefined();
+    expect(opened.leftOut.get(conflicted!)).toBe(
+      `\`${conflicted}\` holds an unresolved Git conflict`,
+    );
+    expect(opened.leftOut.get(stray)).toContain("belongs to no element");
+    expect(filesOf(opened).leftOut).toEqual([conflicted]);
+  });
+
+  it("refuses a board whose board.json it cannot read", async () => {
+    const files = sample("demo");
+    files.set("board.json", bytes('{ "version": 1, "colour": "red" }'));
+    const { home } = memoryHome("demo", files);
+    await expect(open(async () => home, new Map())).rejects.toThrow("unknown field `colour`");
   });
 });
 
@@ -51,13 +85,19 @@ describe("readAsset", () => {
     expect(read.blob.size).toBe(readFileSync(join(SAMPLES, "demo/assets", ASSET)).length);
   });
 
-  it("refuses an asset whose bytes do not match its digest", async () => {
+  it("refuses an asset whose bytes do not match its digest, telling a Git LFS pointer", async () => {
     const files = sample("demo");
     files.get(`assets/${ASSET}`)![100]! ^= 0xff;
     const { home } = memoryHome("demo", files);
-    await expect(readAsset(home, ASSET, NATURAL)).rejects.toThrow(
-      `asset ${ASSET} does not match its digest`,
-    );
+    await expect(readAsset(home, ASSET, NATURAL)).rejects.toMatchObject({
+      reason: "differs",
+      message: "its file differs from its digest",
+    });
+    files.set(`assets/${ASSET}`, bytes(lfsPointer(files.get(`assets/${ASSET}`)!)));
+    await expect(readAsset(home, ASSET, NATURAL)).rejects.toMatchObject({
+      reason: "pointer",
+      message: "its file is a Git LFS pointer, so run `git lfs pull`",
+    });
   });
 
   it("tells what an asset holds from as little of it as tells", async () => {

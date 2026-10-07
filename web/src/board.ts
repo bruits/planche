@@ -22,8 +22,31 @@ export interface Opened {
    * that undo or redo may bring back.
    */
   added: Map<string, Blob>;
+  /** The files of its folder it left out, by path, with why. All but strays travel with it as they are. */
+  leftOut: ReadonlyMap<string, string>;
+  /** The paths of the assets its images show that its folder lacks. */
+  missing: ReadonlySet<string>;
   /** What its elements draw, as the core gives it, until `refresh` finds them touched. */
   drawn: Drawn;
+}
+
+/**
+ * A board's files as they stand, with the element files it left out, which a copy of the board
+ * takes as they are, and the assets its images show that none holds, which it goes without.
+ */
+export interface Source extends Folder {
+  leftOut: readonly string[];
+  lacking: readonly string[];
+}
+
+/** Why an image shows crossed out, its file being missing or unlike its digest. */
+export class Unreadable extends Error {
+  readonly reason: "missing" | "pointer" | "differs";
+
+  constructor(reason: Unreadable["reason"], text: string) {
+    super(text);
+    this.reason = reason;
+  }
 }
 
 /** Each element's items, with the images of `crossedOut` crossed out. */
@@ -33,6 +56,9 @@ interface Drawn {
 }
 
 const NONE: ReadonlySet<string> = new Set();
+
+/** How a Git LFS pointer starts, which a clone made without Git LFS holds in place of a file. */
+const LFS = "version https://git-lfs.github.com/spec/v1";
 
 /**
  * A bitmap capped as `decode` caps them, or a video's first frame, or an SVG, which is
@@ -105,18 +131,17 @@ export async function open<T extends Folder>(
     return contents;
   });
   const [editor, parsing] = await timed(() => core.read(read));
-  // Found before it takes the open board's place, as showing it would fail.
-  try {
-    editor.checkAssets(listed);
-  } catch (error) {
-    editor.free();
-    throw error;
+  const leftOut = new Map(editor.leftOut() as Map<string, string>);
+  for (const stray of listed.filter(core.isStrayElement)) {
+    leftOut.set(stray, `\`${stray}\` belongs to no element, such as a sync tool's conflicted copy`);
   }
   const opened = {
     folder,
     editor,
     board: core.board(editor),
     added: new Map<string, Blob>(),
+    leftOut,
+    missing: new Set(editor.missingAssets(listed).map(core.assetPath)),
     drawn: { crossedOut: NONE, items: new Map() },
   };
   timings.clear();
@@ -144,18 +169,37 @@ export function untitled(): Opened {
     editor,
     board: core.board(editor),
     added: new Map(),
+    leftOut: new Map(),
+    missing: new Set(),
     drawn: { crossedOut: NONE, items: new Map() },
   };
 }
 
+/** The files `source` left out that its folder still holds, as another program may remove one. */
+export async function carried(source: Source): Promise<string[]> {
+  if (source.leftOut.length === 0) {
+    return [];
+  }
+  const listed = new Set(await source.list(core.fileDepth()));
+  return source.leftOut.filter((path) => listed.has(path));
+}
+
 /** Its files as they stand: its folder's, and the assets of the images added since. */
-export function files({ folder, added }: Opened): Folder {
+export function files({ folder, added, leftOut, missing }: Opened): Source {
   return {
     ...folder,
     read: async (path) => {
       const blob = added.get(path);
-      return blob ? new Uint8Array(await blob.arrayBuffer()) : folder.read(path);
+      if (blob) {
+        return new Uint8Array(await blob.arrayBuffer());
+      }
+      if (missing.has(path)) {
+        throw new Unreadable("missing", "its file is missing");
+      }
+      return folder.read(path);
     },
+    leftOut: [...leftOut.keys()].filter((path) => !core.isStrayElement(path)),
+    lacking: [...missing].filter((path) => !added.has(path)),
   };
 }
 
@@ -691,10 +735,15 @@ export function assetPlayback(board: Board): Map<string, Pick<core.ImageEdits, "
   return played;
 }
 
-/** Throws when it is missing or does not match its digest. */
+/** Throws `Unreadable` when it is missing or does not match its digest. */
 export async function readAsset(folder: Folder, asset: string, natural: Size): Promise<Asset> {
-  const bytes = await folder.read(core.assetPath(asset));
-  core.verifyAsset(asset, await digest(bytes));
+  const path = core.assetPath(asset);
+  const bytes = await folder.read(path);
+  if (!core.matchesDigest(path, await digest(bytes))) {
+    throw new TextDecoder().decode(bytes.subarray(0, LFS.length)) === LFS
+      ? new Unreadable("pointer", "its file is a Git LFS pointer, so run `git lfs pull`")
+      : new Unreadable("differs", "its file differs from its digest");
+  }
   const start = core.mediaStart();
   const media =
     core.media(bytes.subarray(0, start), bytes.length <= start) ?? core.media(bytes, true)!;

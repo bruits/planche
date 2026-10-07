@@ -1,5 +1,6 @@
 // Boards' folders in memory, for tests to open, edit and save boards as the app does.
 
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import type { Bytes } from "../src/core.js";
@@ -22,6 +23,12 @@ export function sample(name: string): Map<string, Bytes> {
     }
   }
   return files;
+}
+
+/** What a clone made without Git LFS holds in place of `bytes`. */
+export function lfsPointer(bytes: Bytes): string {
+  const oid = createHash("sha256").update(bytes).digest("hex");
+  return `version https://git-lfs.github.com/spec/v1\noid sha256:${oid}\nsize ${bytes.length}\n`;
 }
 
 /**

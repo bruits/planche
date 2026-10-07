@@ -21,7 +21,7 @@ use board::{AssetId, Background, Board, Element, ElementId};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// Bumped by any change to the files' shape, since an older app would drop fields it does
+/// Bumped by any change to the files' shape, since an older app would refuse fields it does
 /// not know. From the first release on, [`read`] migrates every earlier version.
 pub const FORMAT_VERSION: u32 = 1;
 
@@ -51,8 +51,8 @@ pub enum Error {
         "asset {0} does not match its digest; if the board lives in Git, is Git LFS installed?"
     )]
     CorruptAsset(AssetId),
-    #[error("asset {0} is missing")]
-    MissingAsset(AssetId),
+    #[error("`{0}` holds an unresolved Git conflict")]
+    Conflict(String),
     #[error("`{0}` is not a path inside a board")]
     UnsafePath(String),
     #[error("this is not a ZIP file")]
@@ -77,7 +77,13 @@ const ELEMENTS: &str = "elements/";
 const ASSETS: &str = "assets/";
 const GIT_ATTRIBUTES: &str = ".gitattributes";
 
+#[derive(Deserialize)]
+struct Version {
+    version: u32,
+}
+
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Manifest {
     version: u32,
     /// Left out when plain, as on boards from before there was a choice.
@@ -91,8 +97,9 @@ pub fn write(board: &Board) -> Result<Files> {
     let (path, bytes) = git_attributes();
     let mut files = Files::from([(path.to_owned(), bytes)]);
     files.insert(MANIFEST.to_owned(), manifest_file(board.background));
-    for (id, element) in &board.elements {
-        files.insert(element_path(*id), element_file(*id, element)?);
+    for &id in board.elements.keys() {
+        let element = board.written(id).expect("on the board");
+        files.insert(element_path(id), element_file(id, element)?);
     }
     Ok(files)
 }
@@ -116,31 +123,70 @@ fn element_file(id: ElementId, element: &Element) -> Result<Vec<u8>> {
     }
 }
 
-/// Leaves out what [`is_stray_element`] tells apart. The board comes back repaired (see
+/// A board as [`read`] found it.
+#[derive(Debug)]
+pub struct Reading {
+    pub board: Board,
+    /// The element files it could not take, in path order, which the board lacks and the caller
+    /// keeps as they are.
+    pub left_out: Vec<LeftOut>,
+}
+
+/// An element file that [`read`] could not take, and why.
+#[derive(Debug)]
+pub struct LeftOut {
+    pub path: String,
+    /// [`Error::Conflict`], [`Error::Json`] with the key it refused, or [`Error::Invalid`].
+    pub error: Error,
+}
+
+/// Leaves out what [`is_stray_element`] tells apart, and each element file that holds a conflict
+/// or is not valid, which comes back in [`Reading::left_out`]. Refuses a board whose `board.json`
+/// is missing, not valid, or of another version. The board comes back repaired (see
 /// [`Board::repair`]), and its files only change when the caller writes it.
-pub fn read(files: &Files) -> Result<Board> {
-    let manifest: Manifest =
-        from_json(MANIFEST, files.get(MANIFEST).ok_or(Error::MissingManifest)?)?;
-    if manifest.version != FORMAT_VERSION {
-        return Err(Error::UnsupportedVersion(manifest.version));
-    }
+pub fn read(files: &Files) -> Result<Reading> {
+    let manifest = read_manifest(files)?;
 
     let mut board = Board {
         background: manifest.background,
         ..Board::default()
     };
+    let mut left_out = Vec::new();
     for (path, bytes) in files {
         let Some(id) = element_id(path) else {
             continue;
         };
-        let element: Element = from_json(path, bytes)?;
-        if !element.kind.is_valid() {
-            return Err(Error::Invalid(id));
+        match read_element(id, path, bytes) {
+            Ok(element) => {
+                board.elements.insert(id, element);
+            }
+            Err(error) => left_out.push(LeftOut {
+                path: path.clone(),
+                error,
+            }),
         }
-        board.elements.insert(id, element);
     }
     board.repair();
-    Ok(board)
+    Ok(Reading { board, left_out })
+}
+
+fn read_manifest(files: &Files) -> Result<Manifest> {
+    let bytes = files.get(MANIFEST).ok_or(Error::MissingManifest)?;
+    // Alone first, as a later version may hold keys this one refuses.
+    let Version { version } = from_json(MANIFEST, bytes)?;
+    if version != FORMAT_VERSION {
+        return Err(Error::UnsupportedVersion(version));
+    }
+    from_json(MANIFEST, bytes)
+}
+
+fn read_element(id: ElementId, path: &str, bytes: &[u8]) -> Result<Element> {
+    let element: Element = from_json(path, bytes)?;
+    if element.kind.is_valid() {
+        Ok(element)
+    } else {
+        Err(Error::Invalid(id))
+    }
 }
 
 /// How many segments deep board files go, such as `elements/<id>.json`, so that the caller
@@ -157,7 +203,8 @@ pub fn is_asset_file(path: &str) -> bool {
     asset_of(path).is_some()
 }
 
-fn asset_of(path: &str) -> Option<AssetId> {
+/// The asset that a file of `assets/` holds.
+pub fn asset_of(path: &str) -> Option<AssetId> {
     path.strip_prefix(ASSETS)?.parse().ok()
 }
 
@@ -198,16 +245,20 @@ pub fn asset_path(asset: AssetId) -> String {
     format!("{ASSETS}{asset}")
 }
 
-/// Refuses a board missing an asset its images show, the first of them in draw order, as `listed`,
-/// the paths of its folder, has them, since showing or saving it would fail.
-pub fn check_assets<'a>(board: &Board, listed: impl IntoIterator<Item = &'a str>) -> Result<()> {
+/// The assets that images show and `listed`, the paths of the folder, lacks, each once in draw
+/// order. Those images cannot draw, and saving must not try to copy their assets.
+pub fn missing_assets<'a>(
+    board: &Board,
+    listed: impl IntoIterator<Item = &'a str>,
+) -> Vec<AssetId> {
     let listed: BTreeSet<&str> = listed.into_iter().collect();
-    let missing = board
+    let mut seen = BTreeSet::new();
+    board
         .draw_order()
         .into_iter()
         .filter_map(|id| board.elements[&id].kind.asset())
-        .find(|asset| !listed.contains(asset_path(*asset).as_str()));
-    missing.map_or(Ok(()), |asset| Err(Error::MissingAsset(asset)))
+        .filter(|asset| !listed.contains(asset_path(*asset).as_str()) && seen.insert(*asset))
+        .collect()
 }
 
 /// Whether `found`, the id of the bytes read for `asset`, names the same bytes.
@@ -227,8 +278,23 @@ fn to_json<T: Serialize>(value: &T) -> Vec<u8> {
 }
 
 fn from_json<T: DeserializeOwned>(path: &str, bytes: &[u8]) -> Result<T> {
-    serde_json::from_slice(bytes).map_err(|source| Error::Json {
-        path: path.to_owned(),
-        source,
+    serde_json::from_slice(bytes).map_err(|source| {
+        if has_conflict(bytes) {
+            Error::Conflict(path.to_owned())
+        } else {
+            Error::Json {
+                path: path.to_owned(),
+                source,
+            }
+        }
+    })
+}
+
+/// Whether a line is one of the markers Git leaves in a file it could not merge. JSON holds no
+/// line break within a string, so a valid file never has one.
+fn has_conflict(bytes: &[u8]) -> bool {
+    bytes.split(|&byte| byte == b'\n').any(|line| {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        line.starts_with(b"<<<<<<<") || line.starts_with(b">>>>>>>") || line == b"======="
     })
 }

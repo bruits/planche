@@ -103,6 +103,8 @@ pub enum Error {
 pub struct Board {
     pub elements: BTreeMap<ElementId, Element>,
     pub background: Background,
+    /// The elements [`Board::repair`] cut from what is not on the board, as read, then as repaired.
+    pub repaired: BTreeMap<ElementId, (Element, Element)>,
 }
 
 impl Board {
@@ -137,8 +139,11 @@ impl Board {
     /// another branch deleted, or two groups inside each other, or something stuck to an element
     /// that another branch deleted, or two elements stuck to each other. Such elements move to
     /// the top level or come free where they are, and a cycle breaks at its smallest id, so that
-    /// every client repairs alike.
+    /// every client repairs alike. An element cut from what is not on the board is written as
+    /// read until an edit changes it again (see [`Board::written`]), so that fixing what broke
+    /// brings it back.
     pub fn repair(&mut self) {
+        let mut read = BTreeMap::new();
         let misplaced: Vec<ElementId> = self
             .elements
             .iter()
@@ -157,10 +162,14 @@ impl Board {
             .map(|(id, _)| *id)
             .collect();
         for id in misplaced {
-            self.detach(id);
+            self.change(&mut read, id, |element| element.group = None);
         }
 
-        self.break_cycles(|element| element.group, |element| element.group = None);
+        self.break_cycles(
+            &mut read,
+            |element| element.group,
+            |element| element.group = None,
+        );
 
         let targets: BTreeSet<ElementId> = self
             .elements
@@ -168,12 +177,26 @@ impl Board {
             .filter(|(_, element)| element.kind.is_target())
             .map(|(id, _)| *id)
             .collect();
-        for element in self.elements.values_mut() {
-            for target in element.kind.targets_mut() {
-                target.take_if(|target| !targets.contains(target));
-            }
+        let loose: Vec<ElementId> = self
+            .elements
+            .iter()
+            .filter(|(_, element)| {
+                element
+                    .kind
+                    .targets()
+                    .any(|target| !targets.contains(&target))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in loose {
+            self.change(&mut read, id, |element| {
+                for target in element.kind.targets_mut() {
+                    target.take_if(|target| !targets.contains(target));
+                }
+            });
         }
         self.break_cycles(
+            &mut read,
             |element| element.kind.target(),
             |element| {
                 if let Some(target) = element.kind.target_mut() {
@@ -181,10 +204,40 @@ impl Board {
                 }
             },
         );
+
+        for (id, before) in read {
+            let after = &self.elements[&id];
+            if *after != before {
+                self.repaired.insert(id, (before, after.clone()));
+            }
+        }
+    }
+
+    /// The element with `id` as its file holds it, as read unless it changed since repair.
+    pub fn written(&self, id: ElementId) -> Option<&Element> {
+        let element = self.elements.get(&id)?;
+        Some(match self.repaired.get(&id) {
+            Some((read, repaired)) if repaired == element => read,
+            _ => element,
+        })
+    }
+
+    /// Changes the element with `id`, which `read` keeps as it was first.
+    fn change(
+        &mut self,
+        read: &mut BTreeMap<ElementId, Element>,
+        id: ElementId,
+        change: impl FnOnce(&mut Element),
+    ) {
+        if let Some(element) = self.elements.get_mut(&id) {
+            read.entry(id).or_insert_with(|| element.clone());
+            change(element);
+        }
     }
 
     fn break_cycles(
         &mut self,
+        read: &mut BTreeMap<ElementId, Element>,
         next: impl Fn(&Element) -> Option<ElementId>,
         cut: impl Fn(&mut Element),
     ) {
@@ -198,17 +251,16 @@ impl Board {
             {
                 if let Some(at) = path.iter().position(|&id| id == following) {
                     let smallest = *path[at..].iter().min().expect("never empty");
+                    // Which link breaks hangs on the cycle's other elements, which edits change,
+                    // so it is written broken.
+                    if let Some(before) = read.get_mut(&smallest) {
+                        cut(before);
+                    }
                     cut(self.elements.get_mut(&smallest).expect("on the path"));
                     break;
                 }
                 path.push(following);
             }
-        }
-    }
-
-    fn detach(&mut self, id: ElementId) {
-        if let Some(element) = self.elements.get_mut(&id) {
-            element.group = None;
         }
     }
 
@@ -302,6 +354,7 @@ impl Board {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Element {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -317,7 +370,7 @@ pub struct Element {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum ElementKind {
     /// Draws its asset as displayed, with the asset's EXIF orientation applied, then crops
@@ -718,7 +771,7 @@ impl ElementKind {
 
 /// Applied when drawing. The asset's bytes never change.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ImageEdits {
     /// In the asset's pixels, as displayed.
@@ -753,6 +806,7 @@ impl ImageEdits {
 
 /// From `start` to just before `end`, in seconds of the media's own time, whatever its speed.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Trim {
     pub start: f64,
@@ -820,6 +874,7 @@ pub enum CropShape {
 
 /// Wraps to the width of what holds it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Text {
     pub content: String,
@@ -1198,6 +1253,7 @@ impl Background {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Point {
     #[serde(serialize_with = "without_negative_zero")]
@@ -1214,6 +1270,7 @@ impl Point {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Size {
     pub width: u32,
@@ -1221,6 +1278,7 @@ pub struct Size {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Rect {
     #[serde(serialize_with = "without_negative_zero")]
