@@ -3,6 +3,9 @@
   <img alt="Planche" src="./.github/assets/logo.svg" />
 </picture>
 
+> [!IMPORTANT]
+> Planche is a working title, and the app is still a work in progress.
+
 A cross-platform board for your references and visual research. Fast, open source, agent-ready, and stored as plain files.
 
 <picture>

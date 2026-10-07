@@ -195,7 +195,7 @@ const GRIPS: [number, number][] = [
   [0, 0.5],
 ];
 const CORNERS = GRIPS.filter(([x, y]) => x !== 0.5 && y !== 0.5);
-export const CROP_KEYS = { turn: "x", guides: "o" } as const;
+const CROP_KEYS = { turn: "x", guides: "o" } as const;
 const NUDGES: Record<string, Point> = {
   ArrowLeft: { x: -1, y: 0 },
   ArrowRight: { x: 1, y: 0 },

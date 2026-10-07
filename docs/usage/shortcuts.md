@@ -100,7 +100,7 @@ While cropping, ⇧ keeps the crop's proportions, X turns it between portrait an
 | --- | --- |
 | Show or hide the style card | ⇧S |
 | Pick a colour under the pointer | Hold S, let go on the colour |
-| Palette colours, or a sticky note's papers | 1 to 6 |
+| Palette colours, a sticky note's papers, or a group's background | 1 to 6 |
 | Bold, italic, strikethrough | ⌘B, ⌘I, ⇧⌘X |
 | Larger text, smaller text | ⇧⌘> and ⇧⌘<, or ⌘. and ⌘, |
 | Copy style, paste style | ⌥⌘C, ⌥⌘V |
@@ -109,7 +109,7 @@ While cropping, ⇧ keeps the crop's proportions, X turns it between portrait an
 
 - ⇧ draws straight by steps of 45°, turns by steps of 15°, and keeps proportions while cropping.
 - ⌥ moves a copy, or scales around the centre from a corner.
-- ⌘ keeps what moves off the grid and away from its neighbours, and keeps ends and elements from sticking. For a move, press it once the drag is under way, since ⌘ with a click adds to or takes from the selection.
+- ⌘ keeps what moves off the grid and away from its neighbours, what turns off quarter turns, and ends and elements from sticking. For a move, press it once the drag is under way, since ⌘ with a click adds to or takes from the selection.
 
 ## Layouts
 

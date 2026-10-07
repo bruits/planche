@@ -13,9 +13,9 @@ The toolbar groups its tools. Select, Hand, and Add images come first, then the 
 
 ## Selecting and groups
 
-A click selects the outermost group under the pointer. Double-click a group, or use Go inside, to select its own elements. Esc steps back one thing at a time. It closes a card, then leaves the tool, then goes back up out of a group, then clears the selection.
+A click selects the outermost group under the pointer, and a click with ⇧ or ⌘ adds to the selection or takes from it. Double-click a group, or use Go inside, to select its own elements. Esc steps back one thing at a time. It closes a card, then leaves the tool, then goes back up out of a group, then clears the selection.
 
-A group selected alone takes a background in its style card, a panel behind its elements that grows and shrinks with them. A click on the panel selects the group.
+The style card of a group selected alone sets its background, a panel behind its elements that grows and shrinks with them, and the opacity of its elements. Go inside to style them otherwise. A click on the panel selects the group.
 
 A group's title stands over its top-left corner at one size whatever the zoom, so that it reads from afar, and stays out of exported pictures. Double-click it to rename it, or choose Rename in the menu. A group selected alone without one offers Add title there.
 
@@ -41,7 +41,7 @@ The card follows the selection from one element to the next, and a click on noth
 
 ## Images
 
-Image edits never touch the image's file. Crop, as a rectangle or an ellipse, rotate, flip, and greyscale can all be undone or reset later. Arrange packs images in rows by name, by size, by colour, or at random, and Same height or Same width sizes them alike. Actual size turns an image upright and sizes it to its width and height in pixels. Open source opens the web page an image came from.
+Image edits never touch the image's file. Double-click an image to crop it, and drag inside the crop to move it. Crop, as a rectangle or an ellipse, rotate, flip, and greyscale can all be undone or reset later. Arrange packs images in rows by name, by size, by colour, or at random, and Same height or Same width sizes them alike. Actual size turns an image upright and sizes it to its width and height in pixels. Open source opens the web page an image came from.
 
 Animated images and videos have their own controls, see [media](./media.md).
 

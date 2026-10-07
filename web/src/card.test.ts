@@ -491,26 +491,46 @@ describe("the card of an image and an arrow", () => {
     expect(button("Yellow").getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("styles the elements of a group selected but those locked", () => {
+  it("styles the elements of a group selected with others but those locked", () => {
     const { board, select, shown, kind } = both();
     board.editor.group(GROUP, [IMAGE, ARROW]);
     board.editor.setLocked([ARROW], true);
     board.board = core.board(board.editor);
-    select([GROUP]);
+    select([GROUP, OTHER]);
     shown.set({ opacity: 50 });
     expect(kind(IMAGE)).toMatchObject({ opacity: 50 });
+    expect(kind(OTHER)).toMatchObject({ opacity: 50 });
     expect(kind(ARROW)).not.toHaveProperty("opacity");
   });
 
-  it("gives a group selected alone a background of its own, over its elements' style", () => {
+  it("fades the elements of a group selected alone but those locked", () => {
     const { board, select, kind } = both();
+    board.editor.group(GROUP, [IMAGE, ARROW]);
+    board.editor.setLocked([ARROW], true);
+    board.board = core.board(board.editor);
+    select([GROUP]);
+    slide(50, { release: true });
+    expect(kind(IMAGE)).toMatchObject({ opacity: 50 });
+    expect(kind(ARROW)).not.toHaveProperty("opacity");
+    expect(kind(GROUP)).not.toHaveProperty("opacity");
+  });
+
+  it("styles a group selected alone by its background and its elements' opacity", () => {
+    const { board, select, shown, kind } = both();
     board.editor.group(GROUP, [IMAGE, ARROW]);
     board.board = core.board(board.editor);
     select([GROUP]);
-    expect(groups().slice(0, 2)).toEqual(["Background", "Fill"]);
-    expect(groups()).toContain("Colour");
+    expect(groups()).toEqual(["Background", "Fill", "Opacity"]);
+    expect(shown.common()).toEqual(["colour", "fill"]);
+    expect(named("Pick a colour from the board")).not.toBeNull();
+    // Its colour shows only on a panel, which it lacks.
+    expect(named("Ink background").getAttribute("aria-pressed")).toBe("false");
+    expect(named("No background").getAttribute("aria-pressed")).toBe("true");
     named("Blue background").click();
     expect(kind(GROUP)).toMatchObject({ colour: "blue", fill: "tint" });
+    // As the keys and the pipette set it.
+    shown.set({ colour: "green" });
+    expect(kind(GROUP)).toMatchObject({ colour: "green", fill: "tint" });
     expect(kind(ARROW)).toMatchObject({ colour: "red" });
     named("No background").click();
     expect(kind(GROUP)).not.toHaveProperty("colour");

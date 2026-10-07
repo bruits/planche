@@ -22,7 +22,7 @@ just ci                                # everything CI checks, in CI order
 ## Useful Resources
 
 - In [CONTRIBUTING.md](./CONTRIBUTING.md): [Quality Guidelines](./CONTRIBUTING.md#quality-guidelines) applies to agents and humans equally, [Getting Started](./CONTRIBUTING.md#getting-started) helps you understand the project structure, and [Philosophy](./CONTRIBUTING.md#philosophy) is the project's north star.
-- [docs/development/](./docs/development/) says what is decided and how the parts work. Read [architecture](./docs/development/architecture.md) before adding a crate or a dependency, and [format](./docs/development/format.md) and [saving](./docs/development/saving.md) before changing what writes a board's files.
+- [docs/development/](./docs/development/) says what is decided and how the parts work. Read [architecture](./docs/development/architecture.md) before adding a crate or a dependency, [format](./docs/development/format.md) and [saving](./docs/development/saving.md) before changing what writes a board's files, and [interface](./docs/development/interface.md) before changing what users see or read.
 - [docs/usage/](./docs/usage/) says how Planche behaves for users and support. Update it when a change alters what users meet.
 
 ## Agent Guardrails

@@ -56,13 +56,12 @@ import {
   learnLayout,
   listen,
   mac,
-  named,
   typed,
   typing,
   type Command,
   type Shortcut,
 } from "./commands.js";
-import { CROP_KEYS, edits, isTip, type Draw, type Pen } from "./edit.js";
+import { edits, isTip, type Draw, type Pen } from "./edit.js";
 import { message } from "./errors.js";
 import { exportCard, recalled, remembered } from "./exportcard.js";
 import { handle } from "./handle.js";
@@ -1173,9 +1172,7 @@ const commands = {
     keys: [{ key: "s", shift: true }],
     unavailable: () =>
       nothingToStyle() ??
-      (styleCard.common().length > 0 || styleCard.images() || styleCard.frames()
-        ? undefined
-        : "Comments have no style"),
+      (styleCard.common().length > 0 || styleCard.images() ? undefined : "Comments have no style"),
     run: () => {
       if (styleCard.isOpen()) {
         styleCard.close();
@@ -2008,59 +2005,48 @@ function hint(): string {
   const [escapeKey, insideKey] = [commands.escape, commands.goInside].map(({ keys }) =>
     describe(keys[0]!),
   );
-  const [freeKey, centreKey, stepKey] = mac ? ["⌘", "⌥", "⇧"] : ["Ctrl", "Alt", "Shift"];
+  const [centreKey, stepKey] = mac ? ["⌥", "⇧"] : ["Alt", "Shift"];
   const picking = picker.sampling();
   if (picking !== undefined) {
-    return `${picking === "holding" ? "Let go of S" : "Click"} to pick the colour under the pointer · ${escapeKey} to cancel`;
+    return `${picking === "holding" ? "Let go of S" : "Click"} to pick a colour · ${escapeKey} to cancel`;
   }
   if (editing.writing() !== undefined) {
     return `${escapeKey} or click away to finish`;
   }
   if (styleCard.trimming()) {
-    return `Drag an end, or press ← → on it, to choose what loops · ${insideKey} when done · ${escapeKey} to leave it as it was`;
+    return `Drag an end to trim · ${insideKey} when done · ${escapeKey} to cancel`;
   }
   if (editing.cropping() !== undefined) {
-    const [resetKey, turnKey, guidesKey] = [
-      commands.resetCrop.keys[0]!,
-      { key: CROP_KEYS.turn },
-      { key: CROP_KEYS.guides },
-    ].map(describe);
-    return `Drag an edge or a corner to crop, holding ${stepKey} to keep its proportions, or the inside to move it · ${turnKey} to turn it · ${guidesKey} for guides · ${resetKey} to start over · ${insideKey} or click away to crop · ${escapeKey} to leave it as it was`;
+    return `Drag the edges to crop · ${insideKey} when done · ${escapeKey} to cancel`;
   }
   if (pictureCard.isOpen()) {
     const [saveKey, copyKey] = [commands.savePng.keys[0]!, commands.copy.keys[0]!].map(describe);
-    return `${saveKey} to save · ${copyKey} to copy · click with ${stepKey} to add or take out · ${escapeKey} to leave`;
+    return `${saveKey} to save · ${copyKey} to copy · ${escapeKey} to close`;
   }
-  const styling =
-    commands.style.unavailable() === undefined
-      ? `${describe(commands.style.keys[0]!)} to style · `
-      : "";
   if (tool === "hand") {
     return `Drag to move around · ${escapeKey} to select again`;
   }
   if (spaceHeld) {
     return "Drag to move around";
   }
-  const offGrid = snapping ? ` · hold ${freeKey} to keep off the grid` : "";
+  // The handles leave the menu out, as a right-click outside the selection's box, where turns
+  // start, clears it.
   switch (tool === "select" ? editing.grab() : undefined) {
     case "corner":
-      return `Drag to scale · hold ${centreKey} while dragging to scale around the centre${offGrid}`;
+      return `Drag to scale · hold ${centreKey} to scale around the centre`;
     case "side":
-      return `Drag to stretch${offGrid}`;
+      return "Drag to stretch";
     case "turn":
-      return `Drag to turn · hold ${stepKey} to turn by 15°${snapping ? ` · hold ${freeKey} to turn freely` : ""}`;
+      return `Drag to turn · hold ${stepKey} for steps of 15°`;
   }
   if (tool === "eraser") {
-    return `Click or drag over what to erase · a drag spares the image or note it starts on · ${escapeKey} to select again`;
+    return `Click or drag over what to erase · ${escapeKey} to select again`;
   }
   if (isTip(tool)) {
-    return `Drag to draw, or click for a dot · hold ${stepKey} to draw straight, by steps of 45° · ${escapeKey} to select again`;
+    return `Drag to draw · hold ${stepKey} to draw straight · ${escapeKey} to select again`;
   }
-  if (tool === "arrow") {
-    return `Drag from where the arrow starts to where it points · hold ${stepKey} to keep to steps of 45° · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;
-  }
-  if (tool === "line") {
-    return `Drag from one end to the other · hold ${stepKey} to keep to steps of 45° · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;
+  if (tool === "arrow" || tool === "line") {
+    return `Drag to draw · hold ${stepKey} for steps of 45° · ${escapeKey} to select again`;
   }
   if (FRAMED.has(tool)) {
     return `Drag to draw, or click to place · ${escapeKey} to select again`;
@@ -2071,37 +2057,32 @@ function hint(): string {
   if (tool === "note") {
     return `Click to write, or drag to set how wide · ${escapeKey} to select again`;
   }
-  const opens = commands.goInside.unavailable() === undefined;
   if (editing.entered() !== undefined) {
-    return `Inside a group · ${opens ? `${insideKey} to go inside · ` : ""}${escapeKey} to go back up`;
+    return `Inside a group · ${escapeKey} to go back up · right-click for more`;
   }
-  if (opens) {
-    return `Drag to move · double-click or ${insideKey} to go inside · right-click for more`;
+  if (commands.goInside.unavailable() === undefined) {
+    return "Drag to move · double-click to go inside · right-click for more";
   }
   if (editing.writable()) {
-    return `Drag to move · double-click or ${insideKey} to edit the text · ${styling}right-click for more`;
+    return "Drag to move · double-click to write · right-click for more";
   }
   if (editing.loneSegment()) {
-    return `Drag to move · drag an end to move it, holding ${stepKey} to keep to steps of 45° or ${freeKey} to keep it from sticking · ${styling}right-click for more`;
+    return "Drag to move · drag an end to move it · right-click for more";
   }
   if (editing.selection().length > 0) {
-    const crops =
-      commands.crop.unavailable() === undefined ? `double-click or ${insideKey} to crop · ` : "";
-    const keys = [commands.resetCrop, commands.play, commands.sound, commands.openSource]
-      .filter((command) => command.unavailable() === undefined)
-      .map((command) => `${describe(command.keys[0]!)} to ${named(command).toLowerCase()} · `);
-    return `Drag to move, holding ${centreKey} to copy · corners scale · turn from outside a corner · ${crops}${keys.join("")}${styling}right-click for more`;
+    const crops = commands.crop.unavailable() === undefined ? "double-click to crop · " : "";
+    return `Drag to move · ${crops}right-click for more`;
   }
   if (unlocking() !== undefined) {
-    return `Locked · right-click or ${describe(commands.lock.keys[0]!)} to unlock`;
+    return "Locked · right-click to unlock";
   }
-  return `Drop or paste images · scroll to move around · right-click or ${describe(commands.find.keys[0]!)} for more`;
+  return "Drop or paste images · scroll to move around · right-click for more";
 }
 
 /**
  * About the selection, or else the board, with its images landing where it opens. Each keeps to
  * three groups, and each submenu to two, so that it stays quick to scan. What the style card and
- * the keys already reach, such as colours, stays out.
+ * the keys already reach, such as colours, mostly stays out.
  */
 function contextMenu(
   onSelection: boolean,
