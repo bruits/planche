@@ -5,11 +5,26 @@
 
 A cross-platform board for your references and visual research. Fast, open source, agent-ready, and stored as plain files.
 
-## Project Structure
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/assets/screenshot_dark.webp" />
+  <img alt="A board comparing two abbeys in the south of France, with photos, notes, drawings, and a sticky note's style card open" src="./.github/assets/screenshot.webp" />
+</picture>
 
-- `crates/board/` and `crates/format/` — the core, a board as plain data and as a folder of files, with no I/O so that it builds for every platform, the browser included
-- `crates/desktop/` — the desktop shell, which wraps the web app and reads and writes boards on disk through `crates/folder/`
-- `crates/mcp/` — the MCP server through which agents read and edit the board open in the desktop app
-- `web/` — the app, in TypeScript, which runs the core as WASM through `crates/bindings/` and draws boards with `crates/renderer/`, on wgpu
-- `samples/` — boards to try the app on
-- [CONTRIBUTING.md](./CONTRIBUTING.md) — setup, each crate in detail, and the project's philosophy
+## Documentation
+
+- [Boards](./docs/usage/boards.md), [editing](./docs/usage/editing.md), [shortcuts](./docs/usage/shortcuts.md), [images and videos](./docs/usage/media.md), [settings](./docs/usage/settings.md), and [agents](./docs/usage/agents.md) explain how to use Planche. So far Planche has run for real in Chromium and in the macOS app, so what these pages say of other browsers and systems is still to be tried.
+- [CONTRIBUTING.md](./CONTRIBUTING.md) covers setup, the project's layout, and its philosophy, and [docs/development/](./docs/development/) what is decided and how the parts work.
+
+## Acknowledgements
+
+Planche builds on the work of several open-source projects:
+
+- [wgpu](https://wgpu.rs/), the GPU API in Rust that draws every board, in browsers through WebGPU and WebGL2
+- [Tauri](https://v2.tauri.app/), which wraps the web app into a desktop app
+- [wasm-bindgen](https://github.com/wasm-bindgen/wasm-bindgen), through which the web app runs the Rust core
+- [rmcp](https://github.com/modelcontextprotocol/rust-sdk), the official Rust SDK for MCP, which lets agents in
+- [Inter](https://rsms.me/inter/) by Rasmus Andersson, the typeface of every text on a board, and [Tabler Icons](https://tabler.io/icons) by Paweł Kuna, the icons of the toolbar
+
+Thank you to everyone who contributes, or would like to. [CONTRIBUTING.md](./CONTRIBUTING.md) is the place to start, and the [docs](./docs/) explain the choices behind the code.
+
+Planche is an open-source project born from [Bruits](https://bruits.org/), a Rust-focused collective 💛

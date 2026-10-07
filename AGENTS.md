@@ -22,16 +22,16 @@ just ci                                # everything CI checks, in CI order
 ## Useful Resources
 
 - In [CONTRIBUTING.md](./CONTRIBUTING.md): [Quality Guidelines](./CONTRIBUTING.md#quality-guidelines) applies to agents and humans equally, [Getting Started](./CONTRIBUTING.md#getting-started) helps you understand the project structure, and [Philosophy](./CONTRIBUTING.md#philosophy) is the project's north star.
-- [docs/technical/foundation.md](./docs/technical/foundation.md) says what is decided, the renderer and the image pipeline included, and which tracks are still open. Read it before adding a crate or a dependency.
-- [docs/technical/saving.md](./docs/technical/saving.md) says how a board saves itself, and where that stops. Read it before changing what writes a board's files.
+- [docs/development/](./docs/development/) says what is decided and how the parts work. Read [architecture](./docs/development/architecture.md) before adding a crate or a dependency, and [format](./docs/development/format.md) and [saving](./docs/development/saving.md) before changing what writes a board's files.
+- [docs/usage/](./docs/usage/) says how Planche behaves for users and support. Update it when a change alters what users meet.
 
 ## Agent Guardrails
 
-- **The core runs everywhere.** `board` and `format` build for `wasm32-unknown-unknown`: no I/O, no clock, no randomness source, and no platform crate. The shells pass those in. Check with `just wasm`, not only a native build.
-- **Board files are a contract.** A board reads back exactly as written, the same board always writes the same bytes, and an edit rewrites only the files it touches. From the first release on, any change to their shape bumps `FORMAT_VERSION`, `read` migrates every earlier version, and a sample board per version stays as a test fixture.
-- **Tracks are not decisions yet.** The prototype is where the foundation's open tracks (Tauri, Loro, and so on) are tried, so building on one is fine there, as long as the core never depends on it and it can be dropped if it loses. A track becomes a decision only once the prototype has measured it and the [foundation](./docs/technical/foundation.md) records it as a rule.
+- The core runs everywhere. `board` and `format` build for `wasm32-unknown-unknown`, with no I/O, clock, randomness source, or platform crate. The shells pass those in. Check with `just wasm` as well as a native build.
+- Board files are a contract. A board reads back exactly as written, the same board always writes the same bytes, and an edit rewrites only the files it touches. From the first release on, any change to their shape bumps `FORMAT_VERSION`, `read` migrates every earlier version, and a sample board per version stays as a test fixture.
+- Tracks are not decisions yet. The prototype tries the open [tracks](./docs/development/architecture.md#tracks), such as Loro, so building on one is fine there, as long as the core never depends on it and it can be dropped if it loses. A track becomes a decision once the prototype has measured it and the docs record it as a rule.
 - Do not create new documentation files to explain implementation.
 - Do not alter CI/CD configuration unless explicitly instructed.
 - Do not add external dependencies without justification. Prefer the standard library and existing utilities.
-- Match the current project structure, naming, and style; do not create parallel patterns and avoid duplication.
+- Match the current project structure, naming, and style. Create no parallel patterns, and avoid duplication.
 - All code, comments, documentation, commit messages, and user-facing output must be in English.
