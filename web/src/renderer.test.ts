@@ -3,7 +3,7 @@ import type { Point } from "./core.js";
 import { packed, type Placed } from "./renderer.js";
 
 /** Floats per item, its kind first, its extra then its opacity last. */
-const STRIDE = 14;
+const STRIDE = 15;
 
 function pen(points: Point[], opacity: number): Placed {
   return { kind: "stroke", points, width: 2, paint: "ink", opacity };
@@ -42,6 +42,35 @@ describe("the pen strokes the renderer takes", () => {
     const [dot, ...rest] = items([pen([{ x: 4, y: 5 }], 1)]);
     expect(rest).toEqual([]);
     expect(dot!.slice(3, 7)).toEqual([4, 5, 4, 5]);
+  });
+});
+
+function outline(shape: Extract<Placed, { kind: "outline" }>["shape"], corners: number): Placed {
+  return {
+    kind: "outline",
+    shape,
+    corners,
+    frame: { x: 0, y: 0, width: 10, height: 10 },
+    rotation: 0,
+    width: 2,
+    paint: "ink",
+    dashed: false,
+    fill: 1,
+    opacity: 1,
+  };
+}
+
+describe("the outlines the renderer takes", () => {
+  it("tell a polygon or a star by how many corners it goes round, then its fill", () => {
+    const [star, triangle, rectangle] = items([
+      outline("star", 7),
+      outline("triangle", 3),
+      outline("rectangle", 0),
+    ]);
+    // Its shape after its kind and texture, its corners and its fill before its opacity.
+    expect([star![2], star![STRIDE - 3], star![STRIDE - 2]]).toEqual([8, 7, 1]);
+    expect([triangle![2], triangle![STRIDE - 3]]).toEqual([7, 3]);
+    expect([rectangle![2], rectangle![STRIDE - 3]]).toEqual([1, 0]);
   });
 });
 

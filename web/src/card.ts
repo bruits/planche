@@ -23,6 +23,7 @@ import { icon, type Icon } from "./icons.js";
 import { css, type Paint } from "./paint.js";
 import { defaultAlignment, holdsText } from "./text.js";
 import {
+  CORNERS,
   OPACITIES,
   PALETTE,
   PAPERS,
@@ -486,6 +487,39 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     made.append(track, amount);
     return [made];
   };
+  /**
+   * A star's points, or a polygon's sides, which each of them selected counts one more or fewer
+   * of, from its own.
+   */
+  const counts = () => {
+    const counted = styled().filter(({ kind }) => settings(kind).includes("corners"));
+    const stars = counted.filter(({ kind }) => kind.type === "shape" && kind.shape === "star");
+    const noun =
+      stars.length === counted.length ? "points" : stars.length === 0 ? "sides" : "corners";
+    const step = (by: number, bound: number) => {
+      const recounted = (kind: Kind): Style => ({
+        corners: clamp(cornersOf(kind) + by, CORNERS.fewest, CORNERS.most),
+      });
+      const made = button(
+        `${by < 0 ? "Fewer" : "More"} ${noun}`,
+        icon(by < 0 ? "minus" : "plus"),
+        (event) => {
+          restyle({}, recounted);
+          if (!event.altKey || host.tool() !== undefined) {
+            counted.forEach(({ kind }) => learn([kind], recounted(kind)));
+          }
+        },
+      );
+      if (counted.every(({ kind }) => cornersOf(kind) === bound)) {
+        made.setAttribute("aria-disabled", "true");
+      }
+      return made;
+    };
+    const shown = value("corners");
+    const tally = letters(shown === undefined ? "Mixed" : `${shown} ${noun}`);
+    tally.classList.add("tally");
+    return [step(-1, CORNERS.fewest), tally, step(1, CORNERS.most)];
+  };
   const toggle = (
     setting: "bold" | "italic" | "strike",
     label: string,
@@ -523,6 +557,9 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     );
     if (strokes.length > 0) {
       rows.push(row("Strokes", ...strokes));
+    }
+    if (can.has("corners")) {
+      rows.push(row("Corners", counts()));
     }
     if (can.has("size")) {
       const shown = value("size");
@@ -1160,6 +1197,10 @@ function swatch(paint: Paint, kind: "palette" | "own" | "paper"): HTMLSpanElemen
   made.className = `swatch ${kind}`;
   made.style.setProperty("--swatch", css(paint, made));
   return made;
+}
+
+function cornersOf(kind: Kind): number {
+  return Number(valueOf(kind, "corners", 1));
 }
 
 /** Dimmed while `command` cannot run, as the toolbar's buttons are. */

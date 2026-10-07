@@ -5,7 +5,7 @@ import { imageKind, untitled } from "./board.js";
 import { card, type CardCommands, type CardMedia } from "./card.js";
 import type { Command } from "./commands.js";
 import * as core from "./core.js";
-import type { Tip } from "./core.js";
+import type { Kind, Tip } from "./core.js";
 import { styles } from "./style.js";
 
 const IMAGE = "a".repeat(32);
@@ -485,6 +485,81 @@ describe("the card of an image and an arrow", () => {
     select([OTHER]);
     shown.paste();
     expect(kind(OTHER)).toMatchObject({ colour: "red" });
+  });
+});
+
+/** Blank, in the frame of the image the card starts over. */
+function counting(form: "star" | "polygon"): Kind {
+  return { type: "shape", frame, rotation: 0, shape: form, text: { content: "", font_size: 20 } };
+}
+
+function tally() {
+  return document.querySelector(".style-card .tally")?.textContent;
+}
+
+/** The card over a star and a polygon of `corners`, the star selected. */
+function counted(corners: number) {
+  const made = opened();
+  made.board.editor.add(ARROW, undefined, JSON.stringify(counting("star")));
+  made.board.editor.add(OTHER, undefined, JSON.stringify({ ...counting("polygon"), corners }));
+  made.board.board = core.board(made.board.editor);
+  made.select([ARROW]);
+  const kind = (id: string) => core.element(made.board.editor, id)?.kind;
+  return { ...made, kind };
+}
+
+describe("the card of a star and a polygon", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    localStorage.clear();
+  });
+
+  it("counts a star's points up and down, which its tool draws next", () => {
+    const { kind } = counted(7);
+    expect(tally()).toBe("5 points");
+    button("More points").click();
+    button("More points").click();
+    expect(kind(ARROW)).toMatchObject({ corners: 7 });
+    expect(tally()).toBe("7 points");
+    expect(styles().dressed(counting("star"), 1)).toMatchObject({ corners: 7 });
+    // As it comes again, it writes nothing.
+    button("Fewer points").click();
+    button("Fewer points").click();
+    expect(kind(ARROW)).not.toHaveProperty("corners");
+  });
+
+  it("counts each up from its own, and none past the most", () => {
+    const { kind, select } = counted(12);
+    select([IMAGE, ARROW, OTHER]);
+    expect(tally()).toBe("Mixed");
+    expect(button("More corners").getAttribute("aria-disabled")).toBeNull();
+    button("More corners").click();
+    expect(kind(ARROW)).toMatchObject({ corners: 6 });
+    expect(kind(OTHER)).toMatchObject({ corners: 12 });
+    select([OTHER]);
+    expect(tally()).toBe("12 sides");
+    expect(button("More sides").getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("leaves what the star tool draws alone while ⌥ is held", () => {
+    const { kind } = counted(5);
+    button("More points").dispatchEvent(new MouseEvent("click", { altKey: true }));
+    expect(kind(ARROW)).toMatchObject({ corners: 6 });
+    expect(styles().dressed(counting("star"), 1)).not.toHaveProperty("corners");
+  });
+
+  it("offers no count for a triangle", () => {
+    const { board, select } = opened();
+    const triangle = { type: "shape", frame, rotation: 0, shape: "triangle" };
+    board.editor.add(
+      ARROW,
+      undefined,
+      JSON.stringify({ ...triangle, text: { content: "", font_size: 20 } }),
+    );
+    board.board = core.board(board.editor);
+    select([ARROW]);
+    expect(document.querySelector('.style-card [aria-label="Corners"]')).toBeNull();
+    expect(button("Solid fill")).not.toBeNull();
   });
 });
 

@@ -3,7 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Align, Colour, Dash, ElementKind, Fill, Heads, Opacity, Paper, Shape, Text, Weight};
+use crate::{
+    Align, Colour, Corners, Dash, ElementKind, Fill, Heads, Opacity, Paper, Shape, Text, Weight,
+};
 
 /// A part of a style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +18,7 @@ pub enum Setting {
     Dash,
     Heads,
     Fill,
+    Corners,
     FontSize,
     Bold,
     Italic,
@@ -47,6 +50,9 @@ pub struct Style {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub fill: Option<Fill>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub corners: Option<Corners>,
     /// In board units.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
@@ -99,6 +105,20 @@ const SHAPE: &[Setting] = &[
     Setting::Align,
     Setting::Opacity,
 ];
+/// Of a star or a polygon, which counts its corners.
+const POLYGON: &[Setting] = &[
+    Setting::Colour,
+    Setting::Weight,
+    Setting::Dash,
+    Setting::Fill,
+    Setting::Corners,
+    Setting::FontSize,
+    Setting::Bold,
+    Setting::Italic,
+    Setting::Strike,
+    Setting::Align,
+    Setting::Opacity,
+];
 const CROSS: &[Setting] = &[
     Setting::Colour,
     Setting::Weight,
@@ -131,7 +151,7 @@ const POINT_PARTS: f64 = 100_000.0;
 
 impl ElementKind {
     /// The parts of a style it takes, those of its text even while it holds none. A cross fills
-    /// nothing.
+    /// nothing, and only a star or a polygon counts its corners.
     pub fn settings(&self) -> &'static [Setting] {
         match self {
             Self::Note { .. } => NOTE,
@@ -140,6 +160,7 @@ impl ElementKind {
                 shape: Shape::Cross,
                 ..
             } => CROSS,
+            Self::Shape { shape, .. } if shape.counts_corners() => POLYGON,
             Self::Shape { .. } => SHAPE,
             Self::Arrow { .. } => ARROW,
             Self::Line { .. } => LINE,
@@ -161,6 +182,7 @@ impl ElementKind {
                 Setting::Dash => style.dash = Some(Dash::default()),
                 Setting::Heads => style.heads = Some(Heads::default()),
                 Setting::Fill => style.fill = Some(Fill::default()),
+                Setting::Corners => style.corners = Some(Corners::default()),
                 Setting::FontSize => {}
                 Setting::Bold => style.bold = Some(false),
                 Setting::Italic => style.italic = Some(false),
@@ -179,6 +201,7 @@ impl ElementKind {
             Self::Sticky { paper, .. } => set(paper, style.paper),
             Self::Shape {
                 shape,
+                corners,
                 colour,
                 weight,
                 dash,
@@ -190,6 +213,9 @@ impl ElementKind {
                 set(dash, style.dash);
                 if *shape != Shape::Cross {
                     set(fill, style.fill);
+                }
+                if shape.counts_corners() {
+                    set(corners, style.corners);
                 }
             }
             Self::Arrow {
@@ -242,12 +268,18 @@ impl ElementKind {
             text.align.take_if(|align| Some(*align) == chosen);
         }
         if let Self::Shape {
-            shape: Shape::Cross,
+            shape,
+            corners,
             fill,
             ..
         } = &mut self
         {
-            *fill = Fill::default();
+            if *shape == Shape::Cross {
+                *fill = Fill::default();
+            }
+            if !shape.counts_corners() {
+                *corners = Corners::default();
+            }
         }
         if let Self::Stroke { points, .. } = &mut self {
             for point in points.iter_mut() {
@@ -329,6 +361,7 @@ mod tests {
             frame: frame(),
             rotation: 0.0,
             shape,
+            corners: Default::default(),
             text: Text::new("Hello", 20.0),
             target: None,
             colour: Colour::Ink,
@@ -402,13 +435,17 @@ mod tests {
     }
 
     /// Of every kind, each with every part of its style as it comes.
-    fn plain_kinds() -> [ElementKind; 11] {
+    fn plain_kinds() -> [ElementKind; 15] {
         [
             note(None),
             sticky(),
             shape(Shape::Rectangle, Fill::Hollow),
             shape(Shape::Ellipse, Fill::Hollow),
             shape(Shape::Cross, Fill::Hollow),
+            shape(Shape::Triangle, Fill::Hollow),
+            shape(Shape::Diamond, Fill::Hollow),
+            shape(Shape::Star, Fill::Hollow),
+            shape(Shape::Polygon, Fill::Hollow),
             arrow(),
             line(),
             pen(),
@@ -427,6 +464,7 @@ mod tests {
             dash: Some(Dash::Dashed),
             heads: Some(Heads::Both),
             fill: Some(Fill::Solid),
+            corners: Corners::new(9),
             font_size: Some(33.0),
             bold: Some(true),
             italic: Some(true),
@@ -460,6 +498,17 @@ mod tests {
                 .settings()
                 .contains(&Setting::Fill)
         );
+        for (counted, counts) in [
+            (Shape::Star, true),
+            (Shape::Polygon, true),
+            (Shape::Triangle, false),
+            (Shape::Diamond, false),
+            (Shape::Rectangle, false),
+        ] {
+            let settings = shape(counted, Fill::Hollow).settings();
+            assert_eq!(settings.contains(&Setting::Corners), counts, "{counted:?}");
+            assert!(settings.contains(&Setting::Fill), "{counted:?}");
+        }
         assert!(arrow().settings().contains(&Setting::Heads));
         assert_eq!(image().settings(), [Setting::Opacity]);
         assert!(comment().settings().is_empty());
@@ -528,6 +577,24 @@ mod tests {
             },
             in_shape,
             Style {
+                fill: Some(Fill::Hollow),
+                ..in_shape
+            },
+            Style {
+                fill: Some(Fill::Hollow),
+                ..in_shape
+            },
+            Style {
+                fill: Some(Fill::Hollow),
+                corners: Some(Corners::default()),
+                ..in_shape
+            },
+            Style {
+                fill: Some(Fill::Hollow),
+                corners: Some(Corners::default()),
+                ..in_shape
+            },
+            Style {
                 heads: Some(Heads::End),
                 ..stroke
             },
@@ -552,6 +619,7 @@ mod tests {
             colour: Some(Colour::Red),
             paper: Some(Paper::Pink),
             fill: Some(Fill::Solid),
+            corners: Corners::new(8),
             bold: Some(true),
             ..Style::default()
         };
@@ -565,6 +633,13 @@ mod tests {
             unreachable!()
         };
         assert_eq!((colour, fill), (Colour::Red, Fill::Hollow));
+        let corners = |kind: ElementKind| match kind.with_style(&style) {
+            ElementKind::Shape { corners, .. } => corners.count(),
+            _ => unreachable!(),
+        };
+        assert_eq!(corners(shape(Shape::Star, Fill::Hollow)), 8);
+        assert_eq!(corners(shape(Shape::Polygon, Fill::Hollow)), 8);
+        assert_eq!(corners(shape(Shape::Triangle, Fill::Hollow)), 5);
         assert_eq!(image().with_style(&style), image());
         let faded = Style {
             opacity: Opacity::new(50),
@@ -640,6 +715,15 @@ mod tests {
             shape(Shape::Cross, Fill::Solid).canonical(),
             shape(Shape::Cross, Fill::Hollow)
         );
+        // A star that turns into a shape that counts no corners keeps none of its own.
+        let mut nine = loud(shape(Shape::Star, Fill::Hollow));
+        if let ElementKind::Shape { shape, .. } = &mut nine {
+            *shape = Shape::Diamond;
+        }
+        let ElementKind::Shape { corners, .. } = nine.canonical() else {
+            unreachable!()
+        };
+        assert_eq!(corners, Corners::default());
         // Choosing the plain style puts every part back as it comes, which writes nothing.
         for kind in plain_kinds() {
             let canonical = kind.clone().canonical();
@@ -653,7 +737,9 @@ mod tests {
                 assert_eq!(text.remove("font_size"), Some(33.0.into()), "{kind:?}");
                 assert!(text.keys().all(|key| key == "content"), "{kind:?}");
             }
-            let parts = ["colour", "paper", "weight", "dash", "heads", "fill"];
+            let parts = [
+                "colour", "paper", "weight", "dash", "heads", "fill", "corners",
+            ];
             assert!(
                 parts.iter().all(|part| written.get(part).is_none()),
                 "{kind:?}"

@@ -102,10 +102,11 @@ const kinds: [string, Kind][] = [
     `${paper} paper`,
     sticky({ paper }),
   ]),
-  ...(["rectangle", "ellipse", "cross"] as const).map((form): [string, Kind] => [
-    `a ${form}`,
-    shape({ shape: form }),
-  ]),
+  ...(["rectangle", "ellipse", "cross", "triangle", "diamond", "star", "polygon"] as const).map(
+    (form): [string, Kind] => [`a ${form}`, shape({ shape: form })],
+  ),
+  ["a seven-pointed star", shape({ shape: "star", corners: 7 })],
+  ["a dodecagon", shape({ shape: "polygon", corners: 12 })],
   ...(["thin", "thick"] as const).flatMap((weight): [string, Kind][] => [
     [`a ${weight} shape`, shape({ weight })],
     [`a ${weight} arrow`, arrow({ weight })],

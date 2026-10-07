@@ -7,7 +7,7 @@ import { restyled, settings, styleOf, styles, valueOf } from "./style.js";
 
 const frame = { x: 0, y: 0, width: 100, height: 50 };
 const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
-const shape = (form: "rectangle" | "cross", content = ""): Kind => ({
+const shape = (form: "rectangle" | "cross" | "star" | "triangle", content = ""): Kind => ({
   type: "shape",
   frame,
   rotation: 0,
@@ -61,6 +61,15 @@ describe("a style", () => {
   it("offers what each element takes, but no text style for a blank shape", () => {
     expect(settings(arrow)).toEqual(["colour", "weight", "dash", "heads", "opacity"]);
     expect(settings(shape("rectangle"))).toEqual(["colour", "weight", "dash", "fill", "opacity"]);
+    expect(settings(shape("triangle"))).toEqual(["colour", "weight", "dash", "fill", "opacity"]);
+    expect(settings(shape("star"))).toEqual([
+      "colour",
+      "weight",
+      "dash",
+      "fill",
+      "corners",
+      "opacity",
+    ]);
     expect(settings(shape("cross", "X"))).toEqual([
       "colour",
       "weight",
@@ -89,6 +98,8 @@ describe("a style", () => {
     expect(valueOf(shape("rectangle"), "align", 1)).toBe("centre");
     expect(valueOf(shape("rectangle"), "size", 2)).toBe(40);
     expect(valueOf(sticky, "paper", 1)).toBe("yellow");
+    expect(valueOf(shape("star"), "corners", 1)).toBe(5);
+    expect(valueOf({ ...shape("star"), corners: 8 } as Kind, "corners", 1)).toBe(8);
   });
 
   it("shows none of the parts the element does not take", () => {
@@ -127,6 +138,8 @@ describe("a style", () => {
       heads: "both",
     });
     expect(restyled(shape("cross"), { fill: "solid" }, 1)).toEqual(shape("cross"));
+    expect(restyled(shape("triangle"), { corners: 7 }, 1)).toEqual(shape("triangle"));
+    expect(restyled(shape("star"), { corners: 7 }, 1)).toEqual({ ...shape("star"), corners: 7 });
   });
 
   it("dresses what a tool draws in the style it learnt, but what the core would refuse", () => {

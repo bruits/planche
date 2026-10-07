@@ -574,6 +574,7 @@ mod tests {
             frame,
             rotation,
             shape,
+            corners: Default::default(),
             text: Text::new(content.to_owned(), 20.0),
             target: None,
             colour: Colour::Ink,
@@ -781,6 +782,36 @@ mod tests {
         assert_at(stick(&board, point(50.0, 202.0), 3.0), 4, 50.0, 200.0);
         assert_at(stick(&board, point(221.0, 219.0), 3.0), 5, 220.0, 220.0);
         assert_at(stick(&board, point(250.0, 220.0), 3.0), 5, 250.0, 220.0);
+    }
+
+    #[test]
+    fn an_end_sticks_to_the_sides_of_a_triangle_and_not_to_a_star_s_dents() {
+        let mut star = shape(Shape::Star, area(200.0, 0.0, 100.0, 100.0), 0.0, "");
+        if let ElementKind::Shape { fill, .. } = &mut star {
+            *fill = Fill::Solid;
+        }
+        let board = board([
+            (
+                1,
+                element(
+                    None,
+                    "a0",
+                    shape(Shape::Triangle, area(0.0, 0.0, 100.0, 100.0), 0.0, ""),
+                ),
+            ),
+            (
+                2,
+                element(None, "a1", image(area(200.0, 0.0, 100.0, 100.0))),
+            ),
+            (3, element(None, "a2", star)),
+        ]);
+        // Just out of its right side, from (50, 0) to (100, 100), onto the nearest point of it.
+        assert_at(stick(&board, point(77.0, 49.0), 3.0), 1, 75.0, 50.0);
+        // In its frame's corner, away from its sides.
+        assert_eq!(stick(&board, point(95.0, 10.0), 3.0), None);
+        // In the dent between the star's bottom points, onto the image under it.
+        assert_at(stick(&board, point(250.0, 90.0), 3.0), 2, 250.0, 90.0);
+        assert_at(stick(&board, point(250.0, 50.0), 3.0), 3, 250.0, 50.0);
     }
 
     fn end(at: Point, target: Option<u128>) -> End {

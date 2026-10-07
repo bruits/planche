@@ -2,10 +2,11 @@
 //! the outlines that show a selection.
 
 use std::collections::BTreeSet;
-use std::f64::consts::{FRAC_1_SQRT_2, TAU};
+use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
 
 use crate::{
-    Board, CropShape, ElementId, ElementKind, Fill, ImageEdits, Point, Rect, Shape, Text, Tip,
+    Board, Corners, CropShape, ElementId, ElementKind, Fill, ImageEdits, Point, Rect, Shape, Text,
+    Tip,
 };
 
 /// The most points [`Board::hit_along`] tries, so that however long the way, it stays quick.
@@ -17,6 +18,9 @@ const CORNER: f64 = 70.0;
 const PIECE: f64 = 4.0;
 /// So that a corner rounded near its limit costs the renderer little.
 const MOST_PIECES: f64 = 16.0;
+/// How far a star's inner corners are from its centre, in parts of its points' distance, as in a
+/// five-pointed star whose edges line up. The renderer's `STAR` is the same.
+const STAR_DEPTH: f64 = 0.381_966;
 
 impl Board {
     /// The topmost element that draws at `point`, or within `tolerance` of it. A group or a
@@ -281,7 +285,126 @@ pub(crate) fn corners(rect: &Rect, degrees: f64) -> [Point; 4] {
         .map(|(x, y)| Point { x, y }.turned(rect.centre(), degrees))
 }
 
+/// The corners of a shape drawn as a polygon, as it lies on the board, `None` for any other.
+fn polygon_of(kind: &ElementKind) -> Option<Vec<Point>> {
+    let ElementKind::Shape {
+        frame,
+        rotation,
+        shape,
+        corners,
+        ..
+    } = kind
+    else {
+        return None;
+    };
+    let (count, star) = shape.polygon(*corners)?;
+    Some(polygon(frame, *rotation, count, star))
+}
+
+/// The corners of a regular polygon of `count` corners, or of a star of `count` points, one
+/// pointing up, stretched to touch every side of `frame` whichever way its size goes, then turned
+/// clockwise by `degrees` around its centre.
+fn polygon(frame: &Rect, degrees: f64, count: u8, star: bool) -> Vec<Point> {
+    let unit = unit_polygon(count, star);
+    let Some(bounds) = around(&unit) else {
+        return Vec::new();
+    };
+    let centre = frame.centre();
+    let (width, height) = (frame.width.abs(), frame.height.abs());
+    unit.into_iter()
+        .map(|corner| {
+            Point {
+                x: centre.x + ((corner.x - bounds.x) / bounds.width - 0.5) * width,
+                y: centre.y + ((corner.y - bounds.y) / bounds.height - 0.5) * height,
+            }
+            .turned(centre, degrees)
+        })
+        .collect()
+}
+
+impl Shape {
+    /// Where the corners of one drawn as a polygon lie, in parts of its frame before it turns,
+    /// `None` for any other.
+    pub fn corner_parts(self, corners: Corners) -> Option<Vec<Point>> {
+        let (count, star) = self.polygon(corners)?;
+        let whole = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        Some(polygon(&whole, 0.0, count, star))
+    }
+}
+
+/// As [`polygon`] draws it, around the unit circle's centre, its points on the circle.
+fn unit_polygon(count: u8, star: bool) -> Vec<Point> {
+    let steps = if star { count * 2 } else { count };
+    (0..steps)
+        .map(|step| {
+            let (sin, cos) = (f64::from(step) / f64::from(steps) * TAU).sin_cos();
+            let radius = if star && step % 2 == 1 {
+                STAR_DEPTH
+            } else {
+                1.0
+            };
+            Point {
+                x: radius * sin,
+                y: -radius * cos,
+            }
+        })
+        .collect()
+}
+
 impl ElementKind {
+    /// Where a shape's text lies, in parts of its frame before it turns, the largest rectangle of
+    /// the frame's proportions within the largest circle its outline holds, stretched with it, or
+    /// the whole frame for a rectangle or a cross. `None` for anything but a shape.
+    pub fn text_area(&self) -> Option<Rect> {
+        let Self::Shape { shape, corners, .. } = self else {
+            return None;
+        };
+        let (bounds, radius) = match shape.polygon(*corners) {
+            // A star's circle runs through its inner corners.
+            Some((count, star)) => (
+                around(&unit_polygon(count, star))?,
+                if star {
+                    STAR_DEPTH
+                } else {
+                    (PI / f64::from(count)).cos()
+                },
+            ),
+            None if *shape == Shape::Ellipse => (
+                Rect {
+                    x: -1.0,
+                    y: -1.0,
+                    width: 2.0,
+                    height: 2.0,
+                },
+                1.0,
+            ),
+            None => {
+                return Some(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                });
+            }
+        };
+        // Stretched, the circle is an ellipse whose half axes are these parts of the frame, and
+        // the square of parts it holds meets it at its corners.
+        let (across, down) = (radius / bounds.width, radius / bounds.height);
+        let half = (across.powi(-2) + down.powi(-2)).sqrt().recip();
+        let (x, y) = (-bounds.x / bounds.width, -bounds.y / bounds.height);
+        Some(Rect {
+            x: x - half,
+            y: y - half,
+            width: 2.0 * half,
+            height: 2.0 * half,
+        })
+    }
+
     /// A stroke of `tip` through `points`, in board units, framed by them and styled as it comes,
     /// without the points that stray less than `tolerance` from the line through the others.
     pub fn stroke(tip: Tip, points: &[Point], tolerance: f64) -> Self {
@@ -474,6 +597,9 @@ pub(crate) fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
             diagonals(&corners(frame, *rotation)).any(|(a, b)| distance(point, a, b) <= reach)
                 || covers(kind, point)
         }
+        ElementKind::Shape { .. } if let Some(outline) = polygon_of(kind) => {
+            near_edges(&outline, point, reach) || covers(kind, point)
+        }
         ElementKind::Shape {
             frame, rotation, ..
         } => near_edges(&corners(frame, *rotation), point, reach) || covers(kind, point),
@@ -543,6 +669,9 @@ pub(crate) fn covers(kind: &ElementKind, point: Point) -> bool {
                 },
             ..
         } => within_ellipse(frame, *rotation, point),
+        ElementKind::Shape { .. } if let Some(outline) = polygon_of(kind) => {
+            encloses(&outline, point)
+        }
         ElementKind::Stroke { .. } => false,
         _ => shape(kind).is_some_and(|shape| inside(&shape, point)),
     }
@@ -574,6 +703,9 @@ pub(crate) fn nearest_on_outline(kind: &ElementKind, point: Point) -> Option<Poi
             shape: Shape::Cross,
             ..
         } => nearest_on_segments(point, diagonals(&corners(frame, *rotation))),
+        ElementKind::Shape { .. } if let Some(outline) = polygon_of(kind) => {
+            nearest_on_segments(point, edges(&outline))
+        }
         _ if kind.is_target() => nearest_on_segments(point, edges(&shape(kind)?)),
         _ => None,
     }
@@ -620,6 +752,14 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
             } else {
                 diagonals(&outline).any(|(a, b)| overlap(&[a, b], area))
             }
+        }
+        // By its edges, as a star's dents keep it from being convex. An area that meets none lies
+        // wholly within it or wholly out of it.
+        ElementKind::Shape {
+            shape, fill, text, ..
+        } if let Some(outline) = polygon_of(kind) => {
+            edges(&outline).any(|(a, b)| overlap(&[a, b], area))
+                || (filled(*shape, *fill, text) && encloses(&outline, area[0]))
         }
         ElementKind::Shape {
             frame,
@@ -674,7 +814,7 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
 }
 
 /// Whether what `target` covers holds the whole of what `kind` draws: its frame, the curve of an
-/// ellipse, the line of a stroke, or the pin of a comment.
+/// ellipse, the corners of a polygon, the line of a stroke, or the pin of a comment.
 pub(crate) fn holds(target: &ElementKind, kind: &ElementKind) -> bool {
     match kind {
         ElementKind::Shape {
@@ -685,9 +825,10 @@ pub(crate) fn holds(target: &ElementKind, kind: &ElementKind) -> bool {
         } if frame.width != 0.0 && frame.height != 0.0 => {
             covers(target, frame.centre())
                 && match target {
-                    // Close enough, as no cheap test tells whether one ellipse holds another.
+                    // Close enough, as no cheap test tells whether an ellipse, or a star with its
+                    // dents, holds an ellipse.
                     ElementKind::Shape {
-                        shape: Shape::Ellipse,
+                        shape: Shape::Ellipse | Shape::Star,
                         ..
                     }
                     | ElementKind::Image {
@@ -706,9 +847,14 @@ pub(crate) fn holds(target: &ElementKind, kind: &ElementKind) -> bool {
                         };
                         covers(target, upright.turned(centre, *rotation))
                     }),
-                    _ => shape(target)
+                    _ => polygon_of(target)
+                        .or_else(|| shape(target))
                         .is_some_and(|polygon| ellipse_within(frame, *rotation, &polygon)),
                 }
+        }
+        ElementKind::Shape { .. } if let Some(outline) = polygon_of(kind) => {
+            outline.iter().all(|point| covers(target, *point))
+                && clear_of_dents(target, edges(&outline))
         }
         ElementKind::Note {
             frame, rotation, ..
@@ -718,9 +864,11 @@ pub(crate) fn holds(target: &ElementKind, kind: &ElementKind) -> bool {
         }
         | ElementKind::Shape {
             frame, rotation, ..
-        } => corners(frame, *rotation)
-            .iter()
-            .all(|point| covers(target, *point)),
+        } => {
+            let outline = corners(frame, *rotation);
+            outline.iter().all(|point| covers(target, *point))
+                && clear_of_dents(target, edges(&outline))
+        }
         // By its points, as its frame may jut out of a target turned otherwise, and the curve it
         // draws stays within what they surround.
         ElementKind::Stroke {
@@ -728,12 +876,32 @@ pub(crate) fn holds(target: &ElementKind, kind: &ElementKind) -> bool {
             rotation,
             points,
             ..
-        } => stroke_points(frame, *rotation, points)
-            .into_iter()
-            .all(|point| covers(target, point)),
+        } => {
+            let line = stroke_points(frame, *rotation, points);
+            line.iter().all(|point| covers(target, *point))
+                && clear_of_dents(target, line.windows(2).map(|piece| (piece[0], piece[1])))
+        }
         ElementKind::Comment { at, .. } => covers(target, *at),
         _ => false,
     }
+}
+
+/// Whether none of `segments` meets the outline of `target` when it is a star, whose dents may
+/// reach in between points it covers.
+fn clear_of_dents(
+    target: &ElementKind,
+    mut segments: impl Iterator<Item = (Point, Point)>,
+) -> bool {
+    let ElementKind::Shape {
+        shape: Shape::Star, ..
+    } = target
+    else {
+        return true;
+    };
+    let Some(star) = polygon_of(target) else {
+        return true;
+    };
+    segments.all(|(a, b)| !edges(&star).any(|(c, d)| overlap(&[a, b], &[c, d])))
 }
 
 /// Where the ellipse is the unit circle, it lies within a convex polygon that holds its centre
@@ -900,6 +1068,18 @@ fn inside(polygon: &[Point], point: Point) -> bool {
         && (sides.iter().all(|side| *side >= 0.0) || sides.iter().all(|side| *side <= 0.0))
 }
 
+/// Whether `point` is within `polygon`, convex or not.
+fn encloses(polygon: &[Point], point: Point) -> bool {
+    edges(polygon)
+        .filter(|(a, b)| {
+            (a.y > point.y) != (b.y > point.y)
+                && point.x < a.x + (point.y - a.y) / (b.y - a.y) * (b.x - a.x)
+        })
+        .count()
+        % 2
+        == 1
+}
+
 /// From `point` to the segment from `a` to `b`.
 fn distance(point: Point, a: Point, b: Point) -> f64 {
     apart(point, closest(point, a, b))
@@ -955,7 +1135,9 @@ fn edges(shape: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
 mod tests {
     use super::*;
     use crate::tests::{board, element, id, stroke};
-    use crate::{AssetId, Colour, Dash, Fill, Heads, ImageEdits, Paper, Size, Text, Weight};
+    use crate::{
+        AssetId, Colour, Corners, Dash, Fill, Heads, ImageEdits, Paper, Size, Text, Weight,
+    };
 
     fn image(x: f64, y: f64, width: f64, height: f64, rotation: f64) -> ElementKind {
         ElementKind::Image {
@@ -1285,6 +1467,7 @@ mod tests {
             frame,
             rotation,
             shape,
+            corners: Default::default(),
             text: Text::new(content.to_owned(), 20.0),
             target: None,
             colour: Colour::Ink,
@@ -1616,6 +1799,211 @@ mod tests {
         assert_eq!(board.hit(point(450.0, 20.0), 3.0), None);
         assert_eq!(board.touching(area(20.0, 20.0, 10.0, 10.0)), [id(2)]);
         assert!(board.touching(area(440.0, 10.0, 8.0, 8.0)).is_empty());
+    }
+
+    fn counted(shape: Shape, frame: Rect, corners: u8, fill: Fill) -> ElementKind {
+        let mut kind = framed(shape, frame, 0.0);
+        if let ElementKind::Shape {
+            corners: drawn,
+            fill: filled,
+            ..
+        } = &mut kind
+        {
+            *drawn = Corners::new(corners).unwrap();
+            *filled = fill;
+        }
+        kind
+    }
+
+    #[test]
+    fn a_polygon_or_a_star_touches_every_side_of_its_frame() {
+        let frame = area(10.0, 20.0, 300.0, 40.0);
+        for count in Corners::FEWEST.count()..=Corners::MOST.count() {
+            for star in [false, true] {
+                let bounds = around(&polygon(&frame, 0.0, count, star)).unwrap();
+                let off = [
+                    bounds.x - frame.x,
+                    bounds.y - frame.y,
+                    bounds.width - frame.width,
+                    bounds.height - frame.height,
+                ];
+                assert!(off.iter().all(|off| off.abs() < 1e-9), "{count} {star}");
+                // One corner pointing up, at the middle of the top side.
+                let top = polygon(&frame, 0.0, count, star)[0];
+                assert!((top.x - 160.0).abs() < 1e-9 && (top.y - 20.0).abs() < 1e-9);
+            }
+        }
+        // Turned over by a negative size, it draws the same.
+        let over = area(310.0, 60.0, -300.0, -40.0);
+        assert_eq!(
+            polygon(&over, 0.0, 3, false),
+            polygon(&frame, 0.0, 3, false)
+        );
+    }
+
+    #[test]
+    fn a_shape_s_text_lies_within_its_outline() {
+        let part = |shape| {
+            let area = framed(shape, area(0.0, 0.0, 1.0, 1.0), 0.0)
+                .text_area()
+                .unwrap();
+            [area.x, area.y, area.width, area.height]
+        };
+        let near = |parts: [f64; 4], expected: [f64; 4]| {
+            parts
+                .iter()
+                .zip(expected)
+                .all(|(part, expected)| (part - expected).abs() < 1e-9)
+        };
+        assert_eq!(part(Shape::Rectangle), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(part(Shape::Cross), [0.0, 0.0, 1.0, 1.0]);
+        let corner = (1.0 - FRAC_1_SQRT_2) / 2.0;
+        assert!(near(
+            part(Shape::Ellipse),
+            [corner, corner, FRAC_1_SQRT_2, FRAC_1_SQRT_2]
+        ));
+        assert!(near(part(Shape::Diamond), [0.25, 0.25, 0.5, 0.5]));
+        // Low in a triangle, around the centre of its circle, a third of the way up.
+        let [x, y, width, height] = part(Shape::Triangle);
+        assert!(near(
+            [x + width / 2.0, y + height / 2.0, 0.0, 0.0],
+            [0.5, 2.0 / 3.0, 0.0, 0.0]
+        ));
+        let frame = area(10.0, 20.0, 300.0, 80.0);
+        for count in Corners::FEWEST.count()..=Corners::MOST.count() {
+            for shape in [Shape::Star, Shape::Polygon] {
+                let kind = counted(shape, frame, count, Fill::Solid);
+                let part = kind.text_area().unwrap();
+                assert!((part.x + part.width / 2.0 - 0.5).abs() < 1e-9);
+                // A hair within, as a four-pointed star's inner corners touch its corners.
+                let text = Rect {
+                    x: frame.x + (part.x + 1e-6) * frame.width,
+                    y: frame.y + (part.y + 1e-6) * frame.height,
+                    width: (part.width - 2e-6) * frame.width,
+                    height: (part.height - 2e-6) * frame.height,
+                };
+                assert!(
+                    corners(&text, 0.0)
+                        .iter()
+                        .all(|corner| covers(&kind, *corner)),
+                    "{shape:?} {count}"
+                );
+            }
+        }
+        assert_eq!(arrow((0.0, 0.0), (1.0, 1.0)).text_area(), None);
+    }
+
+    #[test]
+    fn a_triangle_a_diamond_or_a_polygon_is_hit_along_its_own_sides() {
+        let board = board([
+            (
+                1,
+                element(
+                    None,
+                    "a0",
+                    framed(Shape::Triangle, area(0.0, 0.0, 100.0, 100.0), 0.0),
+                ),
+            ),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    framed(Shape::Diamond, area(200.0, 0.0, 100.0, 100.0), 0.0),
+                ),
+            ),
+            // A hexagon, its corners at (650, 0), (700, 25), (700, 75), (650, 100), (600, 75), and
+            // (600, 25).
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    counted(
+                        Shape::Polygon,
+                        area(600.0, 0.0, 100.0, 100.0),
+                        6,
+                        Fill::Hollow,
+                    ),
+                ),
+            ),
+            // Turned upside down, pointing down at (50, 300).
+            (
+                4,
+                element(
+                    None,
+                    "a3",
+                    framed(Shape::Triangle, area(0.0, 200.0, 100.0, 100.0), 180.0),
+                ),
+            ),
+        ]);
+        // Along the triangle's right side, and in its frame's corners, out of it.
+        assert_eq!(board.hit(point(75.0, 50.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 99.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(5.0, 5.0), 3.0), None);
+        assert_eq!(board.hit(point(50.0, 60.0), 3.0), None);
+        assert_eq!(board.hit(point(225.0, 25.0), 3.0), Some(id(2)));
+        assert_eq!(board.hit(point(205.0, 5.0), 3.0), None);
+        assert_eq!(board.hit(point(700.0, 50.0), 3.0), Some(id(3)));
+        assert_eq!(board.hit(point(602.0, 2.0), 3.0), None);
+        assert_eq!(board.hit(point(50.0, 201.0), 3.0), Some(id(4)));
+        assert_eq!(board.hit(point(50.0, 298.0), 3.0), Some(id(4)));
+        assert_eq!(board.hit(point(5.0, 295.0), 3.0), None);
+        // Over a frame's corner, out of what it surrounds.
+        assert!(board.touching(area(0.0, 0.0, 10.0, 10.0)).is_empty());
+        assert!(board.touching(area(200.0, 0.0, 10.0, 10.0)).is_empty());
+        assert_eq!(board.touching(area(40.0, 40.0, 50.0, 10.0)), [id(1)]);
+        // Within a hollow one, which only draws its outline.
+        assert!(board.touching(area(240.0, 40.0, 20.0, 20.0)).is_empty());
+    }
+
+    #[test]
+    fn a_star_covers_and_touches_none_of_its_dents() {
+        // Five points, the two at the bottom at (419.1, 100) and (480.9, 100), the dent between
+        // them at (450, 76.4).
+        let star = |fill| counted(Shape::Star, area(400.0, 0.0, 100.0, 100.0), 5, fill);
+        let filled = board([(1, element(None, "a0", star(Fill::Solid)))]);
+        assert_eq!(filled.covering(point(450.0, 50.0)), [id(1)]);
+        assert!(filled.covering(point(450.0, 90.0)).is_empty());
+        assert_eq!(filled.hit(point(450.0, 90.0), 3.0), None);
+        assert!(filled.touching(area(445.0, 85.0, 10.0, 10.0)).is_empty());
+        assert_eq!(filled.touching(area(440.0, 40.0, 20.0, 20.0)), [id(1)]);
+        let hollow = board([(1, element(None, "a0", star(Fill::Hollow)))]);
+        assert_eq!(hollow.hit(point(450.0, 50.0), 3.0), None);
+        assert_eq!(hollow.hit(point(450.0, 77.0), 3.0), Some(id(1)));
+        assert!(hollow.touching(area(440.0, 40.0, 20.0, 20.0)).is_empty());
+        assert_eq!(hollow.touching(area(445.0, 70.0, 10.0, 10.0)), [id(1)]);
+    }
+
+    #[test]
+    fn what_lies_whole_on_a_triangle_lies_within_its_sides() {
+        let triangle = counted(Shape::Triangle, area(0.0, 0.0, 100.0, 100.0), 5, Fill::Tint);
+        let note = |x, y| ElementKind::Note {
+            frame: area(x, y, 10.0, 10.0),
+            rotation: 0.0,
+            text: Text::new("A".to_owned(), 20.0),
+            target: None,
+            colour: Colour::Ink,
+            opacity: Default::default(),
+        };
+        assert!(holds(&triangle, &note(45.0, 50.0)));
+        // Within its frame, in a corner the triangle leaves out.
+        assert!(!holds(&triangle, &note(2.0, 2.0)));
+        // A triangle whose frame juts out of a diamond, though its corners do not.
+        let diamond = counted(Shape::Diamond, area(0.0, 0.0, 100.0, 100.0), 5, Fill::Tint);
+        let inner = framed(Shape::Triangle, area(30.0, 10.0, 40.0, 40.0), 0.0);
+        assert!(holds(&diamond, &inner));
+        assert!(!holds(
+            &diamond,
+            &framed(Shape::Rectangle, area(30.0, 10.0, 40.0, 40.0), 0.0)
+        ));
+        // An ellipse around a point of the triangle, within its frame but over its side.
+        let round = framed(Shape::Ellipse, area(15.0, 50.0, 30.0, 30.0), 0.0);
+        assert!(!holds(&triangle, &round));
+        assert!(holds(
+            &triangle,
+            &framed(Shape::Ellipse, area(40.0, 60.0, 20.0, 20.0), 0.0)
+        ));
     }
 
     #[test]
@@ -2047,5 +2435,94 @@ mod tests {
         // 16 wide, so 8 either side of its line.
         assert_eq!(board.touching(area(40.0, 53.0, 20.0, 4.0)), [id(1)]);
         assert!(board.touching(area(40.0, 59.0, 20.0, 4.0)).is_empty());
+    }
+
+    #[test]
+    fn a_star_holds_what_lies_within_it_but_nothing_that_spans_one_of_its_dents() {
+        // The two bottom points at (19.1, 100) and (80.9, 100), the dent between them at
+        // (50, 76.4). Each corner of the note across it lies in a point, its middle in the dent.
+        let star = counted(Shape::Star, area(0.0, 0.0, 100.0, 100.0), 5, Fill::Solid);
+        let note = |frame| ElementKind::Note {
+            frame,
+            rotation: 0.0,
+            text: Text::new("A".to_owned(), 20.0),
+            target: None,
+            colour: Colour::Ink,
+            opacity: Default::default(),
+        };
+        let (within, across) = (
+            note(area(45.0, 45.0, 10.0, 10.0)),
+            note(area(25.0, 88.0, 50.0, 4.0)),
+        );
+        assert!(holds(&star, &within), "a note in its middle");
+        assert!(!covers(&star, point(50.0, 90.0)));
+        assert!(!holds(&star, &across), "a note across the dent");
+        assert!(
+            !holds(
+                &star,
+                &framed(Shape::Rectangle, area(25.0, 88.0, 50.0, 4.0), 0.0)
+            ),
+            "a rectangle across the dent"
+        );
+        let line = pen(area(25.0, 90.0, 50.0, 0.0), 0.0, &[(0.0, 0.0), (1.0, 0.0)]);
+        assert!(!holds(&star, &line), "a stroke across the dent");
+        let board = board([
+            (1, element(None, "a0", star)),
+            (2, element(None, "a1", across)),
+            (3, element(None, "a2", within)),
+        ]);
+        let mut landing = crate::stick::Landing::new(&board);
+        assert_eq!(landing.land(id(2)), None);
+        assert_eq!(landing.land(id(3)), Some(id(1)));
+    }
+
+    #[test]
+    fn a_flat_polygon_or_star_is_hit_and_touched_along_its_line() {
+        let mut turned = counted(Shape::Star, area(600.0, 0.0, 100.0, 0.0), 5, Fill::Solid);
+        if let ElementKind::Shape { rotation, .. } = &mut turned {
+            // Upright, along x = 650 from y = -50 to 50.
+            *rotation = 90.0;
+        }
+        let shapes = [
+            counted(Shape::Triangle, area(0.0, 0.0, 100.0, 0.0), 5, Fill::Solid),
+            counted(Shape::Star, area(200.0, 0.0, 0.0, 100.0), 7, Fill::Solid),
+            counted(Shape::Polygon, area(400.0, 50.0, 0.0, 0.0), 6, Fill::Solid),
+            turned,
+        ];
+        for kind in &shapes {
+            let outline = polygon_of(kind).unwrap();
+            assert!(outline.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
+        }
+        let board = board(
+            shapes
+                .into_iter()
+                .zip(["a0", "a1", "a2", "a3"])
+                .enumerate()
+                .map(|(at, (kind, key))| (at as u128 + 1, element(None, key, kind))),
+        );
+        assert_eq!(board.hit(point(50.0, 2.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 10.0), 3.0), None);
+        // On the line through it, beyond its ends.
+        assert_eq!(board.hit(point(150.0, 0.0), 3.0), None);
+        assert_eq!(board.hit(point(202.0, 50.0), 3.0), Some(id(2)));
+        assert_eq!(board.hit(point(210.0, 50.0), 3.0), None);
+        assert_eq!(board.hit(point(200.0, 150.0), 3.0), None);
+        assert_eq!(board.hit(point(401.0, 50.0), 3.0), Some(id(3)));
+        assert_eq!(board.hit(point(410.0, 50.0), 3.0), None);
+        assert_eq!(board.hit(point(652.0, 0.0), 3.0), Some(id(4)));
+        assert_eq!(board.hit(point(660.0, 0.0), 3.0), None);
+        assert_eq!(board.hit(point(650.0, 80.0), 3.0), None);
+        // Filled, it still covers nothing.
+        assert!(board.covering(point(50.0, 0.0)).is_empty());
+        assert!(board.covering(point(200.0, 50.0)).is_empty());
+        assert!(board.covering(point(400.0, 50.0)).is_empty());
+        assert_eq!(board.touching(area(40.0, -10.0, 20.0, 20.0)), [id(1)]);
+        assert!(board.touching(area(40.0, 10.0, 20.0, 20.0)).is_empty());
+        assert_eq!(board.touching(area(190.0, 40.0, 20.0, 20.0)), [id(2)]);
+        assert!(board.touching(area(205.0, 40.0, 20.0, 20.0)).is_empty());
+        assert_eq!(board.touching(area(395.0, 45.0, 10.0, 10.0)), [id(3)]);
+        assert!(board.touching(area(405.0, 45.0, 10.0, 10.0)).is_empty());
+        assert_eq!(board.touching(area(640.0, -10.0, 20.0, 20.0)), [id(4)]);
+        assert!(board.touching(area(655.0, -10.0, 20.0, 20.0)).is_empty());
     }
 }

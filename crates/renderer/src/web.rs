@@ -139,6 +139,9 @@ struct Out {
 const STROKES: &str = r#"
 /// A dash and the gap after it, in widths of the stroke.
 const DASH: f32 = 7.0;
+/// How far a star's inner corners are from its centre, in parts of its points' distance, as the
+/// board's `STAR_DEPTH`.
+const STAR: f32 = 0.381966;
 
 struct Out {
     @builtin(position) position: vec4f,
@@ -150,15 +153,17 @@ struct Out {
     @location(5) dash: f32,
     @location(6) opacity: f32,
     @location(7) extra: f32,
+    @location(8) corners: f32,
 };
 
 /// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, and 6 for an arrow along it, its
 /// heads `degrees` long, at its end, and its start too when `extra` is 2. 1 or 2 outlines a
 /// rectangle or an ellipse in the frame `geometry`, turned by `degrees`, filling it as much as
-/// `extra`, 3 fills the rectangle, and 4 draws its diagonals. `width` is in board units, but never under
-/// a device pixel, and dashes the stroke when negative, though not an arrow's heads. What one
-/// instance draws blends once, so that an arrow with its heads, or an outline with its fill, fades
-/// as a whole. A text over them blends apart.
+/// `extra`, 3 fills the rectangle, and 4 draws its diagonals. 7 or 8 outlines and fills as 1 and 2
+/// do a polygon of `corners` corners, or a star of `corners` points. `width` is in board units, but
+/// never under a device pixel, and dashes the stroke when negative, though not an arrow's heads.
+/// What one instance draws blends once, so that an arrow with its heads, or an outline with its
+/// fill, fades as a whole. A text over them blends apart.
 @vertex fn vs(
     @builtin(vertex_index) index: u32,
     @location(0) shape: f32,
@@ -168,6 +173,7 @@ struct Out {
     @location(4) colour: vec3f,
     @location(5) opacity: f32,
     @location(6) extra: f32,
+    @location(7) corners: f32,
 ) -> Out {
     let corner = vec2f(f32(index & 1u), f32(index >> 1u));
     let fills = shape > 2.5 && shape < 3.5;
@@ -181,9 +187,10 @@ struct Out {
     out.colour = colour;
     out.opacity = opacity;
     out.extra = extra;
+    out.corners = corners;
     // Never so short that the caps close the gaps.
     out.dash = select(0.0, max(DASH * thickness * camera.zoom, radius * 6.0), dashed);
-    if shape < 0.5 || shape > 5.5 {
+    if lined(shape) {
         let start = (geometry.xy - camera.origin) * camera.zoom;
         let end = (geometry.zw - camera.origin) * camera.zoom;
         let span = distance(start, end);
@@ -203,6 +210,11 @@ struct Out {
         out.position = clip(centre + turn(out.local, degrees));
     }
     return out;
+}
+
+/// Whether `shape` is a line or an arrow.
+fn lined(shape: f32) -> bool {
+    return shape < 0.5 || abs(shape - 6.0) < 0.5;
 }
 
 fn segment(point: vec2f, start: vec2f, end: vec2f) -> f32 {
@@ -281,10 +293,54 @@ fn dashed_ellipse(local: vec2f, half: vec2f, base: f32, away: f32) -> f32 {
     return length(vec2f(along - nearest_dash(along, whole_period(quarter, base), quarter), away));
 }
 
+/// Of a regular polygon of `count` corners, or a star of `count` points, one pointing up, stretched
+/// to touch each side of the box of half size `half`, how far `local` is from its outline,
+/// negative within it, then from the nearest dash along it when `base` is more than 0, each side
+/// cut into a whole number of periods nearest `base` long, as a rectangle's are. As the board's
+/// `polygon` draws it.
+fn polygon(local: vec2f, half: vec2f, count: f32, star: bool, base: f32) -> vec2f {
+    let tau = 6.2831855;
+    let steps = select(count, count * 2.0, star);
+    // The points reach furthest, those nearest to straight across or down, which a star's inner
+    // corners never pass.
+    let sector = tau / count;
+    let right = cos(sector * abs(count * 0.25 - round(count * 0.25)));
+    let bottom = cos(sector * abs(count * 0.5 - round(count * 0.5)));
+    let scale = vec2f(half.x / right, 2.0 * half.y / (1.0 + bottom));
+    var solid = 1e20;
+    var dashed = 1e20;
+    var inside = false;
+    var start = vec2f(0.0, -half.y);
+    for (var corner = 1u; corner <= u32(steps); corner++) {
+        let angle = f32(corner) / steps * tau;
+        let radius = select(1.0, STAR, star && (corner & 1u) == 1u);
+        let unit = radius * vec2f(sin(angle), -cos(angle));
+        let end = vec2f(unit.x * scale.x, (1.0 + unit.y) * scale.y - half.y);
+        let side = end - start;
+        let span = length(side);
+        let direction = side / max(span, 1e-6);
+        let offset = local - start;
+        let along = dot(offset, direction);
+        let across = offset.x * direction.y - offset.y * direction.x;
+        solid = min(solid, length(vec2f(along - clamp(along, 0.0, span), across)));
+        if base > 0.0 {
+            let nearest = nearest_dash(along, whole_period(span, base), span);
+            dashed = min(dashed, length(vec2f(along - nearest, across)));
+        }
+        // Even–odd, as a star's dents keep it from being convex.
+        if (start.y > local.y) != (end.y > local.y)
+            && local.x < start.x + (local.y - start.y) / (end.y - start.y) * (end.x - start.x) {
+            inside = !inside;
+        }
+        start = end;
+    }
+    return vec2f(select(solid, -solid, inside), dashed);
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
     var away: f32;
     var filled = 0.0;
-    if in.shape < 0.5 || in.shape > 5.5 {
+    if lined(in.shape) {
         var nearest = clamp(in.local.x, 0.0, in.size.x);
         if in.dash > 0.0 {
             nearest = nearest_dash(in.local.x, whole_period(in.size.x, in.dash), in.size.x);
@@ -316,6 +372,14 @@ fn dashed_ellipse(local: vec2f, half: vec2f, base: f32, away: f32) -> f32 {
         }
     } else if in.shape < 3.5 {
         return vec4f(in.colour, clamp(0.5 - box(in.local, in.size), 0.0, 1.0) * in.opacity);
+    } else if in.shape > 6.5 {
+        // Rounded, as interpolating a whole number may leave it a hair off.
+        let edge = polygon(in.local, in.size, round(in.corners), in.shape > 7.5, in.dash);
+        away = abs(edge.x);
+        filled = clamp(0.5 - edge.x, 0.0, 1.0) * in.extra;
+        if in.dash > 0.0 && away < in.radius + 1.0 {
+            away = edge.y;
+        }
     } else {
         // Folded into one quarter, both diagonals run from the centre to the corner.
         let point = abs(in.local);
@@ -436,11 +500,11 @@ const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// An image's instance is its x, y, width, height, rotation, the crop's x, y, width, and height
 /// in texture coordinates, which a negative size flips, 1 to draw in greys or 0, and 1 to show
 /// the ellipse that fills it or 0. A text's is its x, y, width, height, rotation, colour, and
-/// padding. A stroke's is the shape, geometry, rotation, width, colour, and extra that [`STROKES`]
-/// reads. Colours are red, green, and blue from 0 to 1. A pen stroke's lines come one after the
-/// other, as lines from each of its points to the next, whose extra tells them from the stroke's
-/// next to them, and when see-through, they draw [`ONCE`].
-const STRIDE: usize = 14;
+/// padding. A stroke's is the shape, geometry, rotation, width, colour, corners, and extra that
+/// [`STROKES`] reads. Colours are red, green, and blue from 0 to 1. A pen stroke's lines come one
+/// after the other, as lines from each of its points to the next, whose extra tells them from the
+/// stroke's next to them, and when see-through, they draw [`ONCE`].
+const STRIDE: usize = 15;
 const IMAGE: f32 = 0.0;
 const STROKE: f32 = 1.0;
 /// The lines of a see-through pen stroke, which together cover each pixel once, as the
@@ -627,7 +691,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x3];
     let texts_module = module(&device, &[CAMERA, TEXT].concat());
     let text_attributes = [rect, degrees, colour, opacity(3)];
-    let [shape, geometry, degrees, width, colour, extra] = wgpu::vertex_attr_array![0 => Float32, 1 => Float32x4, 2 => Float32, 3 => Float32, 4 => Float32x3, 5 => Float32];
+    let [shape, geometry, degrees, width, colour, corners, extra] = wgpu::vertex_attr_array![0 => Float32, 1 => Float32x4, 2 => Float32, 3 => Float32, 4 => Float32x3, 7 => Float32, 6 => Float32];
     let strokes_module = module(&device, &[CAMERA, ELLIPSE, STROKES].concat());
     let stroke_attributes = [
         shape,
@@ -635,10 +699,8 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         degrees,
         width,
         colour,
-        wgpu::VertexAttribute {
-            shader_location: 6,
-            ..extra
-        },
+        corners,
+        extra,
         opacity(5),
     ];
     let stroking = |target, depth, fragment| {

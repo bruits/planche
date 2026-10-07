@@ -198,6 +198,32 @@ describe("what a picture of the selection covers", () => {
       height: 100 + 2 * half,
     });
   });
+  it("bounds a turned polygon by its corners, which its stroke rounds", () => {
+    const half = core.strokeWidth("thick") / 2;
+    const frame = { x: 0, y: 0, width: 100, height: 100 };
+    const shaped = (shape: "diamond" | "triangle" | "star", rotation: number): Kind => ({
+      type: "shape",
+      frame,
+      rotation,
+      shape,
+      text,
+      weight: "thick",
+    });
+    // Turned an eighth, a diamond is a square on its side.
+    const square = bounds({ a: shaped("diamond", 45) })!;
+    expect(square.width).toBeCloseTo(100 * Math.SQRT1_2 + 2 * half);
+    expect(square.height).toBeCloseTo(100 * Math.SQRT1_2 + 2 * half);
+    expect(square.x).toBeCloseTo(50 - square.width / 2);
+    // Upside down, its apex at the bottom, as wide and tall as its frame.
+    const turned = bounds({ a: shaped("triangle", 180) })!;
+    expect([turned.x, turned.y]).toEqual([expect.closeTo(-half), expect.closeTo(-half)]);
+    expect([turned.width, turned.height]).toEqual([
+      expect.closeTo(100 + 2 * half),
+      expect.closeTo(100 + 2 * half),
+    ]);
+    expect(bounds({ a: shaped("star", 30) })!.width).toBeLessThan(100 * Math.SQRT2);
+  });
+
   it("bounds a turned ellipse by its curve, an image cut to one as an outline holding text", () => {
     const half = core.strokeWidth("thick") / 2;
     const frame = { x: 0, y: 0, width: 100, height: 100 };

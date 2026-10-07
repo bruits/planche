@@ -52,6 +52,9 @@ export const SIZES: { label: string; name: string; pixels: number }[] = [
 /** In percent, the steps the card marks on its opacity, and snaps to. */
 export const OPACITIES = [25, 50, 75, 100];
 
+/** The fewest and the most points a star has, or sides a polygon, as the core takes them. */
+export const CORNERS = { fewest: 3, most: 12 };
+
 /** What a change sets, each where it applies. */
 export interface Style {
   colour?: Colour;
@@ -60,6 +63,8 @@ export interface Style {
   dash?: Dash;
   heads?: Heads;
   fill?: Fill;
+  /** A star's points, or a polygon's sides. */
+  corners?: number;
   /** On screen, in CSS pixels, at the zoom it is set at. */
   size?: number;
   bold?: boolean;
@@ -102,6 +107,8 @@ export function valueOf(kind: Kind, setting: Setting, zoom: number): Style[Setti
       return drawn(plain.heads, "heads" in kind ? kind.heads : undefined);
     case "fill":
       return drawn(plain.fill, "fill" in kind ? kind.fill : undefined);
+    case "corners":
+      return drawn(plain.corners, "corners" in kind ? kind.corners : undefined);
     case "opacity":
       return drawn(plain.opacity, "opacity" in kind ? kind.opacity : undefined);
     case "size":
@@ -243,6 +250,10 @@ function recalled(): Partial<Record<Draw, Style>> {
     "rectangle",
     "ellipse",
     "cross",
+    "triangle",
+    "diamond",
+    "star",
+    "polygon",
     "note",
     "sticky",
   ];

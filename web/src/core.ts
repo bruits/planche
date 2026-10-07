@@ -29,8 +29,10 @@ import init, {
   sizedSvg as sized,
   strokeKind as stroked,
   strokeWidth as width,
+  cornerParts,
   plainStyle,
   styleSettings,
+  textArea,
   verifyAsset as verify,
   withStyle as styled,
   zipTailLength,
@@ -60,6 +62,7 @@ import type {
   Rect,
   Restack,
   Setting,
+  Shape,
   Side,
   Size,
   Style,
@@ -411,6 +414,44 @@ export function settings(kind: Kind): readonly Setting[] {
     taken.set(typeOf(kind), found);
   }
   return found;
+}
+
+const areas = new Map<string, Readonly<Rect>>();
+
+/**
+ * Where the text of a shape lies, in parts of its frame before it turns, which its shape and its
+ * corners alone tell.
+ */
+export function textAreaOf(kind: Extract<Kind, { type: "shape" }>): Readonly<Rect> {
+  const key = `${kind.shape} ${kind.corners ?? ""}`;
+  let found = areas.get(key);
+  if (found === undefined) {
+    found = rect(textArea(JSON.stringify(kind)))!;
+    areas.set(key, found);
+  }
+  return found;
+}
+
+const polygons = new Map<string, readonly Point[] | undefined>();
+
+/**
+ * Where the corners of a `shape` drawn as a polygon lie, with `corners` of its own when it counts
+ * them, in parts of its frame before it turns, `undefined` for any other shape.
+ */
+export function cornerPartsOf(shape: Shape, corners: number): readonly Point[] | undefined {
+  const key = `${shape} ${corners}`;
+  if (!polygons.has(key)) {
+    const flat = cornerParts(shape, corners);
+    polygons.set(
+      key,
+      flat &&
+        Array.from({ length: flat.length / 2 }, (_, at) => ({
+          x: flat[2 * at]!,
+          y: flat[2 * at + 1]!,
+        })),
+    );
+  }
+  return polygons.get(key);
 }
 
 const plains = new Map<string, Readonly<Style>>();

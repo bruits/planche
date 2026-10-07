@@ -273,6 +273,7 @@ const SETTABLE = [
   "dash",
   "heads",
   "fill",
+  "corners",
   "bold",
   "italic",
   "strike",
@@ -309,6 +310,11 @@ function styled(
         throw new Error(`\`opacity\` is a percent from 1 to 100, not ${String(value)}`);
       }
       style.opacity = value as number;
+    } else if (field === "corners") {
+      if (core.checked({ corners: value }) === undefined) {
+        throw new Error(`\`corners\` is a whole number from 3 to 12, not ${String(value)}`);
+      }
+      style.corners = value as number;
     } else {
       Object.assign(style, { [field]: value });
     }
@@ -317,9 +323,9 @@ function styled(
   return restyled(kind, style, 1);
 }
 
-/** As refusals name it, a cross apart, as it takes no fill. */
+/** As refusals name it, a shape by its own name, as some take no fill, and most no corners. */
 function named(kind: Kind): string {
-  return kind.type === "shape" && kind.shape === "cross" ? "cross" : kind.type;
+  return kind.type === "shape" ? kind.shape : kind.type;
 }
 
 async function add(
@@ -452,8 +458,8 @@ function patched(editor: Editor, change: Update): Kind {
     new Error(
       blank
         ? `${id} needs some text before its ${field}`
-        : named(kind) === "cross"
-          ? `${id} is a cross, which takes no ${field}`
+        : kind.type === "shape"
+          ? `${id} is ${/^[aeiou]/.test(kind.shape) ? "an" : "a"} ${kind.shape}, which takes no ${field}`
           : `${id} has type ${kind.type}, which takes no ${field}`,
     );
   if (text !== undefined) {

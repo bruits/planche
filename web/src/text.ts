@@ -15,8 +15,9 @@ export const FONT = "Inter";
 export const LINE_HEIGHT = 1.25;
 /** Around a sticky note's text, in font sizes. */
 const STICKY_PADDING = 0.8;
-/** Around a shape's text, in font sizes, within the rectangle that an ellipse holds. */
+/** Around a shape's text, in font sizes, within the part of its frame its outline holds. */
 const SHAPE_PADDING = 0.5;
+const WHOLE = { x: 0, y: 0, width: 1, height: 1 };
 /** Room around a texture for glyphs that reach past their advance or line, in font sizes. */
 const MARGIN = 0.25;
 /** Pixels per font size of a text out of view, enough to show until it refines. */
@@ -98,13 +99,12 @@ export function layout(kind: Holder): Layout {
   const { width, height } = inEms(kind);
   const padding =
     kind.type === "note" ? 0 : kind.type === "sticky" ? STICKY_PADDING : SHAPE_PADDING;
-  // The largest rectangle of the ellipse's proportions that it holds.
-  const share = kind.type === "shape" && kind.shape === "ellipse" ? Math.SQRT1_2 : 1;
+  const part = kind.type === "shape" ? core.textAreaOf(kind) : WHOLE;
   const area = {
-    x: (width * (1 - share)) / 2 + padding,
-    y: (height * (1 - share)) / 2 + padding,
-    width: Math.max(width * share - 2 * padding, 0),
-    height: Math.max(height * share - 2 * padding, 0),
+    x: width * part.x + padding,
+    y: height * part.y + padding,
+    width: Math.max(width * part.width - 2 * padding, 0),
+    height: Math.max(height * part.height - 2 * padding, 0),
   };
   const measured = metrics(face(kind));
   const lines = wrap(kind.text.content, area.width, (text) => measured.width(text));
@@ -131,7 +131,7 @@ export function needed(kind: Holder): number {
       ? text
       : kind.type === "sticky"
         ? text + 2 * STICKY_PADDING
-        : (text + 2 * SHAPE_PADDING) * (kind.shape === "ellipse" ? Math.SQRT2 : 1);
+        : (text + 2 * SHAPE_PADDING) / core.textAreaOf(kind).height;
   return ems * kind.text.font_size;
 }
 
@@ -401,7 +401,7 @@ function sameLayout(a: Holder, b: Holder): boolean {
   const [lookA, lookB] = [face(a), face(b)];
   return (
     a.type === b.type &&
-    (a.type !== "shape" || b.type !== "shape" || a.shape === b.shape) &&
+    (a.type !== "shape" || b.type !== "shape" || core.textAreaOf(a) === core.textAreaOf(b)) &&
     a.text.content === b.text.content &&
     lookA.bold === lookB.bold &&
     lookA.italic === lookB.italic &&

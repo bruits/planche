@@ -341,12 +341,15 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "is_default")]
         opacity: Opacity,
     },
-    /// Its outline, its fill, and its text in its `colour`. A cross fills nothing.
+    /// Its outline, its fill, and its text in its `colour`. A cross fills nothing, and only a star
+    /// or a polygon counts its `corners`.
     Shape {
         frame: Rect,
         #[serde(serialize_with = "without_negative_zero")]
         rotation: f64,
         shape: Shape,
+        #[serde(default, skip_serializing_if = "is_default")]
+        corners: Corners,
         text: Text,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
@@ -596,6 +599,7 @@ impl ElementKind {
                 frame,
                 rotation,
                 shape: _,
+                corners: _,
                 text,
                 target: _,
                 colour: _,
@@ -931,6 +935,45 @@ impl<'de> Deserialize<'de> for Opacity {
     }
 }
 
+/// How many points a star has, or sides a polygon, from 3 to 12.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "number"))]
+pub struct Corners(u8);
+
+impl Corners {
+    pub const FEWEST: Self = Self(3);
+    pub const MOST: Self = Self(12);
+
+    pub fn new(count: u8) -> Option<Self> {
+        (Self::FEWEST.0..=Self::MOST.0)
+            .contains(&count)
+            .then_some(Self(count))
+    }
+
+    pub fn count(self) -> u8 {
+        self.0
+    }
+}
+
+impl Default for Corners {
+    fn default() -> Self {
+        Self(5)
+    }
+}
+
+impl<'de> Deserialize<'de> for Corners {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let count = u8::deserialize(deserializer)?;
+        Self::new(count).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "a star has from 3 to 12 points, and a polygon as many sides, not {count}"
+            ))
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -1017,7 +1060,7 @@ pub enum Heads {
     Both,
 }
 
-/// What a rectangle or an ellipse draws within its outline, in its colour.
+/// What a shape but a cross draws within its outline, in its colour.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -1049,6 +1092,33 @@ pub enum Shape {
     Ellipse,
     /// The two diagonals of its frame.
     Cross,
+    /// Pointing up, its base the bottom of its frame.
+    Triangle,
+    /// Its corners at the middles of its frame's sides.
+    Diamond,
+    /// Of as many points as its corners, regular but for the frame it fills, one pointing up.
+    Star,
+    /// Of as many sides as its corners, regular but for the frame it fills, a corner pointing up.
+    Polygon,
+}
+
+impl Shape {
+    /// Of one drawn as a polygon, how many corners it goes round, a star's points alone, and
+    /// whether it is a star.
+    pub(crate) fn polygon(self, corners: Corners) -> Option<(u8, bool)> {
+        match self {
+            Self::Triangle => Some((3, false)),
+            Self::Diamond => Some((4, false)),
+            Self::Polygon => Some((corners.count(), false)),
+            Self::Star => Some((corners.count(), true)),
+            Self::Rectangle | Self::Ellipse | Self::Cross => None,
+        }
+    }
+
+    /// Whether how many corners it has is its own to choose.
+    pub(crate) fn counts_corners(self) -> bool {
+        matches!(self, Self::Star | Self::Polygon)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1300,6 +1370,18 @@ mod tests {
     }
 
     #[test]
+    fn a_star_has_from_three_to_twelve_points() {
+        let read = |json: &str| serde_json::from_str::<Corners>(json);
+        assert_eq!(read("3").unwrap(), Corners::FEWEST);
+        assert_eq!(read("12").unwrap(), Corners::MOST);
+        assert_eq!(read("5").unwrap(), Corners::default());
+        for json in ["2", "13", "0", "-1", "4.5", "\"5\""] {
+            assert!(read(json).is_err(), "{json}");
+        }
+        assert_eq!(serde_json::to_string(&Corners::new(7)).unwrap(), "7");
+    }
+
+    #[test]
     fn a_speed_is_one_browsers_play() {
         let read = |json: &str| serde_json::from_str::<Speed>(json);
         assert_eq!(read("0.25").unwrap().times(), 0.25);
@@ -1370,6 +1452,7 @@ mod tests {
             frame,
             rotation,
             shape: Shape::Rectangle,
+            corners: Default::default(),
             text: text(font_size),
             target: None,
             colour: Colour::Ink,

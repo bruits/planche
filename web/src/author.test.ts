@@ -285,6 +285,39 @@ describe("write", () => {
     ).rejects.toThrow("opacity");
   });
 
+  it("draws the stars and polygons an agent counts the corners of, and refuses the others", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const star = { type: "shape", x: 0, y: 0, shape: "star", corners: 7 };
+    const pentagon = { type: "shape", x: 200, y: 0, shape: "polygon", corners: 5 };
+    const { added } = (await write("add", { elements: [star, pentagon] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const [pointed, sided] = added.map(({ id }) => id);
+    const kindOf = (id: string) => opened.board.elements[id]!.kind;
+    expect(kindOf(pointed!)).toMatchObject({ shape: "star", corners: 7 });
+    // Five, as it comes, writes nothing.
+    expect(kindOf(sided!)).not.toHaveProperty("corners");
+    await write("update", { updates: [{ id: sided, corners: 12 }] }, writing, later());
+    expect(kindOf(sided!)).toMatchObject({ corners: 12 });
+    // Turned into a triangle, it counts its own three.
+    await write("update", { updates: [{ id: pointed, shape: "triangle" }] }, writing, later());
+    expect(kindOf(pointed!)).toMatchObject({ shape: "triangle" });
+    expect(kindOf(pointed!)).not.toHaveProperty("corners");
+    const before = opened.editor.json();
+    await expect(
+      write("update", { updates: [{ id: pointed, corners: 6 }] }, writing, later()),
+    ).rejects.toThrow("is a triangle, which takes no corners");
+    await expect(
+      write("update", { updates: [{ id: sided, corners: 13 }] }, writing, later()),
+    ).rejects.toThrow("`corners` is a whole number from 3 to 12, not 13");
+    const ellipse = { type: "shape", x: 0, y: 200, shape: "ellipse", corners: 6 };
+    await expect(write("add", { elements: [ellipse] }, writing, later())).rejects.toThrow(
+      "A new ellipse takes no corners",
+    );
+    expect(opened.editor.json()).toBe(before);
+  });
+
   it("writes a style an agent chooses as it comes as nothing", async () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       font: "",

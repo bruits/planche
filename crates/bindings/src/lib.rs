@@ -7,8 +7,9 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use board::{
-    Alignment, AssetId, Axis, Board, Colour, Copied, ElementId, ElementKind, GRID_STEP, GridLevel,
-    Order, Point, Rect, Restack, Side, Size, Speed, Style, Tip, Transform, Weight,
+    Alignment, AssetId, Axis, Board, Colour, Copied, Corners, ElementId, ElementKind, GRID_STEP,
+    GridLevel, Order, Point, Rect, Restack, Shape, Side, Size, Speed, Style, Tip, Transform,
+    Weight,
 };
 use format::{save, zip};
 use js_sys::{Map, Uint8Array};
@@ -608,6 +609,26 @@ pub fn stroke_width(weight: Option<String>) -> Result<f64, JsError> {
         .transpose()?
         .unwrap_or_default();
     Ok(weight.width())
+}
+
+/// The x, y, width, and height of where the text of the shape `kind`, as JSON, lies, in parts of
+/// its frame before it turns, `undefined` for anything but a shape.
+#[wasm_bindgen(js_name = textArea)]
+pub fn text_area(kind: &str) -> Result<Option<Vec<f64>>, JsError> {
+    let kind: ElementKind = serde_json::from_str(kind)?;
+    Ok(kind.text_area().map(rect))
+}
+
+/// The x and y of each corner of a `shape` drawn as a polygon, one after the other, in parts of
+/// its frame before it turns, with `corners` of its own when it counts them, `undefined` for any
+/// other shape.
+#[wasm_bindgen(js_name = cornerParts)]
+pub fn corner_parts(shape: String, corners: u8) -> Result<Option<Vec<f64>>, JsError> {
+    let shape: Shape = serde_json::from_value(shape.into())?;
+    let corners = Corners::new(corners).unwrap_or_default();
+    Ok(shape
+        .corner_parts(corners)
+        .map(|parts| parts.iter().flat_map(|part| [part.x, part.y]).collect()))
 }
 
 /// The parts of a style that `kind`, as JSON, takes, as a JSON array.

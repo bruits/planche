@@ -1086,6 +1086,12 @@ body {
   width: 52px;
 }
 
+/* As wide as its widest count, so that the button after it stays put as it changes. */
+.style-card .tally {
+  min-width: 10ch;
+  text-align: center;
+}
+
 .style-card button[aria-disabled="true"] {
   opacity: 0.4;
   cursor: default;

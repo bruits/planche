@@ -165,6 +165,9 @@ pub enum NewElement {
         dash: Option<Dash>,
         /// Hollow by default. Not for a cross.
         fill: Option<Fill>,
+        /// A star's points, or a polygon's sides, 5 by default.
+        #[schemars(range(min = 3, max = 12))]
+        corners: Option<u8>,
         /// Of its text, which it needs.
         bold: Option<bool>,
         italic: Option<bool>,
@@ -220,6 +223,9 @@ pub enum NewElement {
     },
 }
 
+/// Each touches every side of its frame. A cross is its diagonals, a triangle points up from the
+/// bottom, a diamond's corners are the middles of the sides, and a star of `corners` points, or a
+/// polygon of `corners` sides, is regular but for its frame, pointing up.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
@@ -228,6 +234,10 @@ pub enum ShapeKind {
     Rectangle,
     Ellipse,
     Cross,
+    Triangle,
+    Diamond,
+    Star,
+    Polygon,
 }
 
 /// A colour of the palette, which each theme draws its own way so that it reads, ink by default,
@@ -382,8 +392,11 @@ pub struct Update {
     pub dash: Option<Dash>,
     /// For an arrow.
     pub heads: Option<Heads>,
-    /// For a rectangle or an ellipse.
+    /// For a shape but a cross.
     pub fill: Option<Fill>,
+    /// For a star, its points, or a polygon, its sides.
+    #[schemars(range(min = 3, max = 12))]
+    pub corners: Option<u8>,
     /// For a note, a sticky note, or a shape holding text.
     pub bold: Option<bool>,
     /// For a note, a sticky note, or a shape holding text.

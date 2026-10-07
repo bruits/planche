@@ -122,6 +122,17 @@ const ADDED_MARGIN = 48;
 const DUPLICATE_OFFSET = 16;
 /** In the order the key goes through them. */
 const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
+/** The tools a drag draws with, or a click places. */
+const FRAMED: ReadonlySet<string> = new Set([
+  "rectangle",
+  "ellipse",
+  "triangle",
+  "diamond",
+  "star",
+  "polygon",
+  "cross",
+  "sticky",
+] satisfies Draw[]);
 const SCHEMES: Scheme[] = ["light", "dark", "system"];
 /** How many test photos the measurements offer to add at once, each about 17 MB of textures. */
 const TEST_PHOTOS = [10, 50, 100];
@@ -598,6 +609,10 @@ const commands = {
     unavailable: noneShown,
     run: () => useTool("cross"),
   },
+  triangle: { label: "Triangle", unavailable: noneShown, run: () => useTool("triangle") },
+  diamond: { label: "Diamond", unavailable: noneShown, run: () => useTool("diamond") },
+  star: { label: "Star", unavailable: noneShown, run: () => useTool("star") },
+  polygon: { label: "Polygon", unavailable: noneShown, run: () => useTool("polygon") },
   note: { label: "Text", keys: [{ key: "t" }], unavailable: noneShown, run: () => useTool("note") },
   sticky: {
     label: "Sticky note",
@@ -1209,6 +1224,10 @@ const bar = toolbar(
           drawing("line", "line"),
           drawing("rectangle", "square"),
           drawing("ellipse", "circle"),
+          drawing("triangle", "triangle"),
+          drawing("diamond", "diamond"),
+          drawing("star", "star"),
+          drawing("polygon", "pentagon"),
           drawing("cross", "cross"),
         ],
       },
@@ -1900,7 +1919,7 @@ function hint(): string {
   if (tool === "line") {
     return `Drag from one end to the other · hold ${stepKey} to keep to steps of 45° · hold ${freeKey} to keep its ends from sticking · ${escapeKey} to select again`;
   }
-  if (tool === "rectangle" || tool === "ellipse" || tool === "cross" || tool === "sticky") {
+  if (FRAMED.has(tool)) {
     return `Drag to draw, or click to place · ${escapeKey} to select again`;
   }
   if (tool === "comment") {

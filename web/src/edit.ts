@@ -108,6 +108,10 @@ export type Draw =
   | "rectangle"
   | "ellipse"
   | "cross"
+  | "triangle"
+  | "diamond"
+  | "star"
+  | "polygon"
   | "note"
   | "sticky"
   | "comment";

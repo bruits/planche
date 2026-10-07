@@ -74,6 +74,10 @@ dash?: Dash,
  */
 fill?: Fill, 
 /**
+ * A star's points, or a polygon's sides, 5 by default.
+ */
+corners?: number, 
+/**
  * Of its text, which it needs.
  */
 bold?: boolean, italic?: boolean, strike?: boolean, 
@@ -156,7 +160,7 @@ ids: Array<string>,
  */
 frame?: boolean, };
 
-export type ShapeKind = "rectangle" | "ellipse" | "cross";
+export type ShapeKind = "rectangle" | "ellipse" | "cross" | "triangle" | "diamond" | "star" | "polygon";
 
 export type Tip = "pen" | "highlighter";
 
@@ -246,9 +250,13 @@ dash?: Dash,
  */
 heads?: Heads, 
 /**
- * For a rectangle or an ellipse.
+ * For a shape but a cross.
  */
 fill?: Fill, 
+/**
+ * For a star, its points, or a polygon, its sides.
+ */
+corners?: number, 
 /**
  * For a note, a sticky note, or a shape holding text.
  */

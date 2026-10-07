@@ -289,10 +289,10 @@ function selected(board: Board, ids: string[]): Board {
 /** What `items` draw over, strokes and arrows' heads included, `undefined` when nothing. */
 function tight(items: Item[], board: Board): Rect | undefined {
   const texts = {
-    // As far as the frame it lies in, which the margin of its texture passes, but within an
-    // ellipse, whose outline holds it.
+    // As far as the frame it lies in, which the margin of its texture passes, but within a
+    // shape's outline when that holds it, as all but a rectangle's or a cross's do.
     placed: (id: string, kind: Holder): Lettering | undefined =>
-      kind.type === "shape" && kind.shape === "ellipse"
+      kind.type === "shape" && core.textAreaOf(kind).width < 1
         ? undefined
         : { id, frame: kind.frame, rotation: kind.rotation, paint: "ink" },
   };
@@ -321,7 +321,12 @@ function reach(items: Placed[]): Rect | undefined {
         if (item.shape === "ellipse") {
           return oval(item.frame, item.rotation, half);
         }
-        // Its outline straddles the frame's edge.
+        // Round about each corner, as far as half its width.
+        const parts = core.cornerPartsOf(item.shape, item.corners);
+        if (parts) {
+          return parts.flatMap((part) => around(partOf(item.frame, item.rotation, part), half));
+        }
+        // A rectangle's or a cross's outline straddles the frame's edge.
         const { x, y, width, height } = item.frame;
         const grown = {
           x: x - half,
@@ -364,19 +369,25 @@ function around({ x, y }: Point, radius: number): Point[] {
 }
 
 /** Turned by `degrees` around its centre, whichever way, as it bounds the same either way. */
-function corners({ x, y, width, height }: Rect, degrees: number): Point[] {
+function corners(frame: Rect, degrees: number): Point[] {
+  return [
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: 1, y: 1 },
+  ].map((part) => partOf(frame, degrees, part));
+}
+
+/**
+ * Where `part` of `frame`, from 0 to 1 across and down, lies once it turns by `degrees` around
+ * its centre, whichever way its size goes.
+ */
+function partOf({ x, y, width, height }: Rect, degrees: number, part: Point): Point {
   const centre = { x: x + width / 2, y: y + height / 2 };
   const radians = (degrees * Math.PI) / 180;
   const [sin, cos] = [Math.sin(radians), Math.cos(radians)];
-  return [
-    [x, y],
-    [x + width, y],
-    [x, y + height],
-    [x + width, y + height],
-  ].map(([cornerX, cornerY]) => {
-    const [across, down] = [cornerX! - centre.x, cornerY! - centre.y];
-    return { x: centre.x + across * cos - down * sin, y: centre.y + across * sin + down * cos };
-  });
+  const [across, down] = [(part.x - 0.5) * Math.abs(width), (part.y - 0.5) * Math.abs(height)];
+  return { x: centre.x + across * cos - down * sin, y: centre.y + across * sin + down * cos };
 }
 
 /** The box around the ellipse that fills `frame`, turned by `degrees`. */

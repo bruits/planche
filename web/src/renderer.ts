@@ -110,14 +110,25 @@ export interface Renderer {
 /** How long a render may wait for the GPU to hand its pixels over, in milliseconds. */
 const READBACK_TIME = 15_000;
 /** Floats per item, as `draw` reads them, those an item leaves out being zeros. */
-const STRIDE = 14;
+const STRIDE = 15;
 /**
  * As the renderer tells its items apart. The segments of a see-through pen stroke draw `once`,
  * each pixel taking the one that covers it most, which needs them told from another stroke's.
  */
 const KINDS = { image: 0, stroke: 1, text: 2, once: 3 };
-/** As the renderer tells its strokes apart. */
-const SHAPES = { line: 0, rectangle: 1, ellipse: 2, fill: 3, cross: 4, arrow: 6 };
+/** As the renderer tells its strokes apart, a triangle and a diamond being polygons. */
+const SHAPES = {
+  line: 0,
+  rectangle: 1,
+  ellipse: 2,
+  fill: 3,
+  cross: 4,
+  arrow: 6,
+  triangle: 7,
+  diamond: 7,
+  polygon: 7,
+  star: 8,
+};
 /** How wide a line of the grid is, or a dot across, in CSS pixels, and how much of the ink it takes. */
 const GRID = {
   grid: { width: 1, alpha: 0.1 },
@@ -408,7 +419,7 @@ function segments(
   const ends = points.length > 1 ? points.slice(1) : points;
   return ends.map((to, at) => {
     const from = points[at]!;
-    return [kind, -1, SHAPES.line, from.x, from.y, to.x, to.y, 0, width, ...rgb, serial];
+    return [kind, -1, SHAPES.line, from.x, from.y, to.x, to.y, 0, width, ...rgb, 0, serial];
   });
 }
 
@@ -457,7 +468,7 @@ function floats(
       const { from, to } = item;
       const arrow = [from.x, from.y, to.x, to.y, item.head, stroke(item)];
       const heads = item.heads === "both" ? 2 : 1;
-      return [KINDS.stroke, -1, SHAPES.arrow, ...arrow, ...colours(item.paint), heads];
+      return [KINDS.stroke, -1, SHAPES.arrow, ...arrow, ...colours(item.paint), 0, heads];
     }
     case "fill": {
       const { frame } = item;
@@ -467,7 +478,16 @@ function floats(
     case "outline": {
       const { frame } = item;
       const outline = [frame.x, frame.y, frame.width, frame.height, item.rotation, stroke(item)];
-      return [KINDS.stroke, -1, SHAPES[item.shape], ...outline, ...colours(item.paint), item.fill];
+      const { corners, fill } = item;
+      return [
+        KINDS.stroke,
+        -1,
+        SHAPES[item.shape],
+        ...outline,
+        ...colours(item.paint),
+        corners,
+        fill,
+      ];
     }
   }
 }

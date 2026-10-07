@@ -4,9 +4,9 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use board::{
-    Align, Alignment, AssetHasher, AssetId, Background, Board, Colour, CropShape, Dash, Editor,
-    Element, ElementId, ElementKind, Fill, Heads, ImageEdits, Opacity, Paper, Point, Rect, Restack,
-    Shape, Size, Speed, Text, Tip, Trim, Weight, ZIndex,
+    Align, Alignment, AssetHasher, AssetId, Background, Board, Colour, Corners, CropShape, Dash,
+    Editor, Element, ElementId, ElementKind, Fill, Heads, ImageEdits, Opacity, Paper, Point, Rect,
+    Restack, Shape, Size, Speed, Text, Tip, Trim, Weight, ZIndex,
 };
 use format::save::{Known, Save};
 use format::{Error, Files, zip};
@@ -97,6 +97,7 @@ fn sample() -> Board {
                     frame: frame(100.0, 100.0),
                     rotation: -12.5,
                     shape: Shape::Ellipse,
+                    corners: Default::default(),
                     text: Text::new("Key light".to_owned(), 16.0),
                     target: None,
                     colour: Colour::Ink,
@@ -182,6 +183,7 @@ fn sample() -> Board {
                     frame: frame(40.0, 40.0),
                     rotation: 0.0,
                     shape: Shape::Cross,
+                    corners: Default::default(),
                     text: Text::new(String::new(), 20.0),
                     target: None,
                     colour: Colour::Ink,
@@ -441,6 +443,7 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
         frame: frame(100.0, 50.0),
         rotation: 0.0,
         shape: Shape::Ellipse,
+        corners: Default::default(),
         text,
         target: None,
         colour: Colour::Red,
@@ -828,6 +831,7 @@ fn equal_boards_write_the_same_bytes() {
         frame: zero,
         rotation: 0.0,
         shape: Shape::Rectangle,
+        corners: Default::default(),
         text: Text::new(String::new(), 1.0),
         target: None,
         colour: Colour::Ink,
@@ -889,6 +893,83 @@ fn an_opacity_that_would_hide_an_element_is_refused_on_read() {
     note["kind"]["opacity"] = serde_json::json!(0);
     files.insert(path.clone(), serde_json::to_vec(&note).unwrap());
     assert!(matches!(format::read(&files), Err(Error::Json { path: at, .. }) if at == path));
+}
+
+#[test]
+fn a_star_or_a_polygon_writes_its_corners_only_when_not_five_and_reads_back() {
+    let drawn = [
+        (Shape::Star, 7),
+        (Shape::Star, 5),
+        (Shape::Polygon, 3),
+        (Shape::Polygon, 12),
+        (Shape::Triangle, 5),
+        (Shape::Diamond, 5),
+    ];
+    let board = Board {
+        elements: drawn
+            .iter()
+            .zip(1..)
+            .map(|(&(shape, corners), bits)| {
+                let kind = ElementKind::Shape {
+                    frame: frame(100.0, 80.0),
+                    rotation: 0.0,
+                    shape,
+                    corners: Corners::new(corners).unwrap(),
+                    text: Text::new(String::new(), 20.0),
+                    target: None,
+                    colour: Colour::Ink,
+                    weight: Weight::Medium,
+                    fill: Fill::Solid,
+                    dash: Dash::Solid,
+                    opacity: Default::default(),
+                };
+                let element = Element {
+                    group: None,
+                    z: z("a0"),
+                    kind,
+                };
+                (ElementId::from_random(bits), element)
+            })
+            .collect(),
+        ..Board::default()
+    };
+    let files = format::write(&board).unwrap();
+    let written: Vec<serde_json::Value> = (1..=6)
+        .map(|bits| {
+            let bytes = &files[&format!("elements/{}.json", ElementId::from_random(bits))];
+            serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["kind"].clone()
+        })
+        .collect();
+    let corners: Vec<Option<u64>> = written
+        .iter()
+        .map(|kind| kind.get("corners").map(|corners| corners.as_u64().unwrap()))
+        .collect();
+    assert_eq!(corners, [Some(7), None, Some(3), Some(12), None, None]);
+    assert_eq!(written[0]["shape"], "star");
+    assert_eq!(written[3]["shape"], "polygon");
+    assert_eq!(written[4]["shape"], "triangle");
+    assert_eq!(written[5]["shape"], "diamond");
+    assert_eq!(format::read(&files).unwrap(), board);
+    assert_eq!(
+        format::write(&format::read(&files).unwrap()).unwrap(),
+        files
+    );
+}
+
+#[test]
+fn corners_a_star_or_a_polygon_cannot_have_are_refused_on_read() {
+    for corners in [2, 13] {
+        let mut files = format::write(&sample()).unwrap();
+        let path = format!("elements/{ELLIPSE}.json");
+        let mut shape: serde_json::Value = serde_json::from_slice(&files[&path]).unwrap();
+        shape["kind"]["shape"] = serde_json::json!("star");
+        shape["kind"]["corners"] = serde_json::json!(corners);
+        files.insert(path.clone(), serde_json::to_vec(&shape).unwrap());
+        assert!(
+            matches!(format::read(&files), Err(Error::Json { path: at, .. }) if at == path),
+            "{corners}"
+        );
+    }
 }
 
 #[test]

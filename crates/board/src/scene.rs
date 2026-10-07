@@ -58,9 +58,11 @@ pub enum Item {
         heads: Heads,
         opacity: f64,
     },
-    /// `fill` how much of its paint fills it.
+    /// `fill` how much of its paint fills it, and `corners` how many a polygon goes round, a star's
+    /// points alone, none for other shapes.
     Outline {
         shape: Shape,
+        corners: u8,
         frame: Rect,
         rotation: f64,
         width: f64,
@@ -173,6 +175,7 @@ fn drawn(
                 for shape in [Shape::Rectangle, Shape::Cross] {
                     items.push(Item::Outline {
                         shape,
+                        corners: 0,
                         frame: *frame,
                         rotation: *rotation,
                         width: Weight::default().width(),
@@ -214,6 +217,7 @@ fn drawn(
             frame,
             rotation,
             shape,
+            corners,
             text: written,
             colour,
             weight,
@@ -231,6 +235,7 @@ fn drawn(
             // faded.
             items.push(Item::Outline {
                 shape: *shape,
+                corners: shape.polygon(*corners).map_or(0, |(count, _)| count),
                 frame: *frame,
                 rotation: *rotation,
                 width: weight.width(),
@@ -336,8 +341,8 @@ fn shown(natural: Size, edits: &ImageEdits) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Opacity;
     use crate::tests::{board, element, id, stroke};
+    use crate::{Corners, Opacity};
 
     const FRAME: Rect = Rect {
         x: 10.0,
@@ -383,6 +388,7 @@ mod tests {
             frame: FRAME,
             rotation: 45.0,
             shape,
+            corners: Corners::new(7).unwrap(),
             text: Text::new("", 20.0),
             target: None,
             colour: Colour::Red,
@@ -491,6 +497,7 @@ mod tests {
         let crossed_out = BTreeSet::from([AssetId::of(b"dusk")]);
         let outline = |shape| Item::Outline {
             shape,
+            corners: 0,
             frame: FRAME,
             rotation: 30.0,
             width: 2.0,
@@ -541,6 +548,20 @@ mod tests {
     }
 
     #[test]
+    fn a_shape_drawn_as_a_polygon_tells_how_many_corners_it_goes_round() {
+        let corners = |kind| match &drawn(shape(kind, Fill::Hollow))[..] {
+            [Item::Outline { corners, .. }] => *corners,
+            drawn => panic!("{drawn:?}"),
+        };
+        assert_eq!(corners(Shape::Triangle), 3);
+        assert_eq!(corners(Shape::Diamond), 4);
+        assert_eq!(corners(Shape::Star), 7);
+        assert_eq!(corners(Shape::Polygon), 7);
+        assert_eq!(corners(Shape::Rectangle), 0);
+        assert_eq!(corners(Shape::Ellipse), 0);
+    }
+
+    #[test]
     fn a_shape_outlines_its_frame_with_its_fill_but_a_cross_fills_nothing() {
         let fill = |kind, fill| match &drawn(shape(kind, fill))[..] {
             [
@@ -566,6 +587,7 @@ mod tests {
         assert_eq!(fill(Shape::Rectangle, Fill::Tint), TINT);
         assert_eq!(fill(Shape::Ellipse, Fill::Solid), 1.0);
         assert_eq!(fill(Shape::Cross, Fill::Solid), 0.0);
+        assert_eq!(fill(Shape::Star, Fill::Solid), 1.0);
     }
 
     #[test]
