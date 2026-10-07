@@ -62,6 +62,7 @@ import type {
 import { among, anchors, newId, nudge, renamed } from "./board.js";
 import { cursor, dotted, type Crop, type Grab, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
+import { onTitle, titledGroup } from "./titles.js";
 import { anchored, fitted, holdsText, LINE_HEIGHT, needed, type Holder } from "./text.js";
 import type { View } from "./view.js";
 import { writer } from "./writer.js";
@@ -159,6 +160,8 @@ export interface Hooks {
    * many moves of the pointer those steps caught up with.
    */
   stepped(steps: number[], moves: number): void;
+  /** Once a double-click lands on the title of group `id`, to write it. */
+  retitle(id: string): void;
 }
 
 export type Pen = Extract<Item, { kind: "stroke" }>;
@@ -472,6 +475,7 @@ export function edits(
     pointed,
     stepped,
     inked,
+    retitle,
   }: Hooks,
 ): Edits {
   let selected = new Set<string>();
@@ -519,6 +523,8 @@ export function edits(
   let wasClick = false;
   /** The comment whose pin the last press was on, which the pointer's capture hides from later events. */
   let pressedPin: string | undefined;
+  /** As `pressedPin`, the group whose title the last press was on. */
+  let pressedTitle: string | undefined;
   /**
    * The image being cropped, in pixels the part of it that will show. Its gesture stays open, the
    * image shown whole, until the crop is done, so that meanwhile the board reads as unsaved and
@@ -753,14 +759,19 @@ export function edits(
     let locked: string | undefined;
     if (editing && seen && at && zoom && hovers(seen)) {
       const { editor } = editing;
-      topmost = editor.hit(at.x, at.y, TOLERANCE / zoom);
+      topmost = titledGroup(seen.target) ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
       locked = topmost === undefined ? undefined : editor.lockedBy(topmost);
-      hit = locked === undefined ? topmost : editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom);
+      hit = inside(
+        editor,
+        locked === undefined ? topmost : editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom),
+      );
     }
     if (editing && seen && at && zoom && hoverable(seen)) {
       const { editor } = editing;
       corners = selected.size > 0 && !lone(editing) ? box(editor, [...selected]) : undefined;
-      over = corners && grabbing(editing, corners, at, zoom, hit);
+      // A title takes the press over a grip it covers.
+      over =
+        corners && !onTitle(seen.target) ? grabbing(editing, corners, at, zoom, hit) : undefined;
       const top =
         hit === undefined || over ? undefined : (level(editor, hit) ?? editor.topLevel(hit));
       previewed = top !== undefined && !selected.has(top) ? top : undefined;
@@ -826,6 +837,13 @@ export function edits(
   /** The element, or its group, at the level of the selection, `undefined` outside the group gone into. */
   const level = (editor: Editor, id: string) =>
     entered === undefined ? editor.topLevel(id) : editor.memberOf(entered, id);
+  /** `hit`, but nothing for the panel of the group gone into, or of one holding it, which stands behind. */
+  const inside = (editor: Editor, hit: string | undefined) =>
+    hit !== undefined &&
+    entered !== undefined &&
+    (hit === entered || editor.memberOf(hit, entered) !== undefined)
+      ? undefined
+      : hit;
   /**
    * Up to the group `to`, or the top level. A selection never mixes levels, as moving a group
    * and one of its elements would move it twice.
@@ -961,7 +979,8 @@ export function edits(
 
   view.host.addEventListener("pointerdown", (event) => {
     wasClick = false;
-    pressedPin = pinned(event.target);
+    pressedTitle = titledGroup(event.target);
+    pressedPin = pinned(event.target) ?? pressedTitle;
     seen = event;
     keys = event;
     const editing = current();
@@ -1004,7 +1023,8 @@ export function edits(
     }
     heed(event);
     if (erasing()) {
-      const hit = pressedPin ?? editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom);
+      // As the eraser's way goes, which a group's panel leaves whole.
+      const hit = pressedPin ?? editor.hitAlong(at.x, at.y, at.x, at.y, TOLERANCE / zoom).at(-1);
       press = {
         kind: "erase",
         pointer,
@@ -1052,7 +1072,7 @@ export function edits(
       }
     }
     const corners = selected.size > 0 && !single ? box(editor, [...selected]) : undefined;
-    const hit = pressedPin ?? editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom);
+    const hit = pressedPin ?? inside(editor, editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom));
     const grab =
       corners && pressedPin === undefined ? grabbing(editing, corners, at, zoom, hit) : undefined;
     // Ctrl on macOS opens the context menu instead.
@@ -1679,6 +1699,10 @@ export function edits(
     if (!wasClick || press || !editing || !at || !zoom || event.button !== 0 || view.pans(event)) {
       return;
     }
+    if (pressedTitle !== undefined) {
+      retitle(pressedTitle);
+      return;
+    }
     const { editor, board } = editing;
     const hit = pressedPin ?? editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom);
     const top = hit === undefined ? undefined : level(editor, hit);
@@ -2016,8 +2040,10 @@ export function edits(
       const { editor } = editing;
       const topmost = on ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
       // Unlike a left press, which goes through it, so that the menu offers to unlock it.
-      const hit =
-        topmost === undefined || editor.lockedBy(topmost) !== undefined ? undefined : topmost;
+      const hit = inside(
+        editor,
+        topmost === undefined || editor.lockedBy(topmost) !== undefined ? undefined : topmost,
+      );
       // As a left press would, with no box around a lone arrow or line.
       const onSelection =
         hit === undefined && !lone(editing) && within(at, box(editor, [...selected]));

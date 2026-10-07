@@ -70,6 +70,7 @@ function page(
     hovered() {},
     pointed() {},
     stepped() {},
+    retitle: vi.fn<Hooks["retitle"]>(),
     inked: vi.fn<Hooks["inked"]>(),
   };
   let gone = false;
@@ -1200,6 +1201,89 @@ describe("the end of a press", () => {
     captureLost(host, 300, 250, 1);
     pointer("pointerup", 300, 250);
     expect(strokes(opened)).toEqual([]);
+  });
+});
+
+describe("a group's panel", () => {
+  afterEach(() => document.body.replaceChildren());
+
+  const OTHER = "b".repeat(32);
+  const GROUP = "e".repeat(32);
+
+  /** The sticky note and another a hundred to its right, grouped on a panel. */
+  function framed(hooks: Parameters<typeof page>[1] = {}) {
+    const next: Kind = {
+      type: "sticky",
+      frame: { x: 200, y: 0, width: 100, height: 100 },
+      rotation: 0,
+      text: { content: "", font_size: 20 },
+    };
+    const shown = page([[OTHER, next]], hooks);
+    const { opened } = shown;
+    opened.editor.group(GROUP, [STICKY, OTHER]);
+    const kind = core.element(opened.editor, GROUP)!.kind;
+    opened.editor.update(GROUP, JSON.stringify({ ...kind, colour: "blue", fill: "tint" }));
+    opened.board = core.board(opened.editor);
+    return shown;
+  }
+
+  it("selects its group when clicked between its elements", () => {
+    const { editing, pointer } = framed();
+    pointer("pointerdown", 150, 50);
+    pointer("pointerup", 150, 50);
+    expect(editing.selection()).toEqual([GROUP]);
+  });
+
+  it("is left whole by the eraser", () => {
+    const { opened, pointer } = framed({ erasing: () => true });
+    pointer("pointerdown", 150, 50);
+    pointer("pointerup", 150, 50);
+    expect(Object.keys(opened.board.elements)).toHaveLength(3);
+  });
+
+  it("lets a double-click on its group's title write it, rather than go inside the group", () => {
+    const { editing, hooks, host } = framed();
+    const title = host.appendChild(document.createElement("div"));
+    title.className = "group-title";
+    title.dataset.group = GROUP;
+    const at = { clientX: 50, clientY: -30, button: 0, pointerId: 1, bubbles: true };
+    for (const type of ["pointerdown", "pointerup"]) {
+      title.dispatchEvent(new PointerEvent(type, at));
+    }
+    expect(editing.selection()).toEqual([GROUP]);
+    title.dispatchEvent(new PointerEvent("pointerdown", at));
+    host.dispatchEvent(new PointerEvent("pointerup", at));
+    host.dispatchEvent(new MouseEvent("dblclick", at));
+    expect(hooks.retitle).toHaveBeenCalledExactlyOnceWith(GROUP);
+    expect(editing.entered()).toBeUndefined();
+  });
+
+  it("moves its group from its title, even over the corner's grip it covers", async () => {
+    const { editing, host, at } = framed();
+    editing.select([GROUP]);
+    const title = host.appendChild(document.createElement("div"));
+    title.className = "group-title";
+    title.dataset.group = GROUP;
+    // Within the turn grip's reach of the panel's top-left corner, at (-10, -10).
+    const press = { clientX: -5, clientY: -16, button: 0, pointerId: 1, bubbles: true };
+    const to = { ...press, clientX: 15, clientY: 4 };
+    title.dispatchEvent(new PointerEvent("pointerdown", press));
+    host.dispatchEvent(new PointerEvent("pointermove", to));
+    await nextFrame();
+    host.dispatchEvent(new PointerEvent("pointerup", to));
+    expect(at()).toEqual({ x: 20, y: 20 });
+  });
+
+  it("stands behind the elements of its group once gone into, which a press between drags", async () => {
+    const { editing, pointer, at } = framed();
+    editing.select([GROUP]);
+    editing.goInside();
+    pointer("pointerdown", 150, 50);
+    pointer("pointermove", 150, 80);
+    await nextFrame();
+    pointer("pointerup", 150, 80);
+    expect(at()).toEqual({ x: 0, y: 30 });
+    expect(editing.selection()).toEqual([STICKY, OTHER]);
   });
 });
 

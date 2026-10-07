@@ -95,13 +95,13 @@ mod tests {
     #[test]
     fn a_copy_holds_what_its_groups_hold_its_outermost_elements_stacked_at_the_top_level() {
         let board = board([
-            (1, element(None, "a0", ElementKind::Group)),
-            (2, element(Some(1), "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
+            (2, element(Some(1), "a0", ElementKind::group())),
             (3, element(Some(2), "a5", arrow())),
             (4, element(Some(1), "a0", arrow())),
             (5, element(None, "a3", arrow())),
             (6, element(Some(7), "a0", arrow())),
-            (7, element(None, "a2", ElementKind::Group)),
+            (7, element(None, "a2", ElementKind::group())),
             (8, element(None, "a4", arrow())),
         ]);
         let copied = board.copy(&[5, 1, 6, 9].map(id));
@@ -147,13 +147,13 @@ mod tests {
         };
         let copied = Copied {
             elements: board([
-                (1, element(None, "a0", ElementKind::Group)),
-                (2, element(Some(1), "a0", ElementKind::Group)),
+                (1, element(None, "a0", ElementKind::group())),
+                (2, element(Some(1), "a0", ElementKind::group())),
                 (3, element(Some(2), "a0", image(b"lost"))),
                 (4, element(Some(1), "a1", image(b"kept"))),
-                (5, element(None, "a1", ElementKind::Group)),
+                (5, element(None, "a1", ElementKind::group())),
                 (6, element(Some(5), "a0", image(b"lost"))),
-                (7, element(None, "a2", ElementKind::Group)),
+                (7, element(None, "a2", ElementKind::group())),
             ])
             .elements,
         };

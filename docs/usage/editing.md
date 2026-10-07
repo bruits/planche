@@ -15,6 +15,10 @@ The toolbar groups its tools. Select, Hand, and Add images come first, then the 
 
 A click selects the outermost group under the pointer. Double-click a group, or use Go inside, to select its own elements. Esc steps back one thing at a time. It closes a card, then leaves the tool, then goes back up out of a group, then clears the selection.
 
+A group selected alone takes a background in its style card, a panel behind its elements that grows and shrinks with them. A click on the panel selects the group.
+
+A group's title stands over its top-left corner at one size whatever the zoom, so that it reads from afar, and stays out of exported pictures. Double-click it to rename it, or choose Rename in the menu. A group selected alone without one offers Add title there.
+
 ## Locking
 
 Lock what should stay put, such as the images a board is built on. Clicks and selection rectangles go through a locked element, and no edit reaches it until it is unlocked. It still moves with its group, or with what it sticks to, and an animated image or video keeps playing. To unlock one, rest the pointer on it with nothing selected and use Unlock, or right-click it and choose Unlock.

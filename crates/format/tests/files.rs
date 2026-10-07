@@ -56,7 +56,7 @@ fn sample() -> Board {
                 group: None,
                 locked: false,
                 z: z("a0"),
-                kind: ElementKind::Group,
+                kind: ElementKind::group(),
             },
         ),
         (
@@ -483,11 +483,22 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
         paper: Paper::Pink,
         opacity: Default::default(),
     };
+    let group = ElementKind::Group {
+        colour: Colour::Blue,
+        fill: Fill::Tint,
+        title: Some("Moods".to_owned()),
+    };
+    let framed = ElementId::from_random(9);
     let board = Board {
-        elements: [(NOTE, shape), (ARROW, arrow), (STICKY, sticky)]
-            .into_iter()
-            .map(|(id, kind)| (id, styled(kind)))
-            .collect(),
+        elements: [
+            (NOTE, shape),
+            (ARROW, arrow),
+            (STICKY, sticky),
+            (framed, group),
+        ]
+        .into_iter()
+        .map(|(id, kind)| (id, styled(kind)))
+        .collect(),
         ..Board::default()
     };
     let files = format::write(&board).unwrap();
@@ -517,6 +528,15 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
     assert_eq!(arrow["opacity"], 50);
     assert!(shape.get("opacity").is_none());
     assert_eq!(written(STICKY)["paper"], "pink");
+    assert_eq!(
+        written(framed),
+        serde_json::json!({
+            "type": "group",
+            "colour": "blue",
+            "fill": "tint",
+            "title": "Moods"
+        })
+    );
     assert_eq!(format::read(&files).unwrap(), board);
 }
 

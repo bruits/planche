@@ -369,7 +369,8 @@ pub struct UpdateArguments {
 #[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct Update {
     pub id: String,
-    /// For a note, a sticky note, a shape, or a comment.
+    /// For a note, a sticky note, a shape, a comment, or a group's title, on one line, which an
+    /// empty text takes away.
     pub text: Option<String>,
     /// For a note, a sticky note, or a shape.
     pub font_size: Option<f64>,
@@ -385,8 +386,9 @@ pub struct Update {
     pub crop: Option<Pixels>,
     /// For an image.
     pub crop_shape: Option<CropShape>,
-    /// For a note, a shape, an arrow, a line, or a stroke, a colour of the palette, which each
-    /// theme draws its own way, or `#rrggbb`, which every theme draws alike.
+    /// For a note, a shape, an arrow, a line, a stroke, or a group's panel, which it then fills,
+    /// a colour of the palette, which each theme draws its own way, or `#rrggbb`, which every
+    /// theme draws alike.
     pub colour: Option<Colour>,
     /// For a sticky note.
     pub paper: Option<Paper>,
@@ -396,7 +398,7 @@ pub struct Update {
     pub dash: Option<Dash>,
     /// For an arrow.
     pub heads: Option<Heads>,
-    /// For a shape but a cross.
+    /// For a shape but a cross, or a group, whose panel behind its elements `hollow` takes away.
     pub fill: Option<Fill>,
     /// For a star, its points, or a polygon, its sides.
     #[schemars(range(min = 3, max = 12))]

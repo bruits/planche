@@ -64,7 +64,8 @@ pub struct BoardArguments {
     #[schemars(range(min = 1, max = MOST_PER_PAGE), extend("default" = PAGE))]
     pub limit: Option<usize>,
     /// Only the elements that draw something within this area, in board units, and the comments
-    /// pinned in it. Groups are left out, but each element names its own.
+    /// pinned in it. Groups are left out but for a filled one's panel, and each element names
+    /// its own.
     pub area: Option<Area>,
 }
 

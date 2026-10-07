@@ -144,6 +144,7 @@ const LINE: &[Setting] = &[
     Setting::Opacity,
 ];
 const STROKE: &[Setting] = &[Setting::Colour, Setting::Weight, Setting::Opacity];
+const GROUP: &[Setting] = &[Setting::Colour, Setting::Fill];
 
 /// How finely a pen stroke's points are kept, in parts of its frame, a hundredth of a board unit
 /// across a frame of a thousand.
@@ -166,7 +167,8 @@ impl ElementKind {
             Self::Line { .. } => LINE,
             Self::Stroke { .. } => STROKE,
             Self::Image { .. } => IMAGE,
-            Self::Comment { .. } | Self::Group => &[],
+            Self::Group { .. } => GROUP,
+            Self::Comment { .. } => &[],
         }
     }
 
@@ -244,7 +246,15 @@ impl ElementKind {
                 set(colour, style.colour);
                 set(weight, style.weight);
             }
-            Self::Image { .. } | Self::Comment { .. } | Self::Group => {}
+            Self::Group { colour, fill, .. } => {
+                set(colour, style.colour);
+                set(fill, style.fill);
+                // A colour shows only on a panel.
+                if style.colour.is_some() && style.fill.is_none() && *fill == Fill::Hollow {
+                    *fill = Fill::Tint;
+                }
+            }
+            Self::Image { .. } | Self::Comment { .. } => {}
         }
         if let Some(opacity) = self.opacity_mut() {
             set(opacity, style.opacity);
@@ -281,6 +291,22 @@ impl ElementKind {
                 *corners = Corners::default();
             }
         }
+        if let Self::Group {
+            colour,
+            fill,
+            title,
+        } = &mut self
+        {
+            if *fill == Fill::Hollow {
+                *colour = Colour::default();
+            }
+            if let Some(title) = title.as_mut()
+                && title.contains(['\n', '\r'])
+            {
+                *title = title.replace("\r\n", " ").replace(['\n', '\r'], " ");
+            }
+            title.take_if(|title| title.trim().is_empty());
+        }
         if let Self::Stroke { points, .. } = &mut self {
             for point in points.iter_mut() {
                 point.x = (point.x * POINT_PARTS).round() / POINT_PARTS;
@@ -308,7 +334,7 @@ impl ElementKind {
             | Self::Arrow { opacity, .. }
             | Self::Line { opacity, .. }
             | Self::Stroke { opacity, .. } => Some(*opacity),
-            Self::Comment { .. } | Self::Group => None,
+            Self::Comment { .. } | Self::Group { .. } => None,
         }
     }
 
@@ -321,7 +347,7 @@ impl ElementKind {
             | Self::Arrow { opacity, .. }
             | Self::Line { opacity, .. }
             | Self::Stroke { opacity, .. } => Some(opacity),
-            Self::Comment { .. } | Self::Group => None,
+            Self::Comment { .. } | Self::Group { .. } => None,
         }
     }
 
@@ -451,7 +477,7 @@ mod tests {
             pen(),
             image(),
             comment(),
-            ElementKind::Group,
+            ElementKind::group(),
         ]
     }
 
@@ -512,7 +538,10 @@ mod tests {
         assert!(arrow().settings().contains(&Setting::Heads));
         assert_eq!(image().settings(), [Setting::Opacity]);
         assert!(comment().settings().is_empty());
-        assert!(ElementKind::Group.settings().is_empty());
+        assert_eq!(
+            ElementKind::group().settings(),
+            [Setting::Colour, Setting::Fill]
+        );
         // The plain style shows each part the element takes, but the size of its text.
         for kind in plain_kinds() {
             let shown = serde_json::to_value(kind.plain_style()).unwrap();
@@ -605,7 +634,11 @@ mod tests {
             },
             whole,
             Style::default(),
-            Style::default(),
+            Style {
+                colour: Some(Colour::Ink),
+                fill: Some(Fill::Hollow),
+                ..Style::default()
+            },
         ];
         for (kind, plain) in plain_kinds().into_iter().zip(plain) {
             assert_eq!(kind.plain_style(), plain, "{kind:?}");
@@ -686,6 +719,42 @@ mod tests {
         .canonical();
         assert_eq!(kept, drawn(&[(0.123_46, 1.0), (0.5, 0.0)]));
         assert_eq!(kept.clone().canonical(), kept);
+    }
+
+    #[test]
+    fn a_group_takes_a_colour_on_its_panel_alone() {
+        let group = |colour, fill, title: Option<&str>| ElementKind::Group {
+            colour,
+            fill,
+            title: title.map(str::to_owned),
+        };
+        let red = Style {
+            colour: Some(Colour::Red),
+            ..Style::default()
+        };
+        let solid = Style {
+            fill: Some(Fill::Solid),
+            ..Style::default()
+        };
+        let hollow = Style {
+            fill: Some(Fill::Hollow),
+            ..Style::default()
+        };
+        let tinted = group(Colour::Red, Fill::Tint, None);
+        assert_eq!(ElementKind::group().with_style(&red), tinted);
+        assert_eq!(
+            tinted.clone().with_style(&solid),
+            group(Colour::Red, Fill::Solid, None)
+        );
+        assert_eq!(tinted.with_style(&hollow), ElementKind::group());
+        assert_eq!(
+            group(Colour::Ink, Fill::Hollow, Some(" ")).canonical(),
+            ElementKind::group()
+        );
+        assert_eq!(
+            group(Colour::Ink, Fill::Hollow, Some("Moods\nand\r\nlight")).canonical(),
+            group(Colour::Ink, Fill::Hollow, Some("Moods and light"))
+        );
     }
 
     #[test]

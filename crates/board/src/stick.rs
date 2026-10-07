@@ -637,7 +637,7 @@ mod tests {
         };
         let board = board([
             (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0)))),
-            (2, element(None, "a1", ElementKind::Group)),
+            (2, element(None, "a1", ElementKind::group())),
             (
                 3,
                 element(Some(2), "a0", image(area(50.0, 0.0, 100.0, 100.0))),
@@ -894,7 +894,7 @@ mod tests {
         let board = board([
             (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0)))),
             (2, element(None, "a1", image(area(0.0, 0.0, 100.0, 100.0)))),
-            (3, element(None, "a2", ElementKind::Group)),
+            (3, element(None, "a2", ElementKind::group())),
             (4, element(Some(3), "a0", stuck(1))),
             (5, element(Some(3), "a1", stuck(1))),
             (6, element(None, "a3", stuck(2))),

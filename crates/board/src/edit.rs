@@ -550,7 +550,7 @@ impl Editor {
         let mut pending = self.with_descendants(ids)?;
         // Turning one would turn all its elements at once, those it holds back included.
         pending.retain(|id| {
-            !matches!(self.board.elements[id].kind, ElementKind::Group)
+            !matches!(self.board.elements[id].kind, ElementKind::Group { .. })
                 && self.board.locked_by(*id).is_none()
         });
         let straightened = pending.clone();
@@ -681,7 +681,7 @@ impl Editor {
                     scaled(to);
                 }
                 ElementKind::Comment { at, .. } => scaled(at),
-                ElementKind::Group => {}
+                ElementKind::Group { .. } => {}
             }
         })
     }
@@ -723,7 +723,7 @@ impl Editor {
                 *to = to.turned(pivot, degrees);
             }
             ElementKind::Comment { at, .. } => *at = at.turned(pivot, degrees),
-            ElementKind::Group => {}
+            ElementKind::Group { .. } => {}
         })
     }
 
@@ -756,7 +756,7 @@ impl Editor {
                 at.x = settled(at.x);
                 at.y = settled(at.y);
             }
-            ElementKind::Group => {}
+            ElementKind::Group { .. } => {}
         })
     }
 
@@ -902,7 +902,7 @@ impl Editor {
             group: parent,
             locked: false,
             z,
-            kind: ElementKind::Group,
+            kind: ElementKind::group(),
         };
         step.insert(
             group,
@@ -1128,7 +1128,7 @@ impl Editor {
         let rides = |unit: &ElementId| {
             self.board.with_descendants(&[*unit]).iter().all(|id| {
                 let kind = &self.board.elements[id].kind;
-                matches!(kind, ElementKind::Group)
+                matches!(kind, ElementKind::Group { .. })
                     || kind
                         .targets()
                         .any(|target| holders.get(&target).is_some_and(|holder| holder != unit))
@@ -1502,7 +1502,7 @@ impl Editor {
     fn existing_group(&self, id: ElementId) -> Result<&Element> {
         let element = self.get(id)?;
         match element.kind {
-            ElementKind::Group => Ok(element),
+            ElementKind::Group { .. } => Ok(element),
             _ => Err(Error::NotAGroup(id)),
         }
     }
@@ -1720,7 +1720,7 @@ fn shift(kind: &mut ElementKind, dx: f64, dy: f64) {
             at.x += dx;
             at.y += dy;
         }
-        ElementKind::Group => {}
+        ElementKind::Group { .. } => {}
     }
 }
 
@@ -1775,7 +1775,7 @@ mod tests {
 
     fn editor() -> Editor {
         Editor::new(board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", note(0.0))),
             (3, element(Some(1), "a1", note(10.0))),
             (4, element(None, "a1", note(20.0))),
@@ -1877,8 +1877,8 @@ mod tests {
         *back.target_mut().unwrap() = Some(id(5));
         let copied = Copied {
             elements: board([
-                (1, element(Some(2), "a0", ElementKind::Group)),
-                (2, element(Some(1), "a0", ElementKind::Group)),
+                (1, element(Some(2), "a0", ElementKind::group())),
+                (2, element(Some(1), "a0", ElementKind::group())),
                 (3, element(Some(9), "a1", note(0.0))),
                 (4, element(None, "a2", arrow)),
                 (5, element(None, "a3", circular)),
@@ -1983,7 +1983,9 @@ mod tests {
     #[test]
     fn removing_a_group_removes_its_elements() {
         let mut editor = editor();
-        editor.add(id(6), Some(id(1)), ElementKind::Group).unwrap();
+        editor
+            .add(id(6), Some(id(1)), ElementKind::group())
+            .unwrap();
         editor.add(id(7), Some(id(6)), arrow()).unwrap();
         let before = editor.board().clone();
         editor.remove(&[id(1)]).unwrap();
@@ -2203,7 +2205,7 @@ mod tests {
             opacity: Default::default(),
         };
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", image)),
             (3, element(Some(1), "a1", note(0.0))),
         ]));
@@ -2284,7 +2286,7 @@ mod tests {
         let still = crate::ImageEdits::default();
         let mut editor = Editor::new(board([
             (1, element(None, "a0", played(b"moving", still))),
-            (2, element(None, "a1", ElementKind::Group)),
+            (2, element(None, "a1", ElementKind::group())),
             (3, element(Some(2), "a0", played(b"moving", still))),
             (4, element(None, "a2", played(b"other", still))),
         ]));
@@ -2354,7 +2356,7 @@ mod tests {
             kind
         };
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", turned(note(0.0)))),
             (3, element(None, "a1", turned(note(20.0)))),
             (4, element(None, "a2", arrow())),
@@ -2390,7 +2392,7 @@ mod tests {
     fn ungrouping_an_empty_group_touches_nothing_else() {
         let mut editor = Editor::new(board([
             (1, element(None, "a0", arrow())),
-            (2, element(None, "a0", ElementKind::Group)),
+            (2, element(None, "a0", ElementKind::group())),
             (3, element(None, "a0", arrow())),
         ]));
         assert_eq!(editor.ungroup(id(2)).unwrap(), ids([2]));
@@ -3532,7 +3534,7 @@ mod tests {
     #[test]
     fn a_refused_transform_changes_nothing_even_within_a_gesture() {
         let mut editor = editor();
-        editor.add(id(6), None, ElementKind::Group).unwrap();
+        editor.add(id(6), None, ElementKind::group()).unwrap();
         let before = editor.board().clone();
         editor.begin_gesture();
         editor.translate(&ids([4]), 1.0, 0.0).unwrap();
@@ -3892,7 +3894,7 @@ mod tests {
             *rotation = 30.0;
         }
         let mut editor = Editor::new(board([
-            (9, element(None, "a0", ElementKind::Group)),
+            (9, element(None, "a0", ElementKind::group())),
             (1, element(Some(9), "a0", image)),
             (
                 2,
@@ -4144,7 +4146,7 @@ mod tests {
             (7, element(None, "a6", comment(150.0, 150.0))),
             // Where 4 lies, but drawn below everything, as "Zz" comes before "a0".
             (8, element(None, "Zz", framed(20.0, 20.0, 10.0, 10.0))),
-            (9, element(None, "a7", ElementKind::Group)),
+            (9, element(None, "a7", ElementKind::group())),
             (10, element(Some(9), "a0", framed(30.0, 150.0, 10.0, 10.0))),
             (11, element(None, "a8", comment(500.0, 500.0))),
         ]));
@@ -4384,7 +4386,7 @@ mod tests {
                 element(None, "a1", on(framed(10.0, 10.0, 20.0, 20.0), 1)),
             ),
             (3, element(None, "a2", arrow())),
-            (4, element(None, "a3", ElementKind::Group)),
+            (4, element(None, "a3", ElementKind::group())),
             (5, element(Some(4), "a0", picture(500.0, 0.0))),
         ]));
         let before = editor.board().clone();
@@ -5008,7 +5010,7 @@ mod tests {
     #[test]
     fn what_is_locked_or_within_a_locked_group_refuses_every_edit() {
         let mut editor = Editor::new(board([
-            (1, locked(None, "a0", ElementKind::Group)),
+            (1, locked(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", picture(0.0, 0.0))),
             (3, locked(None, "a1", picture(300.0, 0.0))),
             (4, element(None, "a2", picture(600.0, 0.0))),
@@ -5097,7 +5099,7 @@ mod tests {
     #[test]
     fn what_holds_a_locked_element_carries_it() {
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", picture(0.0, 0.0))),
             (3, locked(Some(1), "a1", picture(300.0, 0.0))),
             (4, locked(None, "a1", on(framed(40.0, 40.0, 20.0, 10.0), 2))),
@@ -5127,7 +5129,7 @@ mod tests {
         // The group lines up already.
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(10.0, 0.0))),
-            (2, element(None, "a1", ElementKind::Group)),
+            (2, element(None, "a1", ElementKind::group())),
             (3, element(Some(2), "a0", picture(0.0, 300.0))),
             (
                 4,
@@ -5150,7 +5152,7 @@ mod tests {
             kind
         };
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", tilted(0.0))),
             (3, locked(Some(1), "a1", tilted(300.0))),
         ]));
@@ -5184,7 +5186,7 @@ mod tests {
     #[test]
     fn a_paste_comes_unlocked_and_its_elements_keep_their_lock() {
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, locked(Some(1), "a0", note(0.0))),
             (3, element(Some(1), "a1", note(10.0))),
             (4, locked(None, "a1", note(20.0))),

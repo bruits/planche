@@ -75,6 +75,7 @@ import { overlay } from "./overlay.js";
 import { testPhotos } from "./photos.js";
 import { sped } from "./playback.js";
 import { lockedPin, pinned, pins } from "./pins.js";
+import { titledGroup, titles } from "./titles.js";
 import { platform } from "./platform.js";
 import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE } from "./raster.js";
@@ -156,6 +157,7 @@ const viewport = view(byId("viewport"), {
     bar.zoomed();
     overlaid.frame(camera, size);
     comments.frame(camera, viewport.mirrored() ? size : undefined);
+    groupTitles.frame(camera, viewport.mirrored() ? size : undefined);
     editing.follow();
     styleCard.frame();
     pictureCard.frame();
@@ -211,6 +213,7 @@ const media: CardMedia = {
 };
 const editing = edits(viewport, overlaid, () => opened, {
   changed,
+  retitle: (id) => groupTitles.write(id),
   selectionChanged() {
     films.select(loneImage(opened?.board, editing.selection())?.image.asset);
     refreshBar();
@@ -253,6 +256,8 @@ const editing = edits(viewport, overlaid, () => opened, {
     );
   },
 });
+// Before the pins, which stand over them.
+const groupTitles = titles(byId("viewport"), retitle);
 const comments = pins(byId("viewport"), {
   choose: (id) => editing.choose(id),
   write: (id) => editing.write(id),
@@ -292,6 +297,7 @@ const present = showing({
     crossedOut = new Set();
     loaded.clear();
     comments.clear();
+    groupTitles.clear();
     life.showSaved();
     showTitle();
     editing.reset();
@@ -346,6 +352,7 @@ const present = showing({
     loaded.clear();
     editing.reset();
     comments.clear();
+    groupTitles.clear();
   },
   changed,
   drawn: (name, since) => untilDrawn.set(name, since),
@@ -422,6 +429,11 @@ const selectedImages = () => selectedKinds().filter((kind) => kind.type === "ima
 /** What the lock command unlocks, as nothing is selected. */
 const unlocking = () => (editing.selection().length === 0 ? editing.lockedUnder() : undefined);
 const selectedImage = () => loneImage(opened?.board, editing.selection())?.image;
+const loneGroup = () => {
+  const [id, ...more] = editing.selection();
+  const kind = id === undefined || more.length > 0 ? undefined : opened?.board.elements[id]?.kind;
+  return kind?.type === "group" ? kind : undefined;
+};
 /** A hair aside, as the core takes it. */
 const near = (size: number, pixels: number) => Math.abs(size - pixels) <= 1e-6;
 const atActualSize = () =>
@@ -1005,6 +1017,11 @@ const commands = {
       editing.selection().length === 1 && selectsGroup() ? undefined : "Select one group",
     run: () => editing.goInside(),
   },
+  rename: {
+    label: () => (loneGroup()?.title === undefined ? "Add title" : "Rename"),
+    unavailable: () => (loneGroup() ? undefined : "Select one group"),
+    run: () => groupTitles.write(editing.selection()[0]!),
+  },
   write: {
     label: "Edit text",
     keys: [{ key: "enter" }],
@@ -1147,9 +1164,9 @@ const commands = {
     keys: [{ key: "s", shift: true }],
     unavailable: () =>
       nothingToStyle() ??
-      (styleCard.common().length > 0 || styleCard.images()
+      (styleCard.common().length > 0 || styleCard.images() || styleCard.frames()
         ? undefined
-        : "Comments and groups have no style"),
+        : "Comments have no style"),
     run: () => {
       if (styleCard.isOpen()) {
         styleCard.close();
@@ -1184,8 +1201,7 @@ const commands = {
     label: "Copy style",
     keys: [{ key: "c", code: "KeyC", command: true, alt: true }],
     unavailable: () =>
-      noneSelected() ??
-      (styleCard.common().length > 0 ? undefined : "Comments and groups have no style"),
+      noneSelected() ?? (styleCard.common().length > 0 ? undefined : "Comments have no style"),
     run: () => styleCard.copy(),
   },
   pasteStyle: {
@@ -1548,9 +1564,10 @@ document.addEventListener("contextmenu", (event) => {
   if (at === undefined || menuOpen() || busy()) {
     return;
   }
-  const pin = pinned(event.target) ?? lockedPin(event.target);
+  const titled = titledGroup(event.target);
+  const pin = pinned(event.target) ?? lockedPin(event.target) ?? titled;
   const locked = editing.lockedAt(at, pin);
-  contextMenu(editing.aim(at, pin), at, { x: event.clientX, y: event.clientY }, locked);
+  contextMenu(editing.aim(at, pin), at, { x: event.clientX, y: event.clientY }, locked, titled);
 });
 
 // The window outlives a reload of the page, so it follows how the page starts, even when the
@@ -1949,7 +1966,26 @@ function selectsGroup(): boolean {
 
 function showComments(): void {
   if (opened) {
-    comments.show(opened.board, editing.selection(), editing.writing());
+    const { board, editor } = opened;
+    comments.show(board, editing.selection(), editing.writing());
+    const lone = loneGroup();
+    const offered = lone && lone.title === undefined ? editing.selection()[0] : undefined;
+    groupTitles.show(board, (id) => core.extent(editor, [id]), editing.selection(), offered);
+  }
+}
+
+/** Gives the group `id` its title, none when blank. */
+function retitle(id: string, title: string): void {
+  const kind = opened?.board.elements[id]?.kind;
+  if (kind?.type !== "group") {
+    return;
+  }
+  try {
+    editing.apply((editor, touched) =>
+      touched.push(...editor.update(id, JSON.stringify({ ...kind, title }))),
+    );
+  } catch (error) {
+    bar.say(message(error));
   }
 }
 
@@ -2063,8 +2099,14 @@ function contextMenu(
   at: Point,
   place: { x: number; y: number },
   locked?: string,
+  titled?: string,
 ): void {
   const paste = { ...commands.paste, run: () => pasteAt(at) };
+  // The title right-clicked, which may be a group's within the one selected.
+  const rename =
+    titled === undefined
+      ? commands.rename
+      : { label: "Rename", run: () => groupTitles.write(titled) };
   // What the right-click landed on, though the selection's box may hold it.
   const unlock =
     locked === undefined ? [] : [{ label: "Unlock", run: () => editing.unlock([locked]) }];
@@ -2082,6 +2124,7 @@ function contextMenu(
         commands.remove,
         "separator",
         commands.write,
+        rename,
         commands.play,
         commands.sound,
         commands.openSource,

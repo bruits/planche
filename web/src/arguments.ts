@@ -206,7 +206,8 @@ stick?: boolean, };
 
 export type Update = { id: string, 
 /**
- * For a note, a sticky note, a shape, or a comment.
+ * For a note, a sticky note, a shape, a comment, or a group's title, on one line, which an
+ * empty text takes away.
  */
 text?: string, 
 /**
@@ -235,8 +236,9 @@ crop?: Pixels,
  */
 crop_shape?: CropShape, 
 /**
- * For a note, a shape, an arrow, a line, or a stroke, a colour of the palette, which each
- * theme draws its own way, or `#rrggbb`, which every theme draws alike.
+ * For a note, a shape, an arrow, a line, a stroke, or a group's panel, which it then fills,
+ * a colour of the palette, which each theme draws its own way, or `#rrggbb`, which every
+ * theme draws alike.
  */
 colour?: Colour, 
 /**
@@ -256,7 +258,7 @@ dash?: Dash,
  */
 heads?: Heads, 
 /**
- * For a shape but a cross.
+ * For a shape but a cross, or a group, whose panel behind its elements `hollow` takes away.
  */
 fill?: Fill, 
 /**

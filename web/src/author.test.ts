@@ -367,6 +367,30 @@ describe("write", () => {
     ).rejects.toThrow("opacity");
   });
 
+  it("titles and fills a group as an agent asks, and takes its title away once empty", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const lines = [0, 100].map((y) => ({ type: "line", from: { x: 0, y }, to: { x: 100, y } }));
+    const { added } = (await write("add", { elements: lines }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const ids = added.map(({ id }) => id);
+    const { group } = (await write("group", { ids }, writing, later())) as { group: string };
+    const kindOf = () => opened.board.elements[group]!.kind;
+    await write(
+      "update",
+      { updates: [{ id: group, text: "Moods\nand light", colour: "red" }] },
+      writing,
+      later(),
+    );
+    expect(kindOf()).toMatchObject({ colour: "red", fill: "tint", title: "Moods and light" });
+    await expect(
+      write("update", { updates: [{ id: group, font_size: 40 }] }, writing, later()),
+    ).rejects.toThrow("has type group, which takes no font_size");
+    await write("update", { updates: [{ id: group, text: "", fill: "hollow" }] }, writing, later());
+    expect(kindOf()).toEqual({ type: "group" });
+  });
+
   it("draws the stars and polygons an agent counts the corners of, and refuses the others", async () => {
     const opened = untitled();
     const { writing } = page(opened);

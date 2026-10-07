@@ -188,6 +188,23 @@ describe("what a picture of the selection covers", () => {
     expect(bounds({ c: comment })).toBeUndefined();
   });
 
+  it("holds a group's panel, which stands clear of its elements", () => {
+    const { opened, ids } = openedOf({
+      a: image({ x: 0, y: 0, width: 100, height: 100 }),
+      b: image({ x: 300, y: 100, width: 100, height: 100 }),
+    });
+    const group = newId();
+    refresh(opened, opened.editor.group(group, [ids.a!, ids.b!]));
+    const filled = { type: "group", colour: "green", fill: "tint" };
+    refresh(opened, opened.editor.update(group, JSON.stringify(filled)));
+    expect(drawnOver(opened, [group], new Set())).toEqual({
+      x: -15,
+      y: -15,
+      width: 430,
+      height: 230,
+    });
+  });
+
   it("outlines an image crossed out, as it draws one", () => {
     const half = core.strokeWidth() / 2;
     const frame = { x: 0, y: 0, width: 200, height: 100 };

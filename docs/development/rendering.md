@@ -8,7 +8,7 @@ A bake-off against the DOM, Canvas2D, raw WebGL2, PixiJS, and Three.js found tha
 
 Everything on the board draws on the GPU, in one list back to front that the core compiles. Images are textured quads. Strokes and fills are quads whose fragments measure their distance to the shape in device pixels, which smooths edges without multisampling. Text and SVGs are textures the web app rasterises. The page itself holds only what lies over the board, such as the selection's outlines and handles, the field where text is written, and comments' pins.
 
-The core compiles each element's draw items from that element alone, and the web app keeps them until an edit touches the element or its assets change. Compiling the whole board at each step of a drag would cost 4.8 ms at 3,000 elements, against 0.08 ms for the 50 elements a drag moves (`just bench`).
+The core compiles each element's draw items from that element alone, and the web app keeps them until an edit touches the element or its assets change. A group's panel follows its elements, so an edit to one also drops what the groups holding it drew. Groups' titles lie over the board with the comments' pins, at one size on screen. Compiling the whole board at each step of a drag would cost 4.8 ms at 3,000 elements, against 0.08 ms for the 50 elements a drag moves (`just bench`).
 
 A see-through stroke, as a highlighter's always is, draws each pixel once however it crosses itself, through depth and stencil passes. Only a frame holding one pays for the depth and stencil buffer, about 40 MB for a full-screen MacBook Pro window.
 

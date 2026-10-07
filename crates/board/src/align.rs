@@ -221,7 +221,7 @@ mod tests {
         let mut editor = editor([
             // Upright, it covers 10 to 30 across.
             (1, None, turned(0.0, 0.0, 40.0, 20.0, 90.0)),
-            (2, None, ElementKind::Group),
+            (2, None, ElementKind::group()),
             (3, Some(2), image(100.0, 0.0, 10.0, 10.0)),
             (4, Some(2), image(120.0, 0.0, 10.0, 10.0)),
             (
@@ -442,7 +442,7 @@ mod tests {
             let mut editor = editor([
                 (1, None, image(0.0, 0.0, 100.0, 100.0)),
                 (2, None, note(40.0, 1)),
-                (3, None, ElementKind::Group),
+                (3, None, ElementKind::group()),
                 (4, Some(3), image(200.0, 0.0, 50.0, 50.0)),
                 (5, Some(3), pointing((225.0, 25.0), (50.0, 50.0), on)),
             ]);
@@ -458,7 +458,7 @@ mod tests {
         let mut editor = editor([
             (1, None, image(0.0, 0.0, 100.0, 100.0)),
             (2, None, image(300.0, 0.0, 50.0, 50.0)),
-            (3, None, ElementKind::Group),
+            (3, None, ElementKind::group()),
             (4, Some(3), note(10.0, 1)),
             (5, Some(3), note(40.0, 1)),
             (6, None, note(70.0, 1)),
@@ -570,7 +570,7 @@ mod tests {
         let [(_, from), _] = arrow.ends_mut().unwrap();
         *from = Some(id(11));
         editor([
-            (10, None, ElementKind::Group),
+            (10, None, ElementKind::group()),
             (11, Some(10), image(0.0, 0.0, 50.0, 50.0)),
             (12, Some(10), arrow),
             (1, None, image(one.0, one.1, 50.0, 50.0)),
@@ -617,7 +617,7 @@ mod tests {
         // The group stays, and its note comes free of the image going from under it.
         let mut grouped = editor([
             (1, None, image(0.0, 0.0, 100.0, 100.0)),
-            (2, None, ElementKind::Group),
+            (2, None, ElementKind::group()),
             (3, Some(2), image(0.0, 200.0, 50.0, 50.0)),
             (4, Some(2), note(10.0, 1)),
         ]);

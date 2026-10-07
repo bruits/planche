@@ -502,6 +502,21 @@ describe("the card of an image and an arrow", () => {
     expect(kind(ARROW)).not.toHaveProperty("opacity");
   });
 
+  it("gives a group selected alone a background of its own, over its elements' style", () => {
+    const { board, select, kind } = both();
+    board.editor.group(GROUP, [IMAGE, ARROW]);
+    board.board = core.board(board.editor);
+    select([GROUP]);
+    expect(groups().slice(0, 2)).toEqual(["Background", "Fill"]);
+    expect(groups()).toContain("Colour");
+    named("Blue background").click();
+    expect(kind(GROUP)).toMatchObject({ colour: "blue", fill: "tint" });
+    expect(kind(ARROW)).toMatchObject({ colour: "red" });
+    named("No background").click();
+    expect(kind(GROUP)).not.toHaveProperty("colour");
+    expect(kind(GROUP)).not.toHaveProperty("fill");
+  });
+
   it("offers what the arrow takes, as an image narrows it to nothing but opacity", () => {
     const { shown, kind } = both();
     expect(shown.common()).toEqual(expect.arrayContaining(["colour", "opacity"]));

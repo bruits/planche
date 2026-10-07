@@ -148,7 +148,7 @@ impl Board {
                         || !matches!(
                             self.elements.get(&group),
                             Some(Element {
-                                kind: ElementKind::Group,
+                                kind: ElementKind::Group { .. },
                                 ..
                             })
                         )
@@ -247,7 +247,7 @@ impl Board {
             .filter(|id| self.elements.contains_key(id))
             .collect();
         while let Some(id) = pending.pop() {
-            if found.insert(id) && matches!(self.elements[&id].kind, ElementKind::Group) {
+            if found.insert(id) && matches!(self.elements[&id].kind, ElementKind::Group { .. }) {
                 pending.extend(self.members(id));
             }
         }
@@ -467,11 +467,31 @@ pub enum ElementKind {
         #[cfg_attr(feature = "ts", ts(optional))]
         target: Option<ElementId>,
     },
-    /// Draws nothing itself. Its elements are those whose `group` it is.
-    Group,
+    /// Its elements are those whose `group` it is. Filled, it draws a panel behind them, around
+    /// what they draw.
+    Group {
+        #[serde(default, skip_serializing_if = "is_default")]
+        colour: Colour,
+        #[serde(default, skip_serializing_if = "is_default")]
+        fill: Fill,
+        /// On one line, which shells show over it at one size on screen, whatever the zoom, so
+        /// that it draws nothing on the board.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        title: Option<String>,
+    },
 }
 
 impl ElementKind {
+    /// A group that draws nothing of its own.
+    pub fn group() -> Self {
+        Self::Group {
+            colour: Colour::default(),
+            fill: Fill::default(),
+            title: None,
+        }
+    }
+
     pub fn asset(&self) -> Option<AssetId> {
         match self {
             Self::Image { asset, .. } => Some(*asset),
@@ -687,7 +707,11 @@ impl ElementKind {
                 text: _,
                 target: _,
             } => at.is_finite(),
-            Self::Group => true,
+            Self::Group {
+                colour: _,
+                fill: _,
+                title: _,
+            } => true,
         }
     }
 }
@@ -1823,12 +1847,12 @@ mod tests {
     #[test]
     fn a_selection_takes_the_elements_of_its_groups_all_the_way_down() {
         let board = board([
-            (1, element(None, "a0", ElementKind::Group)),
-            (2, element(Some(1), "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
+            (2, element(Some(1), "a0", ElementKind::group())),
             (3, element(Some(2), "a0", arrow())),
             (4, element(Some(1), "a1", arrow())),
             (5, element(None, "a1", arrow())),
-            (6, element(None, "a2", ElementKind::Group)),
+            (6, element(None, "a2", ElementKind::group())),
         ]);
         let found = |bits: &[u128]| {
             board.with_descendants(&bits.iter().copied().map(id).collect::<Vec<_>>())
@@ -1845,7 +1869,7 @@ mod tests {
     fn z_indices_stack_siblings_and_ids_break_ties() {
         let board = board([
             (1, element(None, "a2", arrow())),
-            (2, element(None, "a1", ElementKind::Group)),
+            (2, element(None, "a1", ElementKind::group())),
             (3, element(Some(2), "a0V", arrow())),
             (4, element(Some(2), "a0", arrow())),
             (5, element(None, "a0", arrow())),
@@ -1858,13 +1882,13 @@ mod tests {
     fn a_broken_structure_is_repaired_alike_everywhere() {
         let mut broken = board([
             (1, element(Some(9), "a0", arrow())),
-            (2, element(Some(2), "a0", ElementKind::Group)),
+            (2, element(Some(2), "a0", ElementKind::group())),
             (3, element(Some(1), "a0", arrow())),
             // Walking up from 4 enters the cycle 5, 6, 7 at 7, not at its smallest id.
             (4, element(Some(7), "a0", arrow())),
-            (5, element(Some(6), "a0", ElementKind::Group)),
-            (6, element(Some(7), "a0", ElementKind::Group)),
-            (7, element(Some(5), "a0", ElementKind::Group)),
+            (5, element(Some(6), "a0", ElementKind::group())),
+            (6, element(Some(7), "a0", ElementKind::group())),
+            (7, element(Some(5), "a0", ElementKind::group())),
         ]);
         broken.repair();
 
@@ -1890,16 +1914,16 @@ mod tests {
     #[test]
     fn an_element_is_locked_by_its_outermost_locked_group_or_itself() {
         let mut board = board([
-            (1, locked(None, "a0", ElementKind::Group)),
-            (2, element(Some(1), "a0", ElementKind::Group)),
+            (1, locked(None, "a0", ElementKind::group())),
+            (2, element(Some(1), "a0", ElementKind::group())),
             (3, locked(Some(2), "a0", arrow())),
             (4, element(Some(2), "a1", arrow())),
-            (5, element(None, "a1", ElementKind::Group)),
+            (5, element(None, "a1", ElementKind::group())),
             (6, locked(Some(5), "a0", arrow())),
             (7, element(Some(5), "a1", arrow())),
             // Unrepaired, as fresh from a merge.
-            (8, locked(Some(9), "a0", ElementKind::Group)),
-            (9, element(Some(8), "a0", ElementKind::Group)),
+            (8, locked(Some(9), "a0", ElementKind::group())),
+            (9, element(Some(8), "a0", ElementKind::group())),
         ]);
         assert_eq!(board.locked_by(id(3)), Some(id(1)));
         assert_eq!(board.locked_by(id(4)), Some(id(1)));
@@ -1941,7 +1965,7 @@ mod tests {
         };
         let mut broken = board([
             (1, element(None, "a0", note)),
-            (2, element(None, "a1", ElementKind::Group)),
+            (2, element(None, "a1", ElementKind::group())),
             (3, element(None, "a2", line(1, 9))),
             (4, element(None, "a3", line(2, 3))),
         ]);
@@ -1973,7 +1997,7 @@ mod tests {
             (3, element(None, "a2", note(2))),
             (4, element(None, "a3", note(9))),
             (5, element(None, "a4", note(6))),
-            (6, element(None, "a5", ElementKind::Group)),
+            (6, element(None, "a5", ElementKind::group())),
         ]);
         broken.repair();
         let targets = [1, 2, 3, 4, 5].map(|bits| broken.elements[&id(bits)].kind.target());

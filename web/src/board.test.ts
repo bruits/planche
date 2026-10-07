@@ -200,6 +200,38 @@ describe("placed", () => {
     );
   });
 
+  it("lays a group's panel under its elements, which an edit to one of them moves", () => {
+    const { opened, ids } = holding([level(0), level(100)]);
+    const group = newId();
+    refresh(opened, opened.editor.group(group, ids));
+    const filled = { ...core.element(opened.editor, group)!.kind, colour: "blue", fill: "tint" };
+    refresh(opened, opened.editor.update(group, JSON.stringify(filled)));
+    const panel = () => placed(opened, none).find((item) => item.kind === "fill");
+    expect(placed(opened, none).map(({ kind }) => kind)).toEqual(["fill", "line", "line"]);
+    // A twentieth of the mean side of what the lines span around it.
+    expect(panel()).toMatchObject({ paint: "blue", frame: { y: -5, height: 110 } });
+    refresh(opened, opened.editor.translate([ids[1]!], 0, 100));
+    expect(panel()).toMatchObject({ frame: { y: -7.5, height: 215 } });
+  });
+
+  it("lays anew the panels of every group holding an element an edit moves", () => {
+    const { opened, ids } = holding([level(0), level(100), level(200)]);
+    const [inner, outer] = [newId(), newId()];
+    refresh(opened, opened.editor.group(inner, ids.slice(0, 2)));
+    refresh(opened, opened.editor.group(outer, [inner, ids[2]!]));
+    for (const group of [inner, outer]) {
+      const filled = { ...core.element(opened.editor, group)!.kind, fill: "tint" };
+      refresh(opened, opened.editor.update(group, JSON.stringify(filled)));
+    }
+    const panels = () =>
+      placed(opened, none).flatMap((item) => (item.kind === "fill" ? [item.frame.width] : []));
+    const before = panels();
+    refresh(opened, opened.editor.translate([ids[0]!], 300, 0));
+    const after = panels();
+    expect(after[0]).toBeGreaterThan(before[0]!);
+    expect(after[1]).toBeGreaterThan(before[1]!);
+  });
+
   it("draws an element anew once an edit touches it, and its images once other assets are crossed out", () => {
     const { opened, ids } = holding([imageKind(ASSET, NATURAL, { x: 0, y: 0, ...NATURAL })]);
     expect(placed(opened, none)).toMatchObject([{ kind: "image", frame: { x: 0 } }]);

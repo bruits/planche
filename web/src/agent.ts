@@ -116,6 +116,9 @@ function textOf(kind: Kind): string | undefined {
   if (kind.type === "comment") {
     return kind.text;
   }
+  if (kind.type === "group") {
+    return kind.title;
+  }
   return "text" in kind ? kind.text.content : undefined;
 }
 

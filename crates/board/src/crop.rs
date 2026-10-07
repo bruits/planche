@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn resetting_the_crop_of_a_group_shows_the_whole_of_its_images() {
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", image(30.0, true, false))),
         ]));
         editor.crop(id(2), area(50.0, 20.0, 100.0, 60.0)).unwrap();
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn the_crop_shape_applies_to_the_images_of_a_group_in_one_step() {
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", image(30.0, true, false))),
             (3, element(Some(1), "a1", image(0.0, false, false))),
         ]));

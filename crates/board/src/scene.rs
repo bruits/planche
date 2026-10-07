@@ -128,12 +128,24 @@ impl Serialize for Paint {
 impl Board {
     /// What element `id` draws itself, back to front, nothing when it is unknown. Its images, when
     /// their asset is among `crossed_out`, draw where they lie, crossed out. It depends on that
-    /// element and `crossed_out` alone, as shells keep it until the element changes. Elements
-    /// stack in [`Board::draw_order`].
+    /// element and `crossed_out` alone, as shells keep it until the element changes, but for a
+    /// group's panel, which follows what its elements draw. Elements stack in
+    /// [`Board::draw_order`].
     pub fn drawn(&self, id: ElementId, crossed_out: &BTreeSet<AssetId>) -> Vec<Item> {
         let mut items = Vec::new();
-        if let Some(element) = self.elements.get(&id) {
-            drawn(id, &element.kind, crossed_out, &mut items);
+        match self.elements.get(&id).map(|element| &element.kind) {
+            Some(ElementKind::Group { colour, fill, .. }) => {
+                if let Some(frame) = self.panel(id) {
+                    items.push(Item::Fill {
+                        frame,
+                        rotation: 0.0,
+                        paint: Paint::Colour(*colour),
+                        opacity: if *fill == Fill::Solid { 1.0 } else { TINT },
+                    });
+                }
+            }
+            Some(kind) => drawn(id, kind, crossed_out, &mut items),
+            None => {}
         }
         items
     }
@@ -298,7 +310,7 @@ fn drawn(
             },
             opacity: opacity * tip.opacity(),
         }),
-        ElementKind::Comment { .. } | ElementKind::Group => {}
+        ElementKind::Comment { .. } | ElementKind::Group { .. } => {}
     }
 }
 
@@ -430,7 +442,7 @@ mod tests {
             target: None,
         };
         let board = board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", comment)),
             (3, element(Some(1), "a1", note(" "))),
             (4, element(None, "a1", note("Dusk"))),
@@ -446,6 +458,43 @@ mod tests {
                 opacity: 1.0
             }]
         );
+    }
+
+    #[test]
+    fn a_filled_group_draws_a_panel_around_its_elements_and_its_title_nothing() {
+        let at = |x, y| {
+            let mut kind = note("Dusk");
+            if let ElementKind::Note { frame, .. } = &mut kind {
+                (frame.x, frame.y) = (x, y);
+            }
+            kind
+        };
+        let group = |fill, title: &str| ElementKind::Group {
+            colour: Colour::Red,
+            fill,
+            title: Some(title.to_owned()),
+        };
+        let board = board([
+            (1, element(None, "a0", group(Fill::Tint, "Moods"))),
+            (2, element(Some(1), "a0", at(0.0, 0.0))),
+            (3, element(Some(1), "a1", at(300.0, 100.0))),
+            (4, element(None, "a1", group(Fill::Hollow, "Later"))),
+            (5, element(Some(4), "a0", at(0.0, 0.0))),
+            (6, element(Some(4), "a1", at(300.0, 100.0))),
+        ]);
+        let drawn = |bits| board.drawn(id(bits), &BTreeSet::new());
+
+        // A twentieth of their mean side around what they draw, (0, 0) to (500, 200).
+        assert_eq!(
+            drawn(1),
+            [Item::Fill {
+                frame: texture(-17.5, -17.5, 535.0, 235.0),
+                rotation: 0.0,
+                paint: Paint::Colour(Colour::Red),
+                opacity: TINT,
+            }]
+        );
+        assert_eq!(drawn(4), []);
     }
 
     #[test]

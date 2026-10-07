@@ -70,6 +70,12 @@ const STROKES: { [S in "weight" | "heads" | "dash" | "fill"]: Choice<S>[] } = {
   ],
 };
 
+/** None is solid, as a solid panel would hide the ink of what the group holds. */
+const BACKGROUNDS: Choice<"fill">[] = [
+  { value: "hollow", label: "No background", look: () => icon("disc") },
+  { value: "tint", label: "Tinted background", look: () => icon("disc", { fill: 0.3 }) },
+];
+
 const ALIGNMENTS: Choice<"align">[] = [
   { value: "left", label: "Align left", look: () => icon("alignLeft") },
   { value: "centre", label: "Centre", look: () => icon("alignCentre") },
@@ -177,6 +183,8 @@ export interface Card {
   resize(larger: boolean): void;
   /** Whether every element selected is an image. */
   images(): boolean;
+  /** Whether a group is selected alone, which takes a panel of its own. */
+  frames(): boolean;
   /** Whether each element selected that takes a colour is drawn with a highlighter. */
   highlighting(): boolean;
   copy(): void;
@@ -269,6 +277,18 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       )
       .map((id) => ({ id, kind: board.elements[id]!.kind }));
   };
+  /** The group selected alone, whose own panel the card sets apart from its elements. */
+  const framing = (): { id: string; kind: Kind }[] => {
+    const opened = host.current();
+    const [id, ...more] = host.selection();
+    const kind = id === undefined ? undefined : opened?.board.elements[id]?.kind;
+    return kind?.type === "group" &&
+      more.length === 0 &&
+      host.tool() === undefined &&
+      opened?.editor.lockedBy(id!) === undefined
+      ? [{ id: id!, kind }]
+      : [];
+  };
   const alone = () => loneImage(host.current()?.board, host.selection());
   const animated = () => {
     const lone = alone();
@@ -300,9 +320,9 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     const all = targets();
     return all.length > 0 && all.every(({ kind }) => kind.type === "image");
   };
-  const value = <S extends Setting>(setting: S): Style[S] | undefined => {
+  const value = <S extends Setting>(setting: S, of = styled): Style[S] | undefined => {
     const zoom = host.zoom() ?? 1;
-    const values = styled()
+    const values = of()
       .filter(({ kind }) => settings(kind).includes(setting))
       .map(({ kind }) => valueOf(kind, setting, zoom));
     const [first] = values;
@@ -322,10 +342,15 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       host.say(message(error));
     }
   };
-  /** Each element selected in `style`, or the style `each` gives it, as one edit. */
-  const restyle = (style: Style, each: (kind: Kind) => Style = () => style, held = false) => {
+  /** Each element selected, or of `of`, in `style`, or the style `each` gives it, as one edit. */
+  const restyle = (
+    style: Style,
+    each: (kind: Kind) => Style = () => style,
+    held = false,
+    of = targets,
+  ) => {
     const zoom = host.zoom();
-    const all = targets();
+    const all = of();
     if (zoom === undefined || all.length === 0) {
       return [];
     }
@@ -348,9 +373,10 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     }
     return all;
   };
-  const set = (style: Style, only = false) => {
-    const all = restyle(style);
-    if (all.length > 0 && (!only || host.tool() !== undefined)) {
+  /** What no tool draws, such as a group's panel, teaches the tools nothing. */
+  const set = (style: Style, only = false, of?: typeof framing) => {
+    const all = restyle(style, undefined, false, of);
+    if (of === undefined && all.length > 0 && (!only || host.tool() !== undefined)) {
       learn(
         all.map(({ kind }) => kind),
         style,
@@ -369,10 +395,10 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   const button = (name: string, content: Node, press: (event: MouseEvent) => void, extra?: Extra) =>
     cardButton(panel, host.explain, name, content, press, extra);
   /** The buttons of one setting, which press each other off. */
-  const options = <S extends Setting>(setting: S, choices: Choice<S>[]) => {
-    const current = value(setting);
+  const options = <S extends Setting>(setting: S, choices: Choice<S>[], of?: typeof framing) => {
+    const current = value(setting, of);
     return choices.map(({ value: chosen, label, look, command }) =>
-      button(label, look(), (event) => set({ [setting]: chosen }, event.altKey), {
+      button(label, look(), (event) => set({ [setting]: chosen }, event.altKey, of), {
         pressed: current === chosen,
         shortcut: command?.keys?.[0],
       }),
@@ -543,10 +569,21 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       },
     );
 
+  const framed = (): HTMLElement[] => {
+    const [group] = framing();
+    if (group?.kind.type !== "group") {
+      return [];
+    }
+    const filled = (group.kind.fill ?? "hollow") !== "hollow";
+    return [
+      colours(framing, filled ? value("colour", framing) : undefined),
+      row("Fill", options("fill", BACKGROUNDS, framing)),
+    ];
+  };
   /** One row per kind of setting, of those that apply to all. */
   const build = (): HTMLElement[] => {
     const can = new Set(common());
-    const rows: HTMLElement[] = [];
+    const rows: HTMLElement[] = framed();
     if (can.has("colour")) {
       rows.push(colours());
     }
@@ -858,26 +895,31 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     }
   };
   /** The palette over the colours picked lately, column by column, and the pipette over a colour of one's own. */
-  const colours = () => {
+  const colours = (of?: typeof framing, current = value("colour", of)) => {
     const made = document.createElement("div");
     made.className = "colours";
     made.setAttribute("role", "group");
-    made.setAttribute("aria-label", "Colour");
-    const current = value("colour");
+    made.setAttribute("aria-label", of ? "Background" : "Colour");
     const place = (element: HTMLElement, line: number, column: number) => {
       element.style.setProperty("grid-row", String(line));
       element.style.setProperty("grid-column", String(column));
       made.append(element);
     };
-    const highlights = highlighting();
+    const highlights = !of && highlighting();
     PALETTE.forEach(({ colour, label }, at) => {
-      const shown = highlights ? highlight(at) : { paint: colour, label };
+      const shown = highlights
+        ? highlight(at)
+        : { paint: colour, label: of ? `${label} background` : label };
       place(
         button(
           shown.label,
           swatch(shown.paint, "palette"),
-          (event) => set({ colour }, event.altKey),
-          { pressed: current === colour, shortcut: commands.colours[at]?.keys?.[0] },
+          (event) => set({ colour }, event.altKey, of),
+          // The keys colour the group's elements.
+          {
+            pressed: current === colour,
+            shortcut: of ? undefined : commands.colours[at]?.keys?.[0],
+          },
         ),
         1,
         at + 1,
@@ -886,38 +928,50 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     const own = store.picked().slice(0, RECENT);
     own.forEach((colour, at) =>
       place(
-        button(colour, swatch(colour, "own"), (event) => set({ colour }, event.altKey), {
-          pressed: current === colour,
-        }),
+        button(
+          of ? `${colour} background` : colour,
+          swatch(colour, "own"),
+          (event) => set({ colour }, event.altKey, of),
+          {
+            pressed: current === colour,
+          },
+        ),
         2,
         at + 1,
       ),
     );
     place(separator(), 1, 7);
-    const hint = "Pick a colour from the board · hold S";
-    place(
-      button("Pick a colour from the board", icon("pipette"), () => host.pick(), { hint }),
-      1,
-      8,
-    );
+    // It colours the selection's elements.
+    if (!of) {
+      const hint = "Pick a colour from the board · hold S";
+      place(
+        button("Pick a colour from the board", icon("pipette"), () => host.pick(), { hint }),
+        1,
+        8,
+      );
+    }
     // Under the pipette, or beside it while there are none of one's own to leave room for.
     if (own.length > 0) {
       place(separator(), 2, 7);
     }
-    place(custom(current), own.length > 0 ? 2 : 1, own.length > 0 ? 8 : 9);
+    const [line, column] = own.length > 0 ? [2, 8] : of ? [1, 8] : [1, 9];
+    place(custom(current, of), line, column);
     return made;
   };
-  const custom = (current: Colour | undefined) => {
+  const custom = (current: Colour | undefined, of?: typeof framing) => {
+    const named = of ? "A background colour of one's own" : "A colour of one's own";
     const label = document.createElement("label");
     label.className = "custom";
-    label.title = "A colour of one's own";
+    label.title = named;
     label.append(icon("plus"));
     const input = document.createElement("input");
     input.type = "color";
-    input.setAttribute("aria-label", "A colour of one's own");
+    input.setAttribute("aria-label", named);
     input.value = current?.startsWith("#") ? current : "#888888";
-    input.addEventListener("change", () => set({ colour: input.value.toLowerCase() as Colour }));
-    host.explain(label, () => "A colour of one's own");
+    input.addEventListener("change", () =>
+      set({ colour: input.value.toLowerCase() as Colour }, false, of),
+    );
+    host.explain(label, () => named);
     label.append(input);
     return label;
   };
@@ -1013,7 +1067,8 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   };
   // Not hidden by the edit its opacity holds open as it slides.
   const visible = () =>
-    targets().length > 0 && (common().length > 0 || images()) && (host.adjusting() || !host.busy());
+    (framing().length > 0 || (targets().length > 0 && (common().length > 0 || images()))) &&
+    (host.adjusting() || !host.busy());
   const show = (focus = false) => {
     const reading = host.reading();
     readout.hidden = reading === undefined;
@@ -1060,7 +1115,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     }
   };
   const refresh = () => {
-    if (!kept && !host.busy() && targets().length === 0) {
+    if (!kept && !host.busy() && targets().length === 0 && framing().length === 0) {
       open = false;
     }
     if (trimming && animated()?.id !== trimming.id) {
@@ -1128,6 +1183,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       );
     },
     images,
+    frames: () => framing().length > 0,
     copy() {
       const all = styled();
       const first = all.find(({ kind }) => kind.type !== "image") ?? all[0];

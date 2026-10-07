@@ -1336,7 +1336,7 @@ mod tests {
             (2, element(None, "a1", image(200.0, 0.0, 100.0, 50.0, 0.0))),
             // Turned a quarter, its upright box is as tall as it is wide.
             (3, element(None, "a2", image(400.0, 0.0, 100.0, 50.0, 90.0))),
-            (4, element(None, "a3", ElementKind::Group)),
+            (4, element(None, "a3", ElementKind::group())),
             (
                 5,
                 element(Some(4), "a0", image(0.0, 300.0, 10.0, 10.0, 0.0)),
@@ -1345,7 +1345,7 @@ mod tests {
                 6,
                 element(Some(4), "a1", image(90.0, 390.0, 10.0, 10.0, 0.0)),
             ),
-            (7, element(None, "a4", ElementKind::Group)),
+            (7, element(None, "a4", ElementKind::group())),
         ]);
         assert_areas(
             board.neighbours(&[id(1)], None),
@@ -1376,7 +1376,7 @@ mod tests {
             (1, element(None, "a0", image(0.0, 0.0, 100.0, 50.0, 0.0))),
             (2, element(None, "a1", stuck)),
             (3, element(None, "a2", tied)),
-            (4, element(None, "a3", ElementKind::Group)),
+            (4, element(None, "a3", ElementKind::group())),
             (
                 5,
                 element(Some(4), "a0", image(500.0, 0.0, 10.0, 10.0, 0.0)),

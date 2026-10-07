@@ -1,7 +1,7 @@
 //! Where elements draw, in board space: what a pointer or a selection rectangle meets, and
 //! the outlines that show a selection.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
 
 use crate::{
@@ -18,31 +18,43 @@ const CORNER: f64 = 70.0;
 const PIECE: f64 = 4.0;
 /// So that a corner rounded near its limit costs the renderer little.
 const MOST_PIECES: f64 = 16.0;
+/// How far a group's panel reaches past what its elements draw, in parts of their mean side.
+const PANEL_MARGIN: f64 = 0.05;
 /// How far a star's inner corners are from its centre, in parts of its points' distance, as in a
 /// five-pointed star whose edges line up. The renderer's `STAR` is the same.
 const STAR_DEPTH: f64 = 0.381_966;
 
 impl Board {
-    /// The topmost element that draws at `point`, or within `tolerance` of it. A group or a
-    /// comment covers nothing on the board, so it is never the one hit, and a shape neither
-    /// filled nor holding text only draws its outline, so what it surrounds stays within reach.
+    /// The topmost element that draws at `point`, or within `tolerance` of it. A comment covers
+    /// nothing on the board, nor does a group but for its panel, so neither is hit there, and a
+    /// shape neither filled nor holding text only draws its outline, so what it surrounds stays
+    /// within reach.
     pub fn hit(&self, point: Point, tolerance: f64) -> Option<ElementId> {
-        self.draw_order()
-            .into_iter()
-            .rev()
-            .find(|id| hits(&self.elements[id].kind, point, tolerance))
+        let panels = self.all_panels();
+        self.draw_order().into_iter().rev().find(|id| {
+            hits(&self.elements[id].kind, point, tolerance)
+                || panels
+                    .get(id)
+                    .is_some_and(|panel| grown(panel, tolerance).contains(point))
+        })
     }
 
     /// What [`Board::hit`] finds, but through the locked elements, as a click goes.
     pub fn hit_unlocked(&self, point: Point, tolerance: f64) -> Option<ElementId> {
+        let panels = self.all_panels();
         self.draw_order().into_iter().rev().find(|id| {
-            hits(&self.elements[id].kind, point, tolerance) && self.locked_by(*id).is_none()
+            (hits(&self.elements[id].kind, point, tolerance)
+                || panels
+                    .get(id)
+                    .is_some_and(|panel| grown(panel, tolerance).contains(point)))
+                && self.locked_by(*id).is_none()
         })
     }
 
     /// Every element that [`Board::hit_unlocked`] would find anywhere on the way from `from` to
-    /// `to`, under others too, from back to front. The way is tried every `tolerance`, so that it
-    /// misses nothing it passes over, or at most [`MOST_TRIES`] times, spread evenly along it.
+    /// `to`, but for a group's panel, under others too, from back to front. The way is tried
+    /// every `tolerance`, so that it misses nothing it passes over, or at most [`MOST_TRIES`]
+    /// times, spread evenly along it.
     pub fn hit_along(&self, from: Point, to: Point, tolerance: f64) -> Vec<ElementId> {
         // With no tolerance, only its ends.
         let steps = (apart(from, to) / tolerance).ceil();
@@ -89,13 +101,19 @@ impl Board {
             .collect()
     }
 
-    /// Every element that draws something within `area`, and every comment pinned in it, edges
-    /// included, from back to front.
+    /// Every element that draws something within `area`, a group's panel included, and every
+    /// comment pinned in it, edges included, from back to front.
     pub fn touching(&self, area: Rect) -> Vec<ElementId> {
+        let panels = self.all_panels();
         let area = corners(&area, 0.0);
         self.draw_order()
             .into_iter()
-            .filter(|id| touches(&self.elements[id].kind, &area))
+            .filter(|id| {
+                touches(&self.elements[id].kind, &area)
+                    || panels
+                        .get(id)
+                        .is_some_and(|panel| overlap(&corners(panel, 0.0), &area))
+            })
             .collect()
     }
 
@@ -157,31 +175,154 @@ impl Board {
         })
     }
 
-    /// The smallest upright rectangle around what the elements draw, their groups' elements
-    /// included. `None` when they draw nothing.
+    /// The smallest upright rectangle around what the elements draw, their groups' elements and
+    /// panels included. `None` when they draw nothing.
     pub fn bounds(&self, ids: &[ElementId]) -> Option<Rect> {
-        let points: Vec<Point> = self
-            .with_descendants(ids)
-            .into_iter()
-            .filter_map(|id| shape(&self.elements[&id].kind))
+        let within = self.with_descendants(ids);
+        let points: Vec<Point> = within
+            .iter()
+            .filter_map(|id| shape(&self.elements[id].kind))
             .flatten()
             .collect();
-        around(&points)
+        self.around_panels(points, &within)
     }
 
     /// As [`Board::bounds`], with the points where the comments among them are pinned, which a
     /// view must show though they draw nothing on the board.
     pub fn extent(&self, ids: &[ElementId]) -> Option<Rect> {
-        let points: Vec<Point> = self
-            .with_descendants(ids)
-            .into_iter()
-            .filter_map(|id| match &self.elements[&id].kind {
+        let within = self.with_descendants(ids);
+        let points: Vec<Point> = within
+            .iter()
+            .filter_map(|id| match &self.elements[id].kind {
                 ElementKind::Comment { at, .. } => Some(vec![*at]),
                 kind => shape(kind),
             })
             .flatten()
             .collect();
+        self.around_panels(points, &within)
+    }
+
+    fn around_panels(&self, mut points: Vec<Point>, within: &BTreeSet<ElementId>) -> Option<Rect> {
+        let panels = self.panels(within);
+        points.extend(panels.values().flat_map(|panel| corners(panel, 0.0)));
         around(&points)
+    }
+
+    pub(crate) fn panel(&self, id: ElementId) -> Option<Rect> {
+        if !panelled(&self.elements.get(&id)?.kind) {
+            return None;
+        }
+        let within = self.with_descendants(&[id]);
+        let mut panels = BTreeMap::new();
+        self.drawn_box(
+            id,
+            &self.membership(&within),
+            &mut panels,
+            &mut BTreeSet::new(),
+        );
+        panels.remove(&id)
+    }
+
+    /// The panel of each filled group `within`, which stands clear of what its elements draw, the
+    /// panels within it included. A group whose elements draw nothing has none.
+    fn panels(&self, within: &BTreeSet<ElementId>) -> BTreeMap<ElementId, Rect> {
+        let mut panels = BTreeMap::new();
+        if !within.iter().any(|id| panelled(&self.elements[id].kind)) {
+            return panels;
+        }
+        let members = self.membership(within);
+        let mut seen = BTreeSet::new();
+        for id in within {
+            if !self.elements[id]
+                .group
+                .is_some_and(|group| within.contains(&group))
+            {
+                self.drawn_box(*id, &members, &mut panels, &mut seen);
+            }
+        }
+        panels
+    }
+
+    fn membership(&self, within: &BTreeSet<ElementId>) -> BTreeMap<ElementId, Vec<ElementId>> {
+        let mut members: BTreeMap<ElementId, Vec<ElementId>> = BTreeMap::new();
+        for id in within {
+            if let Some(group) = self.elements[id]
+                .group
+                .filter(|group| within.contains(group))
+            {
+                members.entry(group).or_default().push(*id);
+            }
+        }
+        members
+    }
+
+    /// The upright rectangle around what element `id` draws, its panel when a filled group, which
+    /// joins `panels`. A group already `seen`, as in a cycle, draws nothing.
+    fn drawn_box(
+        &self,
+        id: ElementId,
+        members: &BTreeMap<ElementId, Vec<ElementId>>,
+        panels: &mut BTreeMap<ElementId, Rect>,
+        seen: &mut BTreeSet<ElementId>,
+    ) -> Option<Rect> {
+        let kind = &self.elements[&id].kind;
+        if !matches!(kind, ElementKind::Group { .. }) {
+            return shape(kind).and_then(|shape| around(&shape));
+        }
+        if !seen.insert(id) {
+            return None;
+        }
+        let inner = members
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .filter_map(|member| self.drawn_box(*member, members, panels, seen))
+            .reduce(|all, drawn| union(&all, &drawn))?;
+        if !panelled(kind) {
+            return Some(inner);
+        }
+        let panel = padded(inner);
+        panels.insert(id, panel);
+        Some(panel)
+    }
+
+    fn all_panels(&self) -> BTreeMap<ElementId, Rect> {
+        if !self
+            .elements
+            .values()
+            .any(|element| panelled(&element.kind))
+        {
+            return BTreeMap::new();
+        }
+        self.panels(&self.elements.keys().copied().collect())
+    }
+}
+
+fn panelled(kind: &ElementKind) -> bool {
+    matches!(kind, ElementKind::Group { fill, .. } if *fill != Fill::Hollow)
+}
+
+fn padded(bounds: Rect) -> Rect {
+    grown(&bounds, PANEL_MARGIN * (bounds.width + bounds.height) / 2.0)
+}
+
+fn grown(rect: &Rect, by: f64) -> Rect {
+    Rect {
+        x: rect.x - by,
+        y: rect.y - by,
+        width: rect.width + 2.0 * by,
+        height: rect.height + 2.0 * by,
+    }
+}
+
+fn union(a: &Rect, b: &Rect) -> Rect {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    Rect {
+        x,
+        y,
+        width: (a.x + a.width).max(b.x + b.width) - x,
+        height: (a.y + a.height).max(b.y + b.height) - y,
     }
 }
 
@@ -262,7 +403,7 @@ fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
         ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
             Some(vec![*from, *to])
         }
-        ElementKind::Comment { .. } | ElementKind::Group => None,
+        ElementKind::Comment { .. } | ElementKind::Group { .. } => None,
     }
 }
 
@@ -1364,7 +1505,7 @@ mod tests {
     fn the_topmost_element_is_hit_and_never_a_group() {
         let board = board([
             (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
-            (2, element(None, "a1", ElementKind::Group)),
+            (2, element(None, "a1", ElementKind::group())),
             (3, element(Some(2), "a0", image(5.0, 0.0, 10.0, 10.0, 0.0))),
             (4, element(None, "a2", image(20.0, 0.0, 10.0, 10.0, 0.0))),
         ]);
@@ -1374,11 +1515,90 @@ mod tests {
     }
 
     #[test]
+    fn a_filled_group_draws_over_its_panel_which_bounds_it() {
+        let filled = |fill| ElementKind::Group {
+            colour: Colour::Blue,
+            fill,
+            title: None,
+        };
+        let board = board([
+            (1, element(None, "a0", filled(Fill::Tint))),
+            (
+                2,
+                element(Some(1), "a0", image(0.0, 0.0, 100.0, 100.0, 0.0)),
+            ),
+            (
+                3,
+                element(Some(1), "a1", image(300.0, 100.0, 100.0, 100.0, 0.0)),
+            ),
+            (4, element(None, "a1", filled(Fill::Hollow))),
+            (
+                5,
+                element(Some(4), "a0", image(0.0, 500.0, 100.0, 100.0, 0.0)),
+            ),
+            (
+                6,
+                element(Some(4), "a1", image(300.0, 500.0, 100.0, 100.0, 0.0)),
+            ),
+        ]);
+        // A twentieth of the mean side of (0, 0) to (400, 200) around it.
+        let panel = area(-15.0, -15.0, 430.0, 230.0);
+
+        assert_eq!(board.hit(point(200.0, 50.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit_unlocked(point(-10.0, 210.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(2)));
+        assert_eq!(board.hit(point(-20.0, 50.0), 0.0), None);
+        assert_eq!(board.hit(point(-20.0, 50.0), 5.0), Some(id(1)));
+        assert_eq!(board.hit(point(200.0, 550.0), 0.0), None);
+        assert_eq!(board.touching(area(190.0, 40.0, 10.0, 10.0)), [id(1)]);
+        assert_eq!(
+            board.hit_along(point(150.0, 50.0), point(250.0, 50.0), 1.0),
+            []
+        );
+        assert_eq!(board.bounds(&[id(1)]), Some(panel));
+        assert_eq!(board.bounds(&[id(2)]), Some(area(0.0, 0.0, 100.0, 100.0)));
+        assert_eq!(board.outline(id(1)), Some(corners(&panel, 0.0).to_vec()));
+        assert_eq!(board.bounds(&[id(4)]), Some(area(0.0, 500.0, 400.0, 100.0)));
+    }
+
+    #[test]
+    fn a_group_s_panel_stands_clear_of_the_panels_within_it() {
+        let filled = || ElementKind::Group {
+            colour: Colour::Blue,
+            fill: Fill::Solid,
+            title: None,
+        };
+        let board = board([
+            (1, element(None, "a0", filled())),
+            (2, element(Some(1), "a0", filled())),
+            (
+                3,
+                element(Some(2), "a0", image(0.0, 0.0, 100.0, 100.0, 0.0)),
+            ),
+            (
+                4,
+                element(Some(2), "a1", image(300.0, 100.0, 100.0, 100.0, 0.0)),
+            ),
+            (
+                5,
+                element(Some(1), "a1", image(500.0, 100.0, 100.0, 100.0, 0.0)),
+            ),
+        ]);
+        let inner = board.bounds(&[id(2)]).unwrap();
+        let outer = board.bounds(&[id(1)]).unwrap();
+        assert!(outer.x < inner.x && outer.y < inner.y);
+        assert!(outer.y + outer.height > inner.y + inner.height);
+        assert!(outer.x + outer.width > 600.0);
+        assert_eq!(board.hit(point(200.0, 50.0), 0.0), Some(id(2)));
+        assert_eq!(board.hit(point(450.0, 50.0), 0.0), Some(id(1)));
+    }
+
+    #[test]
     fn a_click_goes_through_what_is_locked_or_within_a_locked_group() {
         let board = board([
             (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
             (2, locked(None, "a1", image(0.0, 0.0, 10.0, 10.0, 0.0))),
-            (3, locked(None, "a2", ElementKind::Group)),
+            (3, locked(None, "a2", ElementKind::group())),
             (4, element(Some(3), "a0", image(20.0, 0.0, 10.0, 10.0, 0.0))),
         ]);
         assert_eq!(board.hit(point(5.0, 5.0), 0.0), Some(id(2)));
@@ -2121,7 +2341,7 @@ mod tests {
                 3,
                 element(None, "a2", arrow((105.0, -50.0), (105.0, 150.0))),
             ),
-            (4, element(None, "a3", ElementKind::Group)),
+            (4, element(None, "a3", ElementKind::group())),
         ]);
         assert_eq!(
             board.touching(area(100.0, -10.0, 105.0, 15.0)),
@@ -2133,8 +2353,8 @@ mod tests {
     #[test]
     fn an_element_lifts_to_its_outermost_group() {
         let board = board([
-            (1, element(None, "a0", ElementKind::Group)),
-            (2, element(Some(1), "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
+            (2, element(Some(1), "a0", ElementKind::group())),
             (3, element(Some(2), "a0", image(0.0, 0.0, 1.0, 1.0, 0.0))),
             (4, element(None, "a1", image(0.0, 0.0, 1.0, 1.0, 0.0))),
         ]);
@@ -2146,8 +2366,8 @@ mod tests {
     #[test]
     fn an_element_lifts_to_the_member_of_a_group_holding_it() {
         let board = board([
-            (1, element(None, "a0", ElementKind::Group)),
-            (2, element(Some(1), "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
+            (2, element(Some(1), "a0", ElementKind::group())),
             (3, element(Some(2), "a0", image(0.0, 0.0, 1.0, 1.0, 0.0))),
             (4, element(None, "a1", image(0.0, 0.0, 1.0, 1.0, 0.0))),
         ]);
@@ -2162,8 +2382,8 @@ mod tests {
     fn a_cycle_holds_no_member_of_a_group_outside_it() {
         // Unrepaired, as fresh from a merge.
         let board = board([
-            (1, element(Some(2), "a0", ElementKind::Group)),
-            (2, element(Some(1), "a0", ElementKind::Group)),
+            (1, element(Some(2), "a0", ElementKind::group())),
+            (2, element(Some(1), "a0", ElementKind::group())),
         ]);
         assert_eq!(board.member(id(9), id(1)), None);
     }
@@ -2208,9 +2428,9 @@ mod tests {
     #[test]
     fn an_area_touches_the_outermost_groups_of_what_it_touches_once_each() {
         let board = board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", image(0.0, 0.0, 20.0, 20.0, 0.0))),
-            (3, element(Some(1), "a1", ElementKind::Group)),
+            (3, element(Some(1), "a1", ElementKind::group())),
             (4, element(Some(3), "a0", comment(10.0, 10.0))),
             (5, element(None, "a1", image(0.0, 0.0, 20.0, 20.0, 0.0))),
         ]);
@@ -2232,7 +2452,7 @@ mod tests {
     #[test]
     fn a_selection_rectangle_goes_through_what_is_locked() {
         let board = board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, locked(Some(1), "a0", image(0.0, 0.0, 20.0, 20.0, 0.0))),
             (3, element(Some(1), "a1", image(50.0, 0.0, 20.0, 20.0, 0.0))),
             (4, locked(None, "a1", comment(10.0, 10.0))),
@@ -2251,7 +2471,7 @@ mod tests {
         let board = board([
             (1, element(None, "a0", image(0.0, 0.0, 20.0, 10.0, 0.0))),
             (2, element(None, "a1", comment(50.0, -5.0))),
-            (3, element(None, "a2", ElementKind::Group)),
+            (3, element(None, "a2", ElementKind::group())),
             (4, element(Some(3), "a0", comment(-10.0, 30.0))),
             (5, element(Some(3), "a1", arrow((0.0, 0.0), (5.0, 5.0)))),
         ]);
@@ -2269,11 +2489,11 @@ mod tests {
     #[test]
     fn a_group_outlines_the_bounds_of_its_elements() {
         let board = board([
-            (1, element(None, "a0", ElementKind::Group)),
+            (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
-            (3, element(Some(1), "a1", ElementKind::Group)),
+            (3, element(Some(1), "a1", ElementKind::group())),
             (4, element(Some(3), "a0", arrow((30.0, -5.0), (20.0, 5.0)))),
-            (5, element(None, "a1", ElementKind::Group)),
+            (5, element(None, "a1", ElementKind::group())),
         ]);
         let corners = [(0.0, -5.0), (30.0, -5.0), (30.0, 10.0), (0.0, 10.0)];
         assert_eq!(

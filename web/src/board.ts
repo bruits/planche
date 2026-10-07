@@ -386,6 +386,7 @@ export function refresh({ editor, board, drawn }: Opened, touched: string[]): st
   let reordered = false;
   const shown = new Set<string>();
   const kept = new Set<string>();
+  const containers = new Set<string>();
   for (const id of new Set(touched)) {
     drawn.items.delete(id);
     const before = board.elements[id];
@@ -394,6 +395,11 @@ export function refresh({ editor, board, drawn }: Opened, touched: string[]): st
       delete board.elements[id];
     } else {
       board.elements[id] = element;
+    }
+    for (const group of [before?.group, element?.group]) {
+      if (group !== undefined) {
+        containers.add(group);
+      }
     }
     reordered ||=
       (before === undefined) !== (element === undefined) ||
@@ -404,6 +410,15 @@ export function refresh({ editor, board, drawn }: Opened, touched: string[]): st
     }
     if (element?.kind.type === "image") {
       kept.add(element.kind.asset);
+    }
+  }
+  // A group's panel follows what its elements draw, all the way up.
+  const seen = new Set<string>();
+  for (const group of containers) {
+    for (let up: string | undefined = group; up !== undefined && !seen.has(up);) {
+      seen.add(up);
+      drawn.items.delete(up);
+      up = board.elements[up]?.group;
     }
   }
   if (reordered) {

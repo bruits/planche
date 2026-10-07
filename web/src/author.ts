@@ -478,6 +478,8 @@ function patched(editor: Editor, change: Update): Kind {
   if (text !== undefined) {
     if (kind.type === "comment") {
       kind.text = text;
+    } else if (kind.type === "group") {
+      kind.title = text;
     } else if (holdsText(kind)) {
       kind.text.content = text;
     } else {
