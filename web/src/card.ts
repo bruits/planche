@@ -8,7 +8,7 @@
 // turn on or off.
 
 import { clock, trimOf, type Playback, type Span } from "./playback.js";
-import { among, loneImage, type Opened } from "./board.js";
+import { among, loneImage, shownOrder, type Opened } from "./board.js";
 import {
   ariaKeys,
   composing,
@@ -96,6 +96,7 @@ const GAP = 24;
 export interface CardHost {
   current(): Opened | undefined;
   selection(): string[];
+  showsAnnotations(): boolean;
   /** Clockwise from its top-left, on the board. */
   box(): Point[] | undefined;
   /**
@@ -268,8 +269,8 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     return group ? [group] : members();
   };
   /**
-   * The elements selected, and those of the groups selected, but the groups themselves and the
-   * locked elements.
+   * The elements selected, and those of the groups selected, but the groups themselves, the locked
+   * elements, and the annotations hidden.
    */
   const members = (): { id: string; kind: Kind }[] => {
     const opened = host.current();
@@ -278,7 +279,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     }
     const { board, editor } = opened;
     const chosen = new Set(host.selection());
-    return board.draw_order
+    return shownOrder(board, host.showsAnnotations())
       .filter(
         (id) =>
           among(board, id, chosen) &&

@@ -10,6 +10,7 @@ import {
   placing,
   readAsset,
   release,
+  shownOrder,
   stacked,
   type Opened,
 } from "./board.js";
@@ -115,18 +116,20 @@ export async function render(scene: Scene, request: Request): Promise<Rendered> 
 }
 
 /**
- * The elements `ids` as the board shows them, their groups' elements included, as `options` frame
- * them, without the grid. Throws when they draw nothing.
+ * The elements `ids` as the board shows them, their groups' elements included but for the
+ * annotations unless they are `shown`, as `options` frame them, without the grid. Throws when they
+ * draw nothing.
  */
 export async function exported(
   scene: Scene,
   ids: string[],
   textures: Textures,
   options: Options,
+  shown = true,
 ): Promise<Exported> {
   const { opened, renderer, drawings, crossedOut } = scene;
   // As it stands now, as edits landing while its assets decode replace its elements.
-  const board = selected(opened.board, ids);
+  const board = selected(opened.board, ids, shown);
   const items = stacked(opened, crossedOut, board.draw_order);
   const side = Math.min(MOST_SIDE, renderer.maxTextureSide);
   const laid = plan(board, items, crossedOut, drawings, options, side);
@@ -154,17 +157,18 @@ export async function exported(
 }
 
 /**
- * What a picture of the elements `ids`, their groups' elements included, covers, and at how many
- * pixels, as `options` frame it, within `side` pixels along its longest side. `undefined` when
- * they draw nothing.
+ * What a picture of the elements `ids`, their groups' elements included but for the annotations
+ * unless they are `shown`, covers, and at how many pixels, as `options` frame it, within `side`
+ * pixels along its longest side. `undefined` when they draw nothing.
  */
 export function planned(
   { opened, drawings, crossedOut }: Pick<Scene, "opened" | "drawings" | "crossedOut">,
   ids: string[],
   options: Options,
   side: number,
+  shown = true,
 ): Plan | undefined {
-  const board = selected(opened.board, ids);
+  const board = selected(opened.board, ids, shown);
   const items = stacked(opened, crossedOut, board.draw_order);
   return plan(board, items, crossedOut, drawings, options, Math.min(MOST_SIDE, side));
 }
@@ -232,14 +236,18 @@ function filled(frame: Rect, paint: Paint, opacity = 1): Placed {
   return { kind: "fill", frame, rotation: 0, paint, opacity };
 }
 
-/** What the elements `ids` draw over, their groups' elements included, `undefined` when nothing. */
+/**
+ * What the elements `ids` draw over, their groups' elements included but for the annotations
+ * unless they are `shown`, `undefined` when nothing.
+ */
 export function drawnOver(
   opened: Opened,
   ids: string[],
   crossedOut: ReadonlySet<string>,
+  shown = true,
 ): Rect | undefined {
   const { board } = opened;
-  return tight(stacked(opened, crossedOut, selected(board, ids).draw_order), board);
+  return tight(stacked(opened, crossedOut, selected(board, ids, shown).draw_order), board);
 }
 
 /**
@@ -278,10 +286,13 @@ export function pictureName(board: Board, ids: string[], boardName: string): str
   return `${stem || boardName}.png`;
 }
 
-/** The elements `ids`, their groups' elements included, as a board of their own. */
-function selected(board: Board, ids: string[]): Board {
+/**
+ * The elements `ids`, their groups' elements included but for the annotations unless they are
+ * `shown`, as a board of their own.
+ */
+function selected(board: Board, ids: string[], shown: boolean): Board {
   const chosen = new Set(ids);
-  const order = board.draw_order.filter((id) => among(board, id, chosen));
+  const order = shownOrder(board, shown).filter((id) => among(board, id, chosen));
   const elements = Object.fromEntries(order.map((id) => [id, board.elements[id]!]));
   return { ...board, draw_order: order, elements };
 }

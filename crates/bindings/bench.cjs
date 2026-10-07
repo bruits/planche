@@ -118,7 +118,7 @@ function measure(count) {
     ),
   );
   rows.set("json", median(() => editor.json()));
-  rows.set("hit", median(() => editor.hit(next() * side, next() * side, 6)));
+  rows.set("hit", median(() => editor.hit(next() * side, next() * side, 6, true)));
   rows.set("touching, a quarter of the board", median(() => editor.touching(0, 0, side / 2, side / 2)));
   // Read again after each edit, as the app draws in that order.
   rows.set("drawOrder", median(() => editor.drawOrder()));
@@ -140,8 +140,8 @@ function measure(count) {
     rows.set(`land ${name}`, median(() => editor.land(selected), moved));
     rows.set(`bounds ${name}`, median(() => editor.bounds(selected)));
     // Once as a drag begins, then at each move, over all of the board zoomed out to show it.
-    rows.set(`neighbours ${name}`, median(() => editor.neighbours(selected)));
-    const [box, beside] = [editor.bounds(selected), editor.neighbours(selected)];
+    rows.set(`neighbours ${name}`, median(() => editor.neighbours(selected, undefined, true)));
+    const [box, beside] = [editor.bounds(selected), editor.neighbours(selected, undefined, true)];
     const shown = Float64Array.of(0, 0, side, side);
     rows.set(
       `snapToNeighbours ${name}`,

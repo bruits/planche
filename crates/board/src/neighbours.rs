@@ -9,19 +9,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::arrange::HAIR;
 use crate::grid::PULL;
-use crate::{Axis, Board, ElementId, Point, Rect, snap_to_grid};
+use crate::{Annotations, Axis, Board, ElementId, Point, Rect, snap_to_grid};
 
 impl Board {
     /// The upright bounds of what each element, or each group whole, draws at the level of
     /// `within`, the group gone into, or the top level, and that stays put as `ids` move: none
     /// of them, nor what holds or follows any of them, as what sticks to them does. What draws
-    /// nothing, such as a comment, is left out.
-    pub fn neighbours(&self, ids: &[ElementId], within: Option<ElementId>) -> Vec<Rect> {
+    /// nothing, such as a comment, is left out, as are the `annotations` hidden.
+    pub fn neighbours(
+        &self,
+        ids: &[ElementId],
+        within: Option<ElementId>,
+        annotations: Annotations,
+    ) -> Vec<Rect> {
         let moving = self.followers(ids);
         self.elements
             .iter()
             .filter(|(id, element)| {
-                element.group == within && self.with_descendants(&[**id]).is_disjoint(&moving)
+                element.group == within
+                    && !annotations.hides(&element.kind)
+                    && self.with_descendants(&[**id]).is_disjoint(&moving)
             })
             .filter_map(|(id, _)| self.bounds(&[*id]))
             .collect()
@@ -753,6 +760,7 @@ fn swap_point(point: Point) -> Point {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Annotations::{Hidden, Shown};
     use crate::tests::{arrow, board, element, id, stroke};
     use crate::{AssetId, ElementKind, ImageEdits, Size};
 
@@ -1348,16 +1356,16 @@ mod tests {
             (7, element(None, "a4", ElementKind::group())),
         ]);
         assert_areas(
-            board.neighbours(&[id(1)], None),
+            board.neighbours(&[id(1)], None, Shown),
             &[
                 area(0.0, 300.0, 100.0, 100.0),
                 area(200.0, 0.0, 100.0, 50.0),
                 area(425.0, -25.0, 50.0, 100.0),
             ],
         );
-        let inside = board.neighbours(&[id(5)], Some(id(4)));
+        let inside = board.neighbours(&[id(5)], Some(id(4)), Shown);
         assert_eq!(inside, [area(90.0, 390.0, 10.0, 10.0)]);
-        let grouped = board.neighbours(&[id(4)], None);
+        let grouped = board.neighbours(&[id(4)], None, Shown);
         assert_eq!(grouped.len(), 3);
         assert!(!grouped.contains(&area(0.0, 300.0, 100.0, 100.0)));
     }
@@ -1383,10 +1391,24 @@ mod tests {
             ),
             (6, element(None, "a4", image(900.0, 0.0, 10.0, 10.0, 0.0))),
         ]);
-        assert_eq!(board.neighbours(&[id(1)], None).len(), 2);
+        assert_eq!(board.neighbours(&[id(1)], None, Shown).len(), 2);
         assert_eq!(
-            board.neighbours(&[id(1), id(4)], None),
+            board.neighbours(&[id(1), id(4)], None, Shown),
             [area(900.0, 0.0, 10.0, 10.0)]
+        );
+    }
+
+    #[test]
+    fn the_annotations_hidden_are_no_neighbours() {
+        let board = board([
+            (1, element(None, "a0", image(200.0, 0.0, 100.0, 50.0, 0.0))),
+            (2, element(None, "a1", image(400.0, 0.0, 100.0, 50.0, 0.0))),
+            (3, element(None, "a2", stroke())),
+        ]);
+        assert_eq!(board.neighbours(&[id(1)], None, Shown).len(), 2);
+        assert_eq!(
+            board.neighbours(&[id(1)], None, Hidden),
+            [area(400.0, 0.0, 100.0, 50.0)]
         );
     }
 

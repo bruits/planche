@@ -205,6 +205,18 @@ describe("what a picture of the selection covers", () => {
     });
   });
 
+  it("leaves out the annotations of a group unless they show", () => {
+    const frame = { x: 0, y: 0, width: 100, height: 100 };
+    const { opened, ids } = openedOf({
+      a: image(frame),
+      b: { type: "arrow", from: { x: 0, y: 0 }, to: { x: 500, y: 0 } },
+    });
+    const group = newId();
+    refresh(opened, opened.editor.group(group, [ids.a!, ids.b!]));
+    expect(drawnOver(opened, [group], new Set(), false)).toEqual(frame);
+    expect(drawnOver(opened, [group], new Set())!.width).toBeGreaterThan(500);
+  });
+
   it("outlines an image crossed out, as it draws one", () => {
     const half = core.strokeWidth() / 2;
     const frame = { x: 0, y: 0, width: 200, height: 100 };

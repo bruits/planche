@@ -42,6 +42,7 @@ Triangle, diamond, star, and polygon have no keys. They sit with the other shape
 | Zoom to selection | ⇧2 |
 | Greyscale board | ⌥⌘G |
 | Mirror board | ⌥⌘F |
+| Show or hide annotations | ⇧⌘H |
 | Compact mode | ⌘\\, in the desktop app |
 
 Scrolling pans. Scrolling with ⌘ or Ctrl held, or pinching, zooms.

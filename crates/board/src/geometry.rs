@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
 
 use crate::{
-    Board, Corners, CropShape, ElementId, ElementKind, Fill, ImageEdits, Point, Rect, Shape, Text,
-    Tip,
+    Annotations, Board, Corners, CropShape, ElementId, ElementKind, Fill, ImageEdits, Point, Rect,
+    Shape, Text, Tip,
 };
 
 /// The most points [`Board::hit_along`] tries, so that however long the way, it stays quick.
@@ -25,28 +25,37 @@ const PANEL_MARGIN: f64 = 0.05;
 const STAR_DEPTH: f64 = 0.381_966;
 
 impl Board {
-    /// The topmost element that draws at `point`, or within `tolerance` of it. A comment covers
-    /// nothing on the board, nor does a group but for its panel, so neither is hit there, and a
-    /// shape neither filled nor holding text only draws its outline, so what it surrounds stays
-    /// within reach.
-    pub fn hit(&self, point: Point, tolerance: f64) -> Option<ElementId> {
+    /// The topmost element that draws at `point`, or within `tolerance` of it, but for the
+    /// `annotations` hidden. A comment covers nothing on the board, nor does a group but for its
+    /// panel, so neither is hit there, and a shape neither filled nor holding text only draws its
+    /// outline, so what it surrounds stays within reach.
+    pub fn hit(&self, point: Point, tolerance: f64, annotations: Annotations) -> Option<ElementId> {
         let panels = self.all_panels();
         self.draw_order().into_iter().rev().find(|id| {
-            hits(&self.elements[id].kind, point, tolerance)
-                || panels
-                    .get(id)
-                    .is_some_and(|panel| grown(panel, tolerance).contains(point))
+            let kind = &self.elements[id].kind;
+            !annotations.hides(kind)
+                && (hits(kind, point, tolerance)
+                    || panels
+                        .get(id)
+                        .is_some_and(|panel| grown(panel, tolerance).contains(point)))
         })
     }
 
     /// What [`Board::hit`] finds, but through the locked elements, as a click goes.
-    pub fn hit_unlocked(&self, point: Point, tolerance: f64) -> Option<ElementId> {
+    pub fn hit_unlocked(
+        &self,
+        point: Point,
+        tolerance: f64,
+        annotations: Annotations,
+    ) -> Option<ElementId> {
         let panels = self.all_panels();
         self.draw_order().into_iter().rev().find(|id| {
-            (hits(&self.elements[id].kind, point, tolerance)
-                || panels
-                    .get(id)
-                    .is_some_and(|panel| grown(panel, tolerance).contains(point)))
+            let kind = &self.elements[id].kind;
+            !annotations.hides(kind)
+                && (hits(kind, point, tolerance)
+                    || panels
+                        .get(id)
+                        .is_some_and(|panel| grown(panel, tolerance).contains(point)))
                 && self.locked_by(*id).is_none()
         })
     }
@@ -55,7 +64,13 @@ impl Board {
     /// `to`, but for a group's panel, under others too, from back to front. The way is tried
     /// every `tolerance`, so that it misses nothing it passes over, or at most [`MOST_TRIES`]
     /// times, spread evenly along it.
-    pub fn hit_along(&self, from: Point, to: Point, tolerance: f64) -> Vec<ElementId> {
+    pub fn hit_along(
+        &self,
+        from: Point,
+        to: Point,
+        tolerance: f64,
+        annotations: Annotations,
+    ) -> Vec<ElementId> {
         // With no tolerance, only its ends.
         let steps = (apart(from, to) / tolerance).ceil();
         let steps = if steps.is_finite() {
@@ -86,18 +101,23 @@ impl Board {
             .into_iter()
             .filter(|id| {
                 let kind = &self.elements[id].kind;
-                shape(kind).is_some_and(|shape| overlap(&shape, &around))
+                !annotations.hides(kind)
+                    && shape(kind).is_some_and(|shape| overlap(&shape, &around))
                     && hits_any(kind, &points, tolerance)
                     && self.locked_by(*id).is_none()
             })
             .collect()
     }
 
-    /// Every element whose area holds `point`, besides its outline, from back to front.
-    pub fn covering(&self, point: Point) -> Vec<ElementId> {
+    /// Every element whose area holds `point`, besides its outline, but for the `annotations`
+    /// hidden, from back to front.
+    pub fn covering(&self, point: Point, annotations: Annotations) -> Vec<ElementId> {
         self.draw_order()
             .into_iter()
-            .filter(|id| covers(&self.elements[id].kind, point))
+            .filter(|id| {
+                let kind = &self.elements[id].kind;
+                !annotations.hides(kind) && covers(kind, point)
+            })
             .collect()
     }
 
@@ -118,13 +138,15 @@ impl Board {
     }
 
     /// The top-level elements and outermost groups of what [`Board::touching`] finds but for the
-    /// locked elements, as a selection rectangle goes through them, once each, in the order it
-    /// finds them.
-    pub fn touching_top_level(&self, area: Rect) -> Vec<ElementId> {
+    /// locked elements and the `annotations` hidden, as a selection rectangle goes through them,
+    /// once each, in the order it finds them.
+    pub fn touching_top_level(&self, area: Rect, annotations: Annotations) -> Vec<ElementId> {
         let mut seen = BTreeSet::new();
         self.touching(area)
             .into_iter()
-            .filter(|id| self.locked_by(*id).is_none())
+            .filter(|id| {
+                !annotations.hides(&self.elements[id].kind) && self.locked_by(*id).is_none()
+            })
             .filter_map(|id| self.top_level(id))
             .filter(|id| seen.insert(*id))
             .collect()
@@ -1285,6 +1307,7 @@ fn edges(shape: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Annotations::{Hidden, Shown};
     use crate::tests::{board, element, id, locked, stroke};
     use crate::{
         AssetId, Colour, Corners, Dash, Fill, Heads, ImageEdits, Paper, Size, Text, Weight,
@@ -1441,11 +1464,11 @@ mod tests {
         // An eraser's way through its hollow, then across its bottom.
         assert!(
             board
-                .hit_along(point(30.0, 30.0), point(70.0, 30.0), 2.0)
+                .hit_along(point(30.0, 30.0), point(70.0, 30.0), 2.0, Shown)
                 .is_empty()
         );
         assert_eq!(
-            board.hit_along(point(50.0, 80.0), point(50.0, 120.0), 2.0),
+            board.hit_along(point(50.0, 80.0), point(50.0, 120.0), 2.0, Shown),
             [id(1)]
         );
     }
@@ -1454,11 +1477,11 @@ mod tests {
     fn an_image_is_hit_where_it_draws_once_rotated() {
         // Turned a quarter, 100 by 20 around (50, 10) spans x 40 to 60 and y -40 to 60.
         let board = board([(1, element(None, "a0", image(0.0, 0.0, 100.0, 20.0, 90.0)))]);
-        assert_eq!(board.hit(point(50.0, 55.0), 0.0), Some(id(1)));
-        assert_eq!(board.hit(point(50.0, -35.0), 0.0), Some(id(1)));
-        assert_eq!(board.hit(point(90.0, 10.0), 0.0), None);
-        assert_eq!(board.hit(point(62.0, 0.0), 0.0), None);
-        assert_eq!(board.hit(point(62.0, 0.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 55.0), 0.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, -35.0), 0.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(90.0, 10.0), 0.0, Shown), None);
+        assert_eq!(board.hit(point(62.0, 0.0), 0.0, Shown), None);
+        assert_eq!(board.hit(point(62.0, 0.0), 3.0, Shown), Some(id(1)));
     }
 
     #[test]
@@ -1470,11 +1493,11 @@ mod tests {
         // Turned a quarter around (100, 50), its long axis runs from (100, -50) to (100, 150),
         // and its frame spans x 50 to 150.
         let board = board([(1, element(None, "a0", shown))]);
-        assert_eq!(board.hit(point(100.0, -45.0), 0.0), Some(id(1)));
-        assert_eq!(board.hit(point(100.0, -52.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(100.0, -45.0), 0.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(100.0, -52.0), 3.0, Shown), Some(id(1)));
         // In a corner of its frame, out of the ellipse.
-        assert_eq!(board.hit(point(55.0, -40.0), 0.0), None);
-        assert!(board.covering(point(55.0, -40.0)).is_empty());
+        assert_eq!(board.hit(point(55.0, -40.0), 0.0, Shown), None);
+        assert!(board.covering(point(55.0, -40.0), Shown).is_empty());
         assert!(board.touching(area(50.0, -50.0, 10.0, 10.0)).is_empty());
         assert_eq!(board.touching(area(95.0, -55.0, 10.0, 10.0)), [id(1)]);
     }
@@ -1485,7 +1508,7 @@ mod tests {
             1,
             element(None, "a0", image(100.0, 0.0, -100.0, 20.0, 30.0)),
         )]);
-        assert_eq!(board.hit(point(50.0, 10.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 10.0), 0.0, Shown), Some(id(1)));
     }
 
     #[test]
@@ -1494,11 +1517,11 @@ mod tests {
             (1, element(None, "a0", image(10.0, 10.0, 0.0, 0.0, 0.0))),
             (2, element(None, "a1", image(200.0, 0.0, 0.0, 20.0, 0.0))),
         ]);
-        assert_eq!(board.hit(point(500.0, -300.0), 3.0), None);
-        assert_eq!(board.hit(point(12.0, 10.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(500.0, -300.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(12.0, 10.0), 3.0, Shown), Some(id(1)));
         // On the line through the zero-width frame, far beyond its ends.
-        assert_eq!(board.hit(point(200.0, 500.0), 3.0), None);
-        assert_eq!(board.hit(point(202.0, 10.0), 3.0), Some(id(2)));
+        assert_eq!(board.hit(point(200.0, 500.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(202.0, 10.0), 3.0, Shown), Some(id(2)));
     }
 
     #[test]
@@ -1509,9 +1532,9 @@ mod tests {
             (3, element(Some(2), "a0", image(5.0, 0.0, 10.0, 10.0, 0.0))),
             (4, element(None, "a2", image(20.0, 0.0, 10.0, 10.0, 0.0))),
         ]);
-        assert_eq!(board.hit(point(7.0, 5.0), 0.0), Some(id(3)));
-        assert_eq!(board.hit(point(2.0, 5.0), 0.0), Some(id(1)));
-        assert_eq!(board.hit(point(17.0, 5.0), 0.0), None);
+        assert_eq!(board.hit(point(7.0, 5.0), 0.0, Shown), Some(id(3)));
+        assert_eq!(board.hit(point(2.0, 5.0), 0.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(17.0, 5.0), 0.0, Shown), None);
     }
 
     #[test]
@@ -1544,15 +1567,18 @@ mod tests {
         // A twentieth of the mean side of (0, 0) to (400, 200) around it.
         let panel = area(-15.0, -15.0, 430.0, 230.0);
 
-        assert_eq!(board.hit(point(200.0, 50.0), 0.0), Some(id(1)));
-        assert_eq!(board.hit_unlocked(point(-10.0, 210.0), 0.0), Some(id(1)));
-        assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(2)));
-        assert_eq!(board.hit(point(-20.0, 50.0), 0.0), None);
-        assert_eq!(board.hit(point(-20.0, 50.0), 5.0), Some(id(1)));
-        assert_eq!(board.hit(point(200.0, 550.0), 0.0), None);
+        assert_eq!(board.hit(point(200.0, 50.0), 0.0, Shown), Some(id(1)));
+        assert_eq!(
+            board.hit_unlocked(point(-10.0, 210.0), 0.0, Shown),
+            Some(id(1))
+        );
+        assert_eq!(board.hit(point(50.0, 50.0), 0.0, Shown), Some(id(2)));
+        assert_eq!(board.hit(point(-20.0, 50.0), 0.0, Shown), None);
+        assert_eq!(board.hit(point(-20.0, 50.0), 5.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(200.0, 550.0), 0.0, Shown), None);
         assert_eq!(board.touching(area(190.0, 40.0, 10.0, 10.0)), [id(1)]);
         assert_eq!(
-            board.hit_along(point(150.0, 50.0), point(250.0, 50.0), 1.0),
+            board.hit_along(point(150.0, 50.0), point(250.0, 50.0), 1.0, Shown),
             []
         );
         assert_eq!(board.bounds(&[id(1)]), Some(panel));
@@ -1589,8 +1615,8 @@ mod tests {
         assert!(outer.x < inner.x && outer.y < inner.y);
         assert!(outer.y + outer.height > inner.y + inner.height);
         assert!(outer.x + outer.width > 600.0);
-        assert_eq!(board.hit(point(200.0, 50.0), 0.0), Some(id(2)));
-        assert_eq!(board.hit(point(450.0, 50.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit(point(200.0, 50.0), 0.0, Shown), Some(id(2)));
+        assert_eq!(board.hit(point(450.0, 50.0), 0.0, Shown), Some(id(1)));
     }
 
     #[test]
@@ -1601,14 +1627,45 @@ mod tests {
             (3, locked(None, "a2", ElementKind::group())),
             (4, element(Some(3), "a0", image(20.0, 0.0, 10.0, 10.0, 0.0))),
         ]);
-        assert_eq!(board.hit(point(5.0, 5.0), 0.0), Some(id(2)));
-        assert_eq!(board.hit_unlocked(point(5.0, 5.0), 0.0), Some(id(1)));
-        assert_eq!(board.hit(point(25.0, 5.0), 0.0), Some(id(4)));
-        assert_eq!(board.hit_unlocked(point(25.0, 5.0), 0.0), None);
+        assert_eq!(board.hit(point(5.0, 5.0), 0.0, Shown), Some(id(2)));
+        assert_eq!(board.hit_unlocked(point(5.0, 5.0), 0.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(25.0, 5.0), 0.0, Shown), Some(id(4)));
+        assert_eq!(board.hit_unlocked(point(25.0, 5.0), 0.0, Shown), None);
         assert_eq!(
-            board.hit_along(point(5.0, 5.0), point(25.0, 5.0), 1.0),
+            board.hit_along(point(5.0, 5.0), point(25.0, 5.0), 1.0, Shown),
             [id(1)]
         );
+    }
+
+    #[test]
+    fn a_click_goes_through_the_annotations_hidden_as_does_a_way() {
+        let board = board([
+            (1, element(None, "a0", image(0.0, 0.0, 100.0, 100.0, 0.0))),
+            (2, element(None, "a1", arrow((10.0, 50.0), (90.0, 50.0)))),
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    labelled(Shape::Rectangle, area(40.0, 40.0, 20.0, 20.0), 0.0, "text"),
+                ),
+            ),
+        ]);
+        assert_eq!(board.hit(point(50.0, 50.0), 0.0, Shown), Some(id(3)));
+        assert_eq!(board.hit(point(50.0, 50.0), 0.0, Hidden), Some(id(1)));
+        assert_eq!(
+            board.hit_unlocked(point(20.0, 50.0), 0.0, Shown),
+            Some(id(2))
+        );
+        assert_eq!(
+            board.hit_unlocked(point(20.0, 50.0), 0.0, Hidden),
+            Some(id(1))
+        );
+        assert_eq!(
+            board.hit_along(point(20.0, 50.0), point(80.0, 50.0), 1.0, Hidden),
+            [id(1)]
+        );
+        assert_eq!(board.covering(point(50.0, 50.0), Hidden), [id(1)]);
     }
 
     #[test]
@@ -1619,7 +1676,7 @@ mod tests {
             (3, element(None, "a2", image(0.0, 50.0, 10.0, 10.0, 0.0))),
             (4, element(None, "a3", image(40.0, 0.0, 10.0, 10.0, 0.0))),
         ]);
-        let way = board.hit_along(point(2.0, 5.0), point(45.0, 5.0), 2.0);
+        let way = board.hit_along(point(2.0, 5.0), point(45.0, 5.0), 2.0, Shown);
         assert_eq!(way, [id(1), id(2), id(4)]);
     }
 
@@ -1629,13 +1686,13 @@ mod tests {
             let x = f64::from(tenth) / 10.0;
             let board = board([(1, element(None, "a0", image(x, -10.0, 0.1, 20.0, 0.0)))]);
             assert_eq!(
-                board.hit_along(point(0.0, 0.0), point(100.0, 0.0), 1.0),
+                board.hit_along(point(0.0, 0.0), point(100.0, 0.0), 1.0, Shown),
                 [id(1)],
                 "across x = {x}"
             );
             assert!(
                 board
-                    .hit_along(point(0.0, 12.0), point(100.0, 12.0), 1.0)
+                    .hit_along(point(0.0, 12.0), point(100.0, 12.0), 1.0, Shown)
                     .is_empty()
             );
         }
@@ -1652,8 +1709,8 @@ mod tests {
             ),
         )]);
         let near = point(2000.0, 16.0);
-        assert_eq!(board.hit(near, 4.0), Some(id(1)));
-        assert_eq!(board.hit_along(near, near, 4.0), [id(1)]);
+        assert_eq!(board.hit(near, 4.0, Shown), Some(id(1)));
+        assert_eq!(board.hit_along(near, near, 4.0, Shown), [id(1)]);
     }
 
     #[test]
@@ -1665,7 +1722,7 @@ mod tests {
                 element(None, "a1", image(1e12 - 5.0, 0.0, 10.0, 10.0, 0.0)),
             ),
         ]);
-        let way = board.hit_along(point(5.0, 5.0), point(1e12, 5.0), 1e-6);
+        let way = board.hit_along(point(5.0, 5.0), point(1e12, 5.0), 1e-6, Shown);
         assert_eq!(way, [id(1), id(2)]);
     }
 
@@ -1676,8 +1733,8 @@ mod tests {
             (2, element(None, "a1", image(5.0, 0.0, 10.0, 10.0, 0.0))),
         ]);
         let under = point(7.0, 5.0);
-        assert_eq!(board.hit_along(under, under, 0.0), [id(1), id(2)]);
-        assert_eq!(board.hit_along(under, under, 2.0), [id(1), id(2)]);
+        assert_eq!(board.hit_along(under, under, 0.0, Shown), [id(1), id(2)]);
+        assert_eq!(board.hit_along(under, under, 2.0, Shown), [id(1), id(2)]);
     }
 
     #[test]
@@ -1702,8 +1759,8 @@ mod tests {
                 ),
             ),
         ]);
-        assert_eq!(board.covering(point(50.0, 50.0)), [id(1), id(4)]);
-        assert!(board.covering(point(150.0, 50.0)).is_empty());
+        assert_eq!(board.covering(point(50.0, 50.0), Shown), [id(1), id(4)]);
+        assert!(board.covering(point(150.0, 50.0), Shown).is_empty());
     }
 
     fn framed(shape: Shape, frame: Rect, rotation: f64) -> ElementKind {
@@ -1755,15 +1812,15 @@ mod tests {
                 ),
             ),
         ]);
-        assert_eq!(board.hit(point(50.0, 50.0), 3.0), None);
-        assert_eq!(board.hit(point(2.0, 50.0), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(250.0, 25.0), 3.0), None);
+        assert_eq!(board.hit(point(50.0, 50.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(2.0, 50.0), 3.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(250.0, 25.0), 3.0, Shown), None);
         // Inside the ellipse's frame, but outside the ellipse.
-        assert_eq!(board.hit(point(205.0, 5.0), 3.0), None);
-        assert_eq!(board.hit(point(201.0, 25.0), 3.0), Some(id(2)));
-        assert_eq!(board.hit(point(250.0, 1.0), 3.0), Some(id(2)));
-        assert_eq!(board.hit(point(50.0, 176.0), 3.0), Some(id(3)));
-        assert_eq!(board.hit(point(2.0, 225.0), 3.0), None);
+        assert_eq!(board.hit(point(205.0, 5.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(201.0, 25.0), 3.0, Shown), Some(id(2)));
+        assert_eq!(board.hit(point(250.0, 1.0), 3.0, Shown), Some(id(2)));
+        assert_eq!(board.hit(point(50.0, 176.0), 3.0, Shown), Some(id(3)));
+        assert_eq!(board.hit(point(2.0, 225.0), 3.0, Shown), None);
     }
 
     #[test]
@@ -1788,10 +1845,10 @@ mod tests {
                 ),
             ),
         ]);
-        assert_eq!(board.hit(point(50.0, 50.0), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(2.0, 50.0), 3.0), Some(id(2)));
-        assert_eq!(board.hit(point(241.0, -30.0), 3.0), Some(id(3)));
-        assert_eq!(board.hit(point(205.0, 1.0), 3.0), None);
+        assert_eq!(board.hit(point(50.0, 50.0), 3.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(2.0, 50.0), 3.0, Shown), Some(id(2)));
+        assert_eq!(board.hit(point(241.0, -30.0), 3.0, Shown), Some(id(3)));
+        assert_eq!(board.hit(point(205.0, 1.0), 3.0, Shown), None);
     }
 
     #[test]
@@ -1856,11 +1913,11 @@ mod tests {
                 ),
             ),
         ]);
-        assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(1)));
-        assert_eq!(board.hit(point(250.0, 50.0), 0.0), Some(id(2)));
+        assert_eq!(board.hit(point(50.0, 50.0), 0.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(250.0, 50.0), 0.0, Shown), Some(id(2)));
         // Over the ellipse's frame, but outside its curve.
-        assert_eq!(board.hit(point(205.0, 5.0), 0.0), None);
-        assert_eq!(board.hit(point(450.0, 50.0), 0.0), None);
+        assert_eq!(board.hit(point(205.0, 5.0), 0.0, Shown), None);
+        assert_eq!(board.hit(point(450.0, 50.0), 0.0, Shown), None);
         assert_eq!(board.touching(area(30.0, 30.0, 30.0, 30.0)), [id(1)]);
         assert_eq!(board.touching(area(230.0, 30.0, 40.0, 40.0)), [id(2)]);
         assert!(board.touching(area(200.0, 0.0, 5.0, 5.0)).is_empty());
@@ -1879,9 +1936,9 @@ mod tests {
             opacity: Default::default(),
         };
         let board = board([(1, element(None, "a0", sticky))]);
-        assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 50.0), 0.0, Shown), Some(id(1)));
         // Within its frame, before it turned.
-        assert_eq!(board.hit(point(2.0, 2.0), 0.0), None);
+        assert_eq!(board.hit(point(2.0, 2.0), 0.0, Shown), None);
         assert_eq!(board.touching(area(40.0, 40.0, 20.0, 20.0)), [id(1)]);
     }
 
@@ -1897,8 +1954,8 @@ mod tests {
                 framed(Shape::Ellipse, area(0.0, 0.0, 200.0, 50.0), 30.0),
             ),
         )]);
-        assert_eq!(board.hit(point(186.6, 75.0), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(186.6, -25.0), 3.0), None);
+        assert_eq!(board.hit(point(186.6, 75.0), 3.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(186.6, -25.0), 3.0, Shown), None);
         assert_eq!(board.touching(area(180.0, 70.0, 10.0, 10.0)), [id(1)]);
         assert!(board.touching(area(180.0, -30.0, 10.0, 10.0)).is_empty());
     }
@@ -1923,11 +1980,11 @@ mod tests {
                 ),
             ),
         ]);
-        assert_eq!(board.hit(point(50.0, 2.0), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(50.0, 10.0), 3.0), None);
+        assert_eq!(board.hit(point(50.0, 2.0), 3.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 10.0), 3.0, Shown), None);
         // On the line through it, far beyond its ends.
-        assert_eq!(board.hit(point(150.0, 0.0), 3.0), None);
-        assert_eq!(board.hit(point(202.0, 50.0), 3.0), Some(id(2)));
+        assert_eq!(board.hit(point(150.0, 0.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(202.0, 50.0), 3.0, Shown), Some(id(2)));
         assert_eq!(board.touching(area(40.0, -10.0, 20.0, 20.0)), [id(1)]);
         assert_eq!(board.touching(area(190.0, 40.0, 20.0, 20.0)), [id(2)]);
         assert!(board.touching(area(40.0, 10.0, 20.0, 20.0)).is_empty());
@@ -1944,10 +2001,10 @@ mod tests {
                 framed(Shape::Ellipse, area(0.0, 0.0, 200.0, 4.0), 0.0),
             ),
         )]);
-        assert_eq!(board.hit(point(50.0, 2.0), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(50.0, 2.1), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(100.0, 2.0), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(50.0, 10.0), 3.0), None);
+        assert_eq!(board.hit(point(50.0, 2.0), 3.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 2.1), 3.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(100.0, 2.0), 3.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 10.0), 3.0, Shown), None);
     }
 
     #[test]
@@ -1961,12 +2018,12 @@ mod tests {
                 framed(Shape::Ellipse, area(0.0, 0.0, 200.0, 4.0), 0.0),
             ),
         )]);
-        assert_eq!(board.hit(point(250.0, 7.0), 4.0), None);
-        assert_eq!(board.hit(point(280.0, 5.5), 4.0), None);
-        assert_eq!(board.hit(point(295.0, 5.2), 4.0), None);
-        assert_eq!(board.hit(point(230.0, 8.0), 4.0), None);
+        assert_eq!(board.hit(point(250.0, 7.0), 4.0, Shown), None);
+        assert_eq!(board.hit(point(280.0, 5.5), 4.0, Shown), None);
+        assert_eq!(board.hit(point(295.0, 5.2), 4.0, Shown), None);
+        assert_eq!(board.hit(point(230.0, 8.0), 4.0, Shown), None);
         // Just off its tip, it still is.
-        assert_eq!(board.hit(point(204.0, 2.0), 4.0), Some(id(1)));
+        assert_eq!(board.hit(point(204.0, 2.0), 4.0, Shown), Some(id(1)));
     }
 
     #[test]
@@ -1984,9 +2041,9 @@ mod tests {
             (3, element(None, "a2", image(400.0, 0.0, 100.0, 100.0, 0.0))),
         ]);
         let half = Weight::Medium.width() / 2.0;
-        assert_eq!(board.hit(point(-half + 0.1, 50.0), 0.0), Some(id(1)));
-        assert_eq!(board.hit(point(250.0, half - 0.1), 0.0), Some(id(2)));
-        assert_eq!(board.hit(point(400.0 - half + 0.1, 50.0), 0.0), None);
+        assert_eq!(board.hit(point(-half + 0.1, 50.0), 0.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(250.0, half - 0.1), 0.0, Shown), Some(id(2)));
+        assert_eq!(board.hit(point(400.0 - half + 0.1, 50.0), 0.0, Shown), None);
     }
 
     #[test]
@@ -2040,11 +2097,11 @@ mod tests {
                 ),
             ),
         ]);
-        assert_eq!(board.hit(point(50.0, 50.0), 3.0), Some(id(2)));
-        assert_eq!(board.covering(point(50.0, 50.0)), [id(1), id(2)]);
-        assert_eq!(board.hit(point(250.0, 25.0), 3.0), Some(id(3)));
-        assert_eq!(board.hit(point(205.0, 5.0), 3.0), None);
-        assert_eq!(board.hit(point(450.0, 20.0), 3.0), None);
+        assert_eq!(board.hit(point(50.0, 50.0), 3.0, Shown), Some(id(2)));
+        assert_eq!(board.covering(point(50.0, 50.0), Shown), [id(1), id(2)]);
+        assert_eq!(board.hit(point(250.0, 25.0), 3.0, Shown), Some(id(3)));
+        assert_eq!(board.hit(point(205.0, 5.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(450.0, 20.0), 3.0, Shown), None);
         assert_eq!(board.touching(area(20.0, 20.0, 10.0, 10.0)), [id(2)]);
         assert!(board.touching(area(440.0, 10.0, 8.0, 8.0)).is_empty());
     }
@@ -2186,17 +2243,17 @@ mod tests {
             ),
         ]);
         // Along the triangle's right side, and in its frame's corners, out of it.
-        assert_eq!(board.hit(point(75.0, 50.0), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(50.0, 99.0), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(5.0, 5.0), 3.0), None);
-        assert_eq!(board.hit(point(50.0, 60.0), 3.0), None);
-        assert_eq!(board.hit(point(225.0, 25.0), 3.0), Some(id(2)));
-        assert_eq!(board.hit(point(205.0, 5.0), 3.0), None);
-        assert_eq!(board.hit(point(700.0, 50.0), 3.0), Some(id(3)));
-        assert_eq!(board.hit(point(602.0, 2.0), 3.0), None);
-        assert_eq!(board.hit(point(50.0, 201.0), 3.0), Some(id(4)));
-        assert_eq!(board.hit(point(50.0, 298.0), 3.0), Some(id(4)));
-        assert_eq!(board.hit(point(5.0, 295.0), 3.0), None);
+        assert_eq!(board.hit(point(75.0, 50.0), 3.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 99.0), 3.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(5.0, 5.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(50.0, 60.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(225.0, 25.0), 3.0, Shown), Some(id(2)));
+        assert_eq!(board.hit(point(205.0, 5.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(700.0, 50.0), 3.0, Shown), Some(id(3)));
+        assert_eq!(board.hit(point(602.0, 2.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(50.0, 201.0), 3.0, Shown), Some(id(4)));
+        assert_eq!(board.hit(point(50.0, 298.0), 3.0, Shown), Some(id(4)));
+        assert_eq!(board.hit(point(5.0, 295.0), 3.0, Shown), None);
         // Over a frame's corner, out of what it surrounds.
         assert!(board.touching(area(0.0, 0.0, 10.0, 10.0)).is_empty());
         assert!(board.touching(area(200.0, 0.0, 10.0, 10.0)).is_empty());
@@ -2211,14 +2268,14 @@ mod tests {
         // them at (450, 76.4).
         let star = |fill| counted(Shape::Star, area(400.0, 0.0, 100.0, 100.0), 5, fill);
         let filled = board([(1, element(None, "a0", star(Fill::Solid)))]);
-        assert_eq!(filled.covering(point(450.0, 50.0)), [id(1)]);
-        assert!(filled.covering(point(450.0, 90.0)).is_empty());
-        assert_eq!(filled.hit(point(450.0, 90.0), 3.0), None);
+        assert_eq!(filled.covering(point(450.0, 50.0), Shown), [id(1)]);
+        assert!(filled.covering(point(450.0, 90.0), Shown).is_empty());
+        assert_eq!(filled.hit(point(450.0, 90.0), 3.0, Shown), None);
         assert!(filled.touching(area(445.0, 85.0, 10.0, 10.0)).is_empty());
         assert_eq!(filled.touching(area(440.0, 40.0, 20.0, 20.0)), [id(1)]);
         let hollow = board([(1, element(None, "a0", star(Fill::Hollow)))]);
-        assert_eq!(hollow.hit(point(450.0, 50.0), 3.0), None);
-        assert_eq!(hollow.hit(point(450.0, 77.0), 3.0), Some(id(1)));
+        assert_eq!(hollow.hit(point(450.0, 50.0), 3.0, Shown), None);
+        assert_eq!(hollow.hit(point(450.0, 77.0), 3.0, Shown), Some(id(1)));
         assert!(hollow.touching(area(440.0, 40.0, 20.0, 20.0)).is_empty());
         assert_eq!(hollow.touching(area(445.0, 70.0, 10.0, 10.0)), [id(1)]);
     }
@@ -2281,9 +2338,9 @@ mod tests {
             },
         ] {
             let board = board([(1, element(None, "a0", kind))]);
-            assert_eq!(board.hit(point(52.0, 48.0), 3.0), Some(id(1)));
-            assert_eq!(board.hit(point(60.0, 40.0), 3.0), None);
-            assert_eq!(board.hit(point(102.0, 102.0), 3.0), Some(id(1)));
+            assert_eq!(board.hit(point(52.0, 48.0), 3.0, Shown), Some(id(1)));
+            assert_eq!(board.hit(point(60.0, 40.0), 3.0, Shown), None);
+            assert_eq!(board.hit(point(102.0, 102.0), 3.0, Shown), Some(id(1)));
             assert_eq!(board.touching(area(40.0, 40.0, 5.0, 5.0)), [id(1)]);
         }
     }
@@ -2317,17 +2374,17 @@ mod tests {
                 ),
             ),
         ]);
-        assert_eq!(board.hit(point(50.0, 50.0), 0.0), Some(id(1)));
-        assert_eq!(board.hit(point(22.0, 78.0), 3.0), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 50.0), 0.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(22.0, 78.0), 3.0, Shown), Some(id(1)));
         // Between its arms, and on its frame away from them.
-        assert_eq!(board.hit(point(50.0, 20.0), 3.0), None);
-        assert_eq!(board.hit(point(50.0, 1.0), 3.0), None);
+        assert_eq!(board.hit(point(50.0, 20.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(50.0, 1.0), 3.0, Shown), None);
         assert!(board.touching(area(40.0, 5.0, 20.0, 20.0)).is_empty());
         assert_eq!(board.touching(area(0.0, 0.0, 10.0, 10.0)), [id(1)]);
-        assert_eq!(board.hit(point(250.0, 20.0), 0.0), Some(id(2)));
+        assert_eq!(board.hit(point(250.0, 20.0), 0.0, Shown), Some(id(2)));
         assert_eq!(board.touching(area(240.0, 5.0, 20.0, 20.0)), [id(2)]);
-        assert_eq!(board.hit(point(75.0, 200.0), 3.0), Some(id(3)));
-        assert_eq!(board.hit(point(50.0, 200.0), 3.0), None);
+        assert_eq!(board.hit(point(75.0, 200.0), 3.0, Shown), Some(id(3)));
+        assert_eq!(board.hit(point(50.0, 200.0), 3.0, Shown), None);
     }
 
     #[test]
@@ -2396,7 +2453,7 @@ mod tests {
             target: None,
         };
         let board = board([(1, element(None, "a0", comment))]);
-        assert_eq!(board.hit(point(10.0, 10.0), 3.0), None);
+        assert_eq!(board.hit(point(10.0, 10.0), 3.0, Shown), None);
         assert_eq!(board.outline(id(1)), Some(Vec::new()));
         assert_eq!(board.bounds(&[id(1)]), None);
     }
@@ -2439,12 +2496,12 @@ mod tests {
             [id(2), id(4), id(5)]
         );
         assert_eq!(
-            board.touching_top_level(area(5.0, 5.0, 10.0, 10.0)),
+            board.touching_top_level(area(5.0, 5.0, 10.0, 10.0), Shown),
             [id(1), id(5)]
         );
         assert!(
             board
-                .touching_top_level(area(50.0, 5.0, 10.0, 10.0))
+                .touching_top_level(area(50.0, 5.0, 10.0, 10.0), Shown)
                 .is_empty()
         );
     }
@@ -2459,9 +2516,37 @@ mod tests {
         ]);
         let around_the_locked = area(5.0, 5.0, 10.0, 10.0);
         assert_eq!(board.touching(around_the_locked), [id(2), id(4)]);
-        assert!(board.touching_top_level(around_the_locked).is_empty());
+        assert!(
+            board
+                .touching_top_level(around_the_locked, Shown)
+                .is_empty()
+        );
         assert_eq!(
-            board.touching_top_level(area(0.0, 0.0, 60.0, 10.0)),
+            board.touching_top_level(area(0.0, 0.0, 60.0, 10.0), Shown),
+            [id(1)]
+        );
+    }
+
+    #[test]
+    fn a_selection_rectangle_goes_through_the_annotations_hidden() {
+        let board = board([
+            (1, element(None, "a0", ElementKind::group())),
+            (2, element(Some(1), "a0", arrow((0.0, 0.0), (20.0, 20.0)))),
+            (3, element(Some(1), "a1", image(50.0, 0.0, 20.0, 20.0, 0.0))),
+            (4, element(None, "a1", comment(10.0, 10.0))),
+        ]);
+        let around_the_arrow = area(5.0, 5.0, 10.0, 10.0);
+        assert_eq!(
+            board.touching_top_level(around_the_arrow, Shown),
+            [id(1), id(4)]
+        );
+        assert!(
+            board
+                .touching_top_level(around_the_arrow, Hidden)
+                .is_empty()
+        );
+        assert_eq!(
+            board.touching_top_level(area(0.0, 0.0, 60.0, 10.0), Hidden),
             [id(1)]
         );
     }
@@ -2619,7 +2704,7 @@ mod tests {
         let board = board([(1, element(None, "a0", far))]);
         assert_eq!(board.drawn(id(1), &BTreeSet::new()).len(), 1);
         // On the one edge of its frame that does not overflow, so that its curve is drawn.
-        assert_eq!(board.hit(point(1e308, 5.0), 1.0), None);
+        assert_eq!(board.hit(point(1e308, 5.0), 1.0, Shown), None);
     }
 
     #[test]
@@ -2640,8 +2725,8 @@ mod tests {
         );
         let board = board([(1, element(None, "a0", bent))]);
         // Rounded from (50, 0) to (125, 43.3), through about (93.75, 10.8) at its middle.
-        assert_eq!(board.hit(point(100.0, 0.0), 1.0), None);
-        assert_eq!(board.hit(point(93.75, 10.8), 1.0), Some(id(1)));
+        assert_eq!(board.hit(point(100.0, 0.0), 1.0, Shown), None);
+        assert_eq!(board.hit(point(93.75, 10.8), 1.0, Shown), Some(id(1)));
         assert_eq!(board.touching(area(92.0, 9.0, 4.0, 4.0)), [id(1)]);
         assert!(board.touching(area(98.0, -2.0, 4.0, 4.0)).is_empty());
     }
@@ -2656,15 +2741,15 @@ mod tests {
         let board = board([(1, element(None, "a0", thick))]);
         // 32 wide, so 16 either side of its line.
         assert_eq!(
-            board.hit_along(point(50.0, 64.0), point(60.0, 64.0), 1.0),
+            board.hit_along(point(50.0, 64.0), point(60.0, 64.0), 1.0, Shown),
             [id(1)]
         );
         assert!(
             board
-                .hit_along(point(50.0, 70.0), point(60.0, 70.0), 1.0)
+                .hit_along(point(50.0, 70.0), point(60.0, 70.0), 1.0, Shown)
                 .is_empty()
         );
-        assert_eq!(board.hit(point(20.0, 35.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit(point(20.0, 35.0), 0.0, Shown), Some(id(1)));
     }
 
     #[test]
@@ -2686,8 +2771,8 @@ mod tests {
             point(20.10508710353183, 1.5694030589546863),
             3.69933750260176,
         );
-        assert_eq!(board.hit(edge, tolerance), Some(id(1)));
-        assert_eq!(board.hit_along(edge, edge, tolerance), [id(1)]);
+        assert_eq!(board.hit(edge, tolerance, Shown), Some(id(1)));
+        assert_eq!(board.hit_along(edge, edge, tolerance, Shown), [id(1)]);
     }
 
     #[test]
@@ -2765,22 +2850,22 @@ mod tests {
                 .enumerate()
                 .map(|(at, (kind, key))| (at as u128 + 1, element(None, key, kind))),
         );
-        assert_eq!(board.hit(point(50.0, 2.0), 3.0), Some(id(1)));
-        assert_eq!(board.hit(point(50.0, 10.0), 3.0), None);
+        assert_eq!(board.hit(point(50.0, 2.0), 3.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, 10.0), 3.0, Shown), None);
         // On the line through it, beyond its ends.
-        assert_eq!(board.hit(point(150.0, 0.0), 3.0), None);
-        assert_eq!(board.hit(point(202.0, 50.0), 3.0), Some(id(2)));
-        assert_eq!(board.hit(point(210.0, 50.0), 3.0), None);
-        assert_eq!(board.hit(point(200.0, 150.0), 3.0), None);
-        assert_eq!(board.hit(point(401.0, 50.0), 3.0), Some(id(3)));
-        assert_eq!(board.hit(point(410.0, 50.0), 3.0), None);
-        assert_eq!(board.hit(point(652.0, 0.0), 3.0), Some(id(4)));
-        assert_eq!(board.hit(point(660.0, 0.0), 3.0), None);
-        assert_eq!(board.hit(point(650.0, 80.0), 3.0), None);
+        assert_eq!(board.hit(point(150.0, 0.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(202.0, 50.0), 3.0, Shown), Some(id(2)));
+        assert_eq!(board.hit(point(210.0, 50.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(200.0, 150.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(401.0, 50.0), 3.0, Shown), Some(id(3)));
+        assert_eq!(board.hit(point(410.0, 50.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(652.0, 0.0), 3.0, Shown), Some(id(4)));
+        assert_eq!(board.hit(point(660.0, 0.0), 3.0, Shown), None);
+        assert_eq!(board.hit(point(650.0, 80.0), 3.0, Shown), None);
         // Filled, it still covers nothing.
-        assert!(board.covering(point(50.0, 0.0)).is_empty());
-        assert!(board.covering(point(200.0, 50.0)).is_empty());
-        assert!(board.covering(point(400.0, 50.0)).is_empty());
+        assert!(board.covering(point(50.0, 0.0), Shown).is_empty());
+        assert!(board.covering(point(200.0, 50.0), Shown).is_empty());
+        assert!(board.covering(point(400.0, 50.0), Shown).is_empty());
         assert_eq!(board.touching(area(40.0, -10.0, 20.0, 20.0)), [id(1)]);
         assert!(board.touching(area(40.0, 10.0, 20.0, 20.0)).is_empty());
         assert_eq!(board.touching(area(190.0, 40.0, 20.0, 20.0)), [id(2)]);

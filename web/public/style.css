@@ -231,6 +231,10 @@ body {
   pointer-events: none;
 }
 
+#viewport.unannotated > .pins {
+  display: none;
+}
+
 /* Placed at its comment's point, which its pin's centre sits on. */
 .comment {
   position: absolute;

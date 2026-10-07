@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use board::{
-    Alignment, AssetId, Axis, Board, Colour, Copied, Corners, ElementId, ElementKind, GRID_STEP,
-    GridLevel, MovieIndex, Order, Point, Rect, Restack, Scale, Shape, Side, Size, Speed, Style,
-    Tip, Transform, Weight,
+    Alignment, Annotations, AssetId, Axis, Board, Colour, Copied, Corners, ElementId, ElementKind,
+    GRID_STEP, GridLevel, MovieIndex, Order, Point, Rect, Restack, Scale, Shape, Side, Size, Speed,
+    Style, Tip, Transform, Weight,
 };
 use format::{save, zip};
 use js_sys::{Map, Uint8Array};
@@ -351,21 +351,29 @@ impl Editor {
             .collect()
     }
 
-    /// The topmost element that draws at a point, or within `tolerance` of it.
-    pub fn hit(&self, x: f64, y: f64, tolerance: f64) -> Option<String> {
-        let hit = self.0.board().hit(Point { x, y }, tolerance);
+    /// The topmost element that draws at a point, or within `tolerance` of it, but for the
+    /// annotations unless they are `shown`.
+    pub fn hit(&self, x: f64, y: f64, tolerance: f64, shown: bool) -> Option<String> {
+        let hit = self
+            .0
+            .board()
+            .hit(Point { x, y }, tolerance, annotations(shown));
         hit.as_ref().map(ElementId::to_string)
     }
 
     /// What `hit` finds, but through the locked elements, as a click goes.
     #[wasm_bindgen(js_name = hitUnlocked)]
-    pub fn hit_unlocked(&self, x: f64, y: f64, tolerance: f64) -> Option<String> {
-        let hit = self.0.board().hit_unlocked(Point { x, y }, tolerance);
+    pub fn hit_unlocked(&self, x: f64, y: f64, tolerance: f64, shown: bool) -> Option<String> {
+        let hit = self
+            .0
+            .board()
+            .hit_unlocked(Point { x, y }, tolerance, annotations(shown));
         hit.as_ref().map(ElementId::to_string)
     }
 
     /// Every element not locked that draws within `tolerance` of the way from one point to
-    /// another, under others too, from back to front.
+    /// another, under others too, from back to front, but for the annotations unless they are
+    /// `shown`.
     #[wasm_bindgen(js_name = hitAlong)]
     pub fn hit_along(
         &self,
@@ -374,6 +382,7 @@ impl Editor {
         to_x: f64,
         to_y: f64,
         tolerance: f64,
+        shown: bool,
     ) -> Vec<String> {
         let (from, to) = (
             Point {
@@ -382,12 +391,17 @@ impl Editor {
             },
             Point { x: to_x, y: to_y },
         );
-        strings(self.0.board().hit_along(from, to, tolerance))
+        strings(
+            self.0
+                .board()
+                .hit_along(from, to, tolerance, annotations(shown)),
+        )
     }
 
-    /// Every element whose area holds a point, besides its outline, from back to front.
-    pub fn covering(&self, x: f64, y: f64) -> Vec<String> {
-        strings(self.0.board().covering(Point { x, y }))
+    /// Every element whose area holds a point, besides its outline, from back to front, but for
+    /// the annotations unless they are `shown`.
+    pub fn covering(&self, x: f64, y: f64, shown: bool) -> Vec<String> {
+        strings(self.0.board().covering(Point { x, y }, annotations(shown)))
     }
 
     /// Where an arrow's or a line's end let go at a point lands, and what it sticks to there, as
@@ -422,16 +436,23 @@ impl Editor {
     }
 
     /// The top-level elements and outermost groups of what `touching` finds but for the locked
-    /// elements, once each.
+    /// elements, and the annotations unless they are `shown`, once each.
     #[wasm_bindgen(js_name = touchingTopLevel)]
-    pub fn touching_top_level(&self, x: f64, y: f64, width: f64, height: f64) -> Vec<String> {
+    pub fn touching_top_level(
+        &self,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        shown: bool,
+    ) -> Vec<String> {
         let area = Rect {
             x,
             y,
             width,
             height,
         };
-        strings(self.0.board().touching_top_level(area))
+        strings(self.0.board().touching_top_level(area, annotations(shown)))
     }
 
     /// What the elements, with those of the groups among them, stick to whole, once each.
@@ -484,14 +505,19 @@ impl Editor {
     }
 
     /// As `bounds` gives them, one after another, each element, or group whole, at the level of
-    /// the group `within`, or the top level, that stays put as the elements move.
+    /// the group `within`, or the top level, that stays put as the elements move, but for the
+    /// annotations unless they are `shown`.
     pub fn neighbours(
         &self,
         ids: Vec<String>,
         within: Option<String>,
+        shown: bool,
     ) -> Result<Vec<f64>, JsError> {
         let within = within.map(|id| id.parse()).transpose()?;
-        let found = self.0.board().neighbours(&parse(ids)?, within);
+        let found = self
+            .0
+            .board()
+            .neighbours(&parse(ids)?, within, annotations(shown));
         Ok(found.into_iter().flat_map(rect).collect())
     }
 
@@ -1073,6 +1099,14 @@ impl ZipIndex {
         self.0
             .entry(path)
             .ok_or_else(|| JsError::new(&format!("`{path}` is not in the ZIP file")))
+    }
+}
+
+fn annotations(shown: bool) -> Annotations {
+    if shown {
+        Annotations::Shown
+    } else {
+        Annotations::Hidden
     }
 }
 

@@ -4,10 +4,12 @@
 // it touches, and the comments pinned in it. Double-clicking a group goes into it, where clicks
 // select its own elements instead, and double-clicking a note, a sticky note, a shape, or a
 // comment writes in it. Clicks and rectangles go through what is locked, which shows dashed while
-// hovered and nothing selectable lies there, and a right-click on it offers to unlock it. A drag
-// begun with ⌥, or Alt elsewhere than macOS, held moves a copy of the
-// selection instead, which it selects. The dots on the selection's corners scale it around the
-// opposite one, or around its centre while ⌥ is held. The sides of a lone note, sticky note, or
+// hovered and nothing selectable lies there, and a right-click on it offers to unlock it. While the
+// annotations are hidden, clicks, rectangles, and selections go through them too, until an edit
+// adds one on its own, an undo or a redo would otherwise select nothing, or a selection asks for
+// one, which shows them again. A drag begun with ⌥, or Alt elsewhere than macOS, held moves a copy
+// of the selection instead, which it selects. The dots on the selection's corners scale it around
+// the opposite one, or around its centre while ⌥ is held. The sides of a lone note, sticky note, or
 // shape stretch it, its text keeping its size, and a drag from just outside a corner turns the
 // selection around its centre, by steps of 15° while ⇧ is held, and onto an upright or a quarter
 // turn near it while snapping. Hovering shows what a press would take, and the ends of a lone
@@ -59,7 +61,7 @@ import type {
   Size,
   Tip,
 } from "./core.js";
-import { among, anchors, newId, nudge, renamed } from "./board.js";
+import { among, anchors, isAnnotation, newId, nudge, renamed } from "./board.js";
 import { cursor, dotted, type Crop, type Grab, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
 import { onTitle, titledGroup } from "./titles.js";
@@ -137,6 +139,10 @@ export interface Hooks {
   snapping(): boolean;
   /** Whether what moves, scales, stretches, or is drawn lines up with what is beside it. */
   aligning(): boolean;
+  /** Whether the annotations show, which presses and selections otherwise go through. */
+  showsAnnotations(): boolean;
+  /** Shows the annotations hidden, once an edit or a selection needs them. */
+  reveal(): void;
   /** What a press draws, `undefined` when it selects. */
   drawing(): Draw | undefined;
   /** Whether a press erases, before it draws or selects. */
@@ -257,7 +263,10 @@ export interface Edits {
   selection(): string[];
   /** The group gone into, `undefined` at the top level. */
   entered(): string | undefined;
-  /** Selects the elements, or the groups holding them at the level of the selection. */
+  /**
+   * Selects the elements, or the groups holding them at the level of the selection, showing the
+   * annotations hidden first when any of them is one.
+   */
   select(ids: string[]): void;
   /** Selects `id` itself, going into its group. */
   choose(id: string): void;
@@ -465,6 +474,8 @@ export function edits(
     settled,
     snapping,
     aligning,
+    showsAnnotations,
+    reveal,
     drawing,
     erasing,
     sampling,
@@ -588,7 +599,7 @@ export function edits(
       return kind;
     }
     const { frame } = kind;
-    const beside = lining ? editor.neighbours([], entered) : new Float64Array();
+    const beside = lining ? editor.neighbours([], entered, showsAnnotations()) : new Float64Array();
     const shown = onScreen(camera, view.size());
     const { x = 0, y = 0 } = core.snapToNeighbours(frame, beside, shown, zoom, pulling);
     return { ...kind, frame: { ...frame, x: frame.x + x, y: frame.y + y } };
@@ -759,11 +770,14 @@ export function edits(
     let locked: string | undefined;
     if (editing && seen && at && zoom && hovers(seen)) {
       const { editor } = editing;
-      topmost = titledGroup(seen.target) ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
+      topmost =
+        titledGroup(seen.target) ?? editor.hit(at.x, at.y, TOLERANCE / zoom, showsAnnotations());
       locked = topmost === undefined ? undefined : editor.lockedBy(topmost);
       hit = inside(
         editor,
-        locked === undefined ? topmost : editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom),
+        locked === undefined
+          ? topmost
+          : editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom, showsAnnotations()),
       );
     }
     if (editing && seen && at && zoom && hoverable(seen)) {
@@ -863,6 +877,9 @@ export function edits(
     }
     return hit === undefined ? undefined : level(editor, hit);
   };
+  const selectable = ({ editor, board }: Editing, id: string) =>
+    editor.lockedBy(id) === undefined &&
+    (showsAnnotations() || !isAnnotation(board.elements[id]!.kind));
   const select = (editing: Editing, ids: string[]) => {
     const { editor, board } = editing;
     const present = ids.filter((id) => id in board.elements);
@@ -870,9 +887,7 @@ export function edits(
       leave(editor);
     }
     selected = new Set(
-      present
-        .flatMap((id) => level(editor, id) ?? [])
-        .filter((id) => editor.lockedBy(id) === undefined),
+      present.flatMap((id) => level(editor, id) ?? []).filter((id) => selectable(editing, id)),
     );
   };
   /**
@@ -907,7 +922,10 @@ export function edits(
   ) => {
     const { editor, board } = editing;
     const { last: from, within: starts } = stroke;
-    const hits = [...editor.hitAlong(from.x, from.y, at.x, at.y, TOLERANCE / zoom), ...pins];
+    const hits = [
+      ...editor.hitAlong(from.x, from.y, at.x, at.y, TOLERANCE / zoom, showsAnnotations()),
+      ...pins,
+    ];
     const holds = (id: string) => starts.some((kept) => among(board, kept, new Set([id])));
     const erased = new Set(
       hits.flatMap((id) => erasable(editor, id) ?? []).filter((id) => !holds(id)),
@@ -948,8 +966,10 @@ export function edits(
   const edit = (editing: Editing, touched: string[], reselect = false) => {
     const { board, editor } = editing;
     const back = new Set(touched.filter((id) => !(id in board.elements)));
-    const unselectable = (id: string) =>
-      !(id in board.elements) || editor.lockedBy(id) !== undefined;
+    const imaged = (id: string) => board.elements[id]?.kind.type === "image";
+    // Read before the edit too, which may remove them.
+    const images = touched.some(imaged);
+    const unselectable = (id: string) => !(id in board.elements) || !selectable(editing, id);
     // Read before the edit, which may remove the group gone into, and its emptied groups too.
     const around: string[] = [];
     for (
@@ -960,6 +980,14 @@ export function edits(
       around.push(at);
     }
     changed(touched);
+    // What it adds would go unseen, but for what comes along with its group.
+    const alone = (id: string) => {
+      const group = board.elements[id]?.group;
+      return back.has(id) && (group === undefined || !back.has(group));
+    };
+    if (!showsAnnotations() && touched.some((id) => alone(id) && annotation(editing, id))) {
+      reveal();
+    }
     if (entered !== undefined && unselectable(entered)) {
       leave(
         editor,
@@ -968,6 +996,17 @@ export function edits(
     }
     if (reselect && !holdsAll(editing, touched, back)) {
       select(editing, touched);
+      // An undo or a redo that touched hidden annotations and no image would select nothing.
+      if (
+        selected.size === 0 &&
+        !showsAnnotations() &&
+        !images &&
+        !touched.some(imaged) &&
+        touched.some((id) => annotation(editing, id) && editor.lockedBy(id) === undefined)
+      ) {
+        reveal();
+        select(editing, touched);
+      }
     }
     for (const id of selected) {
       if (unselectable(id)) {
@@ -1024,7 +1063,9 @@ export function edits(
     heed(event);
     if (erasing()) {
       // As the eraser's way goes, which a group's panel leaves whole.
-      const hit = pressedPin ?? editor.hitAlong(at.x, at.y, at.x, at.y, TOLERANCE / zoom).at(-1);
+      const hit =
+        pressedPin ??
+        editor.hitAlong(at.x, at.y, at.x, at.y, TOLERANCE / zoom, showsAnnotations()).at(-1);
       press = {
         kind: "erase",
         pointer,
@@ -1032,7 +1073,7 @@ export function edits(
         last: at,
         dragging: false,
         clicked: hit === undefined ? undefined : erasable(editor, hit),
-        within: editor.covering(at.x, at.y),
+        within: editor.covering(at.x, at.y, showsAnnotations()),
         selection: new Set(selected),
         entered,
       };
@@ -1072,7 +1113,9 @@ export function edits(
       }
     }
     const corners = selected.size > 0 && !single ? box(editor, [...selected]) : undefined;
-    const hit = pressedPin ?? inside(editor, editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom));
+    const hit =
+      pressedPin ??
+      inside(editor, editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom, showsAnnotations()));
     const grab =
       corners && pressedPin === undefined ? grabbing(editing, corners, at, zoom, hit) : undefined;
     // Ctrl on macOS opens the context menu instead.
@@ -1262,7 +1305,13 @@ export function edits(
       case "marquee": {
         press.dragging ||= distance(at, press.start) * zoom >= DRAG;
         const area = rect(press.start, at);
-        const touched = editor.touchingTopLevel(area.x, area.y, area.width, area.height);
+        const touched = editor.touchingTopLevel(
+          area.x,
+          area.y,
+          area.width,
+          area.height,
+          showsAnnotations(),
+        );
         selected = new Set([...press.kept, ...touched]);
         overlay.marquee(area);
         show();
@@ -1280,7 +1329,7 @@ export function edits(
             press.copy = { copied, ids: renamed(copied), group: entered };
           }
           // Before a copy is pasted, as its original stays put.
-          press.neighbours = editor.neighbours(press.copy ? [] : ids, entered);
+          press.neighbours = editor.neighbours(press.copy ? [] : ids, entered, showsAnnotations());
           editor.beginGesture();
         }
         const { start, bounds, neighbours, copy } = press;
@@ -1327,7 +1376,7 @@ export function edits(
           const scaling = press;
           lined = scaledOnto(
             { area: bounding(corners)!, origin, factor, least: SMALLEST_SCALE },
-            () => (scaling.neighbours ??= editor.neighbours(ids, entered)),
+            () => (scaling.neighbours ??= editor.neighbours(ids, entered, showsAnnotations())),
             zoom,
           );
         }
@@ -1362,7 +1411,8 @@ export function edits(
           : [normal.y, a.y, origin.y];
         const span = moving - staying;
         const stretching = press;
-        const beside = () => (stretching.neighbours ??= editor.neighbours(ids, entered));
+        const beside = () =>
+          (stretching.neighbours ??= editor.neighbours(ids, entered, showsAnnotations()));
         const stretchBy = (further: number, snapped: boolean) => {
           const next = extended(from, side, further, least);
           again(() => [
@@ -1442,7 +1492,8 @@ export function edits(
         }
         // Without what it draws, which a step before added.
         const sketch = press;
-        const beside = () => (sketch.neighbours ??= editor.neighbours([id], entered));
+        const beside = () =>
+          (sketch.neighbours ??= editor.neighbours([id], entered, showsAnnotations()));
         const [start, end] = drawnOnto(press.start, at, beside, zoom);
         press.ends = [start, end];
         // A note shows nothing until written in.
@@ -1704,7 +1755,7 @@ export function edits(
       return;
     }
     const { editor, board } = editing;
-    const hit = pressedPin ?? editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom);
+    const hit = pressedPin ?? editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom, showsAnnotations());
     const top = hit === undefined ? undefined : level(editor, hit);
     if (hit !== undefined && top !== undefined && board.elements[top]?.kind.type === "group") {
       const member = editor.memberOf(top, hit);
@@ -1807,13 +1858,13 @@ export function edits(
     true,
   );
   /** The topmost shape at the level of the selection whose frame holds `at`. */
-  const surrounding = ({ editor, board }: Editing, at: Point) =>
-    board.draw_order.findLast(
+  const surrounding = (editing: Editing, at: Point) =>
+    editing.board.draw_order.findLast(
       (id) =>
-        board.elements[id]!.kind.type === "shape" &&
-        level(editor, id) === id &&
-        editor.lockedBy(id) === undefined &&
-        within(at, box(editor, [id])),
+        editing.board.elements[id]!.kind.type === "shape" &&
+        level(editing.editor, id) === id &&
+        selectable(editing, id) &&
+        within(at, box(editing.editor, [id])),
     );
 
   /** Unless a gesture, some writing, or a crop is under way, since it would carry on over the edit. */
@@ -1837,8 +1888,9 @@ export function edits(
   const writable = ({ board }: Editing) =>
     selected.size === 1 && writesIn(board.elements[[...selected][0]!]?.kind);
   /** Whether it could, as what is locked takes no selection. */
-  const choose = ({ board, editor }: Editing, id: string) => {
-    if (!(id in board.elements) || editor.lockedBy(id) !== undefined) {
+  const choose = (editing: Editing, id: string) => {
+    const { board } = editing;
+    if (!(id in board.elements) || !selectable(editing, id)) {
       return false;
     }
     entered = board.elements[id]!.group;
@@ -1986,6 +2038,9 @@ export function edits(
     select(ids) {
       const editing = current();
       if (editing) {
+        if (!showsAnnotations() && ids.some((id) => annotation(editing, id))) {
+          reveal();
+        }
         select(editing, ids);
         show();
       }
@@ -1998,10 +2053,10 @@ export function edits(
     selectAll() {
       const editing = current();
       if (editing) {
-        const { board, editor } = editing;
+        const { board } = editing;
         selected = new Set(
           board.draw_order.filter(
-            (id) => board.elements[id]!.group === entered && editor.lockedBy(id) === undefined,
+            (id) => board.elements[id]!.group === entered && selectable(editing, id),
           ),
         );
         show();
@@ -2018,7 +2073,8 @@ export function edits(
       return true;
     },
     goInside: () =>
-      run(({ board, editor }, ids) => {
+      run((editing, ids) => {
+        const { board } = editing;
         const group = ids[0];
         if (ids.length !== 1 || board.elements[group!]?.kind.type !== "group") {
           return;
@@ -2026,7 +2082,7 @@ export function edits(
         entered = group;
         selected = new Set(
           Object.keys(board.elements).filter(
-            (id) => board.elements[id]!.group === group && editor.lockedBy(id) === undefined,
+            (id) => board.elements[id]!.group === group && selectable(editing, id),
           ),
         );
         show();
@@ -2038,7 +2094,7 @@ export function edits(
         return selected.size > 0;
       }
       const { editor } = editing;
-      const topmost = on ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
+      const topmost = on ?? editor.hit(at.x, at.y, TOLERANCE / zoom, showsAnnotations());
       // Unlike a left press, which goes through it, so that the menu offers to unlock it.
       const hit = inside(
         editor,
@@ -2064,7 +2120,7 @@ export function edits(
         return undefined;
       }
       const { editor } = editing;
-      const topmost = on ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
+      const topmost = on ?? editor.hit(at.x, at.y, TOLERANCE / zoom, showsAnnotations());
       return topmost === undefined ? undefined : editor.lockedBy(topmost);
     },
     lock: () => run((editing, ids) => edit(editing, editing.editor.setLocked(ids, true))),
@@ -2360,6 +2416,11 @@ function shaped(shape: Shaped, from: Point, to: Point, size: number): Kind {
     default:
       return { type: "shape", frame, rotation: 0, shape, text };
   }
+}
+
+function annotation({ board }: Editing, id: string): boolean {
+  const kind = board.elements[id]?.kind;
+  return kind !== undefined && isAnnotation(kind);
 }
 
 /**

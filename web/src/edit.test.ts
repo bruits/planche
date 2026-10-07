@@ -29,8 +29,14 @@ function page(
     erasing,
     snapping,
     aligning,
+    showsAnnotations,
+    reveal,
     zoom = 1,
-  }: Partial<Pick<Hooks, "drawing" | "erasing" | "snapping" | "aligning">> & { zoom?: number } = {},
+  }: Partial<
+    Pick<Hooks, "drawing" | "erasing" | "snapping" | "aligning" | "showsAnnotations" | "reveal">
+  > & {
+    zoom?: number;
+  } = {},
 ) {
   const opened = untitled();
   for (const [id, kind] of [[STICKY, sticky] as const, ...more]) {
@@ -61,6 +67,8 @@ function page(
     settled() {},
     snapping: snapping ?? (() => false),
     aligning: aligning ?? (() => false),
+    showsAnnotations: showsAnnotations ?? (() => true),
+    reveal: reveal ?? (() => {}),
     drawing: drawing ?? (() => undefined),
     erasing: erasing ?? (() => false),
     sampling: () => false,
@@ -1397,4 +1405,151 @@ describe("locking", () => {
     editing.goInside();
     expect(editing.selection()).toEqual([STICKY]);
   });
+});
+
+describe("hiding annotations", () => {
+  afterEach(() => document.body.replaceChildren());
+
+  const OTHER = "b".repeat(32);
+  const GROUP = "e".repeat(32);
+  /** Under the sticky notes, which cover its top-left corner. */
+  const under: Kind = { ...image, frame: { x: 0, y: 0, width: 300, height: 200 } };
+
+  it("lets a click go through them to what lies under them", () => {
+    const { editing, pointer } = page(
+      [
+        [IMAGE, under],
+        [OTHER, sticky],
+      ],
+      { showsAnnotations: () => false },
+    );
+    pointer("pointerdown", 50, 50);
+    pointer("pointerup", 50, 50);
+    expect(editing.selection()).toEqual([IMAGE]);
+  });
+
+  it("leaves them out of a selection rectangle and of Select all", async () => {
+    const { editing, pointer } = page([[IMAGE, under]], { showsAnnotations: () => false });
+    pointer("pointerdown", 350, 250);
+    pointer("pointermove", -10, -10);
+    await nextFrame();
+    pointer("pointerup", -10, -10);
+    expect(editing.selection()).toEqual([IMAGE]);
+    editing.select([]);
+    editing.selectAll();
+    expect(editing.selection()).toEqual([IMAGE]);
+  });
+
+  it("goes inside a group with only its images selected", () => {
+    const { editing, hide } = hiding();
+    editing.select([STICKY, IMAGE]);
+    editing.group(GROUP);
+    hide();
+    editing.goInside();
+    expect(editing.selection()).toEqual([IMAGE]);
+  });
+
+  it("shows them again for a note an undo brings back, or moves back, and selects it", () => {
+    const { editing, hide, shown } = hiding();
+    editing.select([STICKY]);
+    editing.remove();
+    hide();
+    editing.select([IMAGE]);
+    editing.undo();
+    expect(shown()).toBe(true);
+    expect(editing.selection()).toEqual([STICKY]);
+    editing.apply((editor, touched) => touched.push(...editor.translate([STICKY], 10, 0)));
+    hide();
+    editing.select([IMAGE]);
+    editing.undo();
+    expect(shown()).toBe(true);
+    expect(editing.selection()).toEqual([STICKY]);
+  });
+
+  it("stays hidden through an undo of an image's move, which carries the comment pinned to it", () => {
+    const pinned: Kind = { type: "comment", at: { x: 250, y: 150 }, text: "", target: IMAGE };
+    const { editing, hide, shown } = hiding([[OTHER, pinned]]);
+    editing.apply((editor, touched) => touched.push(...editor.translate([IMAGE], 10, 0)));
+    hide();
+    editing.select([]);
+    editing.undo();
+    expect(shown()).toBe(false);
+    expect(editing.selection()).toEqual([IMAGE]);
+  });
+
+  it("shows them again for notes an undo ungroups, and selects them", () => {
+    const apart: Kind = { ...sticky, frame: { x: 0, y: 300, width: 100, height: 100 } };
+    const { editing, hide, shown } = hiding([[OTHER, apart]]);
+    editing.select([STICKY, OTHER]);
+    editing.group(GROUP);
+    hide();
+    editing.undo();
+    expect(shown()).toBe(true);
+    expect(editing.selection().toSorted()).toEqual([OTHER, STICKY].toSorted());
+  });
+
+  it("stays hidden through a redo that deletes the image a comment is pinned to", () => {
+    const pinned: Kind = { type: "comment", at: { x: 250, y: 150 }, text: "", target: IMAGE };
+    const { editing, hide, shown } = hiding([[OTHER, pinned]]);
+    hide();
+    editing.select([IMAGE]);
+    editing.remove();
+    editing.undo();
+    editing.redo();
+    expect(shown()).toBe(false);
+    expect(editing.selection()).toEqual([]);
+  });
+
+  it("stays hidden through a redo that locks them again with what they lie on", () => {
+    const { editing, hide, shown } = hiding();
+    editing.select([STICKY, IMAGE]);
+    editing.lock();
+    hide();
+    editing.undo();
+    expect(editing.selection()).toEqual([IMAGE]);
+    editing.redo();
+    expect(shown()).toBe(false);
+    expect(editing.selection()).toEqual([]);
+  });
+
+  it("shows them again once an edit adds one, but for those a group brings along", () => {
+    const { editing, hide, shown } = hiding();
+    editing.select([STICKY, IMAGE]);
+    editing.group(GROUP);
+    hide();
+    const ids = { [GROUP]: "1".repeat(32), [IMAGE]: "2".repeat(32), [STICKY]: "3".repeat(32) };
+    editing.apply((editor, touched) =>
+      touched.push(...editor.paste(editor.copy([GROUP]), JSON.stringify(ids), undefined)),
+    );
+    expect(shown()).toBe(false);
+    editing.apply((editor, touched) =>
+      touched.push(...editor.add(OTHER, undefined, JSON.stringify(sticky))),
+    );
+    expect(shown()).toBe(true);
+  });
+
+  it("shows them again once asked to select one, as an agent pointing to it does", () => {
+    const { editing, hide, shown } = hiding();
+    hide();
+    editing.select([IMAGE]);
+    expect(shown()).toBe(false);
+    editing.select([STICKY]);
+    expect(shown()).toBe(true);
+    expect(editing.selection()).toEqual([STICKY]);
+  });
+
+  /** The sticky note over an image, and `more`. */
+  function hiding(more: [string, Kind][] = []) {
+    let annotated = true;
+    const made = page([[IMAGE, under], ...more], {
+      showsAnnotations: () => annotated,
+      reveal: () => {
+        annotated = true;
+      },
+    });
+    const hide = () => {
+      annotated = false;
+    };
+    return { ...made, hide, shown: () => annotated };
+  }
 });

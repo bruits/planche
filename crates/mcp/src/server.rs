@@ -406,8 +406,8 @@ impl<R: Relay> Server<R> {
     /// The board as Planche's window shows it, at most 1568 pixels a side and about 1.15
     /// megapixels, with the part of the board it shows and its pixels per board unit. It works
     /// while the window is hidden. Comments' pins, the selection's handles, and a text being
-    /// written are left out, and it is in the board's own colours and never mirrored, whatever
-    /// the window's view.
+    /// written are left out, and it is in the board's own colours, never mirrored, and with every
+    /// annotation, whatever the window's view.
     #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     async fn screenshot(&self) -> Result<CallToolResult, ErrorData> {
         Ok(self.picture("screenshot", json!({})).await)

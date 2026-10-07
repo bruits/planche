@@ -608,6 +608,20 @@ impl ElementKind {
         )
     }
 
+    /// Whether it annotates the images, which a view may hide.
+    pub fn is_annotation(&self) -> bool {
+        match self {
+            Self::Image { .. } | Self::Group { .. } => false,
+            Self::Note { .. }
+            | Self::Sticky { .. }
+            | Self::Shape { .. }
+            | Self::Arrow { .. }
+            | Self::Line { .. }
+            | Self::Stroke { .. }
+            | Self::Comment { .. } => true,
+        }
+    }
+
     /// Whether it can stick whole to what it lies on.
     pub(crate) fn sticks_whole(&self) -> bool {
         matches!(
@@ -822,6 +836,20 @@ impl ElementKind {
                 title: _,
             } => true,
         }
+    }
+}
+
+/// Whether a view of the board shows its annotations, or hides them, which a pointer then goes
+/// through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Annotations {
+    Shown,
+    Hidden,
+}
+
+impl Annotations {
+    pub fn hides(self, kind: &ElementKind) -> bool {
+        self == Self::Hidden && kind.is_annotation()
     }
 }
 

@@ -254,6 +254,21 @@ describe("placed", () => {
     expect(panel()).toMatchObject({ frame: { y: -7.5, height: 215 } });
   });
 
+  it("leaves the annotations out unless they show, but not the panel of a group holding them", () => {
+    const { opened, ids } = holding([
+      level(0),
+      imageKind(ASSET, NATURAL, { x: 0, y: 0, ...NATURAL }),
+    ]);
+    const group = newId();
+    refresh(opened, opened.editor.group(group, ids));
+    const filled = { ...core.element(opened.editor, group)!.kind, fill: "tint" };
+    refresh(opened, opened.editor.update(group, JSON.stringify(filled)));
+    const kinds = (shown: boolean) =>
+      placed(opened, none, undefined, undefined, undefined, shown).map(({ kind }) => kind);
+    expect(kinds(true)).toEqual(["fill", "line", "image"]);
+    expect(kinds(false)).toEqual(["fill", "image"]);
+  });
+
   it("lays anew the panels of every group holding an element an edit moves", () => {
     const { opened, ids } = holding([level(0), level(100), level(200)]);
     const [inner, outer] = [newId(), newId()];

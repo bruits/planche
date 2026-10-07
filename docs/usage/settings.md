@@ -15,12 +15,13 @@ Light, Dark, or System, and High contrast, which follows the system until you se
 What the view does changes nothing on the board.
 
 - Greyscale board and Mirror board show the board in grey or flipped left to right, to check values and composition.
+- Annotations shows or hides notes, sticky notes, shapes, arrows, lines, strokes, and comments, to see the images bare. Hidden, they stay out of clicks, selections, the style card, and PNG exports, though a group moved, copied, or deleted takes its own along. They come back once you pick a tool that draws, or once a paste, an undo, a redo, or an agent adds or selects one. Agents still see them.
 - Hints shows the line above the toolbar that says what a tool or gesture does.
 - Measurements shows draws a second, memory in use, and how long the board took to read, and adds commands that fill a board kept in the session with test photos.
 - Always on top keeps the desktop app's window above other apps. Wayland does not allow it.
 - Compact mode hides the desktop app's title bar. Drag the window by its top edge, and leave the mode from the right-click menu.
 
-Hints, Always on top, and the theme are remembered. Greyscale board, Mirror board, Measurements, and Compact mode last until the window closes.
+Hints, Always on top, and the theme are remembered. Greyscale board, Mirror board, hidden annotations, Measurements, and Compact mode last until the window closes.
 
 ## Settings menu
 

@@ -502,9 +502,9 @@ export function stacked(
 }
 
 /**
- * What draws, back to front, but the text of `hidden`, which is being written. Images of the
- * `crossedOut` assets show where they lie, crossed out. `adding` stacks where an element added to
- * its `group`, or to the board without one, would.
+ * What draws, back to front, but the text of `hidden`, which is being written, and the annotations
+ * unless they are `shown`. Images of the `crossedOut` assets show where they lie, crossed out.
+ * `adding` stacks where an element added to its `group`, or to the board without one, would.
  */
 export function placed(
   opened: Opened,
@@ -512,14 +512,15 @@ export function placed(
   hidden?: string,
   crossedOut?: ReadonlySet<string>,
   adding?: { item: Placed; group: string | undefined },
+  shown = true,
 ): Placed[] {
   const { board } = opened;
   const place = (order: string[]) =>
     placing(stacked(opened, crossedOut, order), board, texts, hidden);
+  const order = shownOrder(board, shown);
   if (!adding) {
-    return place(board.draw_order);
+    return place(order);
   }
-  const { draw_order: order } = board;
   const chosen = new Set(adding.group === undefined ? [] : [adding.group]);
   // On top of what the group holds, which stacks right after it.
   const end =
@@ -537,16 +538,18 @@ export function exposing(
   { backing, light }: { backing: Placed[]; light: boolean },
   hidden?: string,
   crossedOut?: ReadonlySet<string>,
+  shown = true,
 ): Placed[] {
   const { board } = opened;
   const ids = new Set(chosen);
   const place = (order: string[]) =>
     placing(stacked(opened, crossedOut, order), board, texts, hidden);
-  const shown = place(board.draw_order.filter((id) => among(board, id, ids)));
+  const order = shownOrder(board, shown);
+  const pictured = place(order.filter((id) => among(board, id, ids)));
   return [
-    ...place(board.draw_order.filter((id) => !among(board, id, ids))),
+    ...place(order.filter((id) => !among(board, id, ids))),
     ...backing,
-    ...(light ? shown.map((item) => ({ ...item, light })) : shown),
+    ...(light ? pictured.map((item) => ({ ...item, light })) : pictured),
   ];
 }
 
@@ -565,6 +568,30 @@ export function placing(
     const text = item.id !== hidden && holdsText(kind) ? texts.placed(item.id, kind) : undefined;
     return text ? [{ kind: "text", ...text, opacity: item.opacity }] : [];
   });
+}
+
+/** As the core's `is_annotation` says. */
+const ANNOTATING: Record<Kind["type"], boolean> = {
+  image: false,
+  group: false,
+  note: true,
+  sticky: true,
+  shape: true,
+  arrow: true,
+  line: true,
+  stroke: true,
+  comment: true,
+};
+
+/** Whether it annotates the images, which a view may hide. */
+export function isAnnotation(kind: Kind): boolean {
+  return ANNOTATING[kind.type];
+}
+
+/** The elements that draw, back to front, but for the annotations unless they are `shown`. */
+export function shownOrder(board: Board, shown: boolean): string[] {
+  const order = board.draw_order;
+  return shown ? order : order.filter((id) => !isAnnotation(board.elements[id]!.kind));
 }
 
 /** What the elements draw over, with the points their comments are pinned at, `undefined` when nothing. */

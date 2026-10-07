@@ -32,6 +32,7 @@ import {
   extent,
   files,
   imageKind,
+  isAnnotation,
   loneImage,
   placed,
   prepare,
@@ -40,6 +41,7 @@ import {
   refresh,
   release,
   renamed,
+  shownOrder,
   webAddress,
   row,
   type Added,
@@ -229,6 +231,8 @@ const editing = edits(viewport, overlaid, () => opened, {
   },
   snapping: () => snapping,
   aligning: () => aligning,
+  showsAnnotations: () => annotationsShown,
+  reveal: () => showAnnotations(true),
   drawing: () => drawTool(),
   erasing: () => tool === "eraser",
   sampling: () => picker.sampling() !== undefined,
@@ -386,6 +390,10 @@ let compact = false;
 /** Draws per second, `undefined` until the measurements were shown for a second. */
 let drawRate: number | undefined;
 let hintsShown = recall(HINTS) !== "hidden";
+/** Left out of the preferences, as annotations hidden at the next launch would look lost. */
+let annotationsShown = true;
+/** Whether an agent's screenshot draws, which shows every annotation, whatever the window hides. */
+let screenshotting = false;
 let agentsAllowed = false;
 let onTop = false;
 let hoverPlay = recall(HOVER_PLAY) === "on";
@@ -410,7 +418,7 @@ const unexportable = () => {
   if (ids.length === 0) {
     return "Select what to export";
   }
-  return opened && drawnOver(opened, ids, crossedOut) === undefined
+  return opened && drawnOver(opened, ids, crossedOut, annotationsShown) === undefined
     ? "The selection draws nothing"
     : undefined;
 };
@@ -1061,7 +1069,9 @@ const commands = {
     unavailable: noneShown,
     run: () => {
       if (opened) {
-        viewport.look(fit(extent(opened), viewport.size()));
+        viewport.look(
+          fit(extent(opened, shownOrder(opened.board, annotationsShown)), viewport.size()),
+        );
       }
     },
   },
@@ -1167,6 +1177,12 @@ const commands = {
     run: () => viewport.mirror(!viewport.mirrored()),
     once: true,
   },
+  annotations: {
+    label: "Annotations",
+    keys: [{ key: "h", command: true, shift: true }],
+    run: () => showAnnotations(!annotationsShown),
+    once: true,
+  },
   style: {
     label: () => (styleCard.isOpen() ? "Hide style" : "Show style"),
     keys: [{ key: "s", shift: true }],
@@ -1252,6 +1268,7 @@ const SWITCHES = new Map<Command, () => boolean>([
   [commands.measurements, () => !measurements.hidden],
   [commands.greyBoard, () => viewport.greyed()],
   [commands.mirrorBoard, () => viewport.mirrored()],
+  [commands.annotations, () => annotationsShown],
   [commands.alwaysOnTop, () => onTop],
   [commands.compact, () => compact],
   [commands.hoverPlay, () => hoverPlay],
@@ -1296,6 +1313,7 @@ const WITHIN = new Map<Command, string>(
         [
           commands.greyBoard,
           commands.mirrorBoard,
+          commands.annotations,
           commands.hints,
           commands.measurements,
           commands.alwaysOnTop,
@@ -1390,6 +1408,7 @@ const styleCard = card(
   {
     current: () => opened,
     selection: () => editing.selection(),
+    showsAnnotations: () => annotationsShown,
     box: () => editing.box(),
     tool: () => {
       const tip = penStyling();
@@ -1442,6 +1461,7 @@ const pictureCard = exportCard(
             editing.selection(),
             options,
             renderer.maxTextureSide,
+            annotationsShown,
           ),
     client: (point) => viewport.client(point),
     busy,
@@ -1648,7 +1668,12 @@ function drawTool(): Draw | undefined {
 }
 
 function useTool(next: typeof tool): void {
+  const chosen = next !== tool;
   tool = next;
+  // So that what it would draw over shows.
+  if (chosen && drawTool() !== undefined && !annotationsShown) {
+    showAnnotations(true);
+  }
   // Whose drawing would go unseen under the picture.
   if (drawTool() !== undefined || tool === "eraser") {
     pictureCard.close();
@@ -1671,20 +1696,37 @@ function penStyling(): Tip | undefined {
 
 function placeNow(into: Renderer, board: Opened): void {
   exposed = exposure();
-  into.place(drawnNow(board));
+  into.place(drawnNow(board, annotationsShown || screenshotting));
 }
 
-/** What draws, with what the pen draws while pressed over it, or the picture the export card frames. */
-function drawnNow(board: Opened): Placed[] {
+/**
+ * What draws, but for the annotations unless they are `shown`, with what the pen draws while
+ * pressed over it, or the picture the export card frames.
+ */
+function drawnNow(board: Opened, shown: boolean): Placed[] {
   const picture = pictureCard.plan();
+  const writing = editing.writing();
   if (picture) {
     const { background } = pictureCard.options();
     const behind = { backing: backing(picture.area, background), light: background === "white" };
     const ids = editing.selection();
-    return exposing(board, lettering, ids, behind, editing.writing(), crossedOut);
+    return exposing(board, lettering, ids, behind, writing, crossedOut, shown);
   }
   const adding = inking && { item: inking, group: editing.entered() };
-  return placed(board, lettering, editing.writing(), crossedOut, adding);
+  return placed(board, lettering, writing, crossedOut, adding, shown);
+}
+
+function showAnnotations(shown: boolean): void {
+  annotationsShown = shown;
+  viewport.host.classList.toggle("unannotated", !shown);
+  const elements = opened?.board.elements;
+  if (!shown && elements) {
+    editing.select(editing.selection().filter((id) => !isAnnotation(elements[id]!.kind)));
+  }
+  styleCard.refresh();
+  pictureCard.refresh();
+  placePicture();
+  editing.rehover();
 }
 
 function holdSpace(held: boolean): void {
@@ -1745,7 +1787,7 @@ function views(): Entry {
   return submenu(
     "View",
     sectioned([
-      [stated(commands.greyBoard), stated(commands.mirrorBoard)],
+      [stated(commands.greyBoard), stated(commands.mirrorBoard), stated(commands.annotations)],
       [
         stated(commands.hints),
         stated(commands.measurements),
@@ -1824,7 +1866,21 @@ async function serveAgents(): Promise<void> {
       halfDrawn: () => halfDrawn || present.reloading(),
       crossedOut: (asset) =>
         crossedOut.has(asset) ? (present.crossedOut(asset) ?? "it cannot show") : undefined,
-      drawNow: () => viewport.drawNow(),
+      drawNow() {
+        if (annotationsShown || opened === undefined || renderer === undefined) {
+          return viewport.drawNow();
+        }
+        // Through `placeNow`, as texts drawn anew meanwhile place the board again.
+        screenshotting = true;
+        try {
+          placeNow(renderer, opened);
+          return viewport.drawNow();
+        } finally {
+          screenshotting = false;
+          placeNow(renderer, opened);
+          viewport.redraw();
+        }
+      },
       async render(request) {
         if (opened === undefined || renderer === undefined) {
           throw new Error("Planche shows no board yet");
@@ -2253,7 +2309,7 @@ async function readBoard(at: { clientX: number; clientY: number }): Promise<Imag
       height: ACROSS / scale,
     },
     size: { width: ACROSS, height: ACROSS },
-    items: placed(opened, lettering, editing.writing(), crossedOut),
+    items: placed(opened, lettering, editing.writing(), crossedOut, undefined, annotationsShown),
     background: getComputedStyle(document.body).backgroundColor,
     images: new Map(),
     texts: new Map(),
@@ -2629,6 +2685,7 @@ async function exportPng(options: Options): Promise<void> {
   ready();
   const current = opened;
   const ids = editing.selection();
+  const shown = annotationsShown;
   exporting = true;
   try {
     const sink = await platform.pickExport(
@@ -2644,7 +2701,7 @@ async function exportPng(options: Options): Promise<void> {
       if (opened !== current) {
         throw new Error("Another board opened meanwhile");
       }
-      made = await selectionPng(current, ids, options);
+      made = await selectionPng(current, ids, options, shown);
       await sink.append(new Uint8Array(await made.blob.arrayBuffer()));
     } catch (error) {
       await sink.discard().catch(() => {});
@@ -2664,7 +2721,7 @@ function copyPng(options: Options): void {
   }
   pngCopies += 1;
   const copy = pngCopies;
-  const made = selectionPng(opened, editing.selection(), options);
+  const made = selectionPng(opened, editing.selection(), options, annotationsShown);
   const written = clip.copyImage(made.then(({ blob }) => blob));
   bar.say("Copying as PNG…", true);
   report(
@@ -2685,8 +2742,13 @@ interface Picture {
   capped: boolean;
 }
 
-/** The elements `ids` as the board shows them, as `options` frame them. */
-async function selectionPng(current: Opened, ids: string[], options: Options): Promise<Picture> {
+/** The elements `ids` as the board shows them, the annotations if `shown`, as `options` frame them. */
+async function selectionPng(
+  current: Opened,
+  ids: string[],
+  options: Options,
+  shown: boolean,
+): Promise<Picture> {
   const scene = {
     opened: current,
     renderer: ready(),
@@ -2700,7 +2762,7 @@ async function selectionPng(current: Opened, ids: string[], options: Options): P
     current: () => opened === current && renderer === scene.renderer,
   };
   // Its images from where they lie once no save moves them.
-  const draw = () => exported(scene, ids, textures, options);
+  const draw = () => exported(scene, ids, textures, options, shown);
   const saver = life.saver();
   const { canvas, capped } = await (saver ? saver.during(draw) : draw());
   return { blob: await png(canvas), size: { width: canvas.width, height: canvas.height }, capped };

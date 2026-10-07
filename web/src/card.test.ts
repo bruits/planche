@@ -54,7 +54,7 @@ function slide(percent: number, { release = false } = {}) {
 }
 
 /** The card over a board holding one image, selected, which plays as `moving` says when given. */
-function opened(moving?: Playback) {
+function opened(moving?: Playback, showsAnnotations = () => true) {
   const board = untitled();
   const kind = imageKind(ASSET, { width: 320, height: 240 }, frame, { filename: "cat.png" });
   board.editor.add(IMAGE, undefined, JSON.stringify(kind));
@@ -99,6 +99,7 @@ function opened(moving?: Playback) {
     {
       current: () => board,
       selection: () => selected,
+      showsAnnotations,
       tool: () => undefined,
       box: () => [
         { x: 0, y: 0 },
@@ -491,6 +492,20 @@ describe("the card of an image and an arrow", () => {
     expect(button("Yellow").getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("leaves alone the annotations hidden in a group selected with an image", () => {
+    const { board, select, shown } = opened(undefined, () => false);
+    const arrow = { type: "arrow", from: ORIGIN, to: { x: 100, y: 0 }, colour: "red" };
+    board.editor.add(ARROW, undefined, JSON.stringify(arrow));
+    const other = imageKind(ASSET, { width: 320, height: 240 }, { ...frame, x: 400 });
+    board.editor.add(OTHER, undefined, JSON.stringify(other));
+    board.editor.group(GROUP, [IMAGE, ARROW]);
+    board.board = core.board(board.editor);
+    select([GROUP, OTHER]);
+    expect(shown.common()).toEqual(["opacity"]);
+    shown.set({ colour: "blue" });
+    expect(core.element(board.editor, ARROW)?.kind).toMatchObject({ colour: "red" });
+  });
+
   it("styles the elements of a group selected with others but those locked", () => {
     const { board, select, shown, kind } = both();
     board.editor.group(GROUP, [IMAGE, ARROW]);
@@ -737,6 +752,7 @@ function inking(tip: Tip = "pen") {
     {
       current: () => board,
       selection: () => [],
+      showsAnnotations: () => true,
       tool: pen,
       box: () => undefined,
       client: ({ x, y }) => ({ clientX: x, clientY: y }),
