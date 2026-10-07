@@ -242,6 +242,23 @@ describe("edits", () => {
     expect(core.element(opened.editor, other)?.kind).toMatchObject({ frame: { x: 300, y: 40 } });
   });
 
+  it("shows an image at its actual size, and undoes it in one step", () => {
+    const { opened, editing } = page([
+      [IMAGE, { ...image, frame: { x: 200, y: 0, width: 600, height: 400 }, rotation: 30 }],
+    ]);
+    editing.select([IMAGE]);
+    editing.actualSize();
+    expect(core.element(opened.editor, IMAGE)?.kind).toMatchObject({
+      frame: { x: 350, y: 100, width: 300, height: 200 },
+      rotation: 0,
+    });
+    editing.undo();
+    expect(core.element(opened.editor, IMAGE)?.kind).toMatchObject({
+      frame: { x: 200, y: 0, width: 600, height: 400 },
+      rotation: 30,
+    });
+  });
+
   it("keeps the selection through undo and redo of what moved part of it, and what stuck to that", () => {
     const other = "b".repeat(32);
     const pin = "d".repeat(32);

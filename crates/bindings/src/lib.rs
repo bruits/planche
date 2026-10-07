@@ -270,6 +270,11 @@ impl Editor {
         Ok(strings(self.0.straighten(&parse(ids)?)?))
     }
 
+    #[wasm_bindgen(js_name = actualSize)]
+    pub fn actual_size(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.actual_size(&parse(ids)?)?))
+    }
+
     /// Of each element itself, whatever its group's lock or its elements' own.
     #[wasm_bindgen(js_name = setLocked)]
     pub fn set_locked(&mut self, ids: Vec<String>, locked: bool) -> Result<Vec<String>, JsError> {

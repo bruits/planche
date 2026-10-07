@@ -75,6 +75,7 @@ Scrolling pans. Scrolling with ⌘ or Ctrl held, or pinching, zooms.
 | Distribute horizontally, vertically | ⌥⇧H, ⌥⇧V |
 | Rotate left, rotate right | ⇧L, ⇧R |
 | Straighten | ⌥R |
+| Actual size | ⌥T |
 | Flip horizontally, flip vertically | ⇧H, ⇧V |
 
 ## Images and media

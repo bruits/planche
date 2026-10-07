@@ -10,7 +10,7 @@ use std::mem;
 use serde::Deserialize;
 
 use crate::align::{Alignment, Axis, alignment, distribution};
-use crate::arrange::{Order, Side, arrangement, normalization};
+use crate::arrange::{HAIR, Order, Side, arrangement, normalization};
 use crate::crop::cropped;
 use crate::geometry::{filled, holds, nearest_on_outline};
 use crate::grid::settled;
@@ -599,6 +599,41 @@ impl Editor {
             .map(|id| (id, self.change(id, |_| turning.board.elements.remove(&id))))
             .collect();
         self.record(step)
+    }
+
+    /// Turns each image among the elements, with those of the groups among them, upright around
+    /// its own centre, at one board unit to the pixel it shows. What sticks to them follows.
+    pub fn actual_size(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        self.restyle(ids, |kind| {
+            let ElementKind::Image {
+                natural_size,
+                frame,
+                rotation,
+                edits,
+                ..
+            } = kind
+            else {
+                return;
+            };
+            let (width, height) = edits.crop.map_or(
+                (natural_size.width.into(), natural_size.height.into()),
+                |crop| (crop.width, crop.height),
+            );
+            if !(width > 0.0 && height > 0.0 && width.is_finite() && height.is_finite()) {
+                return;
+            }
+            *rotation = 0.0;
+            // Recomputed, the frame would come out a hair off, and each press would change it.
+            if (frame.width - width).abs() > HAIR || (frame.height - height).abs() > HAIR {
+                let centre = frame.centre();
+                *frame = Rect {
+                    x: centre.x - width / 2.0,
+                    y: centre.y - height / 2.0,
+                    width,
+                    height,
+                };
+            }
+        })
     }
 
     /// With the elements of the scaled groups, around `origin`. The scale is the same both
@@ -3883,6 +3918,118 @@ mod tests {
     }
 
     #[test]
+    fn at_actual_size_each_image_stands_upright_at_a_unit_to_the_pixel_it_shows() {
+        let rect = |x, y, width, height| Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        let mut turned_over = picture(0.0, 0.0);
+        if let ElementKind::Image {
+            rotation, edits, ..
+        } = &mut turned_over
+        {
+            *rotation = 30.0;
+            edits.flip_horizontal = true;
+        }
+        // Its pixels (10, 20) to (50, 50), shown twice as large.
+        let mut cropped = picture(300.0, 0.0);
+        if let ElementKind::Image { frame, edits, .. } = &mut cropped {
+            *frame = rect(300.0, 0.0, 80.0, 60.0);
+            edits.crop = Some(rect(10.0, 20.0, 40.0, 30.0));
+        }
+        let mut empty = picture(600.0, 0.0);
+        if let ElementKind::Image { natural_size, .. } = &mut empty {
+            *natural_size = crate::Size {
+                width: 0,
+                height: 0,
+            };
+        }
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", turned_over.clone())),
+            (2, element(None, "a1", cropped.clone())),
+            (3, element(None, "a2", empty)),
+            (4, element(None, "a3", framed(0.0, 300.0, 20.0, 10.0))),
+        ]));
+        let before = editor.board().clone();
+        let upright = |mut kind: ElementKind, at: Rect| {
+            if let ElementKind::Image {
+                frame, rotation, ..
+            } = &mut kind
+            {
+                *frame = at;
+                *rotation = 0.0;
+            }
+            kind
+        };
+
+        assert_eq!(editor.actual_size(&ids([1, 2, 3, 4])), Ok(ids([1, 2])));
+        let kind = |bits| &editor.board().elements[&id(bits)].kind;
+        assert_eq!(
+            kind(1),
+            &upright(turned_over, rect(50.0, 50.0, 100.0, 100.0))
+        );
+        assert_eq!(kind(2), &upright(cropped, rect(320.0, 15.0, 40.0, 30.0)));
+        assert_eq!(editor.undo(), ids([1, 2]));
+        assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn at_actual_size_an_image_already_there_stays_where_it_is() {
+        let mut image = picture(0.1, 0.1);
+        if let ElementKind::Image { frame, .. } = &mut image {
+            frame.width = 100.0;
+            frame.height = 100.0;
+        }
+        let mut editor = Editor::new(board([(1, element(None, "a0", image))]));
+        let before = editor.board().clone();
+
+        assert_eq!(editor.actual_size(&ids([1])), Ok(Vec::new()));
+        assert_eq!(editor.board(), &before);
+        assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn at_actual_size_what_sticks_to_an_image_keeps_to_its_pixel() {
+        let mut image = picture(0.0, 0.0);
+        if let ElementKind::Image { rotation, .. } = &mut image {
+            *rotation = 30.0;
+        }
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", image)),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    on(turned(framed(120.0, 120.0, 20.0, 10.0), 30.0), 1),
+                ),
+            ),
+            (
+                3,
+                element(None, "a2", stuck((300.0, 0.0), None, (40.0, 60.0), Some(1))),
+            ),
+        ]));
+        let note = |editor: &Editor| placement(editor, 2).0.centre();
+        let end = |editor: &Editor| ends(editor, 3)[1].0;
+        let pixels = |editor: &Editor| {
+            [note(editor), end(editor)].map(|point| editor.board().pixel_at(id(1), point).unwrap())
+        };
+        let before = pixels(&editor);
+
+        editor.actual_size(&ids([1, 2])).unwrap();
+
+        for (now, was) in pixels(&editor).into_iter().zip(before) {
+            assert_at(now, was.x, was.y);
+        }
+        assert_eq!(placement(&editor, 2).1, 0.0);
+        assert_eq!(placement(&editor, 2).2, 1.0);
+        assert_eq!(ends(&editor, 3)[0].0, Point { x: 300.0, y: 0.0 });
+        assert_sound(&editor);
+    }
+
+    #[test]
     fn what_sticks_to_what_follows_follows_too() {
         let comment = ElementKind::Comment {
             at: Point { x: 60.0, y: 60.0 },
@@ -4896,6 +5043,7 @@ mod tests {
                 editor.set_speed(&them, Speed::NORMAL),
                 editor.set_greyscale(&them, true),
                 editor.straighten(&them),
+                editor.actual_size(&them),
                 editor.scale(&them, origin, 2.0),
                 editor.rotate(&them, origin, 90.0),
                 editor.settle_on_grid(&them),
@@ -5016,6 +5164,7 @@ mod tests {
         );
         assert_eq!(editor.reset_crop(&ids([1])), Ok(ids([2])));
         assert_eq!(editor.straighten(&ids([1])), Ok(ids([2])));
+        assert_eq!(editor.actual_size(&ids([1])), Ok(ids([2])));
         assert_eq!(editor.board().elements[&id(3)], looks);
     }
 

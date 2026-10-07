@@ -422,6 +422,17 @@ const selectedImages = () => selectedKinds().filter((kind) => kind.type === "ima
 /** What the lock command unlocks, as nothing is selected. */
 const unlocking = () => (editing.selection().length === 0 ? editing.lockedUnder() : undefined);
 const selectedImage = () => loneImage(opened?.board, editing.selection())?.image;
+/** A hair aside, as the core takes it. */
+const near = (size: number, pixels: number) => Math.abs(size - pixels) <= 1e-6;
+const atActualSize = () =>
+  selectedImages().every((kind) => {
+    const shown = kind.edits.crop ?? kind.natural_size;
+    return (
+      kind.rotation === 0 &&
+      near(kind.frame.width, shown.width) &&
+      near(kind.frame.height, shown.height)
+    );
+  });
 const greyed = () => {
   const images = selectedImages();
   return images.length > 0 && images.every((kind) => kind.edits.greyscale);
@@ -859,6 +870,15 @@ const commands = {
         : "Nothing selected is turned"),
     run: () => editing.straighten(),
   },
+  actualSize: {
+    label: "Actual size",
+    keys: [{ key: "t", alt: true }],
+    unavailable: () =>
+      noneSelected() ??
+      (selectedImages().length > 0 ? undefined : "Only images have an actual size") ??
+      (atActualSize() ? "Already at actual size" : undefined),
+    run: () => editing.actualSize(),
+  },
   flipHorizontally: flip("Flip horizontally", "h", true),
   flipVertically: flip("Flip vertically", "v", false),
   crop: {
@@ -1006,7 +1026,7 @@ const commands = {
     unavailable: noneShown,
     run: () => viewport.zoomBy(1 / ZOOM_STEP),
   },
-  actualSize: zoomTo("Zoom to 100%", 1, [{ key: "0", code: "Digit0", command: true }]),
+  zoomActual: zoomTo("Zoom to 100%", 1, [{ key: "0", code: "Digit0", command: true }]),
   fit: {
     label: "Zoom to fit",
     keys: [{ code: "Digit1", shift: true }],
@@ -1663,7 +1683,7 @@ function zooms(): Entry[] {
     commands.fitSelection,
     "separator",
     ...ZOOMS.map((zoom) => ({
-      ...zoomTo(percent(zoom), zoom, zoom === 1 ? commands.actualSize.keys : undefined),
+      ...zoomTo(percent(zoom), zoom, zoom === 1 ? commands.zoomActual.keys : undefined),
       checked: now !== undefined && percent(now) === percent(zoom),
     })),
   ];
@@ -2089,6 +2109,7 @@ function contextMenu(
           commands.rotateLeft,
           commands.rotateRight,
           commands.straighten,
+          commands.actualSize,
           "separator",
           commands.flipHorizontally,
           commands.flipVertically,

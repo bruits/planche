@@ -37,7 +37,7 @@ The card follows the selection from one element to the next, and a click on noth
 
 ## Images
 
-Image edits never touch the image's file. Crop, as a rectangle or an ellipse, rotate, flip, and greyscale can all be undone or reset later. Arrange packs images in rows by name, by size, by colour, or at random, and Same height or Same width sizes them alike. Open source opens the web page an image came from.
+Image edits never touch the image's file. Crop, as a rectangle or an ellipse, rotate, flip, and greyscale can all be undone or reset later. Arrange packs images in rows by name, by size, by colour, or at random, and Same height or Same width sizes them alike. Actual size turns an image upright and sizes it to its width and height in pixels. Open source opens the web page an image came from.
 
 Animated images and videos have their own controls, see [media](./media.md).
 

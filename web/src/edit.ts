@@ -290,6 +290,8 @@ export interface Edits {
   /** Clockwise around the selection's centre, as turning it from a corner does. */
   rotate(degrees: number): void;
   straighten(): void;
+  /** The images among the selection. */
+  actualSize(): void;
   greyscale(on: boolean): void;
   /** The one image selected. */
   crop(): void;
@@ -2062,6 +2064,7 @@ export function edits(
         }
       }),
     straighten: () => run(straighten),
+    actualSize: () => run((editing, ids) => edit(editing, editing.editor.actualSize(ids))),
     greyscale: (on) => run((editing, ids) => edit(editing, editing.editor.setGreyscale(ids, on))),
     crop: () =>
       run((editing, ids) => {
