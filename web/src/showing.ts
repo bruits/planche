@@ -4,17 +4,16 @@
 // the same way once an edit brings them back.
 
 import {
-  AT_ONCE,
   assetSizes,
   extent,
   files,
-  pool,
   readAsset,
   Unreadable,
   type Asset,
   type Decoded,
   type Opened,
 } from "./board.js";
+import { AT_ONCE, pool } from "./pool.js";
 import { fit, type Camera } from "./camera.js";
 import type { Board, Size } from "./core.js";
 import { message } from "./errors.js";

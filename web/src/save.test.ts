@@ -398,6 +398,78 @@ describe("folderStore", () => {
     expect(target.files.has(`assets/${ASSET}`)).toBe(false);
   });
 
+  it("writes a save in steps, its images, then its board, then all its elements together", async () => {
+    const { opened } = (await open(
+      async () => memoryHome("demo", sample("demo")).home,
+      new Map(),
+    ))!;
+    const target = memoryHome("copy");
+    const steps: string[][] = [];
+    let writing = false;
+    const home: Home = {
+      ...target.home,
+      async writeAll(files, wrote) {
+        expect(writing).toBe(false);
+        writing = true;
+        steps.push(files.map(([path]) => path));
+        await target.home.writeAll(files, wrote);
+        writing = false;
+      },
+    };
+    const store = await folderStore(home, undefined, false);
+    const all = Object.keys(opened.board.elements);
+    const snapshot = opened.editor.snapshot();
+    try {
+      expect(await store.save(snapshot, all, () => filesOf(opened))).toBe(true);
+    } finally {
+      snapshot.free();
+    }
+    const [images, board, elements] = steps as [string[], string[], string[]];
+    expect(steps).toHaveLength(3);
+    expect(images.every(core.isAssetFile)).toBe(true);
+    expect(board).toEqual(["board.json"]);
+    expect(elements.toSorted()).toEqual(all.map((id) => `elements/${id}.json`).toSorted());
+  });
+
+  it("writes a large image before it reads the next", async () => {
+    const { opened } = (await open(
+      async () => memoryHome("demo", sample("demo")).home,
+      new Map(),
+    ))!;
+    const events: string[] = [];
+    const source: Source = {
+      ...filesOf(opened),
+      async read(path) {
+        events.push(`read ${path}`);
+        // Larger than a save holds at once.
+        return new Uint8Array(40 << 20);
+      },
+    };
+    const target = memoryHome("copy");
+    const home: Home = {
+      ...target.home,
+      async writeAll(files, wrote) {
+        events.push(...files.map(([path]) => `write ${path}`));
+        await target.home.writeAll(files, wrote);
+      },
+    };
+    const store = await folderStore(home, undefined, false);
+    const snapshot = opened.editor.snapshot();
+    try {
+      const all = Object.keys(opened.board.elements);
+      expect(await store.save(snapshot, all, () => source)).toBe(true);
+    } finally {
+      snapshot.free();
+    }
+    const images = events
+      .filter((event) => event.startsWith("read "))
+      .map((event) => event.slice(5));
+    expect(images.length).toBeGreaterThan(1);
+    expect(events.filter((event) => images.some((path) => event.endsWith(path)))).toEqual(
+      images.flatMap((path) => [`read ${path}`, `write ${path}`]),
+    );
+  });
+
   it("gives a folder lacking a board's .gitattributes one, and leaves its user's alone", async () => {
     const [[path, bytes]] = [...core.newFiles()] as [[string, core.Bytes]];
     const lacking = memoryHome("demo", sample("demo"));
@@ -450,6 +522,49 @@ describe("folderStore", () => {
     const { home } = memoryHome("demo", sample("demo"));
     const { editor, save } = await demo(home);
     await save(editor.translate([STICKY], 10, 0));
+    const again = await open(async () => home, new Map());
+    expect(again!.opened.board).toEqual(core.board(editor));
+  });
+
+  it("keeps what landed of a save that fails partway, and writes only the rest next", async () => {
+    const ELLIPSE = "2e95d0b468a74c1fb6e39d027f18a5c4";
+    const STAR = "d06f4b2a91c84e7c8b3f5a2e6c1d0947";
+    const inner = memoryHome("demo", sample("demo"));
+    const before = new Map(inner.files);
+    let failing: string | undefined = `elements/${STICKY}.json`;
+    // `memoryHome`'s `writeAll` goes through this `write`, one file after another.
+    const home: Home = {
+      ...inner.home,
+      async write(path, bytes) {
+        if (path === failing) {
+          failing = undefined;
+          throw new Error("the disk is full");
+        }
+        return inner.home.write(path, bytes);
+      },
+    };
+    const { editor, store, save } = await demo(home);
+    core.setBackground(editor, "grid");
+    const touched = [...editor.translate([ELLIPSE, STICKY], 10, 0), ...editor.remove([STAR])];
+    await expect(save(touched)).rejects.toThrow("the disk is full");
+    // The elements before the one that failed landed, and no later step started.
+    const landed = touched
+      .map((id) => `elements/${id}.json`)
+      .filter((path) => path < `elements/${STICKY}.json` && path !== `elements/${STAR}.json`)
+      .toSorted();
+    expect(landed).toContain(`elements/${ELLIPSE}.json`);
+    expect(inner.written).toEqual(landed);
+    expect(inner.files.get(`elements/${STICKY}.json`)).toBe(before.get(`elements/${STICKY}.json`));
+    expect(inner.files.get("board.json")).toBe(before.get("board.json"));
+    expect(inner.removed).toEqual([]);
+    // What landed is the app's own.
+    expect(await store.changed()).toBe(false);
+
+    inner.written.length = 0;
+    expect(await save(touched)).toBe(true);
+    expect(inner.written).toEqual([`elements/${STICKY}.json`, "board.json"]);
+    expect(inner.removed).toEqual([`elements/${STAR}.json`]);
+    expect(await store.changed()).toBe(false);
     const again = await open(async () => home, new Map());
     expect(again!.opened.board).toEqual(core.board(editor));
   });

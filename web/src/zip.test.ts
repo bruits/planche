@@ -159,6 +159,26 @@ describe("zipFolder", () => {
     expect(fromZip!.opened.board).toEqual(fromFolder!.opened.board);
   });
 
+  it("reads a board's files in one go, as it reads each alone", async () => {
+    const file = slices("demo.zip", demoZip());
+    const reads: [number, number][] = [];
+    const folder = await zipFolder({
+      ...file,
+      read: async (start, end) => {
+        reads.push([start, end]);
+        return file.read(start, end);
+      },
+    });
+    const board = (await folder.list(core.fileDepth())).filter(core.isBoardFile).toReversed();
+    reads.length = 0;
+    const read = (await folder.readAll(board)).files;
+    expect(reads).toHaveLength(1);
+    expect([...read.keys()]).toEqual(board);
+    for (const path of board) {
+      expect(read.get(path)).toEqual(await folder.read(path));
+    }
+  });
+
   it("refuses an asset whose bytes were damaged in the file", async () => {
     const bytes = demoZip();
     // Into the asset's own bytes, past its name in the header before them.
@@ -180,6 +200,37 @@ describe("zipFolder, of a ZIP file another tool made", () => {
     expect(fromZip!.opened.board).toEqual(fromFolder!.opened.board);
     const written = await exported(await zipFolder(zipped));
     expect(Buffer.compare(written.bytes(), demoZip())).toBe(0);
+  });
+
+  it("reads its files together as it reads each alone", async () => {
+    const folder = await zipFolder(slices("demo.zip", rezipped(sample("demo"))));
+    const paths = [...sample("demo").keys()].toReversed();
+    const { files: read } = await folder.readAll(paths);
+    expect(read).toEqual(new Map(paths.map((path) => [path, sample("demo").get(path)])));
+  });
+
+  it("reads its files together on each side of a large image between them", async () => {
+    const demo = sample("demo");
+    const elements = [...demo].filter(([path]) => core.isElementFile(path));
+    const entries = new Map([
+      ["board.json", demo.get("board.json")!],
+      ["assets/big", noise(200_000)],
+      ...elements,
+    ]);
+    const file = slices("demo.zip", rezipped(entries));
+    let reads = 0;
+    const folder = await zipFolder({
+      ...file,
+      read: async (start, end) => {
+        reads++;
+        return file.read(start, end);
+      },
+    });
+    const board = [...entries.keys()].filter(core.isBoardFile);
+    reads = 0;
+    const { files: read } = await folder.readAll(board);
+    expect(reads).toBe(2);
+    expect(read).toEqual(new Map(board.map((path) => [path, entries.get(path)])));
   });
 
   it("inflates a large file whole", async () => {

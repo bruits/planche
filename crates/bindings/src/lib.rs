@@ -829,6 +829,11 @@ pub fn is_board_file(path: &str) -> bool {
     format::is_board_file(path)
 }
 
+#[wasm_bindgen(js_name = isElementFile)]
+pub fn is_element_file(path: &str) -> bool {
+    format::is_element_file(path)
+}
+
 /// Such as a sync tool's conflicted copy of an element file, which the board leaves out.
 #[wasm_bindgen(js_name = isStrayElement)]
 pub fn is_stray_element(path: &str) -> bool {
@@ -1031,6 +1036,12 @@ impl ZipIndex {
 
     pub fn paths(&self) -> Vec<String> {
         self.0.paths().map(str::to_owned).collect()
+    }
+
+    /// Where the headers and bytes of the entries at `paths` lie, flat as start then end.
+    pub fn runs(&self, paths: Vec<String>) -> Vec<f64> {
+        let runs = self.0.runs(paths.iter().map(String::as_str));
+        runs.into_iter().flat_map(span).collect()
     }
 
     /// Where the entry's header lies, which says where its bytes start.

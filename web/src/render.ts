@@ -8,12 +8,12 @@ import {
   files,
   loneImage,
   placing,
-  pool,
   readAsset,
   release,
   stacked,
   type Opened,
 } from "./board.js";
+import { pool } from "./pool.js";
 import { density } from "./capture.js";
 import * as core from "./core.js";
 import type { Background, Board, Item, Point, Rect, Size } from "./core.js";

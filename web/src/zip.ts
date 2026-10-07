@@ -3,7 +3,7 @@
 
 import { carried, digest, type Source } from "./board.js";
 import * as core from "./core.js";
-import type { Bytes, Snapshot } from "./core.js";
+import type { Bytes, Files, Snapshot } from "./core.js";
 import type { Folder, Sink, Slices } from "./platform.js";
 import { VIDEO_LIMIT } from "./video.js";
 
@@ -20,15 +20,37 @@ export async function zipFolder(file: Slices): Promise<Folder> {
   const directory = span(core.locateZipDirectory(file.size, tail));
   const index = new core.ZipIndex(directory[0], await read(directory));
   const paths = index.paths();
+  const unzipped = async (path: string, data: Bytes) => {
+    const bytes = index.deflated(path) ? await inflate(path, data, index.size(path)) : data;
+    index.check(path, bytes.length, core.crc32(bytes));
+    return bytes;
+  };
   return {
     name: file.name.replace(/\.zip$/i, ""),
     list: async (depth) => paths.filter((path) => path.split("/").length <= depth),
     read: async (path) => {
       const header = await read(span(index.header(path)));
-      const data = await read(span(index.data(path, header)));
-      const bytes = index.deflated(path) ? await inflate(path, data, index.size(path)) : data;
-      index.check(path, bytes.length, core.crc32(bytes));
-      return bytes;
+      return unzipped(path, await read(span(index.data(path, header))));
+    },
+    // A range at a time, which holds a board's files side by side.
+    async readAll(wanted) {
+      const placed = wanted
+        .map((path) => [path, span(index.header(path))] as const)
+        .toSorted(([, one], [, other]) => one[0] - other[0]);
+      const runs = index.runs(wanted);
+      const files: Files = new Map();
+      let next = 0;
+      for (let at = 0; at < runs.length; at += 2) {
+        const [start, end] = [runs[at]!, runs[at + 1]!];
+        const run = await read([start, end]);
+        const within = ([from, to]: [number, number]) => run.subarray(from - start, to - start);
+        for (; next < placed.length && placed[next]![1][0] < end; next++) {
+          const [path, header] = placed[next]!;
+          const data = span(index.data(path, within(header)));
+          files.set(path, await unzipped(path, data[1] <= end ? within(data) : await read(data)));
+        }
+      }
+      return { files: new Map(wanted.map((path) => [path, files.get(path)!])), stamps: new Map() };
     },
   };
 }

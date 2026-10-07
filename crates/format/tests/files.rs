@@ -1753,6 +1753,49 @@ fn an_encrypted_zip_or_one_compressed_otherwise_is_refused() {
 }
 
 #[test]
+fn a_board_zipped_here_reads_its_files_in_one_range() {
+    let file = zip_of(&load(&samples().join("demo"))).unwrap();
+    let directory = zip::locate(file.len() as u64, &file).unwrap();
+    let index = zip::Index::read(directory.start, &file[at(directory.clone())]).unwrap();
+    let board: Vec<&str> = index
+        .paths()
+        .filter(|path| format::is_board_file(path))
+        .collect();
+    let runs = index.runs(board.iter().copied());
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].end, directory.start);
+    for path in &board {
+        let entry = index.entry(path).unwrap();
+        let data = entry.data(&file[at(entry.header())]).unwrap();
+        assert!(runs[0].start <= entry.header().start && data.end <= runs[0].end);
+    }
+    assert!(index.runs([]).is_empty());
+    assert!(index.runs(["elements/none.json"]).is_empty());
+}
+
+#[test]
+fn files_far_apart_read_in_ranges_of_their_own() {
+    let big = vec![7; 70_000];
+    let file = zip_entries(&[("a", b"1"), ("b", &big), ("c", b"3")]);
+    let directory = zip::locate(file.len() as u64, &file).unwrap();
+    let index = zip::Index::read(directory.start, &file[at(directory)]).unwrap();
+    assert_eq!(index.runs(["a", "c"]).len(), 2);
+    assert_eq!(index.runs(["c", "b", "a"]).len(), 1);
+
+    // Past 32 MiB, a range ends.
+    let size = 20 << 20;
+    let mut writer = zip::Writer::new();
+    for path in ["a", "b", "c"] {
+        writer.entry(path, size, 0, None).unwrap();
+    }
+    let end = writer.finish().unwrap();
+    let index = zip::Index::read(3 * (31 + size), &end[..end.len() - 22]).unwrap();
+    let runs = index.runs(["a", "b", "c"]);
+    assert_eq!(runs.len(), 3);
+    assert!(runs.windows(2).all(|pair| pair[0].end <= pair[1].start));
+}
+
+#[test]
 fn a_board_zipped_again_by_another_tool_opens() {
     let files = load(&samples().join("demo"));
     // Deflated in the folder zipped, with each file's resource fork apart, as Finder does.

@@ -54,6 +54,8 @@ const DATE: u16 = (1 << 5) | 1;
 const ZIP64_EXTRA: u16 = 1;
 const MARK16: u16 = u16::MAX;
 const MARK32: u32 = u32::MAX;
+/// The longest range [`Index::runs`] gives, unless one entry takes more.
+const MOST_RUN: u64 = 32 << 20;
 /// Deflate shrinks bytes this many times at most, so an entry claiming to inflate to more is a
 /// trap.
 const MAX_RATIO: u64 = 1032;
@@ -448,6 +450,36 @@ impl Index {
 
     pub fn paths(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)
+    }
+
+    /// Where the headers and bytes of the entries at `paths` lie, in few ranges. As a local
+    /// header's extra field holds up to 64 KiB more than the directory tells, each range runs that
+    /// far past its last entry, short of the directory, and takes in the entries that start within.
+    pub fn runs<'a>(&self, paths: impl IntoIterator<Item = &'a str>) -> Vec<Range<u64>> {
+        let mut entries: Vec<&Entry> = paths
+            .into_iter()
+            .filter_map(|path| self.entries.get(path))
+            .collect();
+        entries.sort_unstable_by_key(|entry| entry.offset);
+        let mut runs: Vec<Range<u64>> = Vec::new();
+        for entry in entries {
+            let end = (entry.header().end + entry.compressed)
+                .saturating_add(u64::from(u16::MAX))
+                .min(entry.directory);
+            match runs.last_mut() {
+                Some(run) if entry.offset < run.end && end - run.start <= MOST_RUN => {
+                    run.end = run.end.max(end);
+                }
+                last => {
+                    // Its entries end where the next starts, as no two share bytes.
+                    if let Some(run) = last {
+                        run.end = run.end.min(entry.offset);
+                    }
+                    runs.push(entry.offset..end);
+                }
+            }
+        }
+        runs
     }
 
     pub fn entry(&self, path: &str) -> Option<&Entry> {

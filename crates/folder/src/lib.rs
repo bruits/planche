@@ -6,6 +6,7 @@
 //! ZIP file, is read in ranges and written in parts. It knows nothing of boards, and needs no
 //! Tauri, so its tests run on every platform.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -13,6 +14,13 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime};
+
+#[cfg(target_vendor = "apple")]
+unsafe extern "C" {
+    /// Hands the data to the drive without asking it to empty its cache, which std's `sync_all`
+    /// does on Apple. Harmless on a bad descriptor.
+    safe fn fsync(fd: std::ffi::c_int) -> std::ffi::c_int;
+}
 
 /// Every file in `root` and in its folders, down to `depth` levels in all, sorted. Names
 /// that are not UTF-8 are left out too.
@@ -58,22 +66,76 @@ pub fn read(root: &Path, path: &str) -> io::Result<Vec<u8>> {
 /// Writes through a temporary file renamed over the target. A top-level dot file is only
 /// ever created, since its user owns it afterwards, and no other is.
 pub fn write(root: &Path, path: &str, bytes: &[u8]) -> io::Result<()> {
-    let segments = segments(path)?;
-    if segments.len() > 1 && segments.iter().any(|segment| segment.starts_with('.')) {
-        return Err(refused(path));
+    write_all(root, &[(path, bytes)]).map_err(|interrupted| interrupted.error)
+}
+
+/// The files at `paths`, packed as [`pack`] packs them, as [`read`] reads each.
+pub fn read_all<'a>(root: &Path, paths: impl IntoIterator<Item = &'a str>) -> io::Result<Vec<u8>> {
+    let mut files = Vec::new();
+    for path in paths {
+        let bytes = read(root, path)
+            .map_err(|error| io::Error::new(error.kind(), format!("`{path}`: {error}")))?;
+        files.push((path, bytes));
     }
-    let file = file(root, path, &segments)?;
-    let name = segments.last().expect("never empty");
-    if name.starts_with('.') && fs::symlink_metadata(&file).is_ok() {
-        return Ok(());
+    Ok(pack(
+        files.iter().map(|(path, bytes)| (*path, bytes.as_slice())),
+    ))
+}
+
+/// Many files in one body, as the shell and the page pass them. Their count, then for each the
+/// length of its path and of its bytes, its path, and its bytes, the numbers as little-endian
+/// 32-bit integers.
+pub fn pack<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Vec<u8> {
+    let mut packed = vec![0; 4];
+    let mut count: u32 = 0;
+    for (path, bytes) in files {
+        packed.extend(length(path.len()).to_le_bytes());
+        packed.extend(length(bytes.len()).to_le_bytes());
+        packed.extend(path.as_bytes());
+        packed.extend(bytes);
+        count += 1;
     }
-    if is_link(&file) {
-        return Err(refused(path));
+    packed[..4].copy_from_slice(&count.to_le_bytes());
+    packed
+}
+
+fn length(len: usize) -> u32 {
+    u32::try_from(len).expect("files pass 4 GiB in slices")
+}
+
+/// The files that [`pack`] packed.
+pub fn unpack(body: &[u8]) -> io::Result<Vec<(&str, &[u8])>> {
+    let mut rest = body;
+    let count = number(&mut rest)?;
+    // Each takes 8 bytes at least, so more would run past the body.
+    if count > rest.len() / 8 {
+        return Err(damaged());
     }
-    fs::create_dir_all(file.parent().expect("inside the root"))?;
-    let mut draft = Draft::create(&file)?;
-    draft.append(bytes)?;
-    draft.commit()
+    let mut files = Vec::with_capacity(count);
+    for _ in 0..count {
+        let (path_len, len) = (number(&mut rest)?, number(&mut rest)?);
+        let path = str::from_utf8(take(&mut rest, path_len)?).map_err(|_| damaged())?;
+        files.push((path, take(&mut rest, len)?));
+    }
+    if !rest.is_empty() {
+        return Err(damaged());
+    }
+    Ok(files)
+}
+
+fn take<'a>(rest: &mut &'a [u8], len: usize) -> io::Result<&'a [u8]> {
+    let (taken, left) = rest.split_at_checked(len).ok_or_else(damaged)?;
+    *rest = left;
+    Ok(taken)
+}
+
+fn number(rest: &mut &[u8]) -> io::Result<usize> {
+    let bytes = take(rest, 4)?.try_into().expect("4 bytes");
+    Ok(u32::from_le_bytes(bytes) as usize)
+}
+
+fn damaged() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "the files sent are damaged")
 }
 
 /// Also when the file is gone already. Dot files are never removed.
@@ -133,6 +195,91 @@ fn retried(mut act: impl FnMut() -> io::Result<()>) -> io::Result<()> {
     }
 }
 
+/// How many of a batch took their place before it failed, and why it did.
+#[derive(Debug)]
+pub struct Interrupted {
+    pub done: usize,
+    pub error: io::Error,
+}
+
+/// What [`write`] does, for many files at once. Where the system can, the drive's cache is flushed
+/// once for all of them, before the first rename. The files take their places in the order given,
+/// so a crash at any point leaves a prefix of them, each whole.
+pub fn write_all(root: &Path, entries: &[(&str, &[u8])]) -> Result<(), Interrupted> {
+    let interrupted = |done, error| Interrupted { done, error };
+    let mut seen = BTreeSet::new();
+    let mut targets = Vec::with_capacity(entries.len());
+    for (path, _) in entries {
+        if !seen.insert(*path) {
+            return Err(interrupted(0, refused(path)));
+        }
+        targets.push(target(root, path).map_err(|error| interrupted(0, error))?);
+    }
+    let mut staged: Vec<Option<Staged>> = Vec::with_capacity(entries.len());
+    let last = targets.iter().rposition(Option::is_some);
+    for (at, ((_, bytes), target)) in entries.iter().zip(&targets).enumerate() {
+        let Some(file) = target else {
+            staged.push(None);
+            continue;
+        };
+        let stage = || -> io::Result<Staged> {
+            fs::create_dir_all(file.parent().expect("inside the root"))?;
+            let mut draft = Draft::create(file)?;
+            draft.append(bytes)?;
+            // The last one's full flush covers the others' writeouts, which the drive has by then.
+            draft.stage(Some(at) == last)
+        };
+        staged.push(Some(stage().map_err(|error| interrupted(0, error))?));
+    }
+    for (done, staged) in staged.into_iter().enumerate() {
+        if let Some(staged) = staged {
+            staged.place().map_err(|error| interrupted(done, error))?;
+        }
+    }
+    Ok(())
+}
+
+/// Where `path` is written, `None` for a top-level dot file that is there already.
+fn target(root: &Path, path: &str) -> io::Result<Option<PathBuf>> {
+    let segments = segments(path)?;
+    if segments.len() > 1 && segments.iter().any(|segment| segment.starts_with('.')) {
+        return Err(refused(path));
+    }
+    let file = file(root, path, &segments)?;
+    let name = segments.last().expect("never empty");
+    if name.starts_with('.') && fs::symlink_metadata(&file).is_ok() {
+        return Ok(None);
+    }
+    if is_link(&file) {
+        return Err(refused(path));
+    }
+    Ok(Some(file))
+}
+
+/// A draft's file, complete and closed, that waits to take the file's place.
+#[derive(Debug)]
+struct Staged {
+    file: PathBuf,
+    temporary: PathBuf,
+    gone: bool,
+}
+
+impl Staged {
+    fn place(mut self) -> io::Result<()> {
+        retried(|| fs::rename(&self.temporary, &self.file))?;
+        self.gone = true;
+        Ok(())
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if !self.gone {
+            let _ = fs::remove_file(&self.temporary);
+        }
+    }
+}
+
 /// A file written in parts through a temporary file beside it, which takes the file's place
 /// once complete, so that a crash never leaves it half-written. Short of a crash, the
 /// temporary file goes away with the draft, however it ends.
@@ -180,6 +327,24 @@ impl Draft {
         out.write_all(bytes)
     }
 
+    /// Closes the draft with its bytes handed to the drive. With `hardened` they are on the
+    /// medium, and so is whatever was staged before.
+    fn stage(mut self, hardened: bool) -> io::Result<Staged> {
+        let out = self.out.take().expect("open until the draft ends");
+        if hardened {
+            out.sync_all()?;
+        } else {
+            hand_over(&out)?;
+        }
+        drop(out);
+        self.gone = true;
+        Ok(Staged {
+            file: self.file.clone(),
+            temporary: self.temporary.clone(),
+            gone: false,
+        })
+    }
+
     pub fn commit(mut self) -> io::Result<()> {
         let out = self.out.take().expect("open until the draft ends");
         out.sync_all()?;
@@ -205,6 +370,26 @@ impl Drop for Draft {
             let _ = fs::remove_file(&self.temporary);
         }
     }
+}
+
+/// Hands `file`'s data to the drive without asking it to flush its cache, where the system can,
+/// and else flushes it fully.
+fn hand_over(file: &File) -> io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    {
+        use std::os::fd::AsRawFd;
+        loop {
+            if fsync(file.as_raw_fd()) == 0 {
+                return Ok(());
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    file.sync_all()
 }
 
 /// A file's size and modification time, which tell that it changed since it was opened.
@@ -416,6 +601,152 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    fn names(folder: &Path) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_batch_writes_every_file_and_leaves_no_temporary() {
+        let root = scratch("batch");
+        write(&root, "elements/a.json", b"before").unwrap();
+        let entries: [(&str, &[u8]); 4] = [
+            ("assets/x", b"x"),
+            ("elements/a.json", b"after"),
+            ("elements/b.json", b"b"),
+            ("board.json", b"board"),
+        ];
+        write_all(&root, &entries).unwrap();
+        for (path, bytes) in entries {
+            assert_eq!(read(&root, path).unwrap(), bytes);
+        }
+        assert_eq!(names(&root), ["assets", "board.json", "elements"]);
+        assert_eq!(names(&root.join("elements")), ["a.json", "b.json"]);
+        assert_eq!(names(&root.join("assets")), ["x"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_batch_takes_its_places_in_order_and_a_failure_keeps_the_rest_as_it_was() {
+        let root = scratch("batch-order");
+        write(&root, "elements/c.json", b"c before").unwrap();
+        // A folder that holds something cannot be replaced by a file, on any system.
+        touch(&root, "elements/b.json/inside");
+        let entries: [(&str, &[u8]); 4] = [
+            ("elements/a.json", b"a"),
+            ("elements/b.json", b"b"),
+            ("elements/c.json", b"c after"),
+            ("board.json", b"board"),
+        ];
+        let failed = write_all(&root, &entries).unwrap_err();
+        assert_eq!(failed.done, 1);
+        assert_eq!(read(&root, "elements/a.json").unwrap(), b"a");
+        assert_eq!(read(&root, "elements/c.json").unwrap(), b"c before");
+        assert!(!root.join("board.json").exists());
+        assert_eq!(
+            names(&root.join("elements")),
+            ["a.json", "b.json", "c.json"]
+        );
+        assert_eq!(names(&root), ["elements"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_batch_that_cannot_be_staged_changes_nothing() {
+        let root = scratch("batch-stage");
+        write(&root, "elements/a.json", b"before").unwrap();
+        let entries: [(&str, &[u8]); 2] =
+            [("elements/a.json", b"after"), ("elements/.hidden", b"")];
+        let failed = write_all(&root, &entries).unwrap_err();
+        assert_eq!(failed.done, 0);
+        assert_eq!(failed.error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(read(&root, "elements/a.json").unwrap(), b"before");
+        assert_eq!(names(&root.join("elements")), ["a.json"]);
+
+        // The same path twice would write one temporary file twice.
+        let twice: [(&str, &[u8]); 2] = [("board.json", b"1"), ("board.json", b"2")];
+        assert_eq!(
+            write_all(&root, &twice).unwrap_err().error.kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(!root.join("board.json").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_batch_only_creates_a_top_level_dot_file() {
+        let root = scratch("batch-dot");
+        write(&root, ".gitattributes", b"ours").unwrap();
+        let entries: [(&str, &[u8]); 3] = [
+            (".gitattributes", b"theirs"),
+            (".other", b"new"),
+            ("board.json", b"board"),
+        ];
+        write_all(&root, &entries).unwrap();
+        assert_eq!(fs::read(root.join(".gitattributes")).unwrap(), b"ours");
+        assert_eq!(fs::read(root.join(".other")).unwrap(), b"new");
+        assert_eq!(read(&root, "board.json").unwrap(), b"board");
+        assert_eq!(names(&root), [".gitattributes", ".other", "board.json"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn files_packed_unpack_as_they_were() {
+        let files: [(&str, &[u8]); 3] = [
+            ("board.json", b"{}"),
+            ("elements/\u{e9}.json", b""),
+            ("assets/a", &[0, 1, 2]),
+        ];
+        let packed = pack(files);
+        assert_eq!(unpack(&packed).unwrap(), files);
+        // As the page packs them.
+        let one: [(&str, &[u8]); 1] = [("\u{e9}", &[7])];
+        assert_eq!(
+            pack(one),
+            [1, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0xc3, 0xa9, 7]
+        );
+        assert_eq!(unpack(&pack([])).unwrap(), []);
+
+        for damaged in [
+            &packed[..packed.len() - 1],
+            &[packed.as_slice(), &[0]].concat(),
+            &[255, 255, 255, 255, 0, 0, 0, 0],
+            &[1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0xff],
+        ] {
+            let error = unpack(damaged).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{damaged:?}");
+        }
+    }
+
+    #[test]
+    fn many_files_read_packed_in_the_order_asked() {
+        let root = scratch("read-all");
+        write(&root, "elements/a.json", b"a").unwrap();
+        write(&root, "board.json", b"board").unwrap();
+        let packed = read_all(&root, ["elements/a.json", "board.json"]).unwrap();
+        let read: [(&str, &[u8]); 2] = [("elements/a.json", b"a"), ("board.json", b"board")];
+        assert_eq!(unpack(&packed).unwrap(), read);
+
+        let missing = read_all(&root, ["board.json", "elements/b.json"]).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+        assert!(missing.to_string().contains("elements/b.json"));
+        let hidden = read_all(&root, ["elements/.a.json"]).unwrap_err();
+        assert_eq!(hidden.kind(), io::ErrorKind::InvalidInput);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_empty_batch_writes_nothing() {
+        let root = scratch("batch-empty");
+        write_all(&root, &[]).unwrap();
+        assert!(names(&root).is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn a_range_reads_only_its_bytes() {
         let root = scratch("range");
@@ -567,6 +898,26 @@ mod tests {
         fs::write(root.join(OsStr::from_bytes(b"\xff")), b"").unwrap();
         assert!(!is_empty(&root).unwrap());
         assert!(list(&root, 1).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_batch_that_fails_while_staging_leaves_no_temporary() {
+        let root = scratch("batch-staging-fails");
+        write(&root, "elements/a.json", b"before").unwrap();
+        // A file where a folder should be fails the batch once `elements/a.json` is staged.
+        touch(&root, "assets");
+        let entries: [(&str, &[u8]); 3] = [
+            ("elements/a.json", b"after"),
+            ("assets/x", b"x"),
+            ("board.json", b"board"),
+        ];
+        let failed = write_all(&root, &entries).unwrap_err();
+        assert_eq!(failed.done, 0);
+        assert_ne!(failed.error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(read(&root, "elements/a.json").unwrap(), b"before");
+        assert_eq!(names(&root.join("elements")), ["a.json"]);
+        assert_eq!(names(&root), ["assets", "elements"]);
         fs::remove_dir_all(root).unwrap();
     }
 }

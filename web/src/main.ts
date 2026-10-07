@@ -34,7 +34,6 @@ import {
   imageKind,
   loneImage,
   placed,
-  pool,
   prepare,
   newId,
   reader,
@@ -47,6 +46,7 @@ import {
   type Decoded,
   type Opened,
 } from "./board.js";
+import { pool } from "./pool.js";
 import { fit, onScreen, type Camera } from "./camera.js";
 import { card, type CardMedia } from "./card.js";
 import { clipboard, type Pasted } from "./clipboard.js";

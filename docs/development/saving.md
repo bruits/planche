@@ -14,7 +14,7 @@ In a folder the user opened, the shell writes only a board's files, deletes only
 
 ## How
 
-`crates/format/src/save.rs` plans each save. It writes only the files whose bytes differ from what the app last read or wrote, each flushed to the drive. New assets go first, then element files, then `board.json`, which comes before the elements when the folder has none yet. Files of removed elements go last, and only those the app knew. A save cut at any point leaves whole files that `Board::repair` heals on read, so there is no journal.
+`crates/format/src/save.rs` plans each save. It writes only the files whose bytes differ from what the app last read or wrote. New assets go first, then element files, then `board.json`, which comes before the elements when the folder has none yet. Files of removed elements go last, and only those the app knew. Each step lands before the next starts. On desktop, its files are flushed to the drive together before any takes its place. A save cut at any point leaves whole files that `Board::repair` heals on read, so there is no journal.
 
 A ZIP file holds only the assets the board shows. Before a rewrite, and before Save as leaves a folder or the session, the app keeps in memory the assets that undo may bring back, and writes each one again once an image shows it.
 
@@ -25,4 +25,5 @@ Before writing a file, and when the window comes back to the front, the app comp
 ## Limits
 
 - A power cut may lose the last renames, as the folder itself is not flushed.
+- In a browser, each file takes its place once written, and the browser decides when it reaches the drive.
 - Where a browser lacks Web Locks, two windows may both hold the session.

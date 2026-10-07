@@ -1,9 +1,13 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from "vitest";
-import { tauri } from "./tauri.js";
+import type { Bytes, Files } from "./core.js";
+import { pack, tauri, unpack } from "./tauri.js";
 
-/** The desktop shell, which answers its confirm dialog with `answer`, and its save dialog with `picked`. */
-function shell(answer: boolean, picked: string | null = null) {
+/**
+ * The desktop shell, which answers its confirm dialog with `answer`, its save dialog with
+ * `picked`, and other commands as `more` says.
+ */
+function shell(answer: boolean, picked: string | null = null, more: Record<string, unknown> = {}) {
   let closing: (() => Promise<void>) | undefined;
   const sent: string[] = [];
   const calls: unknown[][] = [];
@@ -19,6 +23,7 @@ function shell(answer: boolean, picked: string | null = null) {
           confirm: answer,
           keyboard_layout: [["KeyQ", "a"]],
           pick_export: picked,
+          ...more,
         };
         return answers[command] as never;
       },
@@ -94,10 +99,80 @@ describe("tauri", () => {
     expect(sent).toEqual(["pick_export", "discard_export"]);
   });
 
+  it("writes many files in one call, and keeps the stamps of those that landed before a failure", async () => {
+    const root = "/Users/me/Planche à dessin";
+    const { api, calls } = shell(true, null, {
+      pick_target: root,
+      write_files: [["stamp"], "disk full"],
+    });
+    const home = (await tauri(api).pickTarget())!;
+    const files: [string, Bytes][] = [
+      ["elements/a.json", new Uint8Array([1])],
+      ["elements/b.json", new Uint8Array([2])],
+    ];
+    const wrote: [string, string][] = [];
+    const writing = home.writeAll(files, (path, stamp) => void wrote.push([path, stamp]));
+    await expect(writing).rejects.toThrow("disk full");
+    expect(wrote).toEqual([["elements/a.json", "stamp"]]);
+    const headers = { root: encodeURIComponent(root) };
+    expect(calls.at(-1)).toEqual(["write_files", pack(files), { headers }]);
+  });
+
+  it("writes a lone file as it is, which may be a large video", async () => {
+    const root = "/Users/me/Board";
+    const { api, calls } = shell(true, null, { pick_target: root, write_files: [["stamp"], null] });
+    const home = (await tauri(api).pickTarget())!;
+    const bytes = new Uint8Array([1, 2]);
+    expect(await home.write("assets/à.png", bytes)).toBe("stamp");
+    const headers = { root: encodeURIComponent(root), path: encodeURIComponent("assets/à.png") };
+    expect(calls.at(-1)).toEqual(["write_files", bytes, { headers }]);
+    expect(calls.at(-1)![1]).toBe(bytes);
+  });
+
+  it("reads many files in one call, stamped before they are read", async () => {
+    const files = new Map([["board.json", new Uint8Array([1, 2])]]);
+    const stamps = new Map([["board.json", "stamp"]]);
+    const { api, sent } = shell(true, null, {
+      pick_folder: "/Users/me/Board",
+      stamp_files: [...stamps],
+      read_files: pack(files).buffer,
+    });
+    const home = (await tauri(api).open())!;
+    expect(await home.readAll(["board.json"])).toEqual({ files, stamps });
+    expect(sent).toEqual(["pick_folder", "stamp_files", "read_files"]);
+  });
+
   it("closing a saved board closes without asking", async () => {
     const { api, sent, close } = shell(false);
     tauri(api).whenClosing!(async () => true);
     await close();
     expect(sent).toEqual(["close_window"]);
+  });
+});
+
+describe("pack", () => {
+  it("packs files as the desktop shell unpacks them, and unpacks them back", () => {
+    const files: Files = new Map([
+      ["é", new Uint8Array([7])],
+      ["empty", new Uint8Array()],
+    ]);
+    const packed = pack(files);
+    expect([...packed.subarray(0, 15)]).toEqual([
+      2, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0xc3, 0xa9, 7,
+    ]);
+    expect(unpack(packed.buffer)).toEqual(files);
+    expect(unpack(pack([]).buffer)).toEqual(new Map());
+  });
+
+  it("refuses a body cut short, with bytes past its last file, or a path that is no text", () => {
+    const packed = pack([["board.json", new Uint8Array([1, 2])]]);
+    for (const damaged of [
+      packed.slice(0, -1),
+      new Uint8Array([...packed, 0]),
+      new Uint8Array([255, 255, 255, 255, 0, 0, 0, 0]),
+      new Uint8Array([1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0xff]),
+    ]) {
+      expect(() => unpack(damaged.buffer)).toThrow("the files read are damaged");
+    }
   });
 });

@@ -60,6 +60,20 @@ export function memoryHome(name: string, files = new Map<string, Bytes>()) {
       }
       return bytes;
     },
+    // Through `read` and `write`, which tests may wrap, one file after another.
+    async readAll(paths) {
+      const batch = { files: new Map<string, Bytes>(), stamps: new Map<string, string>() };
+      for (const path of paths) {
+        batch.stamps.set(path, stamps.get(path) ?? "");
+        batch.files.set(path, await this.read(path));
+      }
+      return batch;
+    },
+    async writeAll(entries, wrote) {
+      for (const [path, bytes] of entries) {
+        wrote(path, await this.write(path, bytes));
+      }
+    },
     async write(path, bytes) {
       // A dot file is its user's once there, as in a folder on disk, and no board file.
       if (path.startsWith(".")) {

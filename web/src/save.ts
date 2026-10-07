@@ -6,7 +6,8 @@ import * as core from "./core.js";
 import type { Bytes, Files, Snapshot } from "./core.js";
 import { carried, retain, type Opened, type Reading, type Source } from "./board.js";
 import { message } from "./errors.js";
-import type { Home, ZipHome } from "./platform.js";
+import type { Folder, Home, ZipHome } from "./platform.js";
+import { FILES_AT_ONCE, pool } from "./pool.js";
 import { writeZip, zipFolder } from "./zip.js";
 
 /** After the last change, in milliseconds. */
@@ -69,9 +70,17 @@ export async function folderStore(
     return false;
   };
 
+  const together = async (files: [string, Bytes][]) => {
+    const bytes = new Map(files);
+    await home.writeAll(files, (path, stamp) => {
+      stamps.set(path, stamp);
+      known.wrote(path, bytes.get(path)!);
+    });
+  };
+
   /**
    * In the order that the core gives them, after the files a board folder starts with, which a
-   * home only writes into a folder that lacks them.
+   * home only writes into a folder that lacks them. Each step lands before the next one starts.
    */
   const write = async (assets: string[], files: Files, deletions: string[], source: Source) => {
     if (!attributed) {
@@ -81,27 +90,31 @@ export async function folderStore(
       attributed = true;
     }
     const lacking = new Set(source.lacking);
-    for (const path of assets.filter((asset) => !lacking.has(asset))) {
-      await home.write(path, await source.read(path));
-      known.copied(path);
+    for await (const batch of batches(
+      assets.filter((asset) => !lacking.has(asset)),
+      source,
+    )) {
+      await home.writeAll(batch, (path) => known.copied(path));
     }
     if (!holdsLeftOut) {
-      for (const path of await carried(source)) {
-        const bytes = await source.read(path);
-        stamps.set(path, await home.write(path, bytes));
-        known.wrote(path, bytes);
+      for await (const batch of batches(await carried(source), source)) {
+        await together(batch);
       }
       holdsLeftOut = true;
     }
-    for (const [path, bytes] of files) {
-      stamps.set(path, await home.write(path, bytes));
-      known.wrote(path, bytes);
+    for (const step of steps(files)) {
+      await together(step);
     }
-    for (const path of deletions) {
-      await home.remove(path);
-      known.deleted(path);
-      stamps.delete(path);
-    }
+    const pending = deletions.values();
+    await pool(
+      () => pending.next().value,
+      async (path) => {
+        await home.remove(path);
+        known.deleted(path);
+        stamps.delete(path);
+      },
+      FILES_AT_ONCE,
+    );
   };
 
   return {
@@ -123,13 +136,7 @@ export async function folderStore(
     },
     async overwrite(snapshot, source) {
       const listed = await home.list(core.fileDepth());
-      const board = listed.filter(core.isBoardFile);
-      // Before reading, as `open` does.
-      const read = await home.stamps(board);
-      const files: Files = new Map();
-      for (const path of board) {
-        files.set(path, await home.read(path));
-      }
+      const { files, stamps: read } = await home.readAll(listed.filter(core.isBoardFile));
       known.free();
       known = core.known(listed, files);
       stamps = read;
@@ -153,6 +160,44 @@ export async function folderStore(
     },
     free: () => known.free(),
   };
+}
+
+/** How many bytes of images a save holds at once, past which it writes them before reading more. */
+const BATCH = 32 << 20;
+
+/** The files at `paths` from `source`, read a batch at a time, each but a lone larger one under `BATCH`. */
+async function* batches(paths: string[], source: Folder): AsyncGenerator<[string, Bytes][]> {
+  let [batch, size] = [[] as [string, Bytes][], 0];
+  for (const path of paths) {
+    const bytes = await source.read(path);
+    if (batch.length > 0 && size + bytes.length > BATCH) {
+      yield batch;
+      [batch, size] = [[], 0];
+    }
+    batch.push([path, bytes]);
+    size += bytes.length;
+    if (size >= BATCH) {
+      yield batch;
+      [batch, size] = [[], 0];
+    }
+  }
+  if (batch.length > 0) {
+    yield batch;
+  }
+}
+
+/** The element files apart from the board's own, which the core's plan puts first or last. */
+function steps(files: Files): [string, Bytes][][] {
+  const split: [string, Bytes][][] = [];
+  for (const file of files) {
+    const last = split.at(-1);
+    if (last !== undefined && core.isElementFile(file[0]) && core.isElementFile(last[0]![0])) {
+      last.push(file);
+    } else {
+      split.push([file]);
+    }
+  }
+  return split;
 }
 
 /**

@@ -5,7 +5,8 @@ import type { Moving } from "./animation.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Copied, Editor, Files, Item, Kind, Point, Rect, Size } from "./core.js";
 import { milliseconds, timed } from "./metrics.js";
-import type { Folder, Home } from "./platform.js";
+import type { Folder } from "./platform.js";
+import { pool, readEach } from "./pool.js";
 import type { Placed } from "./renderer.js";
 import type { Saving } from "./save.js";
 import { holdsText, type Texts } from "./text.js";
@@ -100,7 +101,7 @@ export interface Reading {
   listed: string[];
   /** Those of the board, all but the assets. */
   files: Files;
-  /** Theirs, taken before they were read, where the folder has them. */
+  /** Theirs, taken no later than their bytes, where the folder has them. */
   stamps: Map<string, string>;
 }
 
@@ -117,19 +118,9 @@ export async function open<T extends Folder>(
     return null;
   }
   const [listed, listing] = await timed(() => folder.list(core.fileDepth()));
-  const board = listed.filter(core.isBoardFile);
-  // Before reading, so that what another program writes meanwhile tells by its stamp.
-  const stamps =
-    "stamps" in folder
-      ? await (folder as unknown as Home).stamps(board)
-      : new Map<string, string>();
-  const [read, reading] = await timed(async () => {
-    const contents: Files = new Map();
-    for (const path of board) {
-      contents.set(path, await folder.read(path));
-    }
-    return contents;
-  });
+  const [{ files: read, stamps }, reading] = await timed(() =>
+    folder.readAll(listed.filter(core.isBoardFile)),
+  );
   const [editor, parsing] = await timed(() => core.read(read));
   const leftOut = new Map(editor.leftOut() as Map<string, string>);
   for (const stray of listed.filter(core.isStrayElement)) {
@@ -154,14 +145,17 @@ export async function open<T extends Folder>(
   };
 }
 
+async function absent(path: string): Promise<Bytes> {
+  throw new Error(`${path} is not in the board`);
+}
+
 /** A new board, which has no folder yet. */
 export function untitled(): Opened {
   const folder: Folder = {
     name: "Untitled",
     list: async () => [],
-    read: async (path) => {
-      throw new Error(`${path} is not in the board`);
-    },
+    read: absent,
+    readAll: async (paths) => ({ files: await readEach(paths, absent), stamps: new Map() }),
   };
   const editor = new core.Editor();
   return {
@@ -186,18 +180,20 @@ export async function carried(source: Source): Promise<string[]> {
 
 /** Its files as they stand: its folder's, and the assets of the images added since. */
 export function files({ folder, added, leftOut, missing }: Opened): Source {
+  const read = async (path: string) => {
+    const blob = added.get(path);
+    if (blob) {
+      return new Uint8Array(await blob.arrayBuffer());
+    }
+    if (missing.has(path)) {
+      throw new Unreadable("missing", "its file is missing");
+    }
+    return folder.read(path);
+  };
   return {
     ...folder,
-    read: async (path) => {
-      const blob = added.get(path);
-      if (blob) {
-        return new Uint8Array(await blob.arrayBuffer());
-      }
-      if (missing.has(path)) {
-        throw new Unreadable("missing", "its file is missing");
-      }
-      return folder.read(path);
-    },
+    read,
+    readAll: async (paths) => ({ files: await readEach(paths, read), stamps: new Map() }),
     leftOut: [...leftOut.keys()].filter((path) => !core.isStrayElement(path)),
     lacking: [...missing].filter((path) => !added.has(path)),
   };
@@ -678,37 +674,6 @@ export function among({ elements }: Board, id: string, chosen: Set<string>): boo
     }
   }
   return false;
-}
-
-/** How many images are read, decoded, or prepared at once, which bounds the memory in flight. */
-export const AT_ONCE = 4;
-
-/**
- * Runs `work` on each item `next` hands out, `AT_ONCE` at a time, until it hands out none. Once
- * one throws, it hands out no more, and throws that once the items under way are done.
- */
-export async function pool<T>(
-  next: () => T | undefined,
-  work: (item: T) => Promise<void>,
-): Promise<void> {
-  let failure: { reason: unknown } | undefined;
-  const worker = async () => {
-    while (failure === undefined) {
-      try {
-        const item = next();
-        if (item === undefined) {
-          return;
-        }
-        await work(item);
-      } catch (reason) {
-        failure ??= { reason };
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: AT_ONCE }, worker));
-  if (failure !== undefined) {
-    throw failure.reason;
-  }
 }
 
 /** The natural size of each asset its images show, in the order they draw. */

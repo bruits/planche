@@ -377,8 +377,8 @@ describe("closing", () => {
 
   it("holds the app open while a board saved nowhere holds edits", async () => {
     const { home } = memoryHome("demo", sample("demo"));
-    const { list, read, name } = home;
-    const { life, move } = app({ picked: { name, list, read } });
+    const { list, read, readAll, name } = home;
+    const { life, move } = app({ picked: { name, list, read, readAll } });
     await life.start();
     await life.openFolder();
     expect(await life.closing()).toBe(true);

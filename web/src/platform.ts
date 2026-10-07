@@ -2,7 +2,7 @@
 // folder and working in it are apart, so that measurements leave the user's pace out.
 
 import type { Incoming } from "./add.js";
-import type { Bytes } from "./core.js";
+import type { Bytes, Files } from "./core.js";
 import { browser } from "./browser.js";
 import { tauri } from "./tauri.js";
 
@@ -15,6 +15,14 @@ export interface Folder {
    */
   list(depth: number): Promise<string[]>;
   read(path: string): Promise<Bytes>;
+  /** The files at `paths`, failing as `read` does. */
+  readAll(paths: string[]): Promise<Batch>;
+}
+
+/** Files read together, with the stamps of those its folder stamps, taken no later than their bytes. */
+export interface Batch {
+  files: Files;
+  stamps: Map<string, string>;
 }
 
 /** A folder that a board lives in, which saves itself there. */
@@ -24,6 +32,12 @@ export interface Home extends Folder {
    * only ever created, since its user owns it afterwards. Other dot files are refused.
    */
   write(path: string, bytes: Bytes): Promise<string>;
+  /**
+   * Writes `files`, which take their places in any order, calling `wrote` with each one's stamp
+   * once it has, as `write` gives it. Once one fails, it writes no more, and throws why once those
+   * under way are written.
+   */
+  writeAll(files: [string, Bytes][], wrote: (path: string, stamp: string) => void): Promise<void>;
   /** An element's file, also when gone already. */
   remove(path: string): Promise<void>;
   /** The stamps of those of `paths` that are in the folder, which change whenever a program writes one. */

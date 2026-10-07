@@ -3,6 +3,7 @@
 
 import type { Incoming } from "./add.js";
 import { typed } from "./commands.js";
+import type { Bytes, Files } from "./core.js";
 import { message } from "./errors.js";
 import type { AgentCall, Export, Home, Platform, Slices } from "./platform.js";
 
@@ -24,21 +25,49 @@ export function tauri({ core, event }: TauriApi): Platform {
       pressed.preventDefault();
     }
   });
-  const folder = (root: string): Home => ({
-    name: basename(root),
-    list: (depth) => core.invoke<string[]>("list_files", { root, depth }),
-    read: async (path) =>
-      new Uint8Array(await core.invoke<ArrayBuffer>("read_file", { root, path })),
-    write(path, bytes) {
+  const folder = (root: string): Home => {
+    const stamps = async (paths: string[]) =>
+      new Map(await core.invoke<[string, string][]>("stamp_files", { root, paths }));
+    const writeAll: Home["writeAll"] = async (files, wrote) => {
+      // A lone file goes as it is, as it may be a large video, which a pack would copy.
+      const [lone] = files.length === 1 ? files : [];
       // Headers only carry ASCII, and paths may not.
-      const headers = { root: encodeURIComponent(root), path: encodeURIComponent(path) };
-      return core.invoke<string>("write_file", bytes, { headers });
-    },
-    remove: (path) => core.invoke("remove_file", { root, path }),
-    stamps: async (paths) =>
-      new Map(await core.invoke<[string, string][]>("stamp_files", { root, paths })),
-    remember: () => core.invoke("remember_board", { path: root, zip: false }),
-  });
+      const headers = {
+        root: encodeURIComponent(root),
+        ...(lone === undefined ? {} : { path: encodeURIComponent(lone[0]) }),
+      };
+      const [stamped, failure] = await core.invoke<[string[], string | null]>(
+        "write_files",
+        lone === undefined ? pack(files) : lone[1],
+        { headers },
+      );
+      stamped.forEach((stamp, at) => wrote(files[at]![0], stamp));
+      if (failure !== null) {
+        throw new Error(failure);
+      }
+    };
+    return {
+      name: basename(root),
+      list: (depth) => core.invoke<string[]>("list_files", { root, depth }),
+      read: async (path) =>
+        new Uint8Array(await core.invoke<ArrayBuffer>("read_file", { root, path })),
+      async readAll(paths) {
+        // Before reading, so that what another program writes meanwhile tells by its stamp.
+        const taken = await stamps(paths);
+        const files = unpack(await core.invoke<ArrayBuffer>("read_files", { root, paths }));
+        return { files, stamps: taken };
+      },
+      async write(path, bytes) {
+        let stamp = "";
+        await writeAll([[path, bytes]], (_, written) => (stamp = written));
+        return stamp;
+      },
+      writeAll,
+      remove: (path) => core.invoke("remove_file", { root, path }),
+      stamps,
+      remember: () => core.invoke("remember_board", { path: root, zip: false }),
+    };
+  };
   const zip = (path: string, size: number): Slices => ({
     name: basename(path),
     size,
@@ -199,4 +228,45 @@ export function tauri({ core, event }: TauriApi): Platform {
 
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/** Many files in one body, as `folder::pack` packs them on the desktop shell's side. */
+export function pack(files: Iterable<[string, Bytes]>): Bytes {
+  const encoder = new TextEncoder();
+  const encoded = [...files].map(([path, bytes]) => [encoder.encode(path), bytes] as const);
+  const size = encoded.reduce((sum, [path, bytes]) => sum + 8 + path.length + bytes.length, 4);
+  const packed = new Uint8Array(size);
+  const view = new DataView(packed.buffer);
+  view.setUint32(0, encoded.length, true);
+  let at = 4;
+  for (const [path, bytes] of encoded) {
+    view.setUint32(at, path.length, true);
+    view.setUint32(at + 4, bytes.length, true);
+    packed.set(path, at + 8);
+    packed.set(bytes, at + 8 + path.length);
+    at += 8 + path.length + bytes.length;
+  }
+  return packed;
+}
+
+/** The files `pack` packed, by path in their order, as views into `body`. */
+export function unpack(body: ArrayBuffer): Files {
+  const view = new DataView(body);
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const files: Files = new Map();
+  let at = 4;
+  try {
+    for (let count = view.getUint32(0, true); count > 0; count--) {
+      const [pathLength, length] = [view.getUint32(at, true), view.getUint32(at + 4, true)];
+      const path = decoder.decode(new Uint8Array(body, at + 8, pathLength));
+      files.set(path, new Uint8Array(body, at + 8 + pathLength, length));
+      at += 8 + pathLength + length;
+    }
+  } catch {
+    at = Number.NaN;
+  }
+  if (at !== body.byteLength) {
+    throw new Error("the files read are damaged");
+  }
+  return files;
 }

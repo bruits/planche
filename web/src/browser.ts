@@ -5,6 +5,7 @@
 
 import type { Bytes } from "./core.js";
 import type { Export, Folder, Home, Platform, Session } from "./platform.js";
+import { FILES_AT_ONCE, pool, readEach } from "./pool.js";
 
 const TYPES: Record<Export, string> = { zip: "application/zip", png: "image/png" };
 
@@ -107,15 +108,22 @@ export const browser: Platform = {
     ).getDirectoryHandle("session", { create: true });
     const session = home(root, false);
     let persisting = false;
+    // Asked once there is something to keep, as Firefox asks the user.
+    const keep = () => {
+      if (!persisting) {
+        persisting = true;
+        void navigator.storage.persist?.();
+      }
+    };
     return {
       ...session,
       async write(path, bytes) {
-        // Asked once there is something to keep, as Firefox asks the user.
-        if (!persisting) {
-          persisting = true;
-          void navigator.storage.persist?.();
-        }
+        keep();
         return session.write(path, bytes);
+      },
+      async writeAll(files, wrote) {
+        keep();
+        return session.writeAll(files, wrote);
       },
       async clear() {
         for await (const name of root.keys()) {
@@ -188,6 +196,22 @@ function holdSession(): Promise<boolean> {
 
 /** The board in `root`, kept to reopen once `remembered`. */
 function home(root: FileSystemDirectoryHandle, remembered: boolean): Home {
+  const write = async (path: string, bytes: Bytes) => {
+    const segments = path.split("/");
+    if (segments.length > 1 && segments.some((segment) => segment.startsWith("."))) {
+      throw new Error(`${path} is not a file of the folder`);
+    }
+    const [folder, name] = await locate(root, path, true);
+    if (name.startsWith(".") && (await exists(folder, name))) {
+      return "";
+    }
+    const file = await folder.getFileHandle(name, { create: true });
+    // The browser writes to a swap file and moves it in place on close.
+    const writable = await file.createWritable();
+    await writable.write(bytes);
+    await writable.close();
+    return stamp(await file.getFile());
+  };
   return {
     name: root.name,
     list: async (depth) => (await walk(root, "", depth)).toSorted(),
@@ -195,21 +219,33 @@ function home(root: FileSystemDirectoryHandle, remembered: boolean): Home {
       const [folder, name] = await locate(root, path, false);
       return bytesOf(await (await folder.getFileHandle(name)).getFile());
     },
-    async write(path, bytes) {
-      const segments = path.split("/");
-      if (segments.length > 1 && segments.some((segment) => segment.startsWith("."))) {
-        throw new Error(`${path} is not a file of the folder`);
-      }
-      const [folder, name] = await locate(root, path, true);
-      if (name.startsWith(".") && (await exists(folder, name))) {
-        return "";
-      }
-      const file = await folder.getFileHandle(name, { create: true });
-      // The browser writes to a swap file and moves it in place on close.
-      const writable = await file.createWritable();
-      await writable.write(bytes);
-      await writable.close();
-      return stamp(await file.getFile());
+    async readAll(paths) {
+      const find = locating(root);
+      const read: [Bytes, string][] = [];
+      const pending = paths.entries();
+      await pool(
+        () => pending.next().value,
+        async ([at, path]) => {
+          const [folder, name] = await find(path);
+          // A file read once changed throws, so its stamp names the bytes read.
+          const file = await (await folder.getFileHandle(name)).getFile();
+          read[at] = [await bytesOf(file), stamp(file)];
+        },
+        FILES_AT_ONCE,
+      );
+      return {
+        files: new Map(paths.map((path, at) => [path, read[at]![0]])),
+        stamps: new Map(paths.map((path, at) => [path, read[at]![1]])),
+      };
+    },
+    write,
+    writeAll(files, wrote) {
+      const pending = files.values();
+      return pool(
+        () => pending.next().value,
+        async ([path, bytes]) => wrote(path, await write(path, bytes)),
+        FILES_AT_ONCE,
+      );
     },
     async remove(path) {
       try {
@@ -222,18 +258,26 @@ function home(root: FileSystemDirectoryHandle, remembered: boolean): Home {
       }
     },
     async stamps(paths) {
-      const stamps = new Map<string, string>();
-      for (const path of paths) {
-        try {
-          const [folder, name] = await locate(root, path, false);
-          stamps.set(path, stamp(await (await folder.getFileHandle(name)).getFile()));
-        } catch (error) {
-          if (!(error instanceof DOMException && error.name === "NotFoundError")) {
-            throw error;
+      const find = locating(root);
+      const found: (string | undefined)[] = [];
+      const pending = paths.entries();
+      await pool(
+        () => pending.next().value,
+        async ([at, path]) => {
+          try {
+            const [folder, name] = await find(path);
+            found[at] = stamp(await (await folder.getFileHandle(name)).getFile());
+          } catch (error) {
+            if (!(error instanceof DOMException && error.name === "NotFoundError")) {
+              throw error;
+            }
           }
-        }
-      }
-      return stamps;
+        },
+        FILES_AT_ONCE,
+      );
+      return new Map(
+        paths.flatMap((path, at) => (found[at] === undefined ? [] : [[path, found[at]]])),
+      );
     },
     remember: remembered
       ? () =>
@@ -290,6 +334,23 @@ async function walk(
   return paths;
 }
 
+/** `locate` for many paths at once, which finds each folder once. */
+function locating(
+  root: FileSystemDirectoryHandle,
+): (path: string) => Promise<[FileSystemDirectoryHandle, string]> {
+  const folders = new Map<string, Promise<FileSystemDirectoryHandle>>();
+  return async (path) => {
+    const at = path.lastIndexOf("/");
+    const parent = path.slice(0, Math.max(at, 0));
+    let folder = folders.get(parent);
+    if (folder === undefined) {
+      folder = locate(root, path, false).then(([found]) => found);
+      folders.set(parent, folder);
+    }
+    return [await folder, path.slice(at + 1)];
+  };
+}
+
 /** The folder holding `path`, and the file's name in it. */
 async function locate(
   root: FileSystemDirectoryHandle,
@@ -335,18 +396,20 @@ async function pickWithInput(): Promise<Folder | null> {
       files.set(path, file);
     }
   }
+  const read = async (path: string) => {
+    const file = files.get(path);
+    if (file === undefined) {
+      throw new Error(`${path} is not in ${root}`);
+    }
+    return bytesOf(file);
+  };
   return {
     name: root,
     // The browser listed the whole folder before handing it over.
     list: async (depth) =>
       [...files.keys()].filter((path) => path.split("/").length <= depth).toSorted(),
-    read: async (path) => {
-      const file = files.get(path);
-      if (file === undefined) {
-        throw new Error(`${path} is not in ${root}`);
-      }
-      return bytesOf(file);
-    },
+    read,
+    readAll: async (paths) => ({ files: await readEach(paths, read), stamps: new Map() }),
   };
 }
 

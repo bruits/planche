@@ -131,7 +131,8 @@ fn main() {
             reopen_board,
             list_files,
             read_file,
-            write_file,
+            read_files,
+            write_files,
             remove_file,
             stamp_files,
             pick_zip,
@@ -589,39 +590,90 @@ fn read_file(picked: State<'_, Picked>, root: PathBuf, path: String) -> Result<R
         .map_err(|error| describe(&root, error))
 }
 
-/// Writes the raw body to the board's file that the `root` and `path` headers name,
-/// percent-encoded, and returns its stamp.
+/// The files at `paths`, packed as `folder::pack` packs them, raw like `read_file`'s.
 #[tauri::command(async)]
-fn write_file(picked: State<'_, Picked>, request: Request<'_>) -> Result<String, String> {
-    let bytes = raw_body(&request)?;
-    let (Some(root), Some(path)) = (header(&request, "root"), header(&request, "path")) else {
-        return Err("the `root` and `path` headers must be set".to_owned());
+fn read_files(
+    picked: State<'_, Picked>,
+    root: PathBuf,
+    paths: Vec<String>,
+) -> Result<Response, String> {
+    check(&picked.readable, &root)?;
+    folder::read_all(&root, paths.iter().map(String::as_str))
+        .map(Response::new)
+        .map_err(|error| describe(&root, error))
+}
+
+/// Writes the board's files packed in the raw body, or the one file the `path` header names, into
+/// the folder that the `root` header names, both percent-encoded. Returns the stamps of those it
+/// wrote before any failed, empty for an asset there already, `.gitattributes`, and a file it could
+/// not stamp, which the page then compares by its bytes, and why one failed.
+#[tauri::command(async)]
+fn write_files(
+    picked: State<'_, Picked>,
+    request: Request<'_>,
+) -> Result<(Vec<String>, Option<String>), String> {
+    let body = raw_body(&request)?;
+    let Some(root) = header(&request, "root") else {
+        return Err("the `root` header must be set".to_owned());
     };
     let root = PathBuf::from(root);
     check(&picked.writable, &root)?;
+    let lone = header(&request, "path");
+    let files = match &lone {
+        Some(path) => vec![(path.as_str(), body)],
+        None => folder::unpack(body).map_err(|error| error.to_string())?,
+    };
+    let attributes = format::git_attributes().0;
     // A folder the user opened holds other files too.
-    let attributes = path == format::git_attributes().0;
-    let asset = format::is_asset_file(&path);
-    if !(attributes || asset || format::is_board_file(&path)) {
+    let foreign = files.iter().find(|(path, _)| {
+        !(*path == attributes || format::is_asset_file(path) || format::is_board_file(path))
+    });
+    if let Some((path, _)) = foreign {
         return Err(format!("`{path}` is not a file of a board"));
     }
-    let stamp = || {
-        let stamps = folder::stamps(&root, [path.as_str()]);
-        stamps.map_err(|error| describe(&root, error))
-    };
     // An asset never changes once named, and so is never written over.
-    if asset && !stamp()?.is_empty() {
-        return Ok(String::new());
-    }
-    folder::write(&root, &path, bytes).map_err(|error| describe(&root, error))?;
-    // Its user's from then on, which the app never reads.
-    if attributes {
-        return Ok(String::new());
-    }
-    Ok(stamp()?
-        .first()
-        .map(|(_, stamp)| stamped(*stamp))
-        .unwrap_or_default())
+    let assets = files
+        .iter()
+        .map(|(path, _)| *path)
+        .filter(|path| format::is_asset_file(path));
+    let there: BTreeSet<&str> = folder::stamps(&root, assets)
+        .map_err(|error| describe(&root, error))?
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    let kept: Vec<(&str, &[u8])> = files
+        .iter()
+        .copied()
+        .filter(|(path, _)| !there.contains(path))
+        .collect();
+    let (placed, failure) = match folder::write_all(&root, &kept) {
+        Ok(()) => (kept.len(), None),
+        Err(folder::Interrupted { done, error }) => (done, Some(describe(&root, error))),
+    };
+    let landed: BTreeSet<&str> = kept[..placed]
+        .iter()
+        .map(|(path, _)| *path)
+        .chain(there.iter().copied())
+        .collect();
+    let done = files
+        .iter()
+        .take_while(|(path, _)| landed.contains(path))
+        .count();
+    let written = files[..done]
+        .iter()
+        .map(|(path, _)| *path)
+        .filter(|path| *path != attributes && !there.contains(path));
+    let stamps: BTreeMap<&str, folder::Stamp> = folder::stamps(&root, written)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let stamps = files[..done].iter().map(|(path, _)| {
+        stamps
+            .get(path)
+            .map(|stamp| stamped(*stamp))
+            .unwrap_or_default()
+    });
+    Ok((stamps.collect(), failure))
 }
 
 #[tauri::command(async)]
