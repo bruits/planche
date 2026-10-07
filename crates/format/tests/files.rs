@@ -1305,9 +1305,10 @@ fn an_overwrite_never_deletes_a_file_that_is_left_out() {
 }
 
 #[test]
-fn what_repair_cut_from_files_left_out_is_written_as_read_until_edited() {
+fn what_repair_cut_from_files_left_out_keeps_its_links_until_an_edit_changes_them() {
     let group = ElementId::from_random(1);
-    let mut files = format::write(&sample()).unwrap();
+    let whole = format::write(&sample()).unwrap();
+    let mut files = whole.clone();
     for id in [group, STICKY] {
         files.insert(format!("elements/{id}.json"), b"<<<<<<< ours\n".to_vec());
     }
@@ -1325,20 +1326,52 @@ fn what_repair_cut_from_files_left_out_is_written_as_read_until_edited() {
     let kept = known.overwrite(&reading.board, left_out).unwrap();
     assert!(kept.files.is_empty() && kept.deletions.is_empty());
 
+    let file = |board: &Board, id: ElementId| {
+        let files = format::write(board).unwrap();
+        serde_json::from_slice::<serde_json::Value>(&files[&format!("elements/{id}.json")]).unwrap()
+    };
+    let id = |id: ElementId| serde_json::to_value(id).unwrap();
     let mut edited = reading.board.clone();
     edited.elements.get_mut(&NOTE).unwrap().z = z("a9");
-    let note = &format::write(&edited).unwrap()[&format!("elements/{NOTE}.json")];
-    assert!(!String::from_utf8_lossy(note).contains("\"group\""));
+    let ElementKind::Arrow { from, to, .. } = &mut edited.elements.get_mut(&ARROW).unwrap().kind
+    else {
+        unreachable!()
+    };
+    from.x += 5.0;
+    let moved = *to;
+    assert_eq!(file(&edited, NOTE)["group"], id(group));
+    assert_eq!(file(&edited, ARROW)["kind"]["to_target"], id(STICKY));
+    let mut fixed = format::write(&edited).unwrap();
+    for id in [group, STICKY] {
+        let path = format!("elements/{id}.json");
+        fixed.insert(path.clone(), whole[&path].clone());
+    }
+    let back = format::read(&fixed).unwrap().board;
+    assert_eq!(back.elements[&NOTE].group, Some(group));
+    assert!(back.repaired.is_empty());
+
+    let regroup = ElementId::from_random(60);
+    edited.elements.insert(
+        regroup,
+        Element {
+            z: z("a8"),
+            ..sample().elements[&group].clone()
+        },
+    );
+    edited.elements.get_mut(&NOTE).unwrap().group = Some(regroup);
+    if let ElementKind::Arrow { to, .. } = &mut edited.elements.get_mut(&ARROW).unwrap().kind {
+        to.x = moved.x + 5.0;
+    }
+    assert_eq!(file(&edited, NOTE)["group"], id(regroup));
+    assert!(file(&edited, ARROW)["kind"].get("to_target").is_none());
 }
 
 #[test]
 fn a_cycle_broken_on_read_reads_back_as_edited() {
-    let [first, second] = [50, 51].map(ElementId::from_random);
-    // In a group another branch deleted, which they stay in once written.
-    let gone = Some(ElementId::from_random(52));
+    let [first, second, gone] = [50, 51, 52].map(ElementId::from_random);
     let mut board = Board::default();
     for (id, target) in [(first, second), (second, first)] {
-        let mut stuck = note(gone, "Stuck");
+        let mut stuck = note(Some(gone), "Stuck");
         if let ElementKind::Note { target: to, .. } = &mut stuck.kind {
             *to = Some(target);
         }
@@ -1348,7 +1381,10 @@ fn a_cycle_broken_on_read_reads_back_as_edited() {
         ElementKind::Note { target, .. } => *target,
         _ => unreachable!(),
     };
-    let mut read = format::read(&format::write(&board).unwrap()).unwrap().board;
+    // In a group whose file is left out, which they stay in once written.
+    let mut files = format::write(&board).unwrap();
+    files.insert(format!("elements/{gone}.json"), b"<<<<<<< ours\n".to_vec());
+    let mut read = format::read(&files).unwrap().board;
     assert_eq!(target(&read, first), None);
     if let ElementKind::Note { target, .. } = &mut read.elements.get_mut(&second).unwrap().kind {
         *target = None;
@@ -1359,6 +1395,33 @@ fn a_cycle_broken_on_read_reads_back_as_edited() {
     for id in [first, second] {
         assert_eq!(target(&again, id), None, "{id}");
     }
+}
+
+#[test]
+fn a_link_to_what_another_branch_deleted_goes_once_written() {
+    let mut board = sample();
+    let gone = ElementId::from_random(53);
+    board.elements.get_mut(&NOTE).unwrap().group = Some(gone);
+    if let ElementKind::Arrow { from_target, .. } =
+        &mut board.elements.get_mut(&ARROW).unwrap().kind
+    {
+        *from_target = Some(gone);
+    }
+    let mut files = format::write(&board).unwrap();
+    files.insert(
+        format!("elements/{STICKY}.json"),
+        b"<<<<<<< ours\n".to_vec(),
+    );
+    let read = format::read(&files).unwrap().board;
+    let written = format::write(&read).unwrap();
+    let file = |id: ElementId| {
+        serde_json::from_slice::<serde_json::Value>(&written[&format!("elements/{id}.json")])
+            .unwrap()
+    };
+    assert!(file(NOTE).get("group").is_none());
+    let arrow = file(ARROW)["kind"].clone();
+    assert!(arrow.get("from_target").is_none());
+    assert_eq!(arrow["to_target"], serde_json::to_value(STICKY).unwrap());
 }
 
 #[test]

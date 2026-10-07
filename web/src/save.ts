@@ -33,6 +33,8 @@ export interface Store {
   overwrite(snapshot: Snapshot, source: () => Source): Promise<void>;
   /** Whether another program changed the board since the app read or last wrote it. */
   changed(): Promise<boolean>;
+  /** Once assets it lacked are there, which it then never writes. */
+  found(paths: string[]): void;
   free(): void;
 }
 
@@ -158,6 +160,7 @@ export async function folderStore(
         changedAny(listed)
       );
     },
+    found: (paths) => paths.forEach((path) => known.copied(path)),
     free: () => known.free(),
   };
 }
@@ -232,6 +235,7 @@ export function zipStore(zip: ZipHome, opened: Opened): Store {
       await rewrite(snapshot, source, true);
     },
     changed: () => zip.changed(),
+    found() {},
     free() {},
   };
 }

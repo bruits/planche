@@ -328,10 +328,18 @@ const present = showing({
     // Once their texture is there, which they play onto.
     animated.keep([read]);
     films.keep([read]);
+    // Its file came back.
+    if (crossedOut.has(asset)) {
+      crossedOut = new Set([...crossedOut].filter((other) => other !== asset));
+      if (opened) {
+        placeNow(into, opened);
+      }
+    }
     // As sharp at any size once known to be an SVG.
     reframe();
   },
   crossOut,
+  crossed: (asset) => crossedOut.has(asset),
   holds: (_, asset) => loaded.has(asset) || crossedOut.has(asset),
   unload(into, asset) {
     drawings.drop(asset);
@@ -361,6 +369,7 @@ const present = showing({
 let opened: Opened | undefined;
 let renderer: Renderer | undefined;
 let halfDrawn = false;
+let looking: Promise<void> | undefined;
 /** On the desktop, a second export to the same file would take over the first one's draft. */
 let exporting = false;
 let tool: "select" | "hand" | "eraser" | Draw = "select";
@@ -368,7 +377,7 @@ let tool: "select" | "hand" | "eraser" | Draw = "select";
 let inking: Pen | undefined;
 /** Left out of the board, it starts as the board's background suggests. */
 let snapping = false;
-/** The assets whose images show crossed out, as this machine cannot decode or play them. */
+/** The assets whose images show crossed out, as their files or this machine cannot show them. */
 let crossedOut: ReadonlySet<string> = new Set();
 /** The assets the renderer holds a texture or a drawing of, which adding them again needs not decode. */
 const loaded = new Set<string>();
@@ -1541,15 +1550,13 @@ reducedMotion.addEventListener("change", () => {
 addEventListener("blur", () => void life.saver()?.flush());
 addEventListener("pagehide", () => void life.saver()?.flush());
 addEventListener("beforeunload", () => void life.saver()?.flush());
-addEventListener("focus", () => report(life.saver()?.check() ?? Promise.resolve()));
+addEventListener("focus", lookAgain);
 learnKeys();
 addEventListener("focus", learnKeys);
 // Before the letter it comes with, as the layout may have changed without the window losing focus.
 addEventListener("keydown", (event) => event.key === "Alt" && !event.repeat && learnKeys());
 document.addEventListener("visibilitychange", () =>
-  document.visibilityState === "hidden"
-    ? void life.saver()?.flush()
-    : report(life.saver()?.check() ?? Promise.resolve()),
+  document.visibilityState === "hidden" ? void life.saver()?.flush() : lookAgain(),
 );
 platform.whenClosing?.(() => life.closing());
 document.addEventListener("contextmenu", (event) => {
@@ -1818,6 +1825,8 @@ async function serveAgents(): Promise<void> {
         return camera && onScreen(camera, viewport.size());
       },
       halfDrawn: () => halfDrawn || present.reloading(),
+      crossedOut: (asset) =>
+        crossedOut.has(asset) ? (present.crossedOut(asset) ?? "it cannot show") : undefined,
       drawNow: () => viewport.drawNow(),
       async render(request) {
         if (opened === undefined || renderer === undefined) {
@@ -2386,6 +2395,15 @@ function fleeting(): Saving | undefined {
   return (saver.store.session ? ownFiles : !ownFiles) ? saver : undefined;
 }
 
+function lookAgain(): void {
+  // Images after the board, which reading it again shows afresh. Focus and visibility come
+  // together, and the second check would return before the first one ends.
+  looking ??= (life.saver()?.check() ?? Promise.resolve())
+    .then(() => present.recheck())
+    .finally(() => (looking = undefined));
+  report(looking);
+}
+
 async function show(next: Opened, camera?: Camera): Promise<string | undefined> {
   halfDrawn = true;
   try {
@@ -2397,6 +2415,9 @@ async function show(next: Opened, camera?: Camera): Promise<string | undefined> 
 
 /** Its images show crossed out, from the next draw on. */
 function crossOut(into: Renderer, asset: string): void {
+  if (crossedOut.has(asset)) {
+    return;
+  }
   crossedOut = new Set([...crossedOut, asset]);
   if (opened) {
     placeNow(into, opened);

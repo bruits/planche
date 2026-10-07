@@ -273,6 +273,7 @@ describe("write", () => {
       ...writing,
       unsaved: () => false,
       shown: () => undefined,
+      halfDrawn: () => false,
     } as unknown as Reading & Writing;
     const read = (await reply({ id: 1, tool: "board", args: {}, deadline: later() }, reading)) as {
       elements: { locked_by?: string }[];
@@ -300,6 +301,7 @@ describe("write", () => {
       ...writing,
       unsaved: () => false,
       shown: () => undefined,
+      halfDrawn: () => false,
     } as unknown as Reading & Writing;
     const read = (await reply({ id: 1, tool: "board", args: {}, deadline: later() }, reading)) as {
       elements: { id: string; locked_by?: string }[];

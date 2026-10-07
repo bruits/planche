@@ -340,6 +340,39 @@ describe("saveAs", () => {
     expect(await life.closing()).toBe(true);
     expect(keptWritten).toEqual([`elements/${STICKY}.json`]);
   });
+
+  it("leaves its saver to a board started while it writes", async () => {
+    const second = memoryHome("target");
+    let resume!: () => void;
+    const paused = new Promise<void>((done) => (resume = done));
+    let asked!: () => void;
+    const writing = new Promise<void>((done) => (asked = done));
+    const { writeAll } = second.home;
+    let once = true;
+    second.home.writeAll = async function (files, wrote) {
+      if (once) {
+        once = false;
+        asked();
+        await paused;
+      }
+      return writeAll.call(this, files, wrote);
+    };
+    const { life, opened } = app({
+      session: memorySession().session,
+      picked: memoryHome("demo", sample("demo")).home,
+      target: second.home,
+    });
+    await life.start();
+    await life.openFolder();
+    const saving = life.saveAs();
+    await writing;
+    const starting = life.newBoard();
+    resume();
+    await Promise.all([saving, starting]);
+    expect(opened()?.folder.name).toBe("Untitled");
+    expect(life.saver()?.store.session).toBe(true);
+    await expect(life.closing()).resolves.toBe(true);
+  });
 });
 
 describe("closing", () => {
@@ -700,5 +733,57 @@ describe("a board that fails to show", () => {
       "demo changed on disk, and could not be read again: the app's own fault",
     );
     expect(opened()?.folder.name).toBe("Untitled");
+  });
+});
+
+describe("saveAs, as an image's file comes back", () => {
+  it("copies it into the new folder, which saves on", async () => {
+    const path = `assets/${IMAGE_ASSET}`;
+    const contents = sample("demo");
+    const asset = contents.get(path)!;
+    contents.delete(path);
+    const first = memoryHome("demo", contents);
+    const second = memoryHome("target");
+    let resume!: () => void;
+    const paused = new Promise<void>((done) => (resume = done));
+    let asked!: () => void;
+    const writing = new Promise<void>((done) => (asked = done));
+    const { writeAll } = second.home;
+    let once = true;
+    second.home.writeAll = async function (files, wrote) {
+      if (once) {
+        once = false;
+        asked();
+        await paused;
+      }
+      return writeAll.call(this, files, wrote);
+    };
+    const { life, opened, move } = app({
+      session: memorySession().session,
+      picked: first.home,
+      target: second.home,
+    });
+    await life.start();
+    await life.openFolder();
+    expect(opened()!.missing.has(path)).toBe(true);
+    const saving = life.saveAs();
+    await writing;
+    // As the window coming back finds it there.
+    first.overwrite(path, asset);
+    const board = opened()!;
+    const saver = life.saver()!;
+    await saver.during(async () => {
+      board.missing = new Set([...board.missing].filter((at) => at !== path));
+      saver.store.found([path]);
+    });
+    resume();
+    await saving;
+    expect(opened()?.folder.name).toBe("target");
+    expect(second.files.get(path)).toEqual(asset);
+    expect(opened()!.missing.has(path)).toBe(false);
+    move(IMAGE);
+    const closed = await life.closing();
+    expect(life.saver()?.failure()).toBeUndefined();
+    expect(closed).toBe(true);
   });
 });

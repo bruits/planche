@@ -12,7 +12,7 @@ The format is made to live in Git. One file per element keeps merges clean and d
 - `read` refuses a field it does not know at every level, naming it. It leaves out an element file that holds a Git conflict or is not valid, and refuses the board only when `board.json` is. A left-out file is never written or deleted, and a ZIP file or a copy of the board takes it as it is.
 - A value at its default is left out, such as a rotation of 0 or an image's edits when it has none.
 - The caller draws element ids, as the core has no randomness.
-- `Board::repair` heals on read what a merge or a cut save can leave, such as a group cycle or an element stuck to one another branch deleted, or to a file left out. An element it cut from what is missing is written as read until an edit changes it, so that fixing what broke brings it back.
+- `Board::repair` heals on read what a merge or a cut save can leave, such as a group cycle or an element stuck to one another branch deleted, or to a file left out. An element it cut from a file left out is written with that link until an edit changes it or moves it off, so that fixing the file brings it back. A link to what another branch deleted goes once the element is written.
 - Image metadata keeps a file's name without its path, and a web address without its credentials.
 
 ## ZIP files

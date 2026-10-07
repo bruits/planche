@@ -99,7 +99,7 @@ pub fn write(board: &Board) -> Result<Files> {
     files.insert(MANIFEST.to_owned(), manifest_file(board.background));
     for &id in board.elements.keys() {
         let element = board.written(id).expect("on the board");
-        files.insert(element_path(id), element_file(id, element)?);
+        files.insert(element_path(id), element_file(id, &element)?);
     }
     Ok(files)
 }
@@ -152,6 +152,7 @@ pub fn read(files: &Files) -> Result<Reading> {
         ..Board::default()
     };
     let mut left_out = Vec::new();
+    let mut unread = BTreeSet::new();
     for (path, bytes) in files {
         let Some(id) = element_id(path) else {
             continue;
@@ -160,13 +161,16 @@ pub fn read(files: &Files) -> Result<Reading> {
             Ok(element) => {
                 board.elements.insert(id, element);
             }
-            Err(error) => left_out.push(LeftOut {
-                path: path.clone(),
-                error,
-            }),
+            Err(error) => {
+                unread.insert(id);
+                left_out.push(LeftOut {
+                    path: path.clone(),
+                    error,
+                });
+            }
         }
     }
-    board.repair();
+    board.repair(&unread);
     Ok(Reading { board, left_out })
 }
 

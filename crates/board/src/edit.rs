@@ -214,7 +214,7 @@ impl Editor {
             };
             pasted.elements.insert(id, element);
         }
-        pasted.repair();
+        pasted.repair(&BTreeSet::new());
         let outermost: Vec<ElementId> = pasted
             .draw_order()
             .into_iter()
@@ -1789,7 +1789,7 @@ mod tests {
 
     fn assert_sound(editor: &Editor) {
         let mut board = editor.board().clone();
-        board.repair();
+        board.repair(&BTreeSet::new());
         assert_eq!(&board, editor.board());
     }
 

@@ -62,7 +62,7 @@ impl Known {
                 }
                 continue;
             };
-            let bytes = element_file(id, element)?;
+            let bytes = element_file(id, &element)?;
             if self.files.get(&path) == Some(&bytes) {
                 continue;
             }

@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   digest,
+  files as filesOf,
   imageKind,
   newId,
   open,
@@ -10,8 +11,10 @@ import {
   type Opened,
 } from "./board.js";
 import type { Camera } from "./camera.js";
+import type { Folder } from "./platform.js";
 import * as core from "./core.js";
 import type { Bytes } from "./core.js";
+import { folderStore, saving } from "./save.js";
 import { showing, type Host, type Showing } from "./showing.js";
 import { lfsPointer, memoryHome, sample } from "../test/folders.js";
 
@@ -56,6 +59,7 @@ function view({ undecodable = [] as string[] } = {}) {
     release: (decoded) => void (decoded && released.push(decoded)),
     load: (_, asset) => void loaded.push(asset),
     crossOut: (_, asset) => void crossed.push(asset),
+    crossed: (asset) => crossed.includes(asset) && !loaded.includes(asset),
     holds: (_, asset) => loaded.includes(asset) || crossed.includes(asset),
     unload(_, asset) {
       unloaded.push(asset);
@@ -112,7 +116,7 @@ describe("showing", () => {
     expect(crossed).toEqual([MIDDLE]);
     expect(loaded).not.toContain(MIDDLE);
     expect(said.at(-1)).toEqual([
-      "demo: 13 elements, an image this machine cannot decode",
+      "demo: 13 elements, an image this machine cannot decode, `dusk.jpg`",
       undefined,
     ]);
   });
@@ -129,8 +133,9 @@ describe("showing", () => {
     expect(crossed.toSorted()).toEqual([LARGEST, MIDDLE, SMALLEST].toSorted());
     expect(loaded).toEqual([]);
     expect(wrong).toBe(
-      "an image whose file is missing, and an image left as a Git LFS pointer, so run " +
-        "`git lfs pull`, and an image whose file differs from its digest",
+      `an image whose file is missing, \`assets/${LARGEST}\`, and an image left as a Git LFS ` +
+        `pointer, \`assets/${SMALLEST}\`, so run \`git lfs pull\`, and an image whose file ` +
+        "differs from its digest, `dusk.jpg`",
     );
     expect(said.at(-1)).toEqual([`demo: 13 elements, ${wrong}`, undefined]);
     expect(host.abandon).not.toHaveBeenCalled();
@@ -192,6 +197,7 @@ describe("showing", () => {
       return read(path);
     };
     host.saver = () => ({
+      store: { found() {} },
       during: async (work) => {
         holding += 1;
         try {
@@ -225,7 +231,7 @@ describe("showing, once an image fails to load", () => {
     expect(loaded.toSorted()).toEqual([LARGEST, SMALLEST].toSorted());
     expect(host.abandon).not.toHaveBeenCalled();
     expect(said.at(-1)).toEqual([
-      "demo: 13 elements, an image this machine cannot show",
+      "demo: 13 elements, an image this machine cannot show, `dusk.jpg`",
       undefined,
     ]);
   });
@@ -351,7 +357,7 @@ describe("showing images again", () => {
     expect(crossed).toEqual([MIDDLE]);
     expect(loaded.toSorted()).toEqual([LARGEST, SMALLEST].toSorted());
     expect(said.at(-1)?.[0]).toBe(
-      "An image could not be read again: its file differs from its digest",
+      "`dusk.jpg` could not be read again: its file differs from its digest",
     );
     expect(host.abandon).not.toHaveBeenCalled();
   });
@@ -445,19 +451,154 @@ describe("showing images again", () => {
     await present.show(board);
     edit(present, board, board.editor.remove(imagesOf(board)));
     present.free();
-    let decoding = 0;
-    let most = 0;
+    const waiting: (() => void)[] = [];
     const { decode } = host;
     host.decode = async (read) => {
-      decoding += 1;
-      most = Math.max(most, decoding);
-      await new Promise((resolve) => setTimeout(resolve, 1));
-      decoding -= 1;
+      await new Promise<void>((resolve) => waiting.push(resolve));
       return decode(read);
     };
     edit(present, board, board.editor.undo());
+    for (let ended = 0; ended < 6; ended++) {
+      await vi.waitFor(() => expect(waiting).toHaveLength(Math.min(4, 6 - ended)), {
+        interval: 1,
+      });
+      waiting.shift()!();
+    }
     await reloaded(present);
     expect(loaded).toHaveLength(6);
-    expect(most).toBe(4);
+  });
+});
+
+async function shownWith(change: (files: Map<string, Bytes>) => void, readOnce = false) {
+  const original = sample("demo");
+  const contents = sample("demo");
+  change(contents);
+  const folder = memoryHome("demo", contents);
+  const { home } = folder;
+  const once: Folder = {
+    name: home.name,
+    list: home.list,
+    read: home.read,
+    readAll: home.readAll,
+  };
+  const board = (await open(async () => (readOnce ? once : home), new Map()))!.opened;
+  const shown = view();
+  const found: string[] = [];
+  shown.host.saver = () => ({
+    during: (work) => work(),
+    store: { found: (paths) => void found.push(...paths) },
+  });
+  const present = showing(shown.host);
+  await present.show(board);
+  const asked: string[] = [];
+  const { read } = home;
+  board.folder.read = (path) => {
+    asked.push(path);
+    return read(path);
+  };
+  return { ...shown, ...folder, board, present, original, found, asked };
+}
+
+describe("showing images whose files come back", () => {
+  it("shows again an image whose file came back, which saves then never write", async () => {
+    const path = `assets/${LARGEST}`;
+    const { board, present, overwrite, original, loaded, said, found, asked } = await shownWith(
+      (files) => files.delete(path),
+    );
+    await present.recheck();
+    expect(asked).toEqual([]);
+    overwrite(path, original.get(path)!);
+    await present.recheck();
+    expect(loaded).toContain(LARGEST);
+    expect(present.crossedOut(LARGEST)).toBeUndefined();
+    expect(filesOf(board).lacking).toEqual([]);
+    expect(found).toEqual([path]);
+    expect(said.at(-1)?.[0]).toBe(`\`${path}\` shows again`);
+  });
+
+  it("reads an altered image again once, then once its file changes, until it is right", async () => {
+    const path = `assets/${MIDDLE}`;
+    const { present, overwrite, original, loaded, said, asked } = await shownWith((files) =>
+      tamper(files, MIDDLE),
+    );
+    const before = said.length;
+    await present.recheck();
+    await present.recheck();
+    expect(asked).toEqual([path]);
+    expect(said).toHaveLength(before);
+    overwrite(path, lfsPointer(original.get(path)!));
+    await present.recheck();
+    expect(present.crossedOut(MIDDLE)).toBe("its file is a Git LFS pointer, so run `git lfs pull`");
+    overwrite(path, original.get(path)!);
+    await present.recheck();
+    expect(loaded).toContain(MIDDLE);
+  });
+
+  it("reads nothing again of a folder read once, or of a board left meanwhile", async () => {
+    const path = `assets/${LARGEST}`;
+    const once = await shownWith((files) => files.delete(path), true);
+    once.overwrite(path, once.original.get(path)!);
+    await once.present.recheck();
+    expect(once.asked).toEqual([]);
+
+    const left = await shownWith((files) => files.delete(path));
+    left.overwrite(path, left.original.get(path)!);
+    const checking = left.present.recheck();
+    left.replace(untitled());
+    await checking;
+    expect(left.loaded).not.toContain(LARGEST);
+    expect(left.found).toEqual([]);
+  });
+
+  it("writes no image whose file came back while a save looked at the folder", async () => {
+    const path = `assets/${LARGEST}`;
+    const original = sample("demo");
+    const contents = sample("demo");
+    contents.delete(path);
+    const { home, written, overwrite } = memoryHome("demo", contents);
+    const { opened: board, reading } = (await open(async () => home, new Map()))!;
+    const store = await folderStore(home, reading, false);
+    const saver = saving(store, {
+      snapshot: () => board.editor.snapshot(),
+      source: () => filesOf(board),
+      saved() {},
+      failed() {},
+      conflict: async () => false,
+      reload: async () => "refused",
+    });
+    const shown = view();
+    shown.host.saver = () => saver;
+    const present = showing(shown.host);
+    await present.show(board);
+    // A new image of the missing asset, whose element file the next save writes.
+    const [first] = imagesOf(board, LARGEST);
+    const kind = board.board.elements[first!]!.kind;
+    const added = board.editor.add(newId(), undefined, JSON.stringify(kind));
+    edit(present, board, added);
+    // The save's check of the files it writes waits until the recheck looked at the folder.
+    let resume!: () => void;
+    const paused = new Promise<void>((done) => (resume = done));
+    let asked!: () => void;
+    const checking = new Promise<void>((done) => (asked = done));
+    const { stamps } = home;
+    home.stamps = async (paths) => {
+      if (!paths.every((at) => at.startsWith("assets/"))) {
+        asked();
+        await paused;
+      }
+      return stamps(paths);
+    };
+    saver.touched(added);
+    const flushed = saver.flush();
+    await checking;
+    overwrite(path, original.get(path)!);
+    const rechecked = present.recheck();
+    await new Promise((done) => setTimeout(done, 0));
+    resume();
+    expect(await flushed).toBe(true);
+    await rechecked;
+    await saver.stop();
+    expect(shown.loaded).toContain(LARGEST);
+    expect(written).not.toContain(path);
   });
 });

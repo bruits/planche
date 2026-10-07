@@ -6,7 +6,7 @@ import { anchors, decodeAsset, files, readAsset, release, type Opened } from "./
 import { MOST_SIDE, capture, type Capture } from "./capture.js";
 import * as core from "./core.js";
 import type { Element, Kind, Rect } from "./core.js";
-import { message } from "./errors.js";
+import { clipped, message } from "./errors.js";
 import type { AgentCall } from "./platform.js";
 import type { Rendered, Request } from "./render.js";
 
@@ -24,6 +24,8 @@ export interface Reading {
    * an edit brought back images whose textures were freed.
    */
   halfDrawn(): boolean;
+  /** Why the asset's images show crossed out, if they do. */
+  crossedOut(asset: string): string | undefined;
   drawNow(): HTMLCanvasElement | undefined;
   /** Draws part of the board off the window, which it leaves as it is. */
   render(request: Request): Promise<Rendered>;
@@ -33,6 +35,7 @@ export interface Reading {
 
 /** Longer texts are cut in the outline, and read whole by id. */
 const MOST_TEXT = 280;
+const MOST_LEFT_OUT = 100;
 /** Pixels along the longest side, at least, of an SVG, which draws sharp at any size. */
 const SMALLEST_VECTOR = 512;
 
@@ -54,7 +57,13 @@ export async function answer(
   }
   switch (tool) {
     case "board":
-      return { board, view: reading.shown() ?? null, ...outline(opened, given) };
+      return {
+        board,
+        view: reading.shown() ?? null,
+        images_read: !reading.halfDrawn(),
+        ...leftOutOf(opened),
+        ...outline(reading, opened, given),
+      };
     case "elements":
       return { board, elements: elements(opened, given.ids) };
     case "selection":
@@ -75,22 +84,41 @@ export async function answer(
   }
 }
 
-function outline(opened: Opened, { offset, limit, area }: Record<string, unknown>) {
+function leftOutOf({ leftOut }: Opened) {
+  const named = [...leftOut]
+    .slice(0, MOST_LEFT_OUT)
+    .map(([path, reason]) => ({ path: cut(path), reason: cut(reason) }));
+  return leftOut.size > named.length
+    ? { left_out: named, left_out_total: leftOut.size }
+    : { left_out: named };
+}
+
+function outline(
+  reading: Reading,
+  opened: Opened,
+  { offset, limit, area }: Record<string, unknown>,
+) {
   const ids = area == null ? opened.board.draw_order : within(opened, area as Rect);
   const from = typeof offset === "number" ? offset : 0;
   // The shell bounds it.
   const count = typeof limit === "number" ? limit : ids.length;
   const next = from + count < ids.length ? from + count : null;
   const page = ids.slice(from, from + count);
-  return { total: ids.length, offset: from, next, elements: page.map((id) => entry(opened, id)) };
+  return {
+    total: ids.length,
+    offset: from,
+    next,
+    elements: page.map((id) => entry(reading, opened, id)),
+  };
 }
 
 function within({ editor }: Opened, { x, y, width, height }: Rect): string[] {
   return editor.touching(x, y, width, height);
 }
 
-function entry(opened: Opened, id: string) {
+function entry(reading: Reading, opened: Opened, id: string) {
   const { group, kind } = opened.board.elements[id]!;
+  const crossed = kind.type === "image" ? reading.crossedOut(kind.asset) : undefined;
   return {
     id,
     type: kind.type,
@@ -107,6 +135,7 @@ function entry(opened: Opened, id: string) {
             source: kind.source,
             caption: kind.caption,
             natural_size: kind.natural_size,
+            crossed_out: crossed && { path: core.assetPath(kind.asset), reason: crossed },
           }
         : undefined,
   };
@@ -123,13 +152,7 @@ function textOf(kind: Kind): string | undefined {
 }
 
 function cut(text: string | undefined): string | undefined {
-  if (text === undefined || text.length <= MOST_TEXT) {
-    return text;
-  }
-  // Never between the halves of a character, which the shell could not read back.
-  const last = text.charCodeAt(MOST_TEXT - 1);
-  const end = last >= 0xd800 && last <= 0xdbff ? MOST_TEXT - 1 : MOST_TEXT;
-  return `${text.slice(0, end)}…`;
+  return text === undefined ? undefined : clipped(text, MOST_TEXT);
 }
 
 function targets(kind: Kind): string[] | undefined {

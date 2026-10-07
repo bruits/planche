@@ -23,6 +23,7 @@ mod typescript;
 mod video;
 mod z_index;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
@@ -103,7 +104,8 @@ pub enum Error {
 pub struct Board {
     pub elements: BTreeMap<ElementId, Element>,
     pub background: Background,
-    /// The elements [`Board::repair`] cut from what is not on the board, as read, then as repaired.
+    /// The elements [`Board::repair`] cut from elements that could not be read, as read with those
+    /// links, then as repaired.
     pub repaired: BTreeMap<ElementId, (Element, Element)>,
 }
 
@@ -139,10 +141,10 @@ impl Board {
     /// another branch deleted, or two groups inside each other, or something stuck to an element
     /// that another branch deleted, or two elements stuck to each other. Such elements move to
     /// the top level or come free where they are, and a cycle breaks at its smallest id, so that
-    /// every client repairs alike. An element cut from what is not on the board is written as
-    /// read until an edit changes it again (see [`Board::written`]), so that fixing what broke
-    /// brings it back.
-    pub fn repair(&mut self) {
+    /// every client repairs alike. An element cut from one of the `unread`, whose files could not
+    /// be read, is written with those links until an edit changes them (see [`Board::written`]),
+    /// so that fixing the file brings them back. Links to what was deleted go once written.
+    pub fn repair(&mut self, unread: &BTreeSet<ElementId>) {
         let mut read = BTreeMap::new();
         let misplaced: Vec<ElementId> = self
             .elements
@@ -205,20 +207,36 @@ impl Board {
             },
         );
 
-        for (id, before) in read {
+        let kept = |cut: Option<ElementId>| cut.filter(|id| unread.contains(id));
+        for (id, mut before) in read {
             let after = &self.elements[&id];
+            if before.group != after.group {
+                before.group = kept(before.group);
+            }
+            for (link, now) in before
+                .kind
+                .targets_mut()
+                .into_iter()
+                .zip(after.kind.links())
+            {
+                if *link != now {
+                    *link = kept(*link);
+                }
+            }
             if *after != before {
                 self.repaired.insert(id, (before, after.clone()));
             }
         }
     }
 
-    /// The element with `id` as its file holds it, as read unless it changed since repair.
-    pub fn written(&self, id: ElementId) -> Option<&Element> {
+    /// The element with `id` as its file holds it, as read unless it changed since repair, and
+    /// otherwise with each link repair cut that no edit changed since, nor moved off.
+    pub fn written(&self, id: ElementId) -> Option<Cow<'_, Element>> {
         let element = self.elements.get(&id)?;
         Some(match self.repaired.get(&id) {
-            Some((read, repaired)) if repaired == element => read,
-            _ => element,
+            None => Cow::Borrowed(element),
+            Some((read, repaired)) if repaired == element => Cow::Borrowed(read),
+            Some((read, repaired)) => Cow::Owned(relinked(element, read, repaired)),
         })
     }
 
@@ -330,6 +348,35 @@ pub(crate) fn with_emptied(
         }
         removed.extend(emptied);
     }
+}
+
+/// `element`, edited since repair cut it from `read`, with each link back that the edits left
+/// alone. An end or what sticks whole keeps its link only where it was read, on what it stuck to.
+fn relinked(element: &Element, read: &Element, repaired: &Element) -> Element {
+    let mut written = element.clone();
+    if written.group == repaired.group {
+        written.group = read.group;
+    }
+    if let (Some(ends), Some(read_ends), Some(repaired_ends)) = (
+        written.kind.ends_mut(),
+        read.kind.ends(),
+        repaired.kind.ends(),
+    ) {
+        for ((point, target), ((read_point, read_target), (_, repaired_target))) in ends
+            .into_iter()
+            .zip(read_ends.into_iter().zip(repaired_ends))
+        {
+            if *target == repaired_target && *point == read_point {
+                *target = read_target;
+            }
+        }
+    } else if written.kind.target() == repaired.kind.target()
+        && geometry::anchor(&written.kind) == geometry::anchor(&read.kind)
+        && let Some(target) = written.kind.target_mut()
+    {
+        *target = read.kind.target();
+    }
+    written
 }
 
 /// A board as the web app holds it.
@@ -631,6 +678,15 @@ impl ElementKind {
     pub(crate) fn targets(&self) -> impl Iterator<Item = ElementId> {
         let ends = self.ends().into_iter().flatten().map(|(_, target)| target);
         ends.chain([self.target()]).flatten()
+    }
+
+    /// What [`ElementKind::targets_mut`] gives, by value.
+    fn links(&self) -> Vec<Option<ElementId>> {
+        match self.ends() {
+            Some(ends) => ends.map(|(_, target)| target).to_vec(),
+            None if self.sticks_whole() => vec![self.target()],
+            None => Vec::new(),
+        }
     }
 
     pub(crate) fn targets_mut(&mut self) -> Vec<&mut Option<ElementId>> {
@@ -1948,7 +2004,7 @@ mod tests {
             (6, element(Some(7), "a0", ElementKind::group())),
             (7, element(Some(5), "a0", ElementKind::group())),
         ]);
-        broken.repair();
+        broken.repair(&BTreeSet::new());
 
         let groups: Vec<(ElementId, Option<ElementId>)> = broken
             .elements
@@ -2027,7 +2083,7 @@ mod tests {
             (3, element(None, "a2", line(1, 9))),
             (4, element(None, "a3", line(2, 3))),
         ]);
-        broken.repair();
+        broken.repair(&BTreeSet::new());
 
         let ends = |bits| broken.elements[&id(bits)].kind.ends().unwrap();
         assert_eq!(ends(3), [(point, Some(id(1))), (point, None)]);
@@ -2057,9 +2113,41 @@ mod tests {
             (5, element(None, "a4", note(6))),
             (6, element(None, "a5", ElementKind::group())),
         ]);
-        broken.repair();
+        broken.repair(&BTreeSet::new());
         let targets = [1, 2, 3, 4, 5].map(|bits| broken.elements[&id(bits)].kind.target());
         assert_eq!(targets, [None, Some(id(1)), Some(id(2)), None, None]);
+    }
+
+    #[test]
+    fn what_sticks_whole_to_an_unread_element_keeps_its_link_until_it_moves_off() {
+        let note = |x: f64, colour, target| ElementKind::Note {
+            frame: Rect {
+                x,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            rotation: 0.0,
+            text: Text::new(String::new(), 1.0),
+            target,
+            colour,
+            opacity: Default::default(),
+        };
+        let read = board([(1, element(None, "a0", note(0.0, Colour::Ink, Some(id(9)))))]);
+        let mut board = read.clone();
+        board.repair(&BTreeSet::from([id(9)]));
+        let written = |board: &Board, kind| {
+            let mut edited = board.clone();
+            edited.elements.get_mut(&id(1)).unwrap().kind = kind;
+            edited.written(id(1)).unwrap().kind.target()
+        };
+        assert_eq!(board.elements[&id(1)].kind.target(), None);
+        assert_eq!(written(&board, note(0.0, Colour::Red, None)), Some(id(9)));
+        assert_eq!(written(&board, note(5.0, Colour::Ink, None)), None);
+        let mut deleted = read;
+        deleted.repair(&BTreeSet::new());
+        assert_eq!(written(&deleted, note(0.0, Colour::Red, None)), None);
+        assert_eq!(deleted.written(id(1)).unwrap().kind.target(), None);
     }
 
     #[test]

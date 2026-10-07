@@ -94,8 +94,8 @@ export function memoryHome(name: string, files = new Map<string, Bytes>()) {
     stamps: async (paths) =>
       new Map(paths.flatMap((path) => (stamps.has(path) ? [[path, stamps.get(path)!]] : []))),
   };
-  const overwrite = (path: string, text: string) => {
-    files.set(path, new TextEncoder().encode(text));
+  const overwrite = (path: string, contents: string | Bytes) => {
+    files.set(path, typeof contents === "string" ? new TextEncoder().encode(contents) : contents);
     stamp(path);
   };
   return { home, files, written, removed, overwrite };

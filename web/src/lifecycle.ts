@@ -470,14 +470,26 @@ export function lifecycle(host: Host): Lifecycle {
     const written = Object.keys(current.board.elements);
     try {
       const write = async () => {
-        if (!(await store.save(snapshot, written, () => files(current)))) {
+        // Once, as an image's file may come back meanwhile, which the new folder then lacks.
+        const source = files(current);
+        if (!(await store.save(snapshot, written, () => source))) {
           throw new Error(`${target.name} is no longer empty`);
         }
         // From the folder it leaves, which the session's is emptied of once it does.
         const holds = new Set(await target.list(core.fileDepth()));
-        await retain(current, files(current), (path) => holds.has(path));
+        await retain(current, source, (path) => holds.has(path));
+        // Those whose files came back meanwhile, unless gone again.
+        const lacking = new Set(source.lacking);
+        for (const path of source.lacking.filter((at) => !current.missing.has(at))) {
+          try {
+            await target.write(path, await files(current).read(path));
+            store.found([path]);
+            lacking.delete(path);
+          } catch {}
+        }
+        return lacking;
       };
-      const [, writing] = await timed(() => (autosave ? autosave.during(write) : write()));
+      const [lacking, writing] = await timed(() => (autosave ? autosave.during(write) : write()));
       timings.set("save as", milliseconds(writing));
       if (host.opened() !== current) {
         store.free();
@@ -488,6 +500,7 @@ export function lifecycle(host: Host): Lifecycle {
       await old?.stop();
       old?.store.free();
       current.folder = target;
+      current.missing = lacking;
       const place = homePlace(target);
       autosave = autosaving(current, store, place);
       saved(editor, snapshot);

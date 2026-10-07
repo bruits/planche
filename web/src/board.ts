@@ -688,6 +688,18 @@ export function assetSizes(board: Board): Map<string, Size> {
   return sizes;
 }
 
+/** Each asset's first image's file name, or else its path. */
+export function assetNames(board: Board): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const id of board.draw_order) {
+    const { kind } = board.elements[id]!;
+    if (kind.type === "image" && !names.has(kind.asset)) {
+      names.set(kind.asset, kind.filename ?? core.assetPath(kind.asset));
+    }
+  }
+  return names;
+}
+
 /** How each asset plays, as all its images do. */
 export function assetPlayback(board: Board): Map<string, Pick<core.ImageEdits, "trim" | "speed">> {
   const played = new Map<string, Pick<core.ImageEdits, "trim" | "speed">>();

@@ -14,5 +14,5 @@ Each edit waits up to 10 seconds for the user to finish a drag, a text, or a cro
 
 ## Risks
 
-- Text and pictures on a board can carry a prompt injection. The server's instructions call them data, and an agent that follows them anyway may edit a board that saves itself, so only undo or Git takes an edit back.
+- Text and pictures on a board can carry a prompt injection, and so can the names of the files it left out and the reasons, which quote their keys. The server's instructions call them data, and an agent that follows them anyway may edit a board that saves itself, so only undo or Git takes an edit back.
 - The app reads the image files an agent adds by path, so an agent can add, and so see, any image file the user can read, even from a sandboxed client.

@@ -18,7 +18,7 @@ Only one running Planche can let agents in, and it takes eight connections at mo
 
 ## What agents can do
 
-Agents read the board, its elements, and the selection, and see images, the window's view, or any part of the board drawn at the size they ask. They add images from files or from their bytes, add and edit every kind of element, give a group a title and a background, group, align, restack, lock, and remove them, and select elements to point you to them. A locked element refuses agents' edits as it refuses yours, and Planche tells agents to unlock only what you ask them to. The client lists the tools with what each takes.
+Agents read the board, its elements, and the selection, with the files Planche left out and the images it crosses out, and why, and see images, the window's view, or any part of the board drawn at the size they ask. They add images from files or from their bytes, add and edit every kind of element, give a group a title and a background, group, align, restack, lock, and remove them, and select elements to point you to them. A locked element refuses agents' edits as it refuses yours, and Planche tells agents to unlock only what you ask them to. The client lists the tools with what each takes.
 
 Each edit waits up to 10 seconds for you to finish a drag, a text, or a crop. It then undoes in one step and saves like your own edits. Agents have no tool to save, open, or close a board.
 

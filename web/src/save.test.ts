@@ -38,6 +38,7 @@ function memoryStore({ outcomes = [] as (boolean | Error)[], gated = false } = {
     },
     overwrite: async () => void written.push(["overwritten"]),
     changed: async () => false,
+    found() {},
     free() {},
   };
   const finish = async () => {
@@ -567,5 +568,28 @@ describe("folderStore", () => {
     expect(await store.changed()).toBe(false);
     const again = await open(async () => home, new Map());
     expect(again!.opened.board).toEqual(core.board(editor));
+  });
+
+  it("writes no image whose file came back to the folder once found", async () => {
+    const IMAGE = "1a4e83c05f294b76a3d107e89c526b0f";
+    const path = `assets/${ASSET}`;
+    const contents = sample("demo");
+    const bytes = contents.get(path)!;
+    contents.delete(path);
+    const { home, written, overwrite } = memoryHome("demo", contents);
+    const { opened, reading } = (await open(async () => home, new Map()))!;
+    const store = await folderStore(home, reading, false);
+    // Put back by another program, then found as the app's showing does.
+    overwrite(path, bytes);
+    opened.missing = new Set([...opened.missing].filter((missing) => missing !== path));
+    store.found([path]);
+    const touched = opened.editor.translate([IMAGE], 10, 0);
+    const snapshot = opened.editor.snapshot();
+    try {
+      expect(await store.save(snapshot, touched, () => filesOf(opened))).toBe(true);
+    } finally {
+      snapshot.free();
+    }
+    expect(written).toEqual([`elements/${IMAGE}.json`]);
   });
 });
