@@ -720,7 +720,7 @@ fn nearest_on_segments(
         .min_by(|a, b| apart(*a, point).total_cmp(&apart(*b, point)))
 }
 
-fn filled(shape: Shape, fill: Fill, text: &Text) -> bool {
+pub(crate) fn filled(shape: Shape, fill: Fill, text: &Text) -> bool {
     (shape != Shape::Cross && fill != Fill::Hollow) || !text.is_blank()
 }
 

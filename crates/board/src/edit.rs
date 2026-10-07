@@ -12,11 +12,12 @@ use serde::Deserialize;
 use crate::align::{Alignment, Axis, alignment, distribution};
 use crate::arrange::{Order, Side, arrangement, normalization};
 use crate::crop::cropped;
+use crate::geometry::{filled, holds, nearest_on_outline};
 use crate::grid::settled;
 use crate::stick::{Landing, Motion, lands_on};
 use crate::{
-    AssetId, Background, Board, Copied, CropShape, Element, ElementId, ElementKind, Error,
-    ImageEdits, Point, Rect, Result, Speed, Trim, ZIndex, angle, with_emptied,
+    AssetId, Background, Board, Copied, Corners, CropShape, Element, ElementId, ElementKind, Error,
+    ImageEdits, Point, Rect, Result, Shape, Speed, Trim, ZIndex, angle, with_emptied,
 };
 
 /// Where an element moves among the elements of its group.
@@ -258,7 +259,9 @@ impl Editor {
         self.record(step)
     }
 
-    /// Replaces an element's kind with another of the same kind. What sticks to it follows it.
+    /// Replaces an element's kind with another of the same kind. What sticks to it follows it. An
+    /// end that a shape's new form leaves off goes onto its outline, and what no longer lies whole
+    /// on what it sticks to, as a new form leaves it, lands again where it lies.
     pub fn update(&mut self, id: ElementId, kind: ElementKind) -> Result<Vec<ElementId>> {
         if mem::discriminant(&self.get(id)?.kind) != mem::discriminant(&kind) {
             return Err(Error::KindChanged(id));
@@ -271,6 +274,7 @@ impl Editor {
             self.change(id, |element| Some(Element { kind, ..element })),
         )]);
         self.follow(&mut step);
+        self.keep_on(&mut step);
         self.record(step)
     }
 
@@ -1267,6 +1271,77 @@ impl Editor {
         }
     }
 
+    /// An end a shape's new form leaves off goes onto its outline, or comes free where there is
+    /// none, and what a new form leaves off its target whole lands again where it lies.
+    fn keep_on(&self, step: &mut Changes) {
+        if !step.keys().any(|id| reformed(step, *id).is_some()) {
+            return;
+        }
+        let mut ends = Vec::new();
+        let mut off = Vec::new();
+        for (id, element) in &self.board.elements {
+            let (before, Some(after)) = (&element.kind, self.lying(step, *id)) else {
+                continue;
+            };
+            let pairs = before.ends().into_iter().flatten();
+            let pairs = pairs.zip(after.ends().into_iter().flatten()).enumerate();
+            for (at, ((was, _), (point, target))) in pairs {
+                if let Some((then, now)) = target.and_then(|target| reformed(step, target))
+                    && lands_on(then, was)
+                    && !lands_on(now, point)
+                {
+                    ends.push((*id, at, nearest_on_outline(now, point)));
+                }
+            }
+            if let Some(target) = after.target()
+                && (reformed(step, target).is_some() || reformed(step, *id).is_some())
+                && let (Some(then), Some(now)) =
+                    (self.board.elements.get(&target), self.lying(step, target))
+                && holds(&then.kind, before)
+                && !holds(now, after)
+            {
+                off.push(*id);
+            }
+        }
+        for (id, at, onto) in ends {
+            if let Some(ends) = self.kind_mut(step, id).and_then(ElementKind::ends_mut) {
+                match onto {
+                    Some(onto) => *ends[at].0 = onto,
+                    None => *ends[at].1 = None,
+                }
+            }
+        }
+        if off.is_empty() {
+            return;
+        }
+        let mut board = self.board.clone();
+        for (id, change) in step.iter() {
+            set(&mut board, *id, change.after.clone());
+        }
+        let mut landing = Landing::new(&board);
+        let landed: Vec<_> = off.into_iter().map(|id| (id, landing.land(id))).collect();
+        for (id, target) in landed {
+            if let Some(stuck) = self.kind_mut(step, id).and_then(ElementKind::target_mut) {
+                *stuck = target;
+            }
+        }
+    }
+
+    /// As the step leaves the element, `None` when it removes it.
+    fn lying<'a>(&'a self, step: &'a Changes, id: ElementId) -> Option<&'a ElementKind> {
+        match step.get(&id) {
+            Some(change) => change.after.as_ref(),
+            None => self.board.elements.get(&id),
+        }
+        .map(|element| &element.kind)
+    }
+
+    /// As the step leaves the element, which it then changes, unless it removes it.
+    fn kind_mut<'a>(&self, step: &'a mut Changes, id: ElementId) -> Option<&'a mut ElementKind> {
+        let change = step.entry(id).or_insert_with(|| self.change(id, Some));
+        change.after.as_mut().map(|element| &mut element.kind)
+    }
+
     fn stick_whole(
         &mut self,
         targets: Vec<(ElementId, Option<ElementId>)>,
@@ -1419,6 +1494,28 @@ fn changed(step: &Changes) -> BTreeSet<ElementId> {
         .filter(|(_, change)| change.before != change.after)
         .map(|(id, _)| *id)
         .collect()
+}
+
+/// The shape as it was and as the step leaves it, when the step changes its form, which moving
+/// it never does.
+fn reformed(step: &Changes, id: ElementId) -> Option<(&ElementKind, &ElementKind)> {
+    let change = step.get(&id)?;
+    let (before, after) = (&change.before.as_ref()?.kind, &change.after.as_ref()?.kind);
+    (form(before)? != form(after)?).then_some((before, after))
+}
+
+/// Where a shape's outline runs within its frame, and whether it covers what it surrounds.
+fn form(kind: &ElementKind) -> Option<(Shape, Corners, bool)> {
+    match kind {
+        ElementKind::Shape {
+            shape,
+            corners,
+            fill,
+            text,
+            ..
+        } => Some((*shape, *corners, filled(*shape, *fill, text))),
+        _ => None,
+    }
 }
 
 fn motions(step: &Changes) -> impl Iterator<Item = (ElementId, Motion)> + '_ {
@@ -4483,5 +4580,199 @@ mod tests {
             unreachable!()
         };
         assert_eq!(*rotation, 0.0);
+    }
+
+    /// Filled as `fill`, of `corners` when it counts them, in the square from (0, 0) to (100, 100).
+    fn drawn(shape: crate::Shape, corners: u8, fill: Fill) -> ElementKind {
+        ElementKind::Shape {
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            rotation: 0.0,
+            shape,
+            corners: crate::Corners::new(corners).unwrap(),
+            text: Text::new(String::new(), 2.0),
+            target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            fill,
+            dash: Dash::Solid,
+            opacity: Default::default(),
+        }
+        .canonical()
+    }
+
+    #[test]
+    fn an_end_a_new_outline_leaves_off_goes_onto_it_in_the_same_step() {
+        use crate::Shape::{Ellipse, Rectangle, Star};
+        let star = drawn(Star, 5, Fill::Hollow);
+        let point = nearest_on_outline(&star, Point { x: 100.0, y: 38.0 }).unwrap();
+        let corner = 50.0 - 50.0 * std::f64::consts::FRAC_1_SQRT_2;
+        let cases = [
+            // At a corner, which an ellipse leaves out, onto the nearest point of its curve.
+            (
+                (0.0, 0.0),
+                drawn(Rectangle, 5, Fill::Hollow),
+                drawn(Ellipse, 5, Fill::Hollow),
+                Some((corner, corner)),
+            ),
+            // Within, which no fill leaves out, onto the nearest side.
+            (
+                (30.0, 50.0),
+                drawn(Rectangle, 5, Fill::Solid),
+                drawn(Rectangle, 5, Fill::Hollow),
+                Some((0.0, 50.0)),
+            ),
+            // On a point, which a sixth point turns away.
+            ((point.x, point.y), star, drawn(Star, 6, Fill::Hollow), None),
+        ];
+        for (end, was, now, onto) in cases {
+            let mut editor = Editor::new(board([
+                (1, element(None, "a0", was)),
+                (
+                    2,
+                    element(None, "a1", stuck((300.0, 300.0), None, end, Some(1))),
+                ),
+            ]));
+            let before = editor.board().clone();
+            editor.update(id(1), now.clone()).unwrap();
+            let (to, target) = ends(&editor, 2)[1];
+            assert_eq!(target, Some(id(1)), "{now:?}");
+            assert!(lands_on(&now, to), "{to:?} is off {now:?}");
+            if let Some((x, y)) = onto {
+                assert_at(to, x, y);
+            }
+            editor.undo();
+            assert_eq!(*editor.board(), before);
+        }
+    }
+
+    #[test]
+    fn an_end_on_an_image_keeps_to_its_pixel_however_it_is_cropped() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (
+                2,
+                element(None, "a1", stuck((300.0, 300.0), None, (0.0, 0.0), Some(1))),
+            ),
+        ]));
+        editor
+            .set_crop_shape(&ids([1]), CropShape::Ellipse)
+            .unwrap();
+        let half = Rect {
+            x: 50.0,
+            y: 50.0,
+            width: 50.0,
+            height: 50.0,
+        };
+        editor.crop(id(1), half).unwrap();
+        editor.reset_crop(&ids([1])).unwrap();
+        assert_eq!(ends(&editor, 2)[1], (Point { x: 0.0, y: 0.0 }, Some(id(1))));
+    }
+
+    #[test]
+    fn what_lies_flush_with_a_shape_stays_stuck_as_the_shape_moves_or_turns() {
+        // At the filled square's top-left corner, where rounding could put it a hair outside.
+        let mut editor = Editor::new(board([
+            (
+                1,
+                element(None, "a0", drawn(crate::Shape::Rectangle, 5, Fill::Solid)),
+            ),
+            (2, element(None, "a1", on(framed(0.0, 0.0, 10.0, 10.0), 1))),
+        ]));
+        let pivot = Point { x: 37.0, y: 61.0 };
+        editor.rotate(&ids([1]), pivot, 0.173).unwrap();
+        editor.scale(&ids([1]), pivot, 1.0246).unwrap();
+        editor.translate(&ids([1]), 0.1, 0.3).unwrap();
+        assert_eq!(editor.board().elements[&id(2)].kind.target(), Some(id(1)));
+    }
+
+    #[test]
+    fn a_shape_whose_new_form_its_target_no_longer_holds_lands_again() {
+        use crate::Shape::{Ellipse, Rectangle};
+        // An ellipse within a filled one, whose frame's corners stick out of it.
+        let mut inner = drawn(Ellipse, 5, Fill::Hollow);
+        if let ElementKind::Shape { frame, .. } = &mut inner {
+            *frame = Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 80.0,
+                height: 80.0,
+            };
+        }
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", drawn(Ellipse, 5, Fill::Solid))),
+            (2, element(None, "a1", inner.clone())),
+        ]));
+        editor.land(&ids([2])).unwrap();
+        assert_eq!(editor.board().elements[&id(2)].kind.target(), Some(id(1)));
+        let mut square = editor.board().elements[&id(2)].kind.clone();
+        if let ElementKind::Shape { shape, .. } = &mut square {
+            *shape = Rectangle;
+        }
+        editor.update(id(2), square).unwrap();
+        assert_eq!(editor.board().elements[&id(2)].kind.target(), None);
+    }
+
+    #[test]
+    fn what_a_new_outline_leaves_off_lands_again_where_it_lies() {
+        use crate::Shape::{Rectangle, Star};
+        // On the rectangle's fill, over the image, and on the star's right arm, over nothing.
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(0.0, 0.0))),
+            (2, element(None, "a1", drawn(Rectangle, 5, Fill::Solid))),
+            (3, element(None, "a2", framed(40.0, 40.0, 10.0, 10.0))),
+        ]));
+        editor.land(&ids([3])).unwrap();
+        assert_eq!(editor.board().elements[&id(3)].kind.target(), Some(id(2)));
+        editor
+            .update(id(2), drawn(Rectangle, 5, Fill::Hollow))
+            .unwrap();
+        assert_eq!(editor.board().elements[&id(3)].kind.target(), Some(id(1)));
+        editor.undo();
+        assert_eq!(editor.board().elements[&id(3)].kind.target(), Some(id(2)));
+
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", drawn(Star, 5, Fill::Solid))),
+            (2, element(None, "a1", framed(80.0, 40.0, 4.0, 2.0))),
+        ]));
+        editor.land(&ids([2])).unwrap();
+        assert_eq!(editor.board().elements[&id(2)].kind.target(), Some(id(1)));
+        editor.update(id(1), drawn(Star, 6, Fill::Solid)).unwrap();
+        assert_eq!(editor.board().elements[&id(2)].kind.target(), None);
+    }
+
+    #[test]
+    fn an_edit_leaves_alone_what_was_off_what_it_sticks_to_already() {
+        // Within a hollow rectangle, which neither holds nor reaches them.
+        let note = on(framed(40.0, 40.0, 10.0, 10.0), 1);
+        let mut editor = Editor::new(board([
+            (
+                1,
+                element(None, "a0", drawn(crate::Shape::Rectangle, 5, Fill::Hollow)),
+            ),
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    stuck((300.0, 300.0), None, (50.0, 50.0), Some(1)),
+                ),
+            ),
+            (3, element(None, "a2", note.clone())),
+        ]));
+        let mut red = editor.board().elements[&id(1)].kind.clone();
+        if let ElementKind::Shape { colour, .. } = &mut red {
+            *colour = Colour::Red;
+        }
+        editor.update(id(1), red).unwrap();
+        assert_eq!(
+            ends(&editor, 2)[1],
+            (Point { x: 50.0, y: 50.0 }, Some(id(1)))
+        );
+        assert_eq!(editor.board().elements[&id(3)].kind, note);
     }
 }
