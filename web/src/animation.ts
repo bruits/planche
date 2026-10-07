@@ -9,36 +9,19 @@ import { assetPlayback } from "./board.js";
 import type { Camera, Viewport } from "./camera.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Size, Trim } from "./core.js";
+import { spanOf, startsOf, stepped, type Playback, type Span } from "./playback.js";
 import { LONGEST_SIDE, shownAssets } from "./raster.js";
 import type { Playing, Renderer } from "./renderer.js";
 
 /** How long a frame spends on frames of animated images before it starts no more, in milliseconds. */
 const BUDGET = 8;
-/** How far a time may fall before the frame it means, in milliseconds, as one in seconds rounds. */
-const LEEWAY = 0.5;
 /** How much one keeps of the frames of a loop that starts past its first frame, in bytes. */
 const KEPT = 64 * 1024 * 1024;
-/** The speeds offered, slowest first. */
-const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
 /** An animated image's bytes, and how many times it plays through. */
 export interface Moving {
   bytes: Bytes;
   plays: number;
-}
-
-/** From one frame to another, both shown. */
-export type Span = [first: number, last: number];
-
-export interface Playback {
-  /** The frame it shows, or goes to. */
-  at: number;
-  /** Of its frames, those that decode. */
-  count: number;
-  playing: boolean;
-  span: Span;
-  /** How long each frame shows, in milliseconds, of its first `count`. */
-  delays: readonly number[];
 }
 
 export interface Animations {
@@ -75,6 +58,8 @@ interface Clip {
   moving: Moving;
   /** How long each frame shows, in milliseconds. */
   delays: number[];
+  /** When each frame starts, in seconds, then when the last one ends. */
+  starts: number[];
   /** What a frame takes in memory, in bytes. */
   weight: number;
   paused: boolean;
@@ -85,6 +70,8 @@ interface Clip {
   /** Of its frames, those that decode, which a broken one leaves fewer of than its delays. */
   count: number;
   span: Span;
+  /** The trim its span follows, and of how many frames, as working it out again each frame would cost. */
+  spanned?: { trim: Trim | undefined; count: number } | undefined;
   at: number;
   /** The frame its texture holds. */
   shown: number;
@@ -92,41 +79,6 @@ interface Clip {
   kept?: Map<number, Uint8Array> | undefined;
   /** While it shows, from when it plays or goes to another frame. */
   run?: Run | undefined;
-}
-
-/** The speed offered after `speed`, or before it, `undefined` past the last. */
-export function sped(speed: number, faster: boolean): number | undefined {
-  return faster
-    ? SPEEDS.find((offered) => offered > speed)
-    : SPEEDS.findLast((offered) => offered < speed);
-}
-
-/** When each frame starts, in milliseconds, then when the last one ends. */
-function starts(delays: readonly number[]): number[] {
-  let time = 0;
-  return [0, ...delays.map((delay) => (time += delay))];
-}
-
-/** The frames `trim` plays of one whose frames show as `delays` say, all of them without one. */
-export function spanOf(delays: readonly number[], trim: Trim | undefined): Span {
-  const last = delays.length - 1;
-  if (trim === undefined) {
-    return [0, last];
-  }
-  const begins = starts(delays).slice(0, -1);
-  const before = (milliseconds: number) =>
-    begins.findLastIndex((start) => start <= milliseconds + LEEWAY);
-  const first = Math.max(0, before(trim.start * 1000));
-  return [first, Math.min(last, Math.max(first, before(trim.end * 1000 - 2 * LEEWAY)))];
-}
-
-/** What plays `span` of one whose frames show as `delays` say, `undefined` for all of them. */
-export function trimOf(delays: readonly number[], [first, last]: Span): Trim | undefined {
-  if (first <= 0 && last >= delays.length - 1) {
-    return undefined;
-  }
-  const at = starts(delays);
-  return { start: at[first]! / 1000, end: at[last + 1]! / 1000 };
 }
 
 /** `again` asks for another frame, and `changed` tells that one stopped on its own. */
@@ -302,6 +254,7 @@ export function animations(again: () => void, changed: () => void): Animations {
         clips.set(asset, {
           moving,
           delays,
+          starts: startsOf(delays),
           weight: natural.width * natural.height * 4,
           paused: reduced,
           chosen: false,
@@ -345,10 +298,18 @@ export function animations(again: () => void, changed: () => void): Animations {
           continue;
         }
         const edits = played.get(asset);
-        const [first, last] =
-          previews.get(asset) ?? spanOf(clip.delays.slice(0, clip.count), edits?.trim);
-        if (first !== clip.span[0] || last !== clip.span[1]) {
-          span(clip, [first, last]);
+        const preview = previews.get(asset);
+        if (preview) {
+          if (preview[0] !== clip.span[0] || preview[1] !== clip.span[1]) {
+            span(clip, preview);
+          }
+        } else if (
+          clip.spanned?.count !== clip.count ||
+          clip.spanned.trim?.start !== edits?.trim?.start ||
+          clip.spanned.trim?.end !== edits?.trim?.end
+        ) {
+          clip.spanned = { trim: edits?.trim, count: clip.count };
+          span(clip, spanOf(clip.starts.slice(0, clip.count + 1), edits?.trim));
         }
         if (clip.at < clip.span[0] || clip.at > clip.span[1]) {
           clip.at = clip.span[0];
@@ -431,7 +392,8 @@ export function animations(again: () => void, changed: () => void): Animations {
           count: clip.count,
           playing: !clip.paused,
           span: clip.span,
-          delays: clip.delays,
+          starts:
+            clip.count === clip.delays.length ? clip.starts : clip.starts.slice(0, clip.count + 1),
         }
       );
     },
@@ -451,9 +413,7 @@ export function animations(again: () => void, changed: () => void): Animations {
           pause(clip, true);
           clip.chosen = true;
           clip.over = false;
-          const [first, last] = clip.span;
-          const at = clip.at + by;
-          clip.at = at > last ? first : at < first ? last : at;
+          clip.at = stepped(clip.at, by, clip.span);
         }
       }
       again();
@@ -461,6 +421,10 @@ export function animations(again: () => void, changed: () => void): Animations {
     preview(asset, shown) {
       if (shown === undefined) {
         previews.delete(asset);
+        const clip = clips.get(asset);
+        if (clip) {
+          clip.spanned = undefined;
+        }
       } else {
         previews.set(asset, shown);
         const clip = clips.get(asset);

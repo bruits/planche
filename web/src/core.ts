@@ -6,6 +6,7 @@ import init, {
   Crc32,
   Editor,
   Known,
+  MatroskaFrames,
   Snapshot,
   ZipIndex,
   ZipWriter,
@@ -23,6 +24,8 @@ import init, {
   locateZipDirectory,
   media as told,
   mediaStart,
+  movieFrames,
+  movieIndex as indexIn,
   newBoardFiles,
   snapScaleToGrid as snapScale,
   snapToGrid as snap,
@@ -76,6 +79,7 @@ import type {
 export {
   Editor,
   Known,
+  MatroskaFrames,
   Snapshot,
   ZipIndex,
   ZipWriter,
@@ -85,6 +89,7 @@ export {
   isBoardFile,
   isStrayElement,
   locateZipDirectory,
+  movieFrames,
   zipTailLength,
 };
 
@@ -221,6 +226,20 @@ export function setTrim(editor: Editor, ids: string[], trim: Trim | undefined): 
 export function frameDelays(bytes: Bytes): number[] | undefined {
   const found = delays(bytes);
   return found && Array.from(found);
+}
+
+/**
+ * Of the box starting at `from` in a movie `length` bytes long, given by `window`, its first 16
+ * bytes or as many as are left: where the movie's index lies when it is that box, or else where
+ * the next box starts, `undefined` past the end or for a box cut short.
+ */
+export function movieIndex(
+  length: number,
+  from: number,
+  window: Bytes,
+): [start: number, end: number] | number | undefined {
+  const found = indexIn(length, from, window);
+  return found === undefined ? undefined : found.length === 2 ? [found[0]!, found[1]!] : found[0];
 }
 
 /**

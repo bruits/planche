@@ -18,7 +18,7 @@ import type {
 } from "./core.js";
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
-import { animations, sped } from "./animation.js";
+import { animations } from "./animation.js";
 import {
   among,
   assetSizes,
@@ -49,7 +49,7 @@ import {
   type Opened,
 } from "./board.js";
 import { fit, type Camera } from "./camera.js";
-import { card } from "./card.js";
+import { card, type CardMedia } from "./card.js";
 import { clipboard, type Pasted } from "./clipboard.js";
 import { meanColours } from "./colour.js";
 import {
@@ -74,6 +74,7 @@ import { openFinder, type Listed } from "./finder.js";
 import { heapInUse, megabytes, milliseconds, percentile, rate, timed } from "./metrics.js";
 import { overlay } from "./overlay.js";
 import { testPhotos } from "./photos.js";
+import { sped } from "./playback.js";
 import { pinned, pins } from "./pins.js";
 import { platform } from "./platform.js";
 import { recall, remember } from "./preferences.js";
@@ -185,12 +186,32 @@ const animated = animations(
 );
 const films = videos(
   () => viewport.redraw(),
-  () => refreshBar(),
+  () => {
+    refreshBar();
+    // Its frames, once read, give it its timeline.
+    styleCard.refresh();
+  },
   () => bar.say("A video cannot play here"),
 );
+const media: CardMedia = {
+  playback: (asset) => animated.playback(asset) ?? films.playback(asset),
+  play(assets, playing) {
+    animated.play(assets, playing);
+    films.play(assets, playing);
+  },
+  seek(asset, at) {
+    animated.seek(asset, at);
+    films.seek(asset, at);
+  },
+  preview(asset, span) {
+    animated.preview(asset, span);
+    films.preview(asset, span);
+  },
+};
 const editing = edits(viewport, overlaid, () => opened, {
   changed,
   selectionChanged() {
+    films.select(loneImage(opened?.board, editing.selection())?.image.asset);
     refreshBar();
     showComments();
     styleCard.refresh();
@@ -415,21 +436,25 @@ const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection(
 const selectedMoving = () =>
   selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
 const moving = (asset: string) => animated.playing(asset) || films.playing(asset);
-const selectedAnimated = () => selectedAssets().filter((asset) => animated.holds(asset));
-const framesOnly = () =>
-  noneSelected() ??
-  (selectedAnimated().length > 0 ? undefined : "Only animated images go frame by frame");
+const selectedStepping = () =>
+  selectedAssets().filter((asset) => animated.holds(asset) || films.steps(asset));
 const frameStep = (label: string, by: number, keys: Shortcut[]): Command => ({
   label,
   keys,
-  unavailable: framesOnly,
+  unavailable: () =>
+    noneSelected() ??
+    (selectedStepping().length > 0
+      ? undefined
+      : "Only animated images and videos go frame by frame"),
   run: () => {
-    animated.step(selectedAnimated(), by);
+    const assets = selectedStepping();
+    animated.step(assets, by);
+    films.step(assets, by);
     refreshBar();
   },
 });
 const speedOf = (): number => {
-  const [asset] = selectedAnimated();
+  const [asset] = selectedMoving();
   return (
     (asset === undefined ? undefined : opened && assetPlayback(opened.board).get(asset)?.speed) ?? 1
   );
@@ -438,17 +463,18 @@ const pace = (label: string, faster: boolean, keys: Shortcut[]): Command => ({
   label,
   keys,
   unavailable: () =>
-    framesOnly() ??
+    noneSelected() ??
+    (selectedMoving().length > 0 ? undefined : "Only animated images and videos change speed") ??
     (sped(speedOf(), faster) === undefined
       ? `Already at the ${faster ? "fastest" : "slowest"}`
       : undefined),
   run: () => {
     const speed = sped(speedOf(), faster);
-    const assets = new Set(selectedAnimated());
+    const assets = new Set(selectedMoving());
     if (speed === undefined || !opened) {
       return;
     }
-    // Its animated images alone, as a still selected with them takes no speed.
+    // Its animated images and videos alone, as a still selected with them takes no speed.
     const ids = Object.entries(opened.board.elements)
       .filter(([, { kind }]) => kind.type === "image" && assets.has(kind.asset))
       .map(([id]) => id);
@@ -1292,7 +1318,7 @@ const styleCard = card(
     pick: () => picker.start(false),
     explain: (element, explanation) => bar.explain(element, explanation),
     say: (said) => bar.say(said),
-    media: animated,
+    media,
     trimmed: () => refreshBar(),
   },
   look,
@@ -1312,6 +1338,7 @@ const styleCard = card(
     nextFrame: commands.nextFrame,
     slower: commands.slower,
     faster: commands.faster,
+    sound: commands.sound,
     open: commands.style,
   },
 );

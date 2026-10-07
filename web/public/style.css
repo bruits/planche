@@ -1066,6 +1066,11 @@ body {
   text-align: right;
 }
 
+/* As wide as minutes and seconds to the hundredth. */
+.style-card .count.clock {
+  min-width: 7ch;
+}
+
 .style-card .note {
   flex: 1;
   padding: 0 6px;

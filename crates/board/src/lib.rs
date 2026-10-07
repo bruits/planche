@@ -44,6 +44,7 @@ pub(crate) use svg::svg_size;
 #[cfg(feature = "ts")]
 pub use typescript::typescript;
 pub(crate) use video::video;
+pub use video::{MatroskaFrames, MovieIndex, movie_frames, movie_index};
 pub use z_index::ZIndex;
 
 pub type Result<T> = std::result::Result<T, Error>;

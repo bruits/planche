@@ -2,10 +2,11 @@
 // open, it follows the selection from one element to the next, until Esc closes it, or a press on
 // nothing unless it is kept open. While a gesture scales, stretches, or turns the selection, what
 // it reads shows there instead. Its buttons set what applies to every element selected, and that
-// becomes the style of what their tools draw next, unless ⌥ is held. A lone animated image shows
-// its frames, to play, step through, speed up or down, and trim to the part that plays.
+// becomes the style of what their tools draw next, unless ⌥ is held. A lone animated image or
+// video shows its frames, to play, step through, speed up or down, and trim to the part that
+// plays, and a video's sound, to turn on or off.
 
-import { trimOf, type Playback, type Span } from "./animation.js";
+import { clock, trimOf, type Playback, type Span } from "./playback.js";
 import { among, loneImage, type Opened } from "./board.js";
 import {
   ariaKeys,
@@ -116,7 +117,7 @@ export interface CardHost {
   explain(button: HTMLElement, text: () => string): void;
   say(message: string): void;
   media: CardMedia;
-  /** Once it starts trimming the lone animated image selected, or stops, which the hint tells. */
+  /** Once it starts trimming the lone animated image or video selected, or stops, which the hint tells. */
   trimmed(): void;
 }
 
@@ -146,6 +147,7 @@ export interface CardCommands {
   nextFrame: Command;
   slower: Command;
   faster: Command;
+  sound: Command;
   open: Command;
 }
 
@@ -163,7 +165,7 @@ export interface Card {
    * kept open.
    */
   keepOpen(on: boolean): void;
-  /** Whether the lone animated image selected is being trimmed, until ↩ or Esc. */
+  /** Whether the lone animated image or video selected is being trimmed, until ↩ or Esc. */
   trimming(): boolean;
   /** What applies to every element selected. */
   common(): Setting[];
@@ -233,7 +235,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   /** What the card shows, so that it only builds again once that changed, and at which zoom, as sizes go by it. */
   let built = "";
   let filledAt: number | undefined;
-  /** The frames played of the lone animated image being trimmed, and whether it played before. */
+  /** The frames played of the lone animated image or video being trimmed, and whether it played before. */
   let trimming: { id: string; asset: string; span: Span; playing: boolean } | undefined;
   /** While a pointer moves the frame shown or an end of the trim, which the card must not build under. */
   let dragging = false;
@@ -640,12 +642,41 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     return rows;
   };
   /**
-   * The frames of an animated image, which its own state fills as it plays, then how it plays, or
-   * its trim being set.
+   * The frames of an animated image or a video, which its own state fills as it plays, then how it
+   * plays, or its trim being set. How it plays alone for a video whose frames are not known.
    */
-  const playing = (asset: string, speed: number, { count }: Playback) => {
+  const playing = (asset: string, speed: number, { count, sound }: Playback) => {
+    const step = (name: string, look: Icon, command: Command) =>
+      able(
+        button(name, icon(look), () => command.run(), { shortcut: command.keys?.[0] }),
+        command,
+      );
+    const play = button("Play", icon("play"), () => commands.play.run(), {
+      shortcut: commands.play.keys?.[0],
+    });
+    const normal = button("Normal speed", letters(`${speed}×`), () => paced(1));
+    normal.classList.add("speed");
+    const pace = [
+      step("Slower", "minus", commands.slower),
+      normal,
+      step("Faster", "plus", commands.faster),
+    ];
+    const voice =
+      sound === undefined
+        ? []
+        : [
+            button("Turn sound on", icon("muted"), () => commands.sound.run(), {
+              shortcut: commands.sound.keys?.[0],
+            }),
+          ];
+    voice[0]?.classList.add("push");
+    if (count <= 1) {
+      return [row("Playback", [play], [...pace, ...voice])];
+    }
     const scrub = document.createElement("div");
     scrub.className = "scrub";
+    // Built again for another, as its handlers go to this one.
+    scrub.dataset.asset = asset;
     scrub.classList.toggle("trimming", trimming !== undefined);
     const rail = document.createElement("span");
     rail.className = "rail";
@@ -679,13 +710,21 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     for (const ending of ["pointerup", "lostpointercapture", "pointercancel", "change", "blur"]) {
       input.addEventListener(ending, release);
     }
-    host.explain(input, () => "Frame");
+    const frame = () => {
+      const now = host.media.playback(asset);
+      return sound === undefined || !now ? "Frame" : `Frame ${now.at + 1} of ${now.count}`;
+    };
+    host.explain(input, frame);
     scrub.append(rail, plays, input);
     if (trimming) {
       scrub.append(end(asset, false), end(asset, true));
     }
     const at = document.createElement("span");
     at.className = "count";
+    if (sound !== undefined) {
+      at.classList.add("clock");
+      host.explain(at, frame);
+    }
     const timeline = row("Timeline", [scrub, at]);
     if (trimming) {
       const note = document.createElement("span");
@@ -701,32 +740,18 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       finish.classList.add("primary");
       return [timeline, row("Trim", [note, reset, finish])];
     }
-    const step = (name: string, look: Icon, command: Command) =>
-      able(
-        button(name, icon(look), () => command.run(), { shortcut: command.keys?.[0] }),
-        command,
-      );
-    const normal = button("Normal speed", letters(`${speed}×`), () => paced(1));
-    normal.classList.add("speed");
     const scissors = button("Trim", icon("scissors"), enterTrim);
-    scissors.classList.add("push");
+    scissors.classList.toggle("push", voice.length === 0);
     return [
       timeline,
       row(
         "Playback",
         [
           step("Previous frame", "previousFrame", commands.previousFrame),
-          button("Play", icon("play"), () => commands.play.run(), {
-            shortcut: commands.play.keys?.[0],
-          }),
+          play,
           step("Next frame", "nextFrame", commands.nextFrame),
         ],
-        [
-          step("Slower", "minus", commands.slower),
-          normal,
-          step("Faster", "plus", commands.faster),
-          scissors,
-        ],
+        [...pace, ...voice, scissors],
       ),
     ];
   };
@@ -807,7 +832,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     host.media.preview(asset, undefined);
     const playback = host.media.playback(asset);
     if (keep && playback) {
-      const trimmed = trimOf(playback.delays.slice(0, playback.count), span);
+      const trimmed = trimOf(playback.starts, span);
       edit((editor, touched) => touched.push(...core.setTrim(editor, [id], trimmed)));
       host.media.seek(asset, span[0]);
     }
@@ -912,22 +937,27 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
         ?.focus();
     }
   };
-  /** The frame the lone animated image shows, and whether it plays, as they change on their own. */
+  /**
+   * The frame the lone animated image or video shows, whether it plays, and whether a video's sound
+   * does, as they change on their own.
+   */
   const live = () => {
     const moving = animated();
     if (!moving) {
       return;
     }
-    const { at, count, playing: plays, span: played } = moving.playback;
+    const { at, count, playing: plays, span: played, starts, sound } = moving.playback;
     const [first, last] = trimming?.span ?? played;
     const along = (frame: number) =>
       `calc(${THUMB / 2}px + (100% - ${THUMB}px) * ${frame / Math.max(1, count - 1)})`;
-    const text = `${at + 1} / ${count}`;
+    // A video by the time it shows, as a player tells it, an animated image by its frame.
+    const timed = sound !== undefined;
+    const text = timed ? clock(starts[at] ?? 0) : `${at + 1} / ${count}`;
     const input = panel.querySelector<HTMLInputElement>(".scrub input");
     if (input && !dragging) {
       input.value = String(at);
     }
-    input?.setAttribute("aria-valuetext", text);
+    input?.setAttribute("aria-valuetext", timed ? `${text}, frame ${at + 1} of ${count}` : text);
     const shown = panel.querySelector(".count");
     if (shown && shown.textContent !== text) {
       shown.textContent = text;
@@ -946,7 +976,9 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       );
     const note = panel.querySelector(".note");
     if (note) {
-      note.textContent = `Loops ${first + 1}–${last + 1} of ${count}`;
+      note.textContent = timed
+        ? `Loops ${clock(starts[first] ?? 0)}–${clock(starts[last + 1] ?? 0)}`
+        : `Loops ${first + 1}–${last + 1} of ${count}`;
     }
     const play = panel.querySelector<HTMLButtonElement>(
       '[aria-label="Play"], [aria-label="Pause"]',
@@ -957,6 +989,16 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       play.setAttribute("aria-label", name);
       play.title = shortcut ? `${name} · ${describe(shortcut)}` : name;
       play.replaceChildren(icon(plays ? "pause" : "play"));
+    }
+    const voice = panel.querySelector<HTMLButtonElement>(
+      '[aria-label="Turn sound on"], [aria-label="Turn sound off"]',
+    );
+    const said = sound ? "Turn sound off" : "Turn sound on";
+    if (voice && voice.getAttribute("aria-label") !== said) {
+      const shortcut = commands.sound.keys?.[0];
+      voice.setAttribute("aria-label", said);
+      voice.title = shortcut ? `${said} · ${describe(shortcut)}` : said;
+      voice.replaceChildren(icon(sound ? "sound" : "muted"));
     }
   };
   // Not hidden by the edit its opacity holds open as it slides.

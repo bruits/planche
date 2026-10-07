@@ -8,8 +8,8 @@ use std::ops::Range;
 
 use board::{
     Alignment, AssetId, Axis, Board, Colour, Copied, Corners, ElementId, ElementKind, GRID_STEP,
-    GridLevel, Order, Point, Rect, Restack, Shape, Side, Size, Speed, Style, Tip, Transform,
-    Weight,
+    GridLevel, MovieIndex, Order, Point, Rect, Restack, Shape, Side, Size, Speed, Style, Tip,
+    Transform, Weight,
 };
 use format::{save, zip};
 use js_sys::{Map, Uint8Array};
@@ -811,6 +811,49 @@ pub fn sized_svg(bytes: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
 #[wasm_bindgen(js_name = frameDelays)]
 pub fn frame_delays(bytes: &[u8]) -> Option<Vec<f64>> {
     board::frame_delays(bytes)
+}
+
+/// Of a box starting at `start` in a movie `length` bytes long, from `window`, 16 bytes from
+/// there on: `[start, end]` of the movie's index once it is that box, or else `[next]`, where the
+/// next box starts. `undefined` past its end, or for a box cut short or broken.
+#[wasm_bindgen(js_name = movieIndex)]
+pub fn movie_index(length: f64, start: f64, window: &[u8]) -> Result<Option<Vec<f64>>, JsError> {
+    Ok(
+        board::movie_index(offset(length)?, offset(start)?, window).map(|found| match found {
+            MovieIndex::At(start, end) => span(start..end),
+            MovieIndex::Next(next) => vec![next as f64],
+        }),
+    )
+}
+
+/// When each frame of a movie starts showing, in seconds, in the order they show, then when the
+/// last one ends, from its index. `undefined` for one whose index does not tell them all.
+#[wasm_bindgen(js_name = movieFrames)]
+pub fn movie_frames(index: &[u8]) -> Option<Vec<f64>> {
+    board::movie_frames(index)
+}
+
+/// Reads when the frames of a WebM or Matroska video show, from its bytes, in order, a chunk at
+/// a time.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct MatroskaFrames(board::MatroskaFrames);
+
+#[wasm_bindgen]
+impl MatroskaFrames {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> MatroskaFrames {
+        Self::default()
+    }
+
+    pub fn read(&mut self, bytes: &[u8]) {
+        self.0.read(bytes);
+    }
+
+    /// As for `movieFrames`, of what it read.
+    pub fn frames(&self) -> Option<Vec<f64>> {
+        self.0.frames()
+    }
 }
 
 /// Writes a board's ZIP file one entry at a time.

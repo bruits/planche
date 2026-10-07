@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { animations, sped, spanOf, trimOf, type Moving } from "./animation.js";
+import { animations, type Moving } from "./animation.js";
 import { imageKind, newId, refresh, untitled } from "./board.js";
 import * as core from "./core.js";
 import type { Trim } from "./core.js";
@@ -285,34 +285,5 @@ describe("animations", () => {
     playing.preview(ASSET, undefined);
     at(shown, 440);
     expect(shown.drawn()).toEqual([2, 3, 2, 0]);
-  });
-});
-
-describe("a trim", () => {
-  const delays = [40, 100, 60];
-
-  it("plays the frames from the one its start falls on to the one before its end", () => {
-    expect(spanOf(delays, undefined)).toEqual([0, 2]);
-    expect(spanOf(delays, { start: 0.04, end: 0.14 })).toEqual([1, 1]);
-    expect(spanOf(delays, { start: 0.05, end: 0.2 })).toEqual([1, 2]);
-    expect(spanOf(delays, { start: 0, end: 9 })).toEqual([0, 2]);
-  });
-
-  it("is what plays a span of them, which reads back as that span", () => {
-    expect(trimOf(delays, [0, 2])).toBeUndefined();
-    const trim = trimOf(delays, [1, 1])!;
-    expect(trim).toEqual({ start: 0.04, end: 0.14 });
-    expect(spanOf(delays, trim)).toEqual([1, 1]);
-    expect(spanOf(delays, trimOf(delays, [0, 1]))).toEqual([0, 1]);
-  });
-});
-
-describe("speeds", () => {
-  it("go a step faster or slower, as far as the last offered", () => {
-    expect(sped(1, true)).toBe(1.25);
-    expect(sped(1, false)).toBe(0.75);
-    expect(sped(1.1, false)).toBe(1);
-    expect(sped(2, true)).toBeUndefined();
-    expect(sped(0.25, false)).toBeUndefined();
   });
 });

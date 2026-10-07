@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trimOf, type Playback } from "./animation.js";
+import { startsOf, trimOf, type Playback } from "./playback.js";
 import { imageKind, untitled } from "./board.js";
 import { card, type CardCommands, type CardMedia } from "./card.js";
 import type { Command } from "./commands.js";
@@ -76,6 +76,7 @@ function opened(moving?: Playback) {
     nextFrame: command([{ key: "." }]),
     slower: command([{ key: "<" }]),
     faster: command([{ key: ">" }]),
+    sound: command([{ key: "m" }]),
     open: command(),
   };
   const media = {
@@ -264,7 +265,7 @@ describe("the card of a lone image", () => {
 });
 
 function gif(): Playback {
-  return { at: 2, count: 24, playing: true, span: [0, 23], delays: Array(24).fill(100) };
+  return { at: 2, count: 24, playing: true, span: [0, 23], starts: startsOf(Array(24).fill(100)) };
 }
 
 function named(name: string): HTMLButtonElement {
@@ -314,6 +315,24 @@ describe("the card of a lone animated image", () => {
     expect(media.play).toHaveBeenLastCalledWith([ASSET], true);
   });
 
+  it("goes to the frames of the one selected after another just as long", () => {
+    const playback = gif();
+    const { board, media, select } = opened(playback);
+    const other = "c".repeat(64);
+    board.editor.add(
+      OTHER,
+      undefined,
+      JSON.stringify(imageKind(other, { width: 320, height: 240 }, frame)),
+    );
+    board.board = core.board(board.editor);
+    media.playback = (asset) => (asset === ASSET || asset === other ? playback : undefined);
+    select([OTHER]);
+    const track = document.querySelector<HTMLInputElement>(".style-card .scrub input")!;
+    track.value = "10";
+    track.dispatchEvent(new Event("input"));
+    expect(media.seek).toHaveBeenLastCalledWith(other, 10);
+  });
+
   it("steps and plays as its keys do, and plays at the normal speed again", () => {
     const { board, commands, image, select } = opened(gif());
     named("Previous frame").click();
@@ -349,7 +368,7 @@ describe("the card of a lone animated image", () => {
     expect(media.seek).toHaveBeenLastCalledWith(ASSET, 22);
     expect(document.querySelector(".style-card .note")?.textContent).toBe("Loops 3–23 of 24");
     typed(document.body, "Enter");
-    expect(image()?.edits.trim).toEqual(trimOf(playback.delays, [2, 22]));
+    expect(image()?.edits.trim).toEqual(trimOf(playback.starts, [2, 22]));
     expect(media.preview).toHaveBeenLastCalledWith(ASSET, undefined);
     expect(media.play).toHaveBeenLastCalledWith([ASSET], true);
     expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
@@ -396,6 +415,46 @@ describe("the card of a lone animated image", () => {
   it("shows no frames for a still image", () => {
     opened();
     expect(groups()).toEqual(["Image", "Opacity"]);
+  });
+});
+
+describe("the card of a lone video", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("tells the time it shows, with its frame, and loops its trim by time", () => {
+    opened({ ...gif(), sound: false });
+    expect(document.querySelector(".style-card .count")?.textContent).toBe("0:00.20");
+    expect(slider().getAttribute("aria-valuetext")).toBe("0:00.20, frame 3 of 24");
+    named("Trim").click();
+    typed(named("Trim end"), "ArrowLeft");
+    expect(document.querySelector(".style-card .note")?.textContent).toBe("Loops 0:00.00–0:02.30");
+    // Out of trim, as the window keeps listening to each card's keys.
+    typed(document.body, "Escape");
+  });
+
+  it("turns its sound on and off as its key does, by its frames", () => {
+    const playback: Playback = { ...gif(), sound: false };
+    const { shown, commands } = opened(playback);
+    expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
+    expect(named("Trim")).not.toBeNull();
+    named("Turn sound on").click();
+    expect(commands.sound.run).toHaveBeenCalledOnce();
+    playback.sound = true;
+    shown.frame();
+    expect(named("Turn sound off").title).toBe("Turn sound off · M");
+  });
+
+  it("only plays, at its speed, while its frames are not known", () => {
+    opened({ at: 0, count: 0, playing: true, span: [0, 0], starts: [], sound: false });
+    expect(groups()).toEqual(["Playback", "Image", "Opacity"]);
+    for (const absent of ["Previous frame", "Next frame", "Trim"]) {
+      expect(document.querySelector(`.style-card [aria-label="${absent}"]`)).toBeNull();
+    }
+    expect(named("Pause")).not.toBeNull();
+    expect(named("Normal speed")).not.toBeNull();
+    expect(named("Turn sound on")).not.toBeNull();
   });
 });
 
@@ -665,6 +724,7 @@ function inking(tip: Tip = "pen") {
       nextFrame: command(),
       slower: command(),
       faster: command(),
+      sound: command(),
       open: command(),
     },
   ).open(false);

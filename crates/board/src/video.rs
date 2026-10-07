@@ -2,6 +2,12 @@
 //! `ftyp` box, or by its leading atoms for an old one without, a WebM or Matroska one by its EBML
 //! header.
 
+mod boxes;
+mod ebml;
+
+pub use boxes::{MovieIndex, movie_frames, movie_index};
+pub use ebml::MatroskaFrames;
+
 /// The container a video comes in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Video {
@@ -113,6 +119,10 @@ fn matroska(bytes: &[u8]) -> Option<Video> {
     }
     None
 }
+
+/// No video a board holds has more frames, nearly ten hours at 30 a second, and one that tells
+/// more is broken, as reading them takes memory the core never gives back.
+const MOST_FRAMES: usize = 1 << 20;
 
 /// An EBML variable-length integer and its length in bytes. An id keeps the bit that marks its
 /// length, which a size drops.
