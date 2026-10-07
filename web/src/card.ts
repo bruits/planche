@@ -593,13 +593,18 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     }
     const moving = animated();
     if (moving) {
-      rows.push(...playing(moving.image.asset, moving.image.edits.speed ?? 1, moving.playback));
+      rows.push(
+        ...playing(moving.image.asset, core.editsOf(moving.image).speed ?? 1, moving.playback),
+      );
     }
     if (images()) {
-      const grey = targets().every(({ kind }) => kind.type === "image" && kind.edits.greyscale);
+      const grey = targets().every(
+        ({ kind }) => kind.type === "image" && core.editsOf(kind).greyscale,
+      );
       const shaped = (shape: CropShape) =>
         targets().every(
-          ({ kind }) => kind.type === "image" && (kind.edits.crop_shape ?? "rectangle") === shape,
+          ({ kind }) =>
+            kind.type === "image" && (core.editsOf(kind).crop_shape ?? "rectangle") === shape,
         );
       const crops = commands.crop.unavailable?.() === undefined;
       rows.push(

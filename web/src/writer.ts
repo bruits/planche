@@ -3,6 +3,7 @@
 // is written. Pressing anywhere else, Esc, or ⌘ or Ctrl with Enter finishes it.
 
 import { composing } from "./commands.js";
+import { rotationOf } from "./core.js";
 import { css } from "./paint.js";
 import { opacityOf } from "./style.js";
 import { FONT, LINE_HEIGHT, face, layout, paint, type Holder } from "./text.js";
@@ -83,7 +84,8 @@ export function writer(board: HTMLElement): Writer {
       zoom,
       { mirrored, grey } = { mirrored: false, grey: false },
     ) {
-      const { frame, rotation, text } = kind;
+      const { frame, text } = kind;
+      const rotation = rotationOf(kind);
       const size = text.font_size * zoom;
       const { area, align, top } = layout(kind);
       const { bold, italic } = face(kind);

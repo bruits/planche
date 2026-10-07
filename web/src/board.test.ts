@@ -31,7 +31,7 @@ import { memoryHome, sample, SAMPLES } from "../test/folders.js";
 const bytes = (text: string): Bytes => new TextEncoder().encode(text);
 
 /** One of the demo's images. */
-const ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f";
+const ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
 const NATURAL = { width: 320, height: 240 };
 
 describe("open", () => {
@@ -70,7 +70,7 @@ describe("readAsset", () => {
       (c) => c.charCodeAt(0),
     );
     const assets = [bytes('<svg width="20" height="10"/>'), bytes("<html></html>"), gif, movie];
-    const ids = assets.map((asset) => core.assetId(asset));
+    const ids = assets.map((asset) => core.assetOf(core.digestOf(asset), asset));
     const files = new Map(ids.map((id, at) => [core.assetPath(id), assets[at]!]));
     const { home } = memoryHome("media", files);
     const [svg, html, moving, video] = await Promise.all(
@@ -91,7 +91,7 @@ describe("readAsset", () => {
       `GIF89a\x01\x00\x01\x00\x00\x00\x00\x21\xFE${blocks}\x00${frame}${frame};`,
       (c) => c.charCodeAt(0),
     );
-    const id = core.assetId(gif);
+    const id = core.assetOf(core.digestOf(gif), gif);
     const { home } = memoryHome("media", new Map([[core.assetPath(id), gif]]));
     const read = await readAsset(home, id, NATURAL);
     expect(read).toMatchObject({ vector: false, moving: { bytes: gif, plays: 1 } });
@@ -106,6 +106,29 @@ describe("readAsset", () => {
 });
 
 describe("prepare", () => {
+  it.each([ASSET, "fabec7ea4f16a728b547c12f25158c75f6b48cf14db92745f92e5e9edcd36d93.jpg"])(
+    "names an image's asset after its digest and type, as the demo's %s",
+    async (asset) => {
+      const image = readFileSync(join(SAMPLES, "demo/assets", asset));
+      const held: string[] = [];
+      const added = await prepare(new Blob([image]), 2048, (known) => {
+        held.push(known);
+        return NATURAL;
+      });
+      expect(added).toMatchObject({ asset, natural: NATURAL });
+      expect(held).toEqual([asset]);
+    },
+  );
+
+  it("names a video's asset after its type", async () => {
+    const movie = Uint8Array.from(
+      "\x00\x00\x00\x10ftypisom\x00\x00\x02\x00\x00\x00\x00\x08mdat",
+      (c) => c.charCodeAt(0),
+    );
+    const added = await prepare(new Blob([movie]), 2048, () => NATURAL);
+    expect(added.asset).toBe(`${core.digestOf(movie)}.mp4`);
+  });
+
   it("refuses markup that is not an SVG", async () => {
     await expect(prepare(new Blob(["<html></html>"]), 2048)).rejects.toThrow(
       "markup that is not an SVG",

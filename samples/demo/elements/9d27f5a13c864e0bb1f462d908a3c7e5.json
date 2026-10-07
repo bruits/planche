@@ -3,7 +3,7 @@
   "z": "a1",
   "kind": {
     "type": "image",
-    "asset": "fabec7ea4f16a728b547c12f25158c75f6b48cf14db92745f92e5e9edcd36d93",
+    "asset": "fabec7ea4f16a728b547c12f25158c75f6b48cf14db92745f92e5e9edcd36d93.jpg",
     "natural_size": {
       "width": 240,
       "height": 320
@@ -14,12 +14,16 @@
       "width": 180.0,
       "height": 240.0
     },
-    "rotation": 0.0,
     "edits": {
       "crop": null,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "greyscale": false
-    }
+      "greyscale": false,
+      "crop_shape": "ellipse"
+    },
+    "source": "https://example.com/pier",
+    "filename": "dusk.jpg",
+    "caption": "Dusk from the pier",
+    "opacity": 90
   }
 }

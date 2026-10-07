@@ -275,10 +275,11 @@ function filled(text: string | undefined): string | undefined {
   return text?.trim() ? text : undefined;
 }
 
-/** What agents set of a style, a colour in either case. */
-type Styling = Omit<Style, "size" | "colour"> & { colour?: string };
+/** What agents set of a style, a hex colour in either case. */
+type Styling = Omit<Style, "size">;
 
-const SETTABLE = [
+/** The settings agents change by name, the font size apart. */
+export const SETTABLE = [
   "colour",
   "paper",
   "weight",
@@ -516,10 +517,10 @@ function patched(editor: Editor, change: Update): Kind {
       setLabel(kind, "source", source);
     }
     if (greyscale !== undefined) {
-      kind.edits.greyscale = greyscale;
+      kind.edits = { ...core.editsOf(kind), greyscale };
     }
     if (crop_shape !== undefined) {
-      kind.edits.crop_shape = crop_shape;
+      kind.edits = { ...core.editsOf(kind), crop_shape };
     }
   }
   // After its shape, which tells whether it takes a fill.

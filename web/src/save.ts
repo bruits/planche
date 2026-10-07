@@ -44,6 +44,8 @@ export async function folderStore(
   let known = reading ? core.known(reading.listed, reading.files) : new core.Known();
   // By path, as the app last read or wrote them.
   let stamps = new Map(session ? [] : reading?.stamps);
+  // A session keeps no Git.
+  let attributed = session;
 
   const changedAny = async (paths: string[]) => {
     if (session) {
@@ -65,8 +67,17 @@ export async function folderStore(
     return false;
   };
 
-  /** In the order that the core gives them. */
+  /**
+   * In the order that the core gives them, after the files a board folder starts with, which a
+   * home only writes into a folder that lacks them.
+   */
   const write = async (assets: string[], files: Files, deletions: string[], source: Folder) => {
+    if (!attributed) {
+      for (const [path, bytes] of core.newFiles()) {
+        await home.write(path, bytes);
+      }
+      attributed = true;
+    }
     for (const path of assets) {
       await home.write(path, await source.read(path));
       known.copied(path);

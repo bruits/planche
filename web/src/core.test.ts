@@ -3,7 +3,7 @@ import * as core from "./core.js";
 import type { Background, Colour, CropShape, Kind, Text } from "./core.js";
 
 /** One of samples/demo's, which an image needs to name. */
-const ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f";
+const ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
 /** Ids as the core takes them. */
 const [A, B, G] = ["a", "b", "c"].map((digit) => digit.repeat(32)) as [string, string, string];
 const frame = { x: 10, y: 20, width: 120, height: 80 };
@@ -26,7 +26,6 @@ const image = (more: Partial<Extract<Kind, { type: "image" }>> = {}): Kind => ({
 const note = (more: Partial<Extract<Kind, { type: "note" }>> = {}): Kind => ({
   type: "note",
   frame,
-  rotation: 0,
   text,
   ...more,
 });
@@ -40,7 +39,6 @@ const sticky = (more: Partial<Extract<Kind, { type: "sticky" }>> = {}): Kind => 
 const shape = (more: Partial<Extract<Kind, { type: "shape" }>> = {}): Kind => ({
   type: "shape",
   frame,
-  rotation: 0,
   shape: "rectangle",
   text,
   ...more,
@@ -60,7 +58,6 @@ const line = (more: Partial<Extract<Kind, { type: "line" }>> = {}): Kind => ({
 const stroke = (more: Partial<Extract<Kind, { type: "stroke" }>> = {}): Kind => ({
   type: "stroke",
   frame,
-  rotation: 0,
   points: [0, 1, 0.5, 0, 1, 0.75],
   ...more,
 });
@@ -136,6 +133,9 @@ const kinds: [string, Kind][] = [
   ],
 ];
 
+const unedited = image() as Extract<Kind, { type: "image" }>;
+delete unedited.edits;
+
 /** Each default as sent, then as it reads back, left out. */
 const defaults: [string, Kind, Kind][] = [
   ["an ink note", note({ colour: "ink" }), note()],
@@ -156,35 +156,24 @@ const defaults: [string, Kind, Kind][] = [
   ["a note's text aligned left", note({ text: { ...text, align: "left" } }), note()],
   ["a shape's text centred", shape({ text: { ...text, align: "centre" } }), shape()],
   ["a cross filled", shape({ shape: "cross", fill: "solid" }), shape({ shape: "cross" })],
+  ["an unturned note", note({ rotation: 0 }), note()],
+  ["an unturned pen stroke", stroke({ rotation: 0 }), stroke()],
   [
     "an image cropped to a rectangle",
-    image({
-      edits: {
-        crop: null,
-        flip_horizontal: false,
-        flip_vertical: false,
-        greyscale: false,
-        crop_shape: "rectangle",
-      },
-    }),
-    image({
-      edits: { crop: null, flip_horizontal: false, flip_vertical: false, greyscale: false },
-    }),
+    image({ edits: { ...core.editsOf(unedited), crop_shape: "rectangle" } }),
+    unedited,
   ],
   [
     "an image played at its own speed",
-    image({
-      edits: {
-        crop: null,
-        flip_horizontal: false,
-        flip_vertical: false,
-        greyscale: false,
-        speed: 1,
-      },
-    }),
+    image({ edits: { ...core.editsOf(unedited), speed: 1 } }),
+    unedited,
+  ],
+  [
+    "an image neither cropped, flipped nor greyed",
     image({
       edits: { crop: null, flip_horizontal: false, flip_vertical: false, greyscale: false },
     }),
+    unedited,
   ],
 ];
 
@@ -282,10 +271,10 @@ describe("the core", () => {
       const trim = { start: 0.25, end: 1.5 };
       core.setTrim(editor, [A], trim);
       const trimmed = core.element(editor, A)?.kind;
-      expect(trimmed?.type === "image" && trimmed.edits.trim).toEqual(trim);
+      expect(trimmed?.type === "image" && trimmed.edits?.trim).toEqual(trim);
       core.setTrim(editor, [A], undefined);
       const whole = core.element(editor, A)?.kind;
-      expect(whole?.type === "image" && whole.edits).not.toHaveProperty("trim");
+      expect(whole?.type === "image" && core.editsOf(whole)).not.toHaveProperty("trim");
       expect(() => editor.setSpeed([A], 40)).toThrow("no browser plays 40 times as fast");
     } finally {
       editor.free();
@@ -300,7 +289,9 @@ describe("the core", () => {
         editor.add(A, undefined, JSON.stringify(image()));
         core.setCropShape(editor, [A], crop_shape);
         const kind = core.element(editor, A)?.kind;
-        expect(kind?.type === "image" && (kind.edits.crop_shape ?? "rectangle")).toBe(crop_shape);
+        expect(kind?.type === "image" && (core.editsOf(kind).crop_shape ?? "rectangle")).toBe(
+          crop_shape,
+        );
       } finally {
         editor.free();
       }

@@ -593,8 +593,8 @@ fn a_colour_has_one_spelling() {
         let path = format!("elements/{NOTE}.json");
         let note = String::from_utf8(files[&path].clone()).unwrap();
         let note = note.replace(
-            "\"rotation\": 0.0,",
-            &format!("\"rotation\": 0.0,\n    \"colour\": {colour},"),
+            "\"type\": \"note\",",
+            &format!("\"type\": \"note\",\n    \"colour\": {colour},"),
         );
         files.insert(path.clone(), note.into_bytes());
         assert!(
@@ -661,7 +661,6 @@ fn an_element_is_plain_json() {
       "width": 200.0,
       "height": 80.0
     },
-    "rotation": 0.0,
     "text": {
       "content": "Warm light from the left",
       "font_size": 20.0
@@ -670,6 +669,31 @@ fn an_element_is_plain_json() {
 }
 "#
     );
+}
+
+#[test]
+fn an_image_neither_turned_nor_edited_writes_neither() {
+    let mut board = sample();
+    let image = ElementId::from_random(2);
+    let ElementKind::Image {
+        rotation, edits, ..
+    } = &mut board.elements.get_mut(&image).unwrap().kind
+    else {
+        unreachable!()
+    };
+    (*rotation, *edits) = (-0.0, ImageEdits::default());
+    let mut files = format::write(&board).unwrap();
+    let path = format!("elements/{image}.json");
+    let written = String::from_utf8(files[&path].clone()).unwrap();
+    assert!(!written.contains("rotation") && !written.contains("edits"));
+
+    // As written by hand.
+    let spelled = written.replace(
+        "\"type\": \"image\",",
+        "\"type\": \"image\",\n    \"rotation\": 0.0,\n    \"edits\": {},",
+    );
+    files.insert(path, spelled.into_bytes());
+    assert_eq!(format::read(&files).unwrap(), board);
 }
 
 #[test]
@@ -688,7 +712,6 @@ fn a_pen_stroke_writes_each_number_of_its_points_on_a_line() {
       "width": 60.0,
       "height": 20.0
     },
-    "rotation": 0.0,
     "points": [
       0.0,
       1.0,
@@ -726,7 +749,6 @@ fn a_stroke_names_what_it_sticks_to_after_its_points_and_reads_back() {
       "width": 60.0,
       "height": 20.0
     },
-    "rotation": 0.0,
     "points": [
       0.0,
       1.0,
@@ -1115,7 +1137,10 @@ fn a_first_save_copies_the_images_then_writes_the_manifest_before_every_element(
     // Cut after any of them, the folder still reads as a board.
     assert_eq!(save.files.first().unwrap().0, "board.json");
     let files: Files = save.files.into_iter().collect();
-    assert_eq!(files, format::write(&board).unwrap());
+    let mut written = format::write(&board).unwrap();
+    // The shell's to write, and only into a folder that lacks it.
+    written.remove(".gitattributes");
+    assert_eq!(files, written);
     assert!(save.deletions.is_empty());
 }
 
@@ -1224,7 +1249,9 @@ fn the_demo_board_reads_back_as_written() {
     let files = load(&samples().join("demo"));
     let board = format::read(&files).unwrap();
 
-    let written = format::write(&board).unwrap();
+    let mut written = format::write(&board).unwrap();
+    let (path, bytes) = format::git_attributes();
+    assert_eq!(written.remove(path), Some(bytes));
     let (assets, rest): (Files, Files) = files
         .into_iter()
         .partition(|(path, _)| format::is_asset_file(path));
@@ -1302,10 +1329,90 @@ fn unzip(file: &[u8]) -> format::Result<Files> {
     for path in index.paths() {
         let entry = index.entry(path).unwrap();
         let bytes = &file[at(entry.data(&file[at(entry.header())])?)];
-        entry.check(bytes.len() as u64, zip::Crc32::of(bytes))?;
-        files.insert(path.to_owned(), bytes.to_vec());
+        let bytes = match entry.method() {
+            zip::Method::Stored => bytes.to_vec(),
+            zip::Method::Deflated => inflated(bytes),
+        };
+        entry.check(bytes.len() as u64, zip::Crc32::of(&bytes))?;
+        files.insert(path.to_owned(), bytes);
     }
     Ok(files)
+}
+
+/// A deflate stream of stored blocks, which any inflater reads.
+fn deflated(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut blocks = bytes.chunks(usize::from(u16::MAX)).peekable();
+    if bytes.is_empty() {
+        return vec![1, 0, 0, 0xff, 0xff];
+    }
+    while let Some(block) = blocks.next() {
+        out.push(u8::from(blocks.peek().is_none()));
+        let len = block.len() as u16;
+        out.extend(len.to_le_bytes());
+        out.extend((!len).to_le_bytes());
+        out.extend_from_slice(block);
+    }
+    out
+}
+
+/// What [`deflated`] took, as a shell's inflater gives it back.
+fn inflated(mut bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    loop {
+        let len = usize::from(u16::from_le_bytes([bytes[1], bytes[2]]));
+        out.extend_from_slice(&bytes[5..5 + len]);
+        if bytes[0] & 1 == 1 {
+            return out;
+        }
+        bytes = &bytes[5 + len..];
+    }
+}
+
+/// Zips `entries` deflated, as another tool does.
+fn deflated_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let packed: Vec<Vec<u8>> = entries.iter().map(|(_, bytes)| deflated(bytes)).collect();
+    let listed: Vec<(&str, &[u8])> = entries
+        .iter()
+        .zip(&packed)
+        .map(|((path, _), packed)| (*path, packed.as_slice()))
+        .collect();
+    let mut file = zip_entries(&listed);
+    for (path, bytes) in entries {
+        let (crc, size) = (zip::Crc32::of(bytes), bytes.len() as u32);
+        for (signature, method_at, crc_at, size_at) in [(LOCAL, 8, 14, 22), (CENTRAL, 10, 16, 24)] {
+            let at = record(&file, signature, path);
+            file[at + method_at..at + method_at + 2].copy_from_slice(&8_u16.to_le_bytes());
+            file[at + crc_at..at + crc_at + 4].copy_from_slice(&crc.to_le_bytes());
+            file[at + size_at..at + size_at + 4].copy_from_slice(&size.to_le_bytes());
+        }
+    }
+    file
+}
+
+/// Where the local header or the directory record for `path` starts.
+fn record(file: &[u8], signature: &[u8; 4], path: &str) -> usize {
+    let (name_len_at, name_at) = if signature == LOCAL {
+        (26, 30)
+    } else {
+        (28, 46)
+    };
+    (0..file.len() - name_at)
+        .find(|&at| {
+            file[at..].starts_with(signature)
+                && usize::from(u16::from_le_bytes([
+                    file[at + name_len_at],
+                    file[at + name_len_at + 1],
+                ])) == path.len()
+                && file[at + name_at..].starts_with(path.as_bytes())
+        })
+        .unwrap()
+}
+
+fn rename(file: &mut [u8], from: &[u8], to: &[u8]) {
+    while let Some(at) = file.windows(from.len()).position(|window| window == from) {
+        file[at..at + from.len()].copy_from_slice(to);
+    }
 }
 
 fn at(range: Range<u64>) -> Range<usize> {
@@ -1328,6 +1435,8 @@ fn get32(file: &[u8], at: usize) -> u32 {
 const LOCAL: &[u8; 4] = b"PK\x03\x04";
 const CENTRAL: &[u8; 4] = b"PK\x01\x02";
 const END: &[u8; 4] = b"PK\x05\x06";
+const END64: &[u8; 4] = b"PK\x06\x06";
+const LOCATOR: &[u8; 4] = b"PK\x06\x07";
 
 #[test]
 fn the_demo_board_zips_as_its_sample() {
@@ -1351,10 +1460,12 @@ fn a_zip_holds_only_the_board_and_the_assets_it_draws() {
     files.insert(format::asset_path(AssetId::of(IMAGE)), IMAGE.to_vec());
     let orphan = format::asset_path(AssetId::of(b"drawn by nothing"));
     files.insert(orphan.clone(), b"drawn by nothing".to_vec());
-    files.insert(".gitattributes".to_owned(), format::git_attributes().1);
+    // First, so that Git reads it before any file it applies to.
+    assert_eq!(zip::paths(&board).unwrap()[0], ".gitattributes");
 
     let unzipped = unzip(&zip_of(&files).unwrap()).unwrap();
     files.remove(&orphan);
+    // Left out like any dot file, though the ZIP file holds it for whoever unzips it.
     files.remove(".gitattributes");
     assert_eq!(unzipped, files);
 }
@@ -1412,7 +1523,8 @@ fn a_path_out_of_the_board_is_neither_zipped_nor_unzipped() {
         "elements//a",
         "a\\b",
         "c:a",
-        ".gitattributes",
+        ".DS_Store",
+        "elements/.gitattributes",
         "a~b",
     ] {
         assert!(
@@ -1456,12 +1568,76 @@ fn folders_dot_files_and_backups_are_left_out_of_a_zip() {
 }
 
 #[test]
-fn a_compressed_or_encrypted_zip_is_refused() {
-    for (at, value) in [(10, 8), (8, 1)] {
-        let mut file = zip_entries(&[("board.json", b"{}")]);
-        patch(&mut file, CENTRAL, at, &[value]);
-        assert!(matches!(unzip(&file), Err(Error::Compressed(path)) if path == "board.json"));
+fn an_encrypted_zip_or_one_compressed_otherwise_is_refused() {
+    let file = zip_entries(&[("board.json", b"{}")]);
+    let mut compressed = file.clone();
+    // Bzip2, which no shell inflates.
+    patch(&mut compressed, CENTRAL, 10, &[12]);
+    assert!(matches!(unzip(&compressed), Err(Error::Compressed(path)) if path == "board.json"));
+    for flag in [1, 1 << 6] {
+        let mut encrypted = file.clone();
+        patch(&mut encrypted, CENTRAL, 8, &[flag]);
+        assert!(matches!(unzip(&encrypted), Err(Error::Encrypted(path)) if path == "board.json"));
     }
+}
+
+#[test]
+fn a_board_zipped_again_by_another_tool_opens() {
+    let files = load(&samples().join("demo"));
+    // Deflated in the folder zipped, with each file's resource fork apart, as Finder does.
+    let mut wrapped: Vec<(String, &[u8])> = files
+        .iter()
+        .map(|(path, bytes)| (format!("demo/{path}"), bytes.as_slice()))
+        .collect();
+    wrapped.push(("__MACOSX/demo/x_board.json".to_owned(), b"a fork"));
+    wrapped.sort();
+    let entries: Vec<(&str, &[u8])> = wrapped
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), *bytes))
+        .collect();
+    let mut finder = deflated_zip(&entries);
+    rename(&mut finder, b"x_board.json", b"._board.json");
+    assert_eq!(unzip(&finder).unwrap(), files);
+
+    // Stored, as `zip -0 -r` gives.
+    let mut stored = zip_entries(&entries);
+    rename(&mut stored, b"x_board.json", b"._board.json");
+    assert_eq!(unzip(&stored).unwrap(), files);
+}
+
+#[test]
+fn only_a_folder_holding_every_entry_and_the_manifest_is_left_out() {
+    for paths in [
+        ["board.json", "demo/board.json"].as_slice(),
+        &["a/board.json", "b/elements/x"],
+        &["a/board.json", "x"],
+        &["a/b/board.json"],
+    ] {
+        let entries: Vec<(&str, &[u8])> =
+            paths.iter().map(|path| (*path, b"{}".as_slice())).collect();
+        let unzipped = unzip(&zip_entries(&entries)).unwrap();
+        assert_eq!(unzipped.keys().collect::<Vec<_>>(), paths, "{paths:?}");
+    }
+}
+
+#[test]
+fn a_deflated_entry_claiming_more_than_deflate_gives_is_refused() {
+    let mut file = deflated_zip(&[("board.json", b"{}")]);
+    let at = record(&file, CENTRAL, "board.json");
+    // Two bytes take seven once deflated as a stored block.
+    file[at + 24..at + 28].copy_from_slice(&(7 * 1032 + 1_u32).to_le_bytes());
+    assert!(
+        matches!(unzip(&file), Err(Error::DamagedZip(reason)) if reason.contains("board.json"))
+    );
+}
+
+#[test]
+fn an_entry_with_its_sizes_after_its_bytes_opens() {
+    let mut file = deflated_zip(&[("board.json", b"{}")]);
+    // Its local header then holds no checksum or size, which a record after its bytes does.
+    patch(&mut file, LOCAL, 6, &[1 << 3]);
+    patch(&mut file, LOCAL, 14, &[0; 12]);
+    assert_eq!(unzip(&file).unwrap()["board.json"], b"{}");
 }
 
 #[test]
@@ -1585,61 +1761,202 @@ fn a_damaged_zip_is_refused() {
 }
 
 #[test]
-fn a_zip_never_needs_zip64() {
+fn a_zip_holding_more_entries_than_plain_records_count_takes_zip64() {
+    let names: Vec<String> = (0..65_535).map(|at| format!("{at:05}")).collect();
+    let entries: Vec<(&str, &[u8])> = names
+        .iter()
+        .map(|name| (name.as_str(), b"".as_slice()))
+        .collect();
+
+    let plain = zip_entries(&entries[..65_534]);
+    assert!(!plain.windows(4).any(|window| window == END64));
+    assert_eq!(unzip(&plain).unwrap().len(), 65_534);
+
+    let many = zip_entries(&entries);
+    let end = many.len() - 22;
+    assert_eq!(&many[end - 20..end - 16], LOCATOR);
+    assert_eq!(&many[end + 8..end + 12], &[0xff; 4]);
+    assert_eq!(unzip(&many).unwrap().len(), 65_535);
+}
+
+#[test]
+fn an_entry_past_4_gib_takes_zip64_fields() {
+    let big = 5_u64 << 30;
     let mut writer = zip::Writer::new();
-    for at in 0..65_534 {
-        header(&mut writer, &format!("{at:05}"), b"").unwrap();
-    }
-    assert!(matches!(
-        header(&mut writer, "65534", b""),
-        Err(Error::TooLarge)
-    ));
-    assert!(writer.finish().is_ok());
+    let first = writer.entry("big", big, 7, None).unwrap();
+    // Both sizes, wide, in a field after its path, and the plain ones as markers.
+    assert_eq!(first.len(), 30 + 3 + 20);
+    assert_eq!(&first[18..26], &[0xff; 8]);
+    assert_eq!(&first[33..37], &[1, 0, 16, 0]);
+    assert_eq!(&first[37..45], &big.to_le_bytes());
+    assert_eq!(&first[45..53], &big.to_le_bytes());
+    // Its offset is past 4 GiB, which only the directory says.
+    let second = writer.entry("bigger", 1, 9, None).unwrap();
+    assert_eq!(second.len(), 30 + 6);
+    let end = writer.finish().unwrap();
+    assert!(end.windows(4).any(|window| window == END64));
 
-    for size in [u64::from(u32::MAX), 1 << 32, u64::MAX] {
-        let mut writer = zip::Writer::new();
-        assert!(matches!(
-            writer.entry("big", size, 0, None),
-            Err(Error::TooLarge)
-        ));
-    }
+    // Read from the file's end alone, as its bytes would take 5 GiB.
+    let start = first.len() as u64 + big + second.len() as u64 + 1;
+    let length = start + end.len() as u64;
+    let mut tail = vec![0; zip::tail_length(length) as usize - end.len()];
+    tail.extend(&end);
+    let directory = zip::locate(length, &tail).unwrap();
+    assert_eq!(directory.start, start);
+    let index = zip::Index::read(start, &end[..(directory.end - start) as usize]).unwrap();
+    let entry = index.entry("big").unwrap();
+    assert_eq!(entry.header(), 0..33);
+    assert_eq!(entry.data(&first[..33]).unwrap(), 53..53 + big);
+    assert!(entry.check(big, 7).is_ok());
+    let entry = index.entry("bigger").unwrap();
+    let offset = 53 + big;
+    assert_eq!(entry.header(), offset..offset + 36);
+    assert_eq!(entry.data(&second).unwrap(), offset + 36..offset + 37);
+    assert!(entry.check(1, 9).is_ok());
+}
 
-    let file = zip_entries(&[("board.json", b"{}")]);
-    for (record, at) in [(END, 8), (CENTRAL, 20), (CENTRAL, 24), (CENTRAL, 42)] {
-        let mut marked = file.clone();
-        patch(&mut marked, record, at, &[0xff; 4]);
-        assert!(matches!(unzip(&marked), Err(Error::UnsupportedZip)), "{at}");
+#[test]
+fn zip64_comes_where_plain_fields_would_hold_their_marker() {
+    let largest = u64::from(u32::MAX) - 1;
+    assert_eq!(
+        zip::Writer::new()
+            .entry("big", largest, 0, None)
+            .unwrap()
+            .len(),
+        33
+    );
+    assert_eq!(
+        zip::Writer::new()
+            .entry("big", largest + 1, 0, None)
+            .unwrap()
+            .len(),
+        53
+    );
+
+    // The directory may start at the last offset short of the marker, and an entry too.
+    let mut writer = zip::Writer::new();
+    writer.entry("big", largest - 33, 0, None).unwrap();
+    assert!(
+        !writer
+            .finish()
+            .unwrap()
+            .windows(4)
+            .any(|window| window == END64)
+    );
+    let mut writer = zip::Writer::new();
+    writer.entry("big", largest - 33, 0, None).unwrap();
+    assert_eq!(writer.entry("bigger", 0, 0, None).unwrap().len(), 36);
+    assert!(
+        writer
+            .finish()
+            .unwrap()
+            .windows(4)
+            .any(|window| window == END64)
+    );
+}
+
+/// A file ending in ZIP64 records. An end record 10 bytes in with `fields`, its disk, the
+/// directory's, its entries on this disk and in all, then the directory's size and start, and
+/// a locator on `disk` of `disks` that says it lies `at`.
+fn zip64_ended(fields: [u64; 6], at: u64, disk: u32, disks: u32) -> Vec<u8> {
+    let mut file = vec![0; 10];
+    file.extend(END64);
+    file.extend(44_u64.to_le_bytes());
+    file.extend([45, 0, 45, 0]);
+    file.extend((fields[0] as u32).to_le_bytes());
+    file.extend((fields[1] as u32).to_le_bytes());
+    fields[2..]
+        .iter()
+        .for_each(|value| file.extend(value.to_le_bytes()));
+    file.extend(LOCATOR);
+    file.extend(disk.to_le_bytes());
+    file.extend(at.to_le_bytes());
+    file.extend(disks.to_le_bytes());
+    file.extend(END);
+    // Marked counts, then no size, start, or comment.
+    file.extend([0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff]);
+    file.extend([0; 10]);
+    file
+}
+
+#[test]
+fn a_zip64_end_out_of_place_or_on_other_disks_is_refused() {
+    let located = |file: &[u8]| zip::locate(file.len() as u64, file);
+    let empty = [0, 0, 0, 0, 10, 0];
+    assert_eq!(located(&zip64_ended(empty, 10, 0, 1)).unwrap(), 0..10);
+
+    // Where no record is, past any file, past this one, into its locator, short of it.
+    for at in [
+        u64::MAX - 1,
+        u64::MAX - 55,
+        u64::from(u32::MAX) - 1,
+        1000,
+        11,
+        9,
+    ] {
+        let refused = located(&zip64_ended(empty, at, 0, 1));
+        assert!(matches!(refused, Err(Error::DamagedZip(_))), "{at}");
+    }
+    // Before the bytes read from the end.
+    let file = zip64_ended(empty, 10, 0, 1);
+    let refused = zip::locate(file.len() as u64, &file[20..]);
+    assert!(matches!(refused, Err(Error::DamagedZip(_))));
+    // A directory running past it.
+    for (size, start) in [(11, 0), (u64::MAX, 5), (1, u64::MAX)] {
+        let refused = located(&zip64_ended([0, 0, 0, 0, size, start], 10, 0, 1));
+        assert!(
+            matches!(refused, Err(Error::DamagedZip(_))),
+            "{size} {start}"
+        );
+    }
+    for (fields, disk, disks) in [
+        (empty, 1, 1),
+        (empty, 0, 2),
+        ([1, 0, 0, 0, 10, 0], 0, 1),
+        ([0, 1, 0, 0, 10, 0], 0, 1),
+        ([0, 0, 1, 2, 10, 0], 0, 1),
+    ] {
+        let refused = located(&zip64_ended(fields, 10, disk, disks));
+        assert!(matches!(refused, Err(Error::UnsupportedZip)), "{fields:?}");
     }
 }
 
 #[test]
-fn the_largest_zip_that_needs_no_zip64_is_written() {
-    // Offsets and sizes stop one short of 0xFFFFFFFF, which ZIP64 takes as its marker.
-    let last = u64::from(u32::MAX) - 1;
-    // A header is 30 bytes and its path, a directory record 46 and its path, its end 22.
-    let largest = last - (30 + 3) - (46 + 3) - 22;
+fn an_entry_said_to_lie_past_any_file_is_refused() {
     let mut writer = zip::Writer::new();
-    let header = writer.entry("big", largest, 0, None).unwrap();
-    assert_eq!(get32(&header, 18), largest as u32);
-    assert_eq!(get32(&header, 22), largest as u32);
-    let end = writer.finish().unwrap();
-    assert_eq!(get32(&end, end.len() - 6), (33 + largest) as u32);
-    assert_eq!(33 + largest + end.len() as u64, last);
-
-    let mut writer = zip::Writer::new();
-    writer.entry("big", largest + 1, 0, None).unwrap();
-    assert!(matches!(writer.finish(), Err(Error::TooLarge)));
-
-    let mut writer = zip::Writer::new();
-    writer.entry("big", last - 33, 0, None).unwrap();
+    let first = writer.entry("big", u64::from(u32::MAX), 0, None).unwrap();
+    writer.entry("bigger", 0, 0, None).unwrap();
+    let mut end = writer.finish().unwrap();
+    // Its offset, in the ZIP64 field after its name.
+    let at = end.windows(6).rposition(|name| name == b"bigger").unwrap() + 6 + 4;
+    end[at..at + 8].copy_from_slice(&(u64::MAX - 10).to_le_bytes());
+    let size = end.windows(4).position(|window| window == END64).unwrap();
+    let start = first.len() as u64 + u64::from(u32::MAX) + 36;
     assert!(matches!(
-        writer.entry("bigger", 0, 0, None),
-        Err(Error::TooLarge)
+        zip::Index::read(start, &end[..size]),
+        Err(Error::DamagedZip(reason)) if reason.contains("bigger")
     ));
-    assert!(matches!(
-        zip::Writer::new().entry("big", last - 32, 0, None),
-        Err(Error::TooLarge)
-    ));
+}
+
+#[test]
+fn a_zip_marking_sizes_it_does_not_give_is_refused() {
+    let file = zip_entries(&[("board.json", b"{}")]);
+    for at in [20, 24, 42] {
+        let mut marked = file.clone();
+        patch(&mut marked, CENTRAL, at, &[0xff; 4]);
+        assert!(
+            matches!(unzip(&marked), Err(Error::DamagedZip(reason)) if reason.contains("ZIP64")),
+            "{at}"
+        );
+    }
+    // Another tool may count that many entries with no ZIP64 records.
+    let mut counted = file.clone();
+    patch(&mut counted, END, 8, &[0xff; 4]);
+    assert_eq!(unzip(&counted).unwrap()["board.json"], b"{}");
+
+    let mut spanning = file.clone();
+    patch(&mut spanning, END, 4, &[1]);
+    assert!(matches!(unzip(&spanning), Err(Error::UnsupportedZip)));
 }
 
 #[test]

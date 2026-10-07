@@ -426,21 +426,22 @@ const selectedImage = () => loneImage(opened?.board, editing.selection())?.image
 const near = (size: number, pixels: number) => Math.abs(size - pixels) <= 1e-6;
 const atActualSize = () =>
   selectedImages().every((kind) => {
-    const shown = kind.edits.crop ?? kind.natural_size;
+    const shown = core.editsOf(kind).crop ?? kind.natural_size;
     return (
-      kind.rotation === 0 &&
+      core.rotationOf(kind) === 0 &&
       near(kind.frame.width, shown.width) &&
       near(kind.frame.height, shown.height)
     );
   });
 const greyed = () => {
   const images = selectedImages();
-  return images.length > 0 && images.every((kind) => kind.edits.greyscale);
+  return images.length > 0 && images.every((kind) => core.editsOf(kind).greyscale);
 };
 const shapedAs = (shape: CropShape) => {
   const images = selectedImages();
   return (
-    images.length > 0 && images.every((kind) => (kind.edits.crop_shape ?? "rectangle") === shape)
+    images.length > 0 &&
+    images.every((kind) => (core.editsOf(kind).crop_shape ?? "rectangle") === shape)
   );
 };
 /** Whether the crop under way, or else every image selected, is an ellipse. */
@@ -865,7 +866,7 @@ const commands = {
     keys: [{ key: "r", alt: true }],
     unavailable: () =>
       noneSelected() ??
-      (selectedKinds().some((kind) => "rotation" in kind && kind.rotation !== 0)
+      (selectedKinds().some((kind) => core.rotationOf(kind) !== 0)
         ? undefined
         : "Nothing selected is turned"),
     run: () => editing.straighten(),
@@ -894,7 +895,9 @@ const commands = {
       editing.cropping() !== undefined
         ? undefined
         : (noneSelected() ??
-          (selectedImages().some((kind) => kind.edits.crop || kind.edits.crop_shape === "ellipse")
+          (selectedImages().some(
+            (kind) => core.editsOf(kind).crop || core.editsOf(kind).crop_shape === "ellipse",
+          )
             ? undefined
             : "Nothing selected is cropped")),
     run: () => editing.resetCrop(),

@@ -97,7 +97,7 @@ function entry(opened: Opened, id: string) {
     group,
     locked_by: opened.editor.lockedBy(id),
     bounds: core.extent(opened.editor, [id]),
-    rotation: "rotation" in kind ? kind.rotation : undefined,
+    rotation: "frame" in kind ? core.rotationOf(kind) : undefined,
     text: cut(textOf(kind)),
     targets: targets(kind),
     image:
@@ -143,7 +143,8 @@ async function picture(opened: Opened, id: unknown, background: string) {
   if (kind.type !== "image") {
     throw new Error(`${id} has type ${kind.type}, not image`);
   }
-  const { natural_size: natural, frame, rotation, edits, filename, source, caption } = kind;
+  const { natural_size: natural, frame, filename, source, caption } = kind;
+  const [rotation, edits] = [core.rotationOf(kind), core.editsOf(kind)];
   const unreadable = (error: unknown) => {
     return new Error(`Planche cannot read the picture of ${id} (${message(error)})`);
   };

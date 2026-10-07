@@ -22,7 +22,7 @@ export type Alignment = "left" | "centre" | "right" | "top" | "middle" | "bottom
 
 export type Axis = "horizontal" | "vertical";
 
-export type Colour = string;
+export type Colour = "ink" | "red" | "orange" | "green" | "blue" | "violet" | `#${string}`;
 
 export type CropShape = "rectangle" | "ellipse";
 

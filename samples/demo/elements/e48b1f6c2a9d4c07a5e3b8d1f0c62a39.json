@@ -1,0 +1,21 @@
+{
+  "z": "a8",
+  "kind": {
+    "type": "stroke",
+    "tip": "highlighter",
+    "frame": {
+      "x": 20.0,
+      "y": 290.0,
+      "width": 280.0,
+      "height": 10.0
+    },
+    "rotation": 2.0,
+    "points": [
+      0.0,
+      0.5,
+      1.0,
+      0.5
+    ],
+    "colour": "#f2c94c"
+  }
+}

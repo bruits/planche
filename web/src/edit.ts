@@ -695,7 +695,7 @@ export function edits(
     const own = selected.size === 1 ? editing.board.elements[id!]?.kind : undefined;
     const pivot = middle(corners);
     const from = Math.atan2(at.y - pivot.y, at.x - pivot.x);
-    const angle = own && "rotation" in own ? own.rotation : undefined;
+    const angle = own && "frame" in own ? core.rotationOf(own) : undefined;
     return {
       kind: "rotate",
       pointer,
@@ -1707,7 +1707,7 @@ export function edits(
     }
     const { editor } = editing;
     editor.beginGesture();
-    const { crop: kept, crop_shape: shape = "rectangle" } = kind.edits;
+    const { crop: kept, crop_shape: shape = "rectangle" } = core.editsOf(kind);
     cropping = { id, area: kept ?? whole(kind.natural_size), shape };
     selected = new Set([id]);
     edit(editing, editor.resetCrop([id]));
@@ -2175,11 +2175,11 @@ export function edits(
       const [id] = selected;
       const kind = selected.size === 1 ? editing.board.elements[id!]?.kind : undefined;
       if (press.kind === "rotate") {
-        const degrees = kind && "rotation" in kind ? kind.rotation : press.turned;
+        const degrees = kind && "frame" in kind ? core.rotationOf(kind) : press.turned;
         return { text: `${signed(degrees)}°`, snapped: press.snapped };
       }
       if (press.kind === "scale" && kind?.type === "image") {
-        const shown = kind.edits.crop ?? kind.natural_size;
+        const shown = core.editsOf(kind).crop ?? kind.natural_size;
         return { text: `${Math.round((kind.frame.width / shown.width) * 100)}%`, snapped: false };
       }
       // As turned, unlike the bounds of the box.
@@ -2295,7 +2295,8 @@ function signed(degrees: number): string {
  * shape's staying tall enough for it.
  */
 function extended(kind: Holder, side: number, by: number, least: number): Holder {
-  const { frame, rotation } = kind;
+  const { frame } = kind;
+  const rotation = core.rotationOf(kind);
   if (side % 2 === 1) {
     const width = Math.max(frame.width + by, least);
     // Around the left side as the right one moves, and the other way round.

@@ -118,7 +118,8 @@ export function layout(kind: Holder): Layout {
  * fit its text exactly.
  */
 export function fitted(kind: Holder): Holder {
-  const { frame, rotation } = kind;
+  const { frame } = kind;
+  const rotation = core.rotationOf(kind);
   const height = kind.type === "note" ? needed(kind) : Math.max(frame.height, needed(kind));
   return { ...kind, frame: anchored(frame, rotation, { width: frame.width, height }, [0, 0]) };
 }
@@ -290,7 +291,8 @@ export function texts(again: () => void): Texts {
 /** What draws a text of `kind` whose texture covers `covers`, in font sizes from its frame's top-left. */
 function framed(id: string, kind: Holder, covers: Rect): Lettering {
   const size = kind.text.font_size;
-  const { frame, rotation } = kind;
+  const { frame } = kind;
+  const rotation = core.rotationOf(kind);
   const { x, y, width, height } = covers;
   const placed = {
     x: frame.x + x * size,

@@ -16,10 +16,10 @@ import { showing, type Host, type Showing } from "./showing.js";
 import { memoryHome, sample } from "../test/folders.js";
 
 /** The demo's images, from the largest to the smallest on screen. */
-const LARGEST = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f";
-const MIDDLE = "fabec7ea4f16a728b547c12f25158c75f6b48cf14db92745f92e5e9edcd36d93";
+const LARGEST = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
+const MIDDLE = "fabec7ea4f16a728b547c12f25158c75f6b48cf14db92745f92e5e9edcd36d93.jpg";
 /** Turned, at x 600, y 0, 200 by 200. */
-const SMALLEST = "2f76b06fc4959ba89d116fb907f574e622ad2b9def9ec4ab9247e84ffeee6054";
+const SMALLEST = "2f76b06fc4959ba89d116fb907f574e622ad2b9def9ec4ab9247e84ffeee6054.png";
 const STICKY = "b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74";
 
 async function demo(change?: (files: Map<string, Bytes>) => void): Promise<Opened> {
@@ -93,11 +93,11 @@ describe("showing", () => {
     await showing(host).show(await demo());
     expect(loaded.toSorted()).toEqual([LARGEST, MIDDLE, SMALLEST].toSorted());
     expect(said).toEqual([
-      ["demo: 8 elements", true],
-      ["demo: 8 elements, 1 of 3 images…", true],
-      ["demo: 8 elements, 2 of 3 images…", true],
-      ["demo: 8 elements, 3 of 3 images…", true],
-      ["demo: 8 elements", undefined],
+      ["demo: 13 elements", true],
+      ["demo: 13 elements, 1 of 3 images…", true],
+      ["demo: 13 elements, 2 of 3 images…", true],
+      ["demo: 13 elements, 3 of 3 images…", true],
+      ["demo: 13 elements", undefined],
     ]);
   });
 
@@ -112,7 +112,7 @@ describe("showing", () => {
     expect(crossed).toEqual([MIDDLE]);
     expect(loaded).not.toContain(MIDDLE);
     expect(said.at(-1)).toEqual([
-      "demo: 8 elements, an image this machine cannot decode",
+      "demo: 13 elements, an image this machine cannot decode",
       undefined,
     ]);
   });
@@ -202,7 +202,10 @@ describe("showing, once an image fails to load", () => {
     expect(crossed).toEqual([MIDDLE]);
     expect(loaded.toSorted()).toEqual([LARGEST, SMALLEST].toSorted());
     expect(host.abandon).not.toHaveBeenCalled();
-    expect(said.at(-1)).toEqual(["demo: 8 elements, an image this machine cannot show", undefined]);
+    expect(said.at(-1)).toEqual([
+      "demo: 13 elements, an image this machine cannot show",
+      undefined,
+    ]);
   });
 
   it("fails the opening when the app itself fails, as no upload would", async () => {

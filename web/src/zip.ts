@@ -5,6 +5,13 @@ import { digest } from "./board.js";
 import * as core from "./core.js";
 import type { Bytes, Snapshot } from "./core.js";
 import type { Folder, Sink, Slices } from "./platform.js";
+import { VIDEO_LIMIT } from "./video.js";
+
+/**
+ * The most a deflated entry may take once inflated, as large as the largest file a board takes.
+ * Deflate shrinks bytes about a thousand times at most, so a small ZIP file may still take this.
+ */
+const INFLATED_LIMIT = VIDEO_LIMIT;
 
 /** The board in a ZIP file. Throws when the file cannot hold one. */
 export async function zipFolder(file: Slices): Promise<Folder> {
@@ -18,11 +25,49 @@ export async function zipFolder(file: Slices): Promise<Folder> {
     list: async (depth) => paths.filter((path) => path.split("/").length <= depth),
     read: async (path) => {
       const header = await read(span(index.header(path)));
-      const bytes = await read(span(index.data(path, header)));
+      const data = await read(span(index.data(path, header)));
+      const bytes = index.deflated(path) ? await inflate(path, data, index.size(path)) : data;
       index.check(path, bytes.length, core.crc32(bytes));
       return bytes;
     },
   };
+}
+
+/** Inflates `data`, which another tool deflated, into the `size` bytes its ZIP file says. */
+async function inflate(path: string, data: Bytes, size: number): Promise<Bytes> {
+  if (typeof DecompressionStream !== "function") {
+    throw new Error(
+      "this browser cannot read a compressed ZIP file, so unzip it and open its folder",
+    );
+  }
+  if (size > INFLATED_LIMIT) {
+    throw new Error(`\`${path}\` is over ${INFLATED_LIMIT / 1e6} MB once unzipped`);
+  }
+  const inflated = new Uint8Array(size);
+  let length = 0;
+  const reader = new ReadableStream<Bytes>({
+    start: (controller) => {
+      controller.enqueue(data);
+      controller.close();
+    },
+  })
+    .pipeThrough(new DecompressionStream("deflate-raw"))
+    .getReader();
+  for (;;) {
+    const read = await reader.read().catch(() => {
+      throw new Error(`this ZIP file is damaged: \`${path}\` does not unzip`);
+    });
+    if (read.done) {
+      // Shorter than it says, which the checksum then refuses.
+      return inflated.subarray(0, length);
+    }
+    if (length + read.value.length > size) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`\`${path}\` is larger than its ZIP file says`);
+    }
+    inflated.set(read.value, length);
+    length += read.value.length;
+  }
 }
 
 /**

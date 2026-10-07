@@ -53,6 +53,17 @@ fn movie(bytes: &[u8]) -> Option<Video> {
     if bytes.get(4..8)? != b"ftyp" {
         return old_movie(bytes);
     }
+    let (major, compatible) = brands(bytes)?;
+    let playable = || compatible.iter().any(|brand| PLAYABLE.contains(&brand));
+    let is_movie = MOVIES.contains(&major) || (!NOT_MOVIES.contains(&major) && playable());
+    is_movie.then_some(Video::Mp4)
+}
+
+/// An ISO file's major brand and the compatible ones that `bytes` hold, from its `ftyp` box.
+pub(crate) fn brands(bytes: &[u8]) -> Option<(&[u8; 4], &[[u8; 4]])> {
+    if bytes.get(4..8)? != b"ftyp" {
+        return None;
+    }
     let (start, end) = match u32::from_be_bytes(bytes.get(..4)?.try_into().ok()?) {
         // Up to the end of the file.
         0 => (8, bytes.len()),
@@ -67,9 +78,7 @@ fn movie(bytes: &[u8]) -> Option<Video> {
     let (major, rest) = brands.split_first_chunk::<4>()?;
     // Past the minor version.
     let (compatible, _) = rest.get(4..)?.as_chunks::<4>();
-    let playable = || compatible.iter().any(|brand| PLAYABLE.contains(&brand));
-    let is_movie = MOVIES.contains(&major) || (!NOT_MOVIES.contains(&major) && playable());
-    is_movie.then_some(Video::Mp4)
+    Some((major, compatible))
 }
 
 /// Atoms that may come before an old QuickTime movie's own, which predates `ftyp`.

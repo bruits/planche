@@ -10,6 +10,7 @@ import init, {
   Snapshot,
   ZipIndex,
   ZipWriter,
+  assetOf,
   assetPath,
   checkedColour,
   checkedStyle,
@@ -90,6 +91,7 @@ export {
   Snapshot,
   ZipIndex,
   ZipWriter,
+  assetOf,
   assetPath,
   fileDepth,
   isAssetFile,
@@ -134,6 +136,7 @@ export type {
   Scale,
   Scaled,
   Setting,
+  Shape,
   Side,
   Size,
   Style,
@@ -174,13 +177,14 @@ function feed(sink: { update(slice: Bytes): void }, bytes: Bytes): void {
   }
 }
 
-export function assetId(bytes: Bytes): string {
+/** The SHA-256 digest of `bytes` alone, which `assetOf` names their asset from. */
+export function digestOf(bytes: Bytes): string {
   const hasher = new AssetHasher();
   feed(hasher, bytes);
   return hasher.finish();
 }
 
-/** Throws the core's error when `found`, the id of bytes read for `asset`, is not `asset`. */
+/** Throws the core's error when `found`, the digest of bytes read for `asset`, is not its. */
 export function verifyAsset(asset: string, found: string): void {
   verify(asset, found);
 }
@@ -514,6 +518,23 @@ export function textAreaOf(kind: Extract<Kind, { type: "shape" }>): Readonly<Rec
 }
 
 const polygons = new Map<string, readonly Point[] | undefined>();
+
+/** How far `kind` turns, which an element's file leaves out when it does not. */
+export function rotationOf(kind: Kind): number {
+  return ("rotation" in kind ? kind.rotation : undefined) ?? 0;
+}
+
+const UNEDITED: Readonly<ImageEdits> = Object.freeze({
+  crop: null,
+  flip_horizontal: false,
+  flip_vertical: false,
+  greyscale: false,
+});
+
+/** An image's edits, which its file leaves out when it has none. */
+export function editsOf(image: Extract<Kind, { type: "image" }>): Readonly<ImageEdits> {
+  return image.edits ?? UNEDITED;
+}
 
 /**
  * Where the corners of a `shape` drawn as a polygon lie, with `corners` of its own when it counts

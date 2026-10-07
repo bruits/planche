@@ -309,9 +309,9 @@ describe("saving", () => {
 const STICKY = "b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74";
 const NOTE = "47b0c6e291d84f138a5c3e7fd06b2491";
 
-async function demo(home: Home) {
+async function demo(home: Home, session = false) {
   const { opened, reading } = (await open(async () => home, new Map()))!;
-  const store = await folderStore(home, reading, false);
+  const store = await folderStore(home, reading, session);
   const save = async (touched: string[]) => {
     const snapshot = opened.editor.snapshot();
     try {
@@ -331,7 +331,28 @@ describe("folderStore", () => {
     expect(await save(editor.translate([STICKY], 10, 0))).toBe(true);
     expect(written).toEqual([`elements/${STICKY}.json`]);
     const changed = [...files.keys()].filter((path) => files.get(path) !== before.get(path));
-    expect(changed).toEqual([`elements/${STICKY}.json`]);
+    // With the `.gitattributes` the folder lacked.
+    expect(changed.toSorted()).toEqual([".gitattributes", `elements/${STICKY}.json`]);
+  });
+
+  it("gives a folder lacking a board's .gitattributes one, and leaves its user's alone", async () => {
+    const [[path, bytes]] = [...core.newFiles()] as [[string, core.Bytes]];
+    const lacking = memoryHome("demo", sample("demo"));
+    const first = await demo(lacking.home);
+    expect(await first.save(first.editor.translate([STICKY], 10, 0))).toBe(true);
+    expect(lacking.files.get(path)).toEqual(bytes);
+
+    const theirs = new TextEncoder().encode("* text=auto\n");
+    const holding = memoryHome("demo", new Map([...sample("demo"), [path, theirs]]));
+    const second = await demo(holding.home);
+    expect(await second.save(second.editor.translate([STICKY], 10, 0))).toBe(true);
+    expect(holding.files.get(path)).toBe(theirs);
+
+    // Which no session takes, as it lives in no Git.
+    const session = memoryHome("session", sample("demo"));
+    const third = await demo(session.home, true);
+    expect(await third.save(third.editor.translate([STICKY], 10, 0))).toBe(true);
+    expect(session.files.has(path)).toBe(false);
   });
 
   it("writes nothing over a file another program changed since, and says so", async () => {

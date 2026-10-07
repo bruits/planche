@@ -12,7 +12,8 @@ import {
   type Image,
   type Opened,
 } from "./board.js";
-import type { Rect, Size } from "./core.js";
+import * as core from "./core.js";
+import type { ImageEdits, Rect, Size } from "./core.js";
 import { encode, linear, luminance } from "./paint.js";
 import { MOST_AREA, MOST_SIDE } from "./raster.js";
 
@@ -20,7 +21,8 @@ import { MOST_AREA, MOST_SIDE } from "./raster.js";
 export const SMALLEST_VECTOR = 2048;
 
 export async function still(opened: Opened, image: Image): Promise<Blob> {
-  const { natural_size: natural, edits } = image;
+  const { natural_size: natural } = image;
+  const edits = core.editsOf(image);
   const asset = await readAsset(files(opened), image.asset, natural);
   const shown = edits.crop ?? { x: 0, y: 0, ...natural };
   const scale = scaleOf(shown, asset.vector);
@@ -69,7 +71,7 @@ function drawn(
   natural: Size,
   shown: Rect,
   { width, height }: Size,
-  edits: Image["edits"],
+  edits: Readonly<ImageEdits>,
 ): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = width;

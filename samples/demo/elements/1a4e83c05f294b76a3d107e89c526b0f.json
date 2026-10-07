@@ -3,7 +3,7 @@
   "z": "a0",
   "kind": {
     "type": "image",
-    "asset": "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f",
+    "asset": "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png",
     "natural_size": {
       "width": 320,
       "height": 240
@@ -13,13 +13,6 @@
       "y": 0.0,
       "width": 320.0,
       "height": 240.0
-    },
-    "rotation": 0.0,
-    "edits": {
-      "crop": null,
-      "flip_horizontal": false,
-      "flip_vertical": false,
-      "greyscale": false
     }
   }
 }

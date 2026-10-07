@@ -10,19 +10,17 @@ const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } 
 const shape = (form: "rectangle" | "cross" | "star" | "triangle", content = ""): Kind => ({
   type: "shape",
   frame,
-  rotation: 0,
   shape: form,
   text: { content, font_size: 20 },
 });
-const note: Kind = { type: "note", frame, rotation: 0, text: { content: "Hi", font_size: 20 } };
+const note: Kind = { type: "note", frame, text: { content: "Hi", font_size: 20 } };
 const bold: Kind = {
   type: "note",
   frame,
-  rotation: 0,
   text: { content: "Hi", font_size: 20, bold: true },
 };
-const sticky: Kind = { type: "sticky", frame, rotation: 0, text: { content: "", font_size: 20 } };
-const pen: Kind = { type: "stroke", frame, rotation: 0, points: [0, 1, 1, 0] };
+const sticky: Kind = { type: "sticky", frame, text: { content: "", font_size: 20 } };
+const pen: Kind = { type: "stroke", frame, points: [0, 1, 1, 0] };
 const highlighter: Kind = { ...pen, tip: "highlighter" };
 /** Text fits what holds it as a font of fixed widths would. */
 const measure = (text: string) => ({
@@ -111,7 +109,6 @@ describe("a style", () => {
     const filled: Kind = {
       type: "shape",
       frame,
-      rotation: 0,
       shape: "cross",
       text: { content: "", font_size: 20 },
       fill: "solid",

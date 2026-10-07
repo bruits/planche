@@ -474,9 +474,6 @@ export function lifecycle(host: Host): Lifecycle {
     const written = Object.keys(current.board.elements);
     try {
       const write = async () => {
-        for (const [path, bytes] of core.newFiles()) {
-          await target.write(path, bytes);
-        }
         if (!(await store.save(snapshot, written, () => files(current)))) {
           throw new Error(`${target.name} is no longer empty`);
         }

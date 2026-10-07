@@ -119,7 +119,7 @@ const IMAGE = "c".repeat(32);
 /** Of samples/demo. */
 const image: Kind = {
   type: "image",
-  asset: "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f",
+  asset: "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png",
   natural_size: { width: 300, height: 200 },
   frame: { x: 200, y: 0, width: 300, height: 200 },
   rotation: 0,
@@ -248,10 +248,9 @@ describe("edits", () => {
     ]);
     editing.select([IMAGE]);
     editing.actualSize();
-    expect(core.element(opened.editor, IMAGE)?.kind).toMatchObject({
-      frame: { x: 350, y: 100, width: 300, height: 200 },
-      rotation: 0,
-    });
+    const shown = core.element(opened.editor, IMAGE)!.kind;
+    expect(shown).toMatchObject({ frame: { x: 350, y: 100, width: 300, height: 200 } });
+    expect(core.rotationOf(shown)).toBe(0);
     editing.undo();
     expect(core.element(opened.editor, IMAGE)?.kind).toMatchObject({
       frame: { x: 200, y: 0, width: 600, height: 400 },
@@ -794,7 +793,7 @@ describe("cropping", () => {
   it("keeps the proportions within the image, growing as far as it lets", () => {
     const kept = { x: 100, y: 0, width: 150, height: 100 };
     const { opened, editing, pointer } = page([
-      [IMAGE, { ...image, edits: { ...image.edits, crop: kept } }],
+      [IMAGE, { ...image, edits: { ...core.editsOf(image), crop: kept } }],
     ]);
     editing.select([IMAGE]);
     editing.crop();

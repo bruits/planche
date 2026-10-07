@@ -9,6 +9,9 @@
     "to": {
       "x": 530.0,
       "y": 250.0
-    }
+    },
+    "colour": "orange",
+    "dash": "dashed",
+    "heads": "both"
   }
 }

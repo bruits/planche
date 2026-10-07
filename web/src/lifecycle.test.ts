@@ -13,7 +13,7 @@ const STICKY_FILE = `elements/${STICKY}.json`;
 const NOTE = "47b0c6e291d84f138a5c3e7fd06b2491";
 const IMAGE = "1a4e83c05f294b76a3d107e89c526b0f";
 /** What it shows, which no other element of the demo does. */
-const IMAGE_ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f";
+const IMAGE_ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
 
 /** The demo's sticky note as another program rewrote it. */
 const THEIRS = JSON.stringify({
@@ -112,7 +112,7 @@ describe("lifecycle", () => {
     const { life, opened } = app({ session: memorySession(sample("demo")).session });
     await life.start();
     expect(opened()?.folder.name).toBe("demo");
-    expect(opened()?.board.draw_order).toHaveLength(8);
+    expect(opened()?.board.draw_order).toHaveLength(13);
     expect(life.unsaved()).toBe(false);
   });
 
@@ -630,7 +630,7 @@ describe("a board that fails to show", () => {
   it("keeps the open board when the board picked lacks an image", async () => {
     const first = memoryHome("demo", sample("demo"));
     const lacking = sample("demo");
-    lacking.delete("assets/5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f");
+    lacking.delete("assets/5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png");
     const { life, opened, choose, move } = app({
       session: memorySession().session,
       picked: first.home,

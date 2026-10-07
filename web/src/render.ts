@@ -294,7 +294,7 @@ function tight(items: Item[], board: Board): Rect | undefined {
     placed: (id: string, kind: Holder): Lettering | undefined =>
       kind.type === "shape" && core.textAreaOf(kind).width < 1
         ? undefined
-        : { id, frame: kind.frame, rotation: kind.rotation, paint: "ink" },
+        : { id, frame: kind.frame, rotation: core.rotationOf(kind), paint: "ink" },
   };
   return reach(placing(items, board, texts));
 }

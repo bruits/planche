@@ -37,12 +37,15 @@ export function memoryHome(name: string, files = new Map<string, Bytes>()) {
     return String(clock);
   };
   files.forEach((_, path) => stamp(path));
+  /** The board files written, in order. */
   const written: string[] = [];
   const removed: string[] = [];
   const home: Home = {
     name,
     list: async (depth) =>
-      [...files.keys()].filter((path) => path.split("/").length <= depth).toSorted(),
+      [...files.keys()]
+        .filter((path) => path.split("/").length <= depth && !path.startsWith("."))
+        .toSorted(),
     read: async (path) => {
       const bytes = files.get(path);
       if (bytes === undefined) {
@@ -51,6 +54,13 @@ export function memoryHome(name: string, files = new Map<string, Bytes>()) {
       return bytes;
     },
     async write(path, bytes) {
+      // A dot file is its user's once there, as in a folder on disk, and no board file.
+      if (path.startsWith(".")) {
+        if (!files.has(path)) {
+          files.set(path, bytes.slice());
+        }
+        return "";
+      }
       written.push(path);
       files.set(path, bytes.slice());
       return stamp(path);

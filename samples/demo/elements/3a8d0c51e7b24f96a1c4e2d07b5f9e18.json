@@ -1,0 +1,18 @@
+{
+  "locked": true,
+  "z": "a5",
+  "kind": {
+    "type": "line",
+    "from": {
+      "x": 0.0,
+      "y": 340.0
+    },
+    "to": {
+      "x": 320.0,
+      "y": 340.0
+    },
+    "colour": "red",
+    "weight": "thin",
+    "dash": "dashed"
+  }
+}

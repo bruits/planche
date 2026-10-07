@@ -40,7 +40,7 @@ function dataUrl(blob: Blob): Promise<string> {
 
 /** Board units across a pixel of an image's asset, as its frame lays it out. */
 export function unitsPerPixel(kind: Extract<Kind, { type: "image" }>): number {
-  const { width, height } = kind.edits.crop ?? kind.natural_size;
+  const { width, height } = core.editsOf(kind).crop ?? kind.natural_size;
   return Math.max(kind.frame.width / width, kind.frame.height / height);
 }
 

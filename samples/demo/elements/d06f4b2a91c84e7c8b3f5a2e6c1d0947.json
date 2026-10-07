@@ -1,0 +1,26 @@
+{
+  "z": "a6",
+  "kind": {
+    "type": "shape",
+    "frame": {
+      "x": 860.0,
+      "y": 0.0,
+      "width": 160.0,
+      "height": 160.0
+    },
+    "shape": "star",
+    "corners": 7,
+    "text": {
+      "content": "Hero",
+      "font_size": 24.0,
+      "italic": true,
+      "strike": true,
+      "align": "right"
+    },
+    "colour": "violet",
+    "weight": "thin",
+    "dash": "dashed",
+    "fill": "solid",
+    "opacity": 80
+  }
+}

@@ -171,10 +171,10 @@ export async function prepare(
   const start = new Uint8Array(await bytes.slice(0, core.mediaStart()).arrayBuffer());
   const told = core.media(start, start.length === bytes.size);
   if (told?.kind === "video") {
-    return prepareVideo(bytes, told.type, held);
+    return prepareVideo(bytes, start, told.type, held);
   }
   const whole = new Uint8Array(await bytes.arrayBuffer());
-  const asset = await digest(whole);
+  const asset = core.assetOf(await digest(whole), start);
   const known = held(asset);
   if (known !== undefined) {
     return { asset, bytes, natural: known };
@@ -183,7 +183,7 @@ export async function prepare(
   const media = told ?? core.media(whole, true)!;
   switch (media.kind) {
     case "video":
-      return prepareVideo(bytes, media.type, held);
+      return prepareVideo(bytes, start, media.type, held);
     case "markup":
       throw new Error("markup that is not an SVG");
     case "svg":
@@ -210,6 +210,7 @@ let hashingVideo: Promise<unknown> = Promise.resolve();
 
 async function prepareVideo(
   bytes: Blob,
+  start: Bytes,
   type: string,
   held: (asset: string) => Size | undefined,
 ): Promise<Added> {
@@ -218,7 +219,7 @@ async function prepareVideo(
   }
   const hashed = hashingVideo.then(async () => digest(new Uint8Array(await bytes.arrayBuffer())));
   hashingVideo = hashed.catch(() => undefined);
-  const asset = await hashed;
+  const asset = core.assetOf(await hashed, start);
   const known = held(asset);
   if (known !== undefined) {
     return { asset, bytes, natural: known };
@@ -247,13 +248,14 @@ export function renamed({ elements }: Copied): Record<string, string> {
 }
 
 /**
- * The asset id of `bytes`, which the host hashes without holding the page up in a secure context,
- * which every shell's webview is, and the core otherwise, as for a page served over plain HTTP.
+ * The SHA-256 digest of `bytes`, which names their asset with `core.assetOf`. The host hashes them
+ * without holding the page up in a secure context, which every shell's webview is, and the core
+ * otherwise, as for a page served over plain HTTP.
  */
 export async function digest(bytes: Bytes): Promise<string> {
   return crypto.subtle
     ? hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
-    : core.assetId(bytes);
+    : core.digestOf(bytes);
 }
 
 function hex(bytes: Uint8Array): string {
@@ -668,7 +670,7 @@ export function assetPlayback(board: Board): Map<string, Pick<core.ImageEdits, "
   for (const id of board.draw_order) {
     const { kind } = board.elements[id]!;
     if (kind.type === "image" && !played.has(kind.asset)) {
-      played.set(kind.asset, kind.edits);
+      played.set(kind.asset, core.editsOf(kind));
     }
   }
   return played;

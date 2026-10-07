@@ -345,7 +345,7 @@ describe("the card of a lone animated image", () => {
     select([IMAGE]);
     expect(named("Normal speed").textContent).toBe("1.5×");
     named("Normal speed").click();
-    expect(image()?.edits.speed).toBeUndefined();
+    expect(image()?.edits?.speed).toBeUndefined();
   });
 
   it("dims a speed it cannot go to", () => {
@@ -369,7 +369,7 @@ describe("the card of a lone animated image", () => {
     expect(media.seek).toHaveBeenLastCalledWith(ASSET, 22);
     expect(document.querySelector(".style-card .note")?.textContent).toBe("Loops 3–23 of 24");
     typed(document.body, "Enter");
-    expect(image()?.edits.trim).toEqual(trimOf(playback.starts, [2, 22]));
+    expect(image()?.edits?.trim).toEqual(trimOf(playback.starts, [2, 22]));
     expect(media.preview).toHaveBeenLastCalledWith(ASSET, undefined);
     expect(media.play).toHaveBeenLastCalledWith([ASSET], true);
     expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
@@ -390,7 +390,7 @@ describe("the card of a lone animated image", () => {
     const reset = named("Play every frame");
     reset.focus();
     typed(reset, "Enter");
-    expect(image()?.edits.trim).toBeUndefined();
+    expect(image()?.edits?.trim).toBeUndefined();
     expect(groups()).toContain("Trim");
     // Out of trim, as the window keeps listening to each card's keys.
     reset.blur();
@@ -402,14 +402,14 @@ describe("the card of a lone animated image", () => {
     named("Trim").click();
     typed(named("Trim start"), "ArrowRight");
     typed(document.body, "Escape");
-    expect(image()?.edits.trim).toBeUndefined();
+    expect(image()?.edits?.trim).toBeUndefined();
     expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
     named("Trim").click();
     typed(named("Trim start"), "ArrowRight");
     select([]);
     select([IMAGE]);
     shown.open(false);
-    expect(image()?.edits.trim).toBeUndefined();
+    expect(image()?.edits?.trim).toBeUndefined();
     expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
   });
 

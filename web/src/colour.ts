@@ -12,6 +12,7 @@ import {
   type Opened,
 } from "./board.js";
 import { halved } from "./capture.js";
+import * as core from "./core.js";
 import type { Kind, Size } from "./core.js";
 
 type Image = Extract<Kind, { type: "image" }>;
@@ -75,10 +76,9 @@ function small(decoded: Decoded, natural: Size): ImageData {
   return context.getImageData(0, 0, width, height);
 }
 
-function mean(
-  { data, width, height }: ImageData,
-  { natural_size: natural, edits }: Image,
-): Colour | undefined {
+function mean({ data, width, height }: ImageData, image: Image): Colour | undefined {
+  const { natural_size: natural } = image;
+  const edits = core.editsOf(image);
   const crop = edits.crop ?? { x: 0, y: 0, ...natural };
   const [across, down] = [width / natural.width, height / natural.height];
   const [left, right] = span(crop.x, crop.width, across, width);

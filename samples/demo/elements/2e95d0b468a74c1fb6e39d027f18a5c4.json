@@ -8,11 +8,15 @@
       "width": 160.0,
       "height": 100.0
     },
-    "rotation": 0.0,
     "shape": "ellipse",
     "text": {
       "content": "Key light",
-      "font_size": 20.0
-    }
+      "font_size": 20.0,
+      "bold": true,
+      "align": "left"
+    },
+    "colour": "blue",
+    "weight": "thick",
+    "fill": "tint"
   }
 }

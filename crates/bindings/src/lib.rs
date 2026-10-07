@@ -827,6 +827,13 @@ pub fn asset_path(asset: &str) -> Result<String, JsError> {
     Ok(format::asset_path(asset.parse::<AssetId>()?))
 }
 
+/// The asset holding bytes of this SHA-256 `digest`, named after the type their `start`, the
+/// first `MEDIA_START` bytes or all of them, tells.
+#[wasm_bindgen(js_name = assetOf)]
+pub fn asset_of(digest: &str, start: &[u8]) -> Result<String, JsError> {
+    Ok(digest.parse::<AssetId>()?.typed(start).to_string())
+}
+
 #[wasm_bindgen]
 #[derive(Default)]
 pub struct AssetHasher(board::AssetHasher);
@@ -1011,7 +1018,17 @@ impl ZipIndex {
         Ok(span(self.entry(path)?.data(header)?))
     }
 
-    /// Checks the size and the checksum of the bytes read at `data`.
+    /// Whether the bytes at `data` are deflated, which the shell inflates before `check`.
+    pub fn deflated(&self, path: &str) -> Result<bool, JsError> {
+        Ok(self.entry(path)?.method() == zip::Method::Deflated)
+    }
+
+    /// The entry's length once inflated.
+    pub fn size(&self, path: &str) -> Result<f64, JsError> {
+        Ok(self.entry(path)?.size() as f64)
+    }
+
+    /// Checks the size and the checksum of the bytes read at `data`, once inflated.
     pub fn check(&self, path: &str, size: f64, crc: u32) -> Result<(), JsError> {
         Ok(self.entry(path)?.check(offset(size)?, crc)?)
     }

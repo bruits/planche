@@ -245,7 +245,11 @@ pub enum ShapeKind {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(transparent)]
 #[schemars(inline, extend("pattern" = "^(ink|red|orange|green|blue|violet|#[0-9a-fA-F]{6})$"))]
-#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(type = r#""ink" | "red" | "orange" | "green" | "blue" | "violet" | `#${string}`"#)
+)]
 pub struct Colour(String);
 
 /// As the schema's pattern says, which clients may not check.

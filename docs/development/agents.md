@@ -10,7 +10,7 @@ The app answers each tool call by asking the web app, which holds the board. `cr
 
 ## Edits
 
-Each edit waits up to 10 seconds for the user to finish a drag, a text, or a crop, as it would otherwise join the gesture. It then lands as one edit, which undoes in one step and saves like the user's. `web/src/arguments.ts` declares the edit tools' arguments for the web app. A test in `crates/mcp` fails when the file falls behind, and `PLANCHE_DECLARE=1 cargo test -p mcp` writes it again.
+Each edit waits up to 10 seconds for the user to finish a drag, a text, or a crop, as it would otherwise join the gesture. It then lands as one edit, which undoes in one step and saves like the user's. `web/src/arguments.ts` declares the edit tools' arguments for the web app. A test in `crates/mcp` fails when the file falls behind, and `PLANCHE_DECLARE=1 cargo test -p mcp` writes it again. `web/src/arguments.test.ts` checks its words against the board's, which `crates/mcp` does not depend on.
 
 ## Risks
 

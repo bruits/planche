@@ -36,7 +36,7 @@ pub use arrange::{Order, Side};
 pub use copy::Copied;
 pub use edit::{Editor, Placement, Restack, Scaling, Sticking, Transform};
 pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
-pub use media::{MEDIA_START, Media, media};
+pub use media::{EXTENSIONS, MEDIA_START, Media, extension, media};
 pub use neighbours::{
     Drawn, Pull, Scale, Scaled, snap_drawn_to_neighbours, snap_scale_to_neighbours,
     snap_to_neighbours,
@@ -327,8 +327,9 @@ pub enum ElementKind {
         /// In pixels, as displayed, or as [`media`] reads them for an SVG.
         natural_size: Size,
         frame: Rect,
-        #[serde(serialize_with = "without_negative_zero")]
+        #[serde(default, skip_serializing_if = "is_default")]
         rotation: f64,
+        #[serde(default, skip_serializing_if = "is_default")]
         edits: ImageEdits,
         /// Where the image came from, such as the address of a page, as whoever set it wrote it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -348,7 +349,7 @@ pub enum ElementKind {
     /// Text alone.
     Note {
         frame: Rect,
-        #[serde(serialize_with = "without_negative_zero")]
+        #[serde(default, skip_serializing_if = "is_default")]
         rotation: f64,
         text: Text,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -362,7 +363,7 @@ pub enum ElementKind {
     /// A sticky note, on its paper, whose colour stays whatever the theme.
     Sticky {
         frame: Rect,
-        #[serde(serialize_with = "without_negative_zero")]
+        #[serde(default, skip_serializing_if = "is_default")]
         rotation: f64,
         text: Text,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -377,7 +378,7 @@ pub enum ElementKind {
     /// or a polygon counts its `corners`.
     Shape {
         frame: Rect,
-        #[serde(serialize_with = "without_negative_zero")]
+        #[serde(default, skip_serializing_if = "is_default")]
         rotation: f64,
         shape: Shape,
         #[serde(default, skip_serializing_if = "is_default")]
@@ -442,7 +443,7 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "is_default")]
         tip: Tip,
         frame: Rect,
-        #[serde(serialize_with = "without_negative_zero")]
+        #[serde(default, skip_serializing_if = "is_default")]
         rotation: f64,
         #[serde(with = "flat_points")]
         #[cfg_attr(feature = "ts", ts(type = "number[]"))]
@@ -693,6 +694,7 @@ impl ElementKind {
 
 /// Applied when drawing. The asset's bytes never change.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ImageEdits {
     /// In the asset's pixels, as displayed.
@@ -1245,17 +1247,34 @@ impl FromStr for ElementId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+/// An asset's file name, the SHA-256 digest of its bytes then the [`extension`] of their type
+/// when it tells one, so that the file opens as what it is. Bytes always take the same name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(type = "string"))]
-pub struct AssetId(Hex<32>);
+pub struct AssetId {
+    digest: Hex<32>,
+    extension: Option<&'static str>,
+}
 
 impl AssetId {
     pub fn of(bytes: &[u8]) -> Self {
         let mut hasher = AssetHasher::new();
         hasher.update(bytes);
-        hasher.finish()
+        hasher.finish().typed(bytes)
+    }
+
+    /// Named after the type that `start`, its bytes' start or all of them, tells.
+    pub fn typed(self, start: &[u8]) -> Self {
+        Self {
+            extension: extension(start),
+            ..self
+        }
+    }
+
+    /// Whether both name the same bytes, whatever their extension.
+    pub fn same_bytes(self, other: Self) -> bool {
+        self.digest == other.digest
     }
 }
 
@@ -1271,14 +1290,22 @@ impl AssetHasher {
         self.0.update(bytes);
     }
 
+    /// The id of the bytes hashed, named by their digest alone until [`AssetId::typed`].
     pub fn finish(self) -> AssetId {
-        AssetId(Hex(self.0.finalize().into()))
+        AssetId {
+            digest: Hex(self.0.finalize().into()),
+            extension: None,
+        }
     }
 }
 
 impl fmt::Display for AssetId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
+        self.digest.fmt(formatter)?;
+        match self.extension {
+            Some(extension) => write!(formatter, ".{extension}"),
+            None => Ok(()),
+        }
     }
 }
 
@@ -1286,7 +1313,34 @@ impl FromStr for AssetId {
     type Err = Error;
 
     fn from_str(text: &str) -> Result<Self> {
-        text.parse().map(Self)
+        let (digest, extension) = match text.split_once('.') {
+            Some((digest, extension)) => {
+                let known = EXTENSIONS.into_iter().find(|known| *known == extension);
+                (
+                    digest,
+                    Some(known.ok_or_else(|| Error::InvalidId(text.to_owned()))?),
+                )
+            }
+            None => (text, None),
+        };
+        let digest = digest
+            .parse()
+            .map_err(|_| Error::InvalidId(text.to_owned()))?;
+        Ok(Self { digest, extension })
+    }
+}
+
+impl Serialize for AssetId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for AssetId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -2043,8 +2097,42 @@ mod tests {
                 for chunk in bytes[..length].chunks(piece) {
                     hasher.update(chunk);
                 }
-                assert_eq!(hasher.finish(), whole, "{length} bytes by {piece}");
+                let hashed = hasher.finish().typed(&bytes[..length]);
+                assert_eq!(hashed, whole, "{length} bytes by {piece}");
             }
+        }
+    }
+
+    #[test]
+    fn an_asset_is_named_after_its_type_too() {
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+        let named = AssetId::of(png);
+        let digest = AssetId::of(b"").to_string().len();
+        assert_eq!(&named.to_string()[digest..], ".png");
+        assert_eq!(named.to_string().parse::<AssetId>().unwrap(), named);
+        assert_eq!(
+            serde_json::to_string(&named).unwrap(),
+            format!("\"{named}\"")
+        );
+
+        let mut hasher = AssetHasher::new();
+        hasher.update(png);
+        let hashed = hasher.finish();
+        assert_ne!(hashed, named);
+        assert!(hashed.same_bytes(named));
+        assert!(!AssetId::of(b"").same_bytes(named));
+        assert_eq!(hashed.typed(&png[..8]), named);
+
+        let bare = AssetId::of(b"").to_string();
+        for name in [
+            format!("{bare}.PNG"),
+            format!("{bare}.tar.gz"),
+            format!("{bare}."),
+            format!("{bare}.png/x"),
+            format!("{bare}.exe"),
+            format!("{}.png", bare.to_uppercase()),
+        ] {
+            assert_eq!(name.parse::<AssetId>(), Err(Error::InvalidId(name.clone())));
         }
     }
 

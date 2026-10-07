@@ -24,7 +24,7 @@ A file in `elements/` that belongs to no element, such as a sync tool's conflict
 
 ## Boards in Git
 
-Images need [Git LFS](https://git-lfs.com/). A new board writes a `.gitattributes` that sends `assets/` to Git LFS and keeps Git from changing line endings. A clone made without Git LFS holds small pointer files in place of the images, and Planche refuses to open it. Install Git LFS, then run `git lfs pull`.
+Images need [Git LFS](https://git-lfs.com/). Planche gives a board's folder a `.gitattributes` when it lacks one, and puts one in each ZIP file. It sends `assets/` to Git LFS and keeps Git from changing line endings. Planche never changes a `.gitattributes` that is there. A clone made without Git LFS holds small pointer files in place of the images, and Planche refuses to open it. Install Git LFS, then run `git lfs pull`.
 
 Each element has its own file, so branches that edit different elements merge cleanly. Planche repairs what a merge can break, such as a group nested in itself or an arrow stuck to a deleted element, when it reads the board. The same board always writes the same bytes, so only real edits show up in a diff.
 
@@ -32,7 +32,7 @@ Each element has its own file, so branches that edit different elements merge cl
 
 Export a ZIP file to send a board as one file. It holds the board's files and the images the board shows.
 
-Planche stores files in a ZIP uncompressed, since images are compressed already. It refuses a ZIP file that another tool compressed. Unzip it and open its folder. A board's ZIP file holds 65,534 files and 4 GiB at most.
+Planche stores files in a ZIP uncompressed, since images are compressed already. A board unzipped then zipped again with another tool, such as Finder or Explorer, still opens, and Planche stores it uncompressed again when it next saves into it. Planche refuses an encrypted ZIP file, and a compressed file over 300 MB within one. Unzip it and open its folder.
 
 ## When a board does not open
 

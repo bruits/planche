@@ -95,7 +95,6 @@ describe("write", () => {
     expect(opened.board.elements[id]?.kind).toEqual({
       type: "stroke",
       frame: { x: 10, y: 20, width: 100, height: 50 },
-      rotation: 0,
       points: [0, 0, 1, 1, 1, 0],
       colour: "red",
     });
