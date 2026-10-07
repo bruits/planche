@@ -48,7 +48,7 @@ import {
   type Decoded,
   type Opened,
 } from "./board.js";
-import { fit, type Camera } from "./camera.js";
+import { fit, onScreen, type Camera } from "./camera.js";
 import { card, type CardMedia } from "./card.js";
 import { clipboard, type Pasted } from "./clipboard.js";
 import { meanColours } from "./colour.js";
@@ -78,7 +78,7 @@ import { sped } from "./playback.js";
 import { pinned, pins } from "./pins.js";
 import { platform } from "./platform.js";
 import { recall, remember } from "./preferences.js";
-import { LONGEST_SIDE, onScreen } from "./raster.js";
+import { LONGEST_SIDE } from "./raster.js";
 import {
   backing,
   drawnOver,
@@ -112,6 +112,8 @@ const ON_TOP = "planche.ontop";
 const HOVER_PLAY = "planche.hoverplay";
 /** Where the browser remembers that the style card stays open. */
 const KEEP_STYLE = "planche.keepstyle";
+/** Where the browser remembers that nothing lines up with its neighbours. */
+const NEIGHBOURS = "planche.neighbours";
 const ZOOM_STEP = 1.25;
 /** What the zoom's menu zooms to at once. */
 const ZOOMS = [0.25, 0.5, 1, 2, 4];
@@ -225,6 +227,7 @@ const editing = edits(viewport, overlaid, () => opened, {
     present.free();
   },
   snapping: () => snapping,
+  aligning: () => aligning,
   drawing: () => drawTool(),
   erasing: () => tool === "eraser",
   sampling: () => picker.sampling() !== undefined,
@@ -373,6 +376,7 @@ let agentsAllowed = false;
 let onTop = false;
 let hoverPlay = recall(HOVER_PLAY) === "on";
 let styleKept = recall(KEEP_STYLE) === "on";
+let aligning = recall(NEIGHBOURS) !== "off";
 let arranging = false;
 let copying: { key: string; png: Promise<Blob> } | undefined;
 /** Copies as PNG asked for, so that one cancelled clears no later one's message. */
@@ -1024,6 +1028,13 @@ const commands = {
       snapping = !snapping;
     },
   },
+  snapNeighbours: {
+    label: "Snap to neighbours",
+    run: () => {
+      aligning = !aligning;
+      remember(NEIGHBOURS, aligning ? undefined : "off");
+    },
+  },
   light: palette("Light", "light"),
   dark: palette("Dark", "dark"),
   system: palette("System", "system"),
@@ -1160,6 +1171,7 @@ const SWITCHES = new Map<Command, () => boolean>([
   [commands.ellipticalCrop, elliptical],
   [commands.greyscale, greyed],
   [commands.snap, () => snapping],
+  [commands.snapNeighbours, () => aligning],
   [commands.highContrast, () => appearance.highContrast()],
   [commands.hints, () => hintsShown],
   [commands.measurements, () => !measurements.hidden],
@@ -1199,7 +1211,10 @@ const WITHIN = new Map<Command, string>(
           commands.sameWidth,
         ],
       ],
-      ["Grid", [commands.plain, commands.grid, commands.dots, commands.snap]],
+      [
+        "Grid",
+        [commands.plain, commands.grid, commands.dots, commands.snap, commands.snapNeighbours],
+      ],
       ["Theme", [commands.light, commands.dark, commands.system, commands.highContrast]],
       [
         "View",
@@ -1637,6 +1652,7 @@ function grids(): Entry {
       ...BACKGROUNDS.map((background) => stated(commands[background])),
       "separator",
       stated(commands.snap),
+      stated(commands.snapNeighbours),
     ],
   };
 }

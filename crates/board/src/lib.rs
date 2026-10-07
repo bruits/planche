@@ -13,6 +13,7 @@ mod edit;
 mod geometry;
 mod grid;
 mod media;
+mod neighbours;
 mod scene;
 mod stick;
 mod style;
@@ -36,6 +37,10 @@ pub use copy::Copied;
 pub use edit::{Editor, Placement, Restack, Scaling, Sticking, Transform};
 pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
 pub use media::{MEDIA_START, Media, media};
+pub use neighbours::{
+    Drawn, Pull, Scale, Scaled, snap_drawn_to_neighbours, snap_scale_to_neighbours,
+    snap_to_neighbours,
+};
 pub use scene::{Item, Paint};
 pub use stick::End;
 pub use style::{Setting, Style};

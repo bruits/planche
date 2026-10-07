@@ -28,7 +28,10 @@ import init, {
   movieIndex as indexIn,
   newBoardFiles,
   snapScaleToGrid as snapScale,
+  snapDrawnToNeighbours as drawnNeighbours,
+  snapScaleToNeighbours as scaleNeighbours,
   snapToGrid as snap,
+  snapToNeighbours as snapNeighbours,
   sizedSvg as sized,
   strokeKind as stroked,
   strokeWidth as width,
@@ -50,6 +53,7 @@ import type {
   Copied,
   CropShape,
   Dash,
+  Drawn,
   Element,
   ElementKind as Kind,
   End,
@@ -62,8 +66,11 @@ import type {
   Paint,
   Paper,
   Point,
+  Pull,
   Rect,
   Restack,
+  Scale,
+  Scaled,
   Setting,
   Shape,
   Side,
@@ -108,6 +115,7 @@ export type {
   Copied,
   CropShape,
   Dash,
+  Drawn,
   Element,
   Kind,
   End,
@@ -120,8 +128,11 @@ export type {
   Paint,
   Paper,
   Point,
+  Pull,
   Rect,
   Restack,
+  Scale,
+  Scaled,
   Setting,
   Side,
   Size,
@@ -333,6 +344,57 @@ export function snapScaleToGrid(
   zoom: number,
 ): number | undefined {
   return snapScale(origin.x, origin.y, corner.x, corner.y, factor, zoom);
+}
+
+/**
+ * Where `moving` lands among `neighbours`, as `Editor.neighbours` gives them, that `window` shows,
+ * or else on the grid's lines when `grid`, at `zoom` CSS pixels per board unit.
+ */
+export function snapToNeighbours(
+  moving: Rect,
+  neighbours: Float64Array,
+  window: Rect,
+  zoom: number,
+  grid: boolean,
+): Pull {
+  const pull = snapNeighbours(packed(moving), neighbours, packed(window), zoom, grid);
+  return JSON.parse(pull) as Pull;
+}
+
+/**
+ * What the box `scale` has scales by instead to line up with `neighbours`, as `Editor.neighbours`
+ * gives them, that `window` shows, at `zoom` CSS pixels per board unit.
+ */
+export function snapScaleToNeighbours(
+  scale: Scale,
+  neighbours: Float64Array,
+  window: Rect,
+  zoom: number,
+): Scaled {
+  const scaled = scaleNeighbours(JSON.stringify(scale), neighbours, packed(window), zoom);
+  return JSON.parse(scaled) as Scaled;
+}
+
+/**
+ * Where a box drawn `from` one corner `to` the other lands among `neighbours`, as
+ * `Editor.neighbours` gives them, that `window` shows, or else on the grid's lines when `grid`, at
+ * `zoom` CSS pixels per board unit.
+ */
+export function snapDrawnToNeighbours(
+  from: Point,
+  to: Point,
+  neighbours: Float64Array,
+  window: Rect,
+  zoom: number,
+  grid: boolean,
+): Drawn {
+  const [first, last] = [Float64Array.of(from.x, from.y), Float64Array.of(to.x, to.y)];
+  const landed = drawnNeighbours(first, last, neighbours, packed(window), zoom, grid);
+  return JSON.parse(landed) as Drawn;
+}
+
+function packed(area: Rect): Float64Array {
+  return Float64Array.of(area.x, area.y, area.width, area.height);
 }
 
 /** What the elements draw over, their groups' elements included, `undefined` when nothing. */

@@ -28,8 +28,9 @@ function page(
     drawing,
     erasing,
     snapping,
+    aligning,
     zoom = 1,
-  }: Partial<Pick<Hooks, "drawing" | "erasing" | "snapping">> & { zoom?: number } = {},
+  }: Partial<Pick<Hooks, "drawing" | "erasing" | "snapping" | "aligning">> & { zoom?: number } = {},
 ) {
   const opened = untitled();
   for (const [id, kind] of [[STICKY, sticky] as const, ...more]) {
@@ -59,6 +60,7 @@ function page(
     selectionChanged() {},
     settled() {},
     snapping: snapping ?? (() => false),
+    aligning: aligning ?? (() => false),
     drawing: drawing ?? (() => undefined),
     erasing: erasing ?? (() => false),
     sampling: () => false,
@@ -416,6 +418,347 @@ function cropping() {
   shown.editing.crop();
   return shown;
 }
+
+/**
+ * Sticky notes beside the one that moves, each at its own top-left, 100 wide and tall unless
+ * told, in a window that shows them.
+ */
+function beside(
+  corners: (Point & { width?: number; height?: number })[],
+  options: Partial<Pick<Hooks, "snapping" | "aligning" | "drawing">> = {},
+) {
+  // As happy-dom measures no text, which a sticky note fits as it stretches.
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    font: "",
+    measureText: () => ({ width: 0, fontBoundingBoxAscent: 0, fontBoundingBoxDescent: 0 }),
+  } as unknown as CanvasRenderingContext2D);
+  const others = corners.map((corner, at): [string, Kind] => [
+    String(at).repeat(32),
+    { ...sticky, frame: { width: 100, height: 100, ...corner } } as Kind,
+  ]);
+  const shown = page(others, { aligning: () => true, ...options });
+  Object.defineProperties(shown.host, {
+    clientWidth: { value: 800 },
+    clientHeight: { value: 600 },
+  });
+  const frame = () => {
+    const kind = core.element(shown.opened.editor, STICKY)?.kind;
+    return kind?.type === "sticky" ? kind.frame : undefined;
+  };
+  return { ...shown, frame };
+}
+
+function linedUp(host: HTMLElement, part: string): string | null | undefined {
+  return host.querySelector(`.lineup .${part}`)?.getAttribute("d");
+}
+
+const NOTE = "f".repeat(32);
+
+/** In a face no other test measures, as measures stay with each face. */
+function written(opened: ReturnType<typeof page>["opened"]) {
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    font: "",
+    measureText: (text: string) => ({
+      width: text.length * 50,
+      fontBoundingBoxAscent: 80,
+      fontBoundingBoxDescent: 20,
+      actualBoundingBoxAscent: 70,
+    }),
+  } as unknown as CanvasRenderingContext2D);
+  const note = {
+    type: "note",
+    frame: { x: 0, y: 150, width: 40, height: 150 },
+    rotation: 0,
+    text: { content: "aa bb cc dd ee ff", font_size: 20, bold: true, italic: true },
+  } as const;
+  opened.editor.add(NOTE, undefined, JSON.stringify(note));
+  opened.board = core.board(opened.editor);
+  return note;
+}
+
+describe("lining up", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.replaceChildren();
+  });
+
+  it("lines a move up with a side of what is beside it, showing how until let go", async () => {
+    const { host, pointer, at } = beside([{ x: 300, y: 200 }]);
+    pointer("pointerdown", 50, 50);
+    pointer("pointermove", 246, 50);
+    await nextFrame();
+    expect(at()).toEqual({ x: 200, y: 0 });
+    expect(linedUp(host, "bridges")).toBe("M300 200L300 100");
+    pointer("pointerup", 246, 50);
+    expect(linedUp(host, "bridges")).toBe("");
+  });
+
+  it("keeps as far from the next one as others stand apart, showing each gap alike", async () => {
+    const { host, pointer, at } = beside([
+      { x: 140, y: 0 },
+      { x: 280, y: 0 },
+    ]);
+    pointer("pointerdown", 50, 50);
+    pointer("pointermove", 473, 50);
+    await nextFrame();
+    expect(at()).toEqual({ x: 420, y: 0 });
+    expect(linedUp(host, "gaps")).toContain("M240 50L280 50");
+    expect(linedUp(host, "gaps")).toContain("M380 50L420 50");
+    pointer("pointerup", 473, 50);
+    expect(linedUp(host, "gaps")).toBe("");
+  });
+
+  it("scales a side onto what is beside it, from the dot on a corner", async () => {
+    const { opened, editing, host, pointer } = beside([{ x: 250, y: 300 }]);
+    editing.select([STICKY]);
+    pointer("pointerdown", 100, 100);
+    pointer("pointermove", 247, 247);
+    await nextFrame();
+    expect(core.element(opened.editor, STICKY)?.kind).toMatchObject({
+      frame: { x: 0, y: 0, width: 250, height: 250 },
+    });
+    expect(linedUp(host, "bridges")).toBe("M250 300L250 250");
+    pointer("pointerup", 247, 247);
+    expect(linedUp(host, "bridges")).toBe("");
+  });
+
+  it("stretches a side onto what is beside it", async () => {
+    const { opened, editing, host, pointer } = beside([{ x: 250, y: 300 }]);
+    editing.select([STICKY]);
+    pointer("pointerdown", 100, 50);
+    pointer("pointermove", 247, 50);
+    await nextFrame();
+    expect(core.element(opened.editor, STICKY)?.kind).toMatchObject({
+      frame: { x: 0, y: 0, width: 250, height: 100 },
+    });
+    expect(linedUp(host, "bridges")).toBe("M250 300L250 100");
+    pointer("pointerup", 247, 50);
+  });
+
+  it("frees a scale once ⌘ goes down, and lines it up again once it comes up", async () => {
+    const { editing, host, pointer, frame } = beside([{ x: 250, y: 300 }]);
+    editing.select([STICKY]);
+    pointer("pointerdown", 100, 100);
+    pointer("pointermove", 247, 247);
+    await nextFrame();
+    key("keydown", { key: "Meta", metaKey: true, ctrlKey: true });
+    expect(frame()?.width).toBeCloseTo(247);
+    expect(linedUp(host, "bridges")).toBe("");
+    key("keyup", { key: "Meta" });
+    expect(frame()?.width).toBe(250);
+    pointer("pointerup", 247, 247);
+  });
+
+  it("stretches a quarter-turned sticky note down onto what is beside it", async () => {
+    const { opened, editing, host, pointer } = beside([{ x: 300, y: 250 }]);
+    opened.editor.update(STICKY, JSON.stringify({ ...sticky, rotation: 90 }));
+    opened.board = core.board(opened.editor);
+    editing.select([STICKY]);
+    pointer("pointerdown", 50, 100);
+    pointer("pointermove", 50, 247);
+    await nextFrame();
+    expect(core.bounds(opened.editor, [STICKY])?.height).toBeCloseTo(250);
+    const bridge = linedUp(host, "bridges")
+      ?.match(/-?[\d.]+/g)
+      ?.map(Number);
+    expect(bridge?.map(Math.round)).toEqual([300, 250, 100, 250]);
+    pointer("pointerup", 50, 247);
+  });
+
+  it("stretches no shorter than its text lets it, onto what is beside it further", async () => {
+    // Its font is 20 high, between the right side of the first at 17 and the left of the second.
+    const { editing, pointer, frame } = beside([
+      { x: 10, y: 300, width: 7, height: 7 },
+      { x: 24, y: 300, width: 6, height: 6 },
+    ]);
+    editing.select([STICKY]);
+    pointer("pointerdown", 100, 50);
+    pointer("pointermove", 19, 50);
+    await nextFrame();
+    expect(frame()?.width).toBe(24);
+    pointer("pointerup", 19, 50);
+  });
+
+  it("draws a stretched note's guides to where it fits its text again", async () => {
+    const { opened, editing, host, pointer } = beside([{ x: 250, y: 400 }]);
+    const note = written(opened);
+    editing.select([NOTE]);
+    pointer("pointerdown", 40, 225);
+    pointer("pointermove", 247, 225);
+    await nextFrame();
+    const fits = core.bounds(opened.editor, [NOTE])!;
+    expect(fits.width).toBe(250);
+    expect(fits.height).toBeLessThan(note.frame.height);
+    expect(linedUp(host, "bridges")).toBe(`M250 400L250 ${fits.y + fits.height}`);
+    pointer("pointerup", 247, 225);
+  });
+
+  it("lets go of a stretch once fitting its text leaves the gap it kept behind", async () => {
+    // 40 apart, facing the note as it is, but not once it is wide enough for one line.
+    const { opened, editing, host, pointer } = beside([
+      { x: 300, y: 250, width: 50, height: 40 },
+      { x: 390, y: 250, width: 50, height: 40 },
+    ]);
+    written(opened);
+    editing.select([NOTE]);
+    pointer("pointerdown", 40, 225);
+    pointer("pointermove", 257, 225);
+    await nextFrame();
+    expect(core.bounds(opened.editor, [NOTE])?.width).toBe(257);
+    expect(linedUp(host, "gaps")).toBe("");
+    pointer("pointerup", 257, 225);
+  });
+
+  it("draws a shape's corners onto what is beside it", async () => {
+    const { opened, host, pointer } = beside([{ x: 300, y: 200 }], {
+      drawing: () => "rectangle",
+    });
+    pointer("pointerdown", 297, 20);
+    pointer("pointermove", 397, 120);
+    await nextFrame();
+    expect(linedUp(host, "bridges")).toBe("M300 200L300 120M400 200L400 120");
+    pointer("pointerup", 397, 120);
+    expect(linedUp(host, "bridges")).toBe("");
+    const shapes = Object.values(opened.board.elements).filter(({ kind }) => kind.type === "shape");
+    expect(shapes.map(({ kind }) => kind)).toMatchObject([
+      { frame: { x: 300, y: 20, width: 100, height: 100 } },
+    ]);
+  });
+
+  it("lines up what is drawn once ⌘ comes up, though not with itself", async () => {
+    const { opened, pointer } = beside([{ x: 300, y: 200 }], { drawing: () => "rectangle" });
+    pointer("pointerdown", 297, 20);
+    pointer("pointermove", 397, 120, { free: true });
+    await nextFrame();
+    // 4 below where it ended a step before.
+    pointer("pointermove", 430, 124);
+    await nextFrame();
+    pointer("pointerup", 430, 124);
+    const shapes = Object.values(opened.board.elements).filter(({ kind }) => kind.type === "shape");
+    expect(shapes.map(({ kind }) => kind)).toMatchObject([
+      { frame: { x: 300, y: 20, width: 130, height: 104 } },
+    ]);
+  });
+
+  it("draws a thin shape away from anything as thin as drawn", async () => {
+    const { opened, pointer } = beside([], { drawing: () => "rectangle" });
+    pointer("pointerdown", 300, 400);
+    pointer("pointermove", 500, 404);
+    await nextFrame();
+    pointer("pointerup", 500, 404);
+    const shapes = Object.values(opened.board.elements).filter(({ kind }) => kind.type === "shape");
+    expect(shapes.map(({ kind }) => kind)).toMatchObject([
+      { frame: { x: 300, y: 400, width: 200, height: 4 } },
+    ]);
+  });
+
+  it("frees what is drawn once ⌘ goes down mid-drag", async () => {
+    const { opened, host, pointer } = beside([{ x: 300, y: 200 }], { drawing: () => "rectangle" });
+    pointer("pointerdown", 297, 20);
+    pointer("pointermove", 397, 120);
+    await nextFrame();
+    key("keydown", { key: "Meta", metaKey: true, ctrlKey: true });
+    expect(linedUp(host, "bridges")).toBe("");
+    pointer("pointerup", 397, 120, { free: true });
+    const shapes = Object.values(opened.board.elements).filter(({ kind }) => kind.type === "shape");
+    expect(shapes.map(({ kind }) => kind)).toMatchObject([
+      { frame: { x: 297, y: 20, width: 100, height: 100 } },
+    ]);
+  });
+
+  it("draws onto the grid alone once switched off", async () => {
+    const { opened, host, pointer } = beside([{ x: 300, y: 200 }], {
+      drawing: () => "rectangle",
+      snapping: () => true,
+      aligning: () => false,
+    });
+    pointer("pointerdown", 297, 23);
+    pointer("pointermove", 397, 118);
+    await nextFrame();
+    expect(linedUp(host, "bridges")).toBe("");
+    pointer("pointerup", 397, 118);
+    const shapes = Object.values(opened.board.elements).filter(({ kind }) => kind.type === "shape");
+    expect(shapes.map(({ kind }) => kind)).toMatchObject([
+      { frame: { x: 300, y: 20, width: 100, height: 100 } },
+    ]);
+  });
+
+  it("places a shape with a click lined up with what is beside it", () => {
+    const { opened, pointer } = beside([{ x: 300, y: 200 }], { drawing: () => "rectangle" });
+    // Centred on the click, 100 wide, its left side 3 from the sticky note's.
+    pointer("pointerdown", 353, 450);
+    pointer("pointerup", 353, 450);
+    const shapes = Object.values(opened.board.elements).filter(({ kind }) => kind.type === "shape");
+    expect(shapes.map(({ kind }) => kind)).toMatchObject([
+      { frame: { x: 300, y: 400, width: 100, height: 100 } },
+    ]);
+  });
+
+  it("lets a move with ⌘ held go freely", async () => {
+    const { host, pointer, at } = beside([{ x: 300, y: 200 }]);
+    pointer("pointerdown", 50, 50);
+    pointer("pointermove", 246, 50, { free: true });
+    await nextFrame();
+    expect(at()).toEqual({ x: 196, y: 0 });
+    expect(linedUp(host, "bridges")).toBe("");
+    pointer("pointerup", 246, 50, { free: true });
+    expect(at()).toEqual({ x: 196, y: 0 });
+  });
+
+  it("lets go once ⌘ goes down mid-move, and lines up again once it comes up", async () => {
+    const { host, pointer, at } = beside([{ x: 300, y: 200 }]);
+    pointer("pointerdown", 50, 50);
+    pointer("pointermove", 246, 50);
+    await nextFrame();
+    key("keydown", { key: "Meta", metaKey: true, ctrlKey: true });
+    expect(at()).toEqual({ x: 196, y: 0 });
+    expect(linedUp(host, "bridges")).toBe("");
+    key("keyup", { key: "Meta" });
+    expect(at()).toEqual({ x: 200, y: 0 });
+    expect(linedUp(host, "bridges")).toBe("M300 200L300 100");
+    pointer("pointerup", 246, 50);
+  });
+
+  it("frees a move from the grid too once ⌘ goes down mid-move", async () => {
+    const { pointer, at } = beside([], { snapping: () => true });
+    pointer("pointerdown", 50, 50);
+    pointer("pointermove", 53, 50);
+    await nextFrame();
+    expect(at()).toEqual({ x: 0, y: 0 });
+    key("keydown", { key: "Meta", metaKey: true, ctrlKey: true });
+    expect(at()).toEqual({ x: 3, y: 0 });
+    pointer("pointerup", 53, 50, { free: true });
+  });
+
+  it("lines up before the grid pulls, which takes the way nothing beside it pulls", async () => {
+    const { host, pointer, at } = beside([{ x: 303, y: 200 }], { snapping: () => true });
+    pointer("pointerdown", 50, 50);
+    pointer("pointermove", 246, 53);
+    await nextFrame();
+    expect(at()).toEqual({ x: 203, y: 0 });
+    // From where it lands, the grid's pull included.
+    expect(linedUp(host, "bridges")).toBe("M303 200L303 100");
+    pointer("pointerup", 246, 53);
+  });
+
+  it("leaves what is beside a move alone once switched off", () => {
+    const { pointer, at } = beside([{ x: 300, y: 200 }], { aligning: () => false });
+    pointer("pointerdown", 50, 50);
+    pointer("pointermove", 246, 50);
+    pointer("pointerup", 246, 50);
+    expect(at()).toEqual({ x: 196, y: 0 });
+  });
+
+  it("lines a copy up with its original, which stays put", () => {
+    const { opened, editing, pointer, at } = beside([]);
+    pointer("pointerdown", 50, 50, { altKey: true });
+    pointer("pointermove", 55, 200, { altKey: true });
+    pointer("pointerup", 55, 200);
+    const [copy] = editing.selection();
+    expect(core.element(opened.editor, copy!)?.kind).toMatchObject({ frame: { x: 0, y: 150 } });
+    expect(at()).toEqual({ x: 0, y: 0 });
+  });
+});
 
 describe("cropping", () => {
   afterEach(() => {

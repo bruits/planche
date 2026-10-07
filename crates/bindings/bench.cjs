@@ -139,6 +139,30 @@ function measure(count) {
     rows.set(`translate ${name}`, median(moved));
     rows.set(`land ${name}`, median(() => editor.land(selected), moved));
     rows.set(`bounds ${name}`, median(() => editor.bounds(selected)));
+    // Once as a drag begins, then at each move, over all of the board zoomed out to show it.
+    rows.set(`neighbours ${name}`, median(() => editor.neighbours(selected)));
+    const [box, beside] = [editor.bounds(selected), editor.neighbours(selected)];
+    const shown = Float64Array.of(0, 0, side, side);
+    rows.set(
+      `snapToNeighbours ${name}`,
+      median(() => core.snapToNeighbours(box, beside, shown, 800 / side, true)),
+    );
+    rows.set(
+      `snapScaleToNeighbours ${name}`,
+      median(() =>
+        core.snapScaleToNeighbours(
+          JSON.stringify({
+            area: { x: box[0], y: box[1], width: box[2], height: box[3] },
+            origin: { x: box[0], y: box[1] },
+            factor: 1.5,
+            least: 0.01,
+          }),
+          beside,
+          shown,
+          800 / side,
+        ),
+      ),
+    );
     // Each once, as the app will read them: the move done again to learn what it touched.
     const touched = new Set([...editor.rewindGesture(), ...editor.translate(selected, 30, 20), ...editor.land(selected)]);
     rows.set(`element ${name}`, median(() => touched.forEach((id) => editor.element(id))));
@@ -146,6 +170,27 @@ function measure(count) {
     editor.rewindGesture();
     editor.endGesture();
   }
+  // A row of small elements spaced apart, as many as the board holds, all shown and facing the box
+  // that moves along them, where gaps are many.
+  const strip = [];
+  for (let at = 0, x = 0; at < count; at++) {
+    const width = 10 + next() * 20;
+    strip.push(x, 0, width, 40);
+    x += width + 5 + next() * 45;
+  }
+  const length = strip.at(-4) + strip.at(-2);
+  rows.set(
+    "snapToNeighbours, a spaced row",
+    median(() =>
+      core.snapToNeighbours(
+        Float64Array.of(length / 2, 10, 20, 20),
+        Float64Array.from(strip),
+        Float64Array.of(0, -length / 2, length, length),
+        2560 / length,
+        true,
+      ),
+    ),
+  );
   const snapshot = editor.snapshot();
   rows.set("snapshot.write", median(() => snapshot.write()));
   const known = core.Known.read([], paths, contents);

@@ -13,7 +13,7 @@ pub const GRID_STEP: f64 = 5.0;
 /// shows instead, and a level only shows in full once twice as far apart.
 const DENSEST: f64 = 8.0;
 /// How near a line pulls what comes to it, in screen pixels.
-const PULL: f64 = 8.0;
+pub(crate) const PULL: f64 = 8.0;
 /// How far off a line, relative to [`GRID_SPACING`], float arithmetic leaves what it moved or
 /// scaled onto it. Far below a pixel at any zoom.
 const HAIR: f64 = 1e-9;

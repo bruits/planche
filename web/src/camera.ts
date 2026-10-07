@@ -17,6 +17,11 @@ export interface Viewport {
 const SMALLEST_ZOOM = 0.01;
 const LARGEST_ZOOM = 100;
 
+/** What of the board shows. */
+export function onScreen(camera: Camera, { width, height }: Viewport): Rect {
+  return { x: camera.x, y: camera.y, width: width / camera.zoom, height: height / camera.zoom };
+}
+
 /** Centred on `bounds`, or on the origin at 1:1 when there is nothing to fit. */
 export function fit(bounds: Rect | undefined, viewport: Viewport): Camera {
   const { x, y, width, height } = bounds ?? { x: 0, y: 0, width: 0, height: 0 };

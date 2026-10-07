@@ -8,8 +8,8 @@ use std::ops::Range;
 
 use board::{
     Alignment, AssetId, Axis, Board, Colour, Copied, Corners, ElementId, ElementKind, GRID_STEP,
-    GridLevel, MovieIndex, Order, Point, Rect, Restack, Shape, Side, Size, Speed, Style, Tip,
-    Transform, Weight,
+    GridLevel, MovieIndex, Order, Point, Rect, Restack, Scale, Shape, Side, Size, Speed, Style,
+    Tip, Transform, Weight,
 };
 use format::{save, zip};
 use js_sys::{Map, Uint8Array};
@@ -448,6 +448,18 @@ impl Editor {
         Ok(self.0.board().extent(&parse(ids)?).map(rect))
     }
 
+    /// As `bounds` gives them, one after another, each element, or group whole, at the level of
+    /// the group `within`, or the top level, that stays put as the elements move.
+    pub fn neighbours(
+        &self,
+        ids: Vec<String>,
+        within: Option<String>,
+    ) -> Result<Vec<f64>, JsError> {
+        let within = within.map(|id| id.parse()).transpose()?;
+        let found = self.0.board().neighbours(&parse(ids)?, within);
+        Ok(found.into_iter().flat_map(rect).collect())
+    }
+
     /// The x and y of the image's pixel at a point, as displayed, `undefined` for no image.
     #[wasm_bindgen(js_name = pixelAt)]
     pub fn pixel_at(&self, id: &str, x: f64, y: f64) -> Result<Option<Vec<f64>>, JsError> {
@@ -718,6 +730,55 @@ pub fn snap_scale_to_grid(
     board::snap_scale_to_grid(origin, corner, factor, zoom)
 }
 
+/// Where the moved box lands among its neighbours, which the window shows, or else on the grid's
+/// lines when `grid`, at `zoom`, as JSON. Each box, and the window, is an x, a y, a width, and a
+/// height, the neighbours one after another.
+#[wasm_bindgen(js_name = snapToNeighbours)]
+pub fn snap_to_neighbours(
+    moving: &[f64],
+    neighbours: &[f64],
+    window: &[f64],
+    zoom: f64,
+    grid: bool,
+) -> Result<String, JsError> {
+    let (moving, window) = (area(moving)?, area(window)?);
+    let pull = board::snap_to_neighbours(moving, &areas(neighbours)?, window, zoom, grid);
+    Ok(serde_json::to_string(&pull)?)
+}
+
+/// What the box `scale` has, as JSON, scales by instead to line up with its neighbours that the
+/// window shows, at `zoom`, as JSON. The window is an x, a y, a width, and a height, and the
+/// neighbours each are, one after another.
+#[wasm_bindgen(js_name = snapScaleToNeighbours)]
+pub fn snap_scale_to_neighbours(
+    scale: &str,
+    neighbours: &[f64],
+    window: &[f64],
+    zoom: f64,
+) -> Result<String, JsError> {
+    let scale: Scale = serde_json::from_str(scale)?;
+    let scaled = board::snap_scale_to_neighbours(scale, &areas(neighbours)?, area(window)?, zoom);
+    Ok(serde_json::to_string(&scaled)?)
+}
+
+/// Where a box drawn from one corner to the other lands among its neighbours that the window
+/// shows, or else on the grid's lines when `grid`, at `zoom`, as JSON. Each corner is an x and a
+/// y, and the window an x, a y, a width, and a height, as each neighbour is, one after another.
+#[wasm_bindgen(js_name = snapDrawnToNeighbours)]
+pub fn snap_drawn_to_neighbours(
+    from: &[f64],
+    to: &[f64],
+    neighbours: &[f64],
+    window: &[f64],
+    zoom: f64,
+    grid: bool,
+) -> Result<String, JsError> {
+    let (from, to) = (point(from)?, point(to)?);
+    let drawn =
+        board::snap_drawn_to_neighbours(from, to, &areas(neighbours)?, area(window)?, zoom, grid);
+    Ok(serde_json::to_string(&drawn)?)
+}
+
 #[wasm_bindgen(js_name = isBoardFile)]
 pub fn is_board_file(path: &str) -> bool {
     format::is_board_file(path)
@@ -963,6 +1024,36 @@ fn span(range: Range<u64>) -> Vec<f64> {
 
 fn rect(rect: Rect) -> Vec<f64> {
     vec![rect.x, rect.y, rect.width, rect.height]
+}
+
+fn point(values: &[f64]) -> Result<Point, JsError> {
+    match *values {
+        [x, y] => Ok(Point { x, y }),
+        _ => Err(JsError::new("A point is two numbers")),
+    }
+}
+
+fn area(values: &[f64]) -> Result<Rect, JsError> {
+    match areas(values)?[..] {
+        [area] => Ok(area),
+        _ => Err(JsError::new("A box is four numbers")),
+    }
+}
+
+fn areas(values: &[f64]) -> Result<Vec<Rect>, JsError> {
+    let (boxes, rest) = values.as_chunks::<4>();
+    if !rest.is_empty() {
+        return Err(JsError::new("Boxes are fours of numbers"));
+    }
+    Ok(boxes
+        .iter()
+        .map(|&[x, y, width, height]| Rect {
+            x,
+            y,
+            width,
+            height,
+        })
+        .collect())
 }
 
 fn to_map(files: impl IntoIterator<Item = (String, Vec<u8>)>) -> Map {

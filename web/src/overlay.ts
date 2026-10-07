@@ -1,11 +1,12 @@
 // What shows over the board without being part of it: the outlines of the selection, the dots on
 // its corners, what of it the pointer is on or holds, the outline of what a click would select,
 // the rectangle that selects, the bounds of the group gone into, the box a gesture started from,
-// the outlines of what the ends being drawn or moved stick to, the crop of an image being cropped,
-// and what a picture of the selection covers. It lies in board space, so following the camera only
-// moves its view box, and its strokes keep their width at any zoom.
+// the outlines of what the ends being drawn or moved stick to, what moving, scaling, stretching, or
+// drawing lines up with, the crop of an image being cropped, and what a picture of the selection
+// covers. It lies in board space, so following the camera only moves its view box, and its strokes
+// keep their width at any zoom.
 
-import type { Camera, Viewport } from "./camera.js";
+import { onScreen, type Camera, type Viewport } from "./camera.js";
 import type { Point, Rect } from "./core.js";
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -19,6 +20,10 @@ const GRABBED_DOT = 10;
 const ARC = 15;
 /** Half across the cross a box scales around, in CSS pixels. */
 const PIVOT = 6;
+/** Half across the tick on each end of a line between what lines up, in CSS pixels. */
+const BRIDGE_TICK = 5;
+/** Half across the tick on each end of a gap kept alike, in CSS pixels. */
+const GAP_TICK = 4;
 /** Below this diagonal, in CSS pixels, dots and sides would leave no room to grab the box. */
 const SMALLEST_SCALABLE = 24;
 /** A double arrow across, centred in 24 pixels, as a cursor draws it. */
@@ -62,6 +67,12 @@ export interface Overlay {
   entered(corners: Point[] | undefined): void;
   /** What ends stick to, as `outline` takes them. */
   targets(outlines: Float64Array[]): void;
+  /**
+   * What moving, scaling, stretching, or drawing lines up with: along each line it shares with
+   * others, across the room between them, from the end that stays put, and across each gap it
+   * keeps alike. Empty ones show nothing.
+   */
+  lineup(bridges: [Point, Point][], gaps: [Point, Point][]): void;
   /** `undefined` hides it. */
   crop(crop: Crop | undefined): void;
   /** What a picture of the selection covers, the board shaded around it, `undefined` to hide them. */
@@ -133,6 +144,11 @@ export function overlay(host: HTMLElement): Overlay {
   entered.setAttribute("display", "none");
   const targets = document.createElementNS(SVG, "g");
   targets.classList.add("targets");
+  // The ticks on their own, as dashes would break them.
+  const [bridges, ticks, gaps] = [path("", "bridges"), path("", "ticks"), path("", "gaps")];
+  const lineup = document.createElementNS(SVG, "g");
+  lineup.classList.add("lineup");
+  lineup.append(bridges, ticks, gaps);
   const shade = document.createElementNS(SVG, "path");
   shade.classList.add("crop-shade");
   const kept = document.createElementNS(SVG, "polygon");
@@ -156,7 +172,18 @@ export function overlay(host: HTMLElement): Overlay {
   const picture = document.createElementNS(SVG, "g");
   picture.append(outside, covered);
   picture.setAttribute("display", "none");
-  svg.append(picture, entered, targets, preview, start, selection, grips, marquee, cropping);
+  svg.append(
+    picture,
+    entered,
+    targets,
+    lineup,
+    preview,
+    start,
+    selection,
+    grips,
+    marquee,
+    cropping,
+  );
   host.append(svg);
   let zoom = 1;
   let corners: Point[] | undefined;
@@ -165,6 +192,7 @@ export function overlay(host: HTMLElement): Overlay {
   let centre: Point | undefined;
   let ends: Point[] | undefined;
   let crop: Crop | undefined;
+  let linedUp: { bridges: [Point, Point][]; gaps: [Point, Point][] } = { bridges: [], gaps: [] };
   /** What the window shows, and what a picture covers, in board units. */
   let seen: Rect | undefined;
   let pictured: Rect | undefined;
@@ -198,6 +226,15 @@ export function overlay(host: HTMLElement): Overlay {
     });
     grips.replaceChildren(...shown);
   };
+  const placeLineup = () => {
+    bridges.setAttribute("d", linedUp.bridges.map((span) => straight(...span)).join(""));
+    ticks.setAttribute(
+      "d",
+      linedUp.bridges.map((span) => ticked(span, BRIDGE_TICK / zoom)).join(""),
+    );
+    const spaced = linedUp.gaps.map((span) => straight(...span) + ticked(span, GAP_TICK / zoom));
+    gaps.setAttribute("d", spaced.join(""));
+  };
   const placePivot = () => {
     const size = PIVOT / zoom;
     pivot.setAttribute(
@@ -208,8 +245,8 @@ export function overlay(host: HTMLElement): Overlay {
     );
   };
   return {
-    frame(camera, { width, height }) {
-      seen = { x: camera.x, y: camera.y, width: width / camera.zoom, height: height / camera.zoom };
+    frame(camera, viewport) {
+      seen = onScreen(camera, viewport);
       svg.setAttribute("viewBox", `${seen.x} ${seen.y} ${seen.width} ${seen.height}`);
       shadePicture();
       if (camera.zoom !== zoom) {
@@ -217,6 +254,7 @@ export function overlay(host: HTMLElement): Overlay {
         place();
         placeCrop();
         placePivot();
+        placeLineup();
       }
     },
     outline(outlines) {
@@ -271,6 +309,10 @@ export function overlay(host: HTMLElement): Overlay {
     targets(outlines) {
       targets.replaceChildren(...shapes(outlines));
     },
+    lineup(bridged, spaced) {
+      linedUp = { bridges: bridged, gaps: spaced };
+      placeLineup();
+    },
     crop(shown) {
       crop = shown;
       placeCrop();
@@ -279,7 +321,7 @@ export function overlay(host: HTMLElement): Overlay {
         return;
       }
       shade.setAttribute("d", closed(shown.image) + closed(shown.kept));
-      const across = shown.guides.map(([from, to]) => `M${from.x} ${from.y}L${to.x} ${to.y}`);
+      const across = shown.guides.map(([from, to]) => straight(from, to));
       guides.forEach((guide) => guide.setAttribute("d", across.join("")));
       kept.setAttribute("points", shown.kept.flatMap(({ x, y }) => [x, y]).join(" "));
       cropping.removeAttribute("display");
@@ -320,6 +362,22 @@ function traced(outlines: Float64Array[]): string {
       }
       return points.length > 4 ? `${d}Z` : d;
     })
+    .join("");
+}
+
+function straight(from: Point, to: Point): string {
+  return `M${from.x} ${from.y}L${to.x} ${to.y}`;
+}
+
+/** Square across each end of the line, `half` each way. */
+function ticked([from, to]: [Point, Point], half: number): string {
+  const length = distance(from, to);
+  if (length === 0) {
+    return "";
+  }
+  const [x, y] = [((from.y - to.y) / length) * half, ((to.x - from.x) / length) * half];
+  return [from, to]
+    .map((end) => straight({ x: end.x - x, y: end.y - y }, { x: end.x + x, y: end.y + y }))
     .join("");
 }
 

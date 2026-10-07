@@ -16,14 +16,18 @@
 // a sticky note, a shape, a stroke, or a comment drawn, placed, moved, scaled, or turned whole onto
 // an image, a note, a sticky note, or a shape filled or holding text sticks to it and follows it
 // too. While snapping, what moves, scales, or is drawn lands on the grid's lines where near them
-// otherwise. Holding ⌘, or Ctrl elsewhere than macOS, keeps things from sticking and the grid from
-// pulling, but for a move only once under way, as pressing an element with it toggles the element
-// instead. The eraser removes what a click would select, or all that a drag passes over but what
-// it starts within, in one edit. The pen and the highlighter draw where the pointer goes,
-// smoothed, or a dot for a click, or a straight line from where it was pressed while ⇧ is held, as
-// one edit once let go, and stay the tool. The arrow keys move the selection by a pixel, or ten
-// while ⇧ is held, or by the grid's step while snapping to the grid shown, as one edit until let
-// go.
+// otherwise. While snapping to neighbours, what moves, the sides that scaling or stretching an
+// upright box moves, and the corners of a shape, a note, or a sticky note drawn or placed, line up,
+// where near, with a side or a middle of what the window shows beside them, or a gap away from one
+// as others already stand apart, and what moves halfway between two of those too, which wins over
+// the grid, and shows what it lined up with until let go. Holding ⌘, or Ctrl elsewhere than macOS,
+// keeps things from sticking, and the grid and what is beside them from pulling, but for a move
+// only once under way, as pressing an element with it toggles the element instead. The eraser
+// removes what a click would select, or all that a drag passes over but what it starts within, in
+// one edit. The pen and the highlighter draw where the pointer goes, smoothed, or a dot for a
+// click, or a straight line from where it was pressed while ⇧ is held, as one edit once let go, and
+// stay the tool. The arrow keys move the selection by a pixel, or ten while ⇧ is held, or by the
+// grid's step while snapping to the grid shown, as one edit until let go.
 // Cropping shows an image whole, what its crop leaves out dimmed, and its edges and corners drag
 // the crop, or its inside moves it, until Enter or a press elsewhere crops it, or Escape leaves it
 // as it was. Holding ⇧ keeps the crop's proportions as its edges and corners drag it, X turns it
@@ -31,6 +35,7 @@
 // Resetting the crop meanwhile starts it over from the whole image, and its shape changes as
 // asked.
 
+import { onScreen } from "./camera.js";
 import { composing, mac, opensMenu, typed, typing } from "./commands.js";
 import * as core from "./core.js";
 import type {
@@ -47,6 +52,7 @@ import type {
   Point,
   Rect,
   Restack,
+  Scale,
   Side,
   Size,
   Tip,
@@ -126,6 +132,8 @@ export interface Hooks {
   /** Once a press or an adjustment ends, whose gesture held undo and redo back. */
   settled(): void;
   snapping(): boolean;
+  /** Whether what moves, scales, stretches, or is drawn lines up with what is beside it. */
+  aligning(): boolean;
   /** What a press draws, `undefined` when it selects. */
   drawing(): Draw | undefined;
   /** Whether a press erases, before it draws or selects. */
@@ -306,8 +314,9 @@ export interface Edits {
 type Press =
   /**
    * `through` a press on nothing but the selection's box, which a click lets go of. `bounds` as
-   * they were when the drag began. `copy` what it moves instead of the selection, when the drag
-   * began with ⌥ held, `pasted` its outermost elements, the same at every step.
+   * they were when the drag began, and `neighbours` what they line up with, as the core gives
+   * them. `copy` what it moves instead of the selection, when the drag began with ⌥ held, `pasted`
+   * its outermost elements, the same at every step.
    */
   | {
       kind: "move";
@@ -317,6 +326,7 @@ type Press =
       clicked?: string | undefined;
       through?: true;
       bounds?: Rect | undefined;
+      neighbours?: Float64Array;
       copy?: {
         copied: Copied;
         ids: Record<string, string>;
@@ -327,7 +337,8 @@ type Press =
   | { kind: "marquee"; pointer: number; start: Point; dragging: boolean; kept: Set<string> }
   /**
    * By the dot on the corner `at` of the box `corners` it started from, pressed at `handle` so
-   * that it starts at 1, `centred` while held around its centre.
+   * that it starts at 1, `centred` while held around its centre. `neighbours` what it lines up
+   * with, as the core gives them.
    */
   | {
       kind: "scale";
@@ -337,8 +348,12 @@ type Press =
       handle: Point;
       upright: boolean;
       centred: boolean;
+      neighbours?: Float64Array;
     }
-  /** By the side `at` of the lone `id`, which was `from`, pressed at `start`. */
+  /**
+   * By the side `at` of the lone `id`, which was `from`, pressed at `start`. `neighbours` what it
+   * lines up with, as the core gives them.
+   */
   | {
       kind: "stretch";
       pointer: number;
@@ -347,6 +362,7 @@ type Press =
       start: Point;
       id: string;
       from: Holder;
+      neighbours?: Float64Array;
     }
   /**
    * From outside the corner `at`, `from` the pointer's angle around `pivot`, `angle` the lone
@@ -363,7 +379,10 @@ type Press =
       turned: number;
       snapped: boolean;
     }
-  /** `ends` where it was last drawn from and to, once dragging. */
+  /**
+   * `ends` where it was last drawn from and to, once dragging, `neighbours` what it lines up with,
+   * as the core gives them.
+   */
   | {
       kind: "draw";
       pointer: number;
@@ -372,6 +391,7 @@ type Press =
       shape: Shaped;
       id: string;
       dragging: boolean;
+      neighbours?: Float64Array;
     }
   /** `line` the pointer's way so far, smoothed, `at` where it went last. */
   | {
@@ -426,6 +446,7 @@ export function edits(
     selectionChanged,
     settled,
     snapping,
+    aligning,
     drawing,
     erasing,
     sampling,
@@ -463,8 +484,18 @@ export function edits(
   let hovering = false;
   /** Whether the grid pulls, as the last pointer event had its keys. */
   let pulling = false;
+  /**
+   * Whether what is beside what moves, scales, stretches, or is drawn pulls it, as the last
+   * pointer event had its keys.
+   */
+  let lining = false;
   /** Whether ends stick, as the last pointer event had its keys. */
   let sticking = false;
+  const heed = (held: Keys) => {
+    pulling = snapping() && !freed(held);
+    lining = aligning() && !freed(held);
+    sticking = !freed(held);
+  };
   /** Its gesture stays open until the field closes, so that writing undoes in one step. */
   let written: { id: string; fresh: boolean } | undefined;
   /** Whether the last press was a click, as browsers still send a double-click when it dragged. */
@@ -510,16 +541,59 @@ export function edits(
   /** With what it moves setting down where it lands, or coming free when freed. */
   const setDown = (editor: Editor, ids: string[], how: Omit<core.Transform, "sticking"> = {}) =>
     core.transform(editor, ids, { ...how, sticking: sticking ? "land" : "free" });
-  /** As moving it would pull it. */
-  const aligned = (kind: Kind, zoom: number): Kind => {
-    if (!pulling || !("frame" in kind)) {
+  /**
+   * What the box `scale` has scales by instead to line up with what `beside` gives, showing what
+   * it lines up with, `undefined` when nothing beside it pulls.
+   */
+  const scaledOnto = (
+    scale: Scale,
+    beside: () => Float64Array,
+    zoom: number,
+  ): number | undefined => {
+    const camera = view.camera();
+    const scaled =
+      lining && camera
+        ? core.snapScaleToNeighbours(scale, beside(), onScreen(camera, view.size()), zoom)
+        : undefined;
+    overlay.lineup(scaled?.bridges ?? [], scaled?.gaps ?? []);
+    return scaled?.factor;
+  };
+  /** As moving it among what `editor` holds would pull it. */
+  const aligned = (editor: Editor, kind: Kind, zoom: number): Kind => {
+    const camera = view.camera();
+    if (!(pulling || lining) || !camera || !("frame" in kind)) {
       return kind;
     }
     const { frame } = kind;
-    const [x, y] = [edges(frame.x, frame.width), edges(frame.y, frame.height)].map(
-      (values) => core.snapToGrid(values, zoom) ?? 0,
-    );
-    return { ...kind, frame: { ...frame, x: frame.x + x!, y: frame.y + y! } };
+    const beside = lining ? editor.neighbours([], entered) : new Float64Array();
+    const shown = onScreen(camera, view.size());
+    const { x = 0, y = 0 } = core.snapToNeighbours(frame, beside, shown, zoom, pulling);
+    return { ...kind, frame: { ...frame, x: frame.x + x, y: frame.y + y } };
+  };
+  /**
+   * Where a box drawn `from` one corner `to` the other lands, pulled by the grid and by what
+   * `beside` gives, showing what it lines up with.
+   */
+  const drawnOnto = (
+    from: Point,
+    to: Point,
+    beside: () => Float64Array,
+    zoom: number,
+  ): [Point, Point] => {
+    const camera = view.camera();
+    const landing =
+      (pulling || lining) && camera
+        ? core.snapDrawnToNeighbours(
+            from,
+            to,
+            lining ? beside() : new Float64Array(),
+            onScreen(camera, view.size()),
+            zoom,
+            pulling,
+          )
+        : undefined;
+    overlay.lineup(landing?.bridges ?? [], landing?.gaps ?? []);
+    return landing ? [landing.from, landing.to] : [from, to];
   };
 
   const lone = (editing: Editing): { id: string; segment: Segment } | undefined => {
@@ -895,8 +969,7 @@ export function edits(
       view.host.setPointerCapture(pointer);
       return;
     }
-    pulling = snapping() && !freed(event);
-    sticking = !freed(event);
+    heed(event);
     if (erasing()) {
       const hit = pressedPin ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
       press = {
@@ -1097,12 +1170,13 @@ export function edits(
       const zoom = view.zoom();
       const modifier = !event.repeat && ["Shift", "Alt", "Meta", "Control"].includes(event.key);
       const held =
+        (press?.kind === "move" && press.dragging) ||
         press?.kind === "scale" ||
         press?.kind === "stretch" ||
         press?.kind === "rotate" ||
         press?.kind === "end" ||
         press?.kind === "pen" ||
-        (press?.kind === "draw" && SEGMENTS.has(press.shape));
+        (press?.kind === "draw" && (SEGMENTS.has(press.shape) || press.dragging));
       // Unless a move waits for the frame, which takes the keys then.
       if (held && modifier && editing && last && zoom && !moved) {
         drag(editing, last, zoom, event);
@@ -1127,8 +1201,7 @@ export function edits(
     }
     const { editor } = editing;
     const ids = [...selected];
-    pulling = snapping() && !freed(held);
-    sticking = !freed(held);
+    heed(held);
     // From where the gesture began, so that coming back there changes nothing.
     const again = (edited: () => string[]) =>
       edit(editing, [...editor.rewindGesture(), ...edited()]);
@@ -1153,19 +1226,23 @@ export function edits(
             const copied = core.copy(editor, ids);
             press.copy = { copied, ids: renamed(copied), group: entered };
           }
+          // Before a copy is pasted, as its original stays put.
+          press.neighbours = editor.neighbours(press.copy ? [] : ids, entered);
           editor.beginGesture();
         }
-        const { start, bounds, copy } = press;
+        const { start, bounds, neighbours, copy } = press;
         const [dx, dy] = [at.x - start.x, at.y - start.y];
-        const [nx, ny] =
-          pulling && bounds
-            ? [
-                core.snapToGrid(edges(bounds.x + dx, bounds.width), zoom),
-                core.snapToGrid(edges(bounds.y + dy, bounds.height), zoom),
-              ]
-            : [];
-        const snapped = nx !== undefined || ny !== undefined;
-        const by = { x: dx + (nx ?? 0), y: dy + (ny ?? 0) };
+        const moving = bounds && { ...bounds, x: bounds.x + dx, y: bounds.y + dy };
+        const camera = view.camera();
+        const shown = camera && onScreen(camera, view.size());
+        const beside = lining && neighbours ? neighbours : new Float64Array();
+        const pull =
+          (lining || pulling) && moving && shown
+            ? core.snapToNeighbours(moving, beside, shown, zoom, pulling)
+            : undefined;
+        const snapped = pull?.x !== undefined || pull?.y !== undefined;
+        const by = { x: dx + (pull?.x ?? 0), y: dy + (pull?.y ?? 0) };
+        overlay.lineup(pull?.bridges ?? [], pull?.gaps ?? []);
         again(() => {
           if (copy === undefined) {
             return setDown(editor, ids, { place: { by }, settle: snapped });
@@ -1192,11 +1269,23 @@ export function edits(
         // Along the diagonal, so that the scale is the same both ways.
         const along = ((at.x - origin.x) * dx + (at.y - origin.y) * dy) / length;
         const factor = Math.max(along, SMALLEST_SCALE);
+        let lined: number | undefined;
+        if (press.upright) {
+          const scaling = press;
+          lined = scaledOnto(
+            { area: bounding(corners)!, origin, factor, least: SMALLEST_SCALE },
+            () => (scaling.neighbours ??= editor.neighbours(ids, entered)),
+            zoom,
+          );
+        }
         const gridded =
-          pulling && press.upright ? core.snapScaleToGrid(origin, corner, factor, zoom) : undefined;
-        const snapped = gridded !== undefined && gridded >= SMALLEST_SCALE;
-        const scale = { by: snapped ? gridded : factor };
-        again(() => setDown(editor, ids, { scale, about: origin, settle: snapped }));
+          lined === undefined && pulling && press.upright
+            ? core.snapScaleToGrid(origin, corner, factor, zoom)
+            : undefined;
+        const by =
+          lined ?? (gridded !== undefined && gridded >= SMALLEST_SCALE ? gridded : undefined);
+        const scale = { by: by ?? factor };
+        again(() => setDown(editor, ids, { scale, about: origin, settle: by !== undefined }));
         showTargets(editor, editor.targetsOf(ids));
         return;
       }
@@ -1209,21 +1298,49 @@ export function edits(
         }
         // Outwards, as the box runs clockwise.
         const normal = { x: (b.y - a.y) / length, y: (a.x - b.x) / length };
-        let by = (at.x - start.x) * normal.x + (at.y - start.y) * normal.y;
-        let snapped = false;
-        if (pulling && upright(corners)) {
-          const across = Math.abs(normal.x) > Math.abs(normal.y);
-          const pull = core.snapToGrid([across ? a.x + by * normal.x : a.y + by * normal.y], zoom);
-          if (pull !== undefined) {
-            by += pull * (across ? normal.x : normal.y);
-            snapped = true;
+        const by = (at.x - start.x) * normal.x + (at.y - start.y) * normal.y;
+        const least = Math.max(SMALLEST_SIDE / zoom, from.text.font_size);
+        const across = Math.abs(normal.x) > Math.abs(normal.y);
+        const along: Axis = across ? "horizontal" : "vertical";
+        // The side opposite, which stays put.
+        const origin = corners[(side + 2) % 4]!;
+        const [outwards, moving, staying] = across
+          ? [normal.x, a.x, origin.x]
+          : [normal.y, a.y, origin.y];
+        const span = moving - staying;
+        const stretching = press;
+        const beside = () => (stretching.neighbours ??= editor.neighbours(ids, entered));
+        const stretchBy = (further: number, snapped: boolean) => {
+          const next = extended(from, side, further, least);
+          again(() => [
+            ...editor.stretch(id, JSON.stringify(next)),
+            ...setDown(editor, ids, { settle: snapped }),
+          ]);
+        };
+        const straight = upright(corners);
+        if (straight) {
+          // As the frame's own side, which its text may need longer still.
+          const shortest = side % 2 === 1 ? least : Math.max(least, needed(from));
+          const factor = (moving + by * outwards - staying) / span;
+          const scale = { area: bounding(corners)!, origin, factor, along };
+          const lined = scaledOnto({ ...scale, least: shortest / Math.abs(span) }, beside, zoom);
+          if (lined !== undefined) {
+            stretchBy((staying + span * lined - moving) * outwards, true);
+            // From where it landed, as a note fits its text again, which may change its height.
+            // It lands where it was aimed, as nothing pulls it then, unless what it lined up with
+            // no longer faces it, which leaves it to go on as nothing beside it pulled.
+            const reached = { area: bounding(box(editor, ids))!, origin, factor: 1, along };
+            const kept = scaledOnto({ ...reached, least: 0 }, beside, zoom);
+            if (kept !== undefined && Math.abs(kept - 1) <= 1e-9) {
+              showTargets(editor, editor.targetsOf(ids));
+              return;
+            }
+            overlay.lineup([], []);
           }
         }
-        const next = extended(from, side, by, Math.max(SMALLEST_SIDE / zoom, from.text.font_size));
-        again(() => [
-          ...editor.stretch(id, JSON.stringify(next)),
-          ...setDown(editor, ids, { settle: snapped }),
-        ]);
+        const pull =
+          straight && pulling ? core.snapToGrid([moving + by * outwards], zoom) : undefined;
+        stretchBy(by + (pull ?? 0) * outwards, pull !== undefined);
         showTargets(editor, editor.targetsOf(ids));
         return;
       }
@@ -1260,27 +1377,26 @@ export function edits(
           editor.beginGesture();
         }
         const { id, shape } = press;
-        const sticks = SEGMENTS.has(shape);
-        const start = landed(editor, press.start, zoom, sticks);
-        const end = landed(
-          editor,
-          at,
-          zoom,
-          sticks,
-          sticks && held.shiftKey ? start.at : undefined,
-        );
-        press.ends = [start.at, end.at];
-        // A note shows nothing until written in.
-        overlay.marquee(shape === "note" ? rect(start.at, end.at) : undefined);
-        const kind = styled(shaped(shape, start.at, end.at, FONT_SIZE / zoom), zoom);
-        if (sticks) {
+        if (SEGMENTS.has(shape)) {
+          const start = landed(editor, press.start, zoom);
+          const end = landed(editor, at, zoom, true, held.shiftKey ? start.at : undefined);
+          press.ends = [start.at, end.at];
+          const kind = styled(shaped(shape, start.at, end.at, FONT_SIZE / zoom), zoom);
           const stuck = { ...kind, from_target: start.target, to_target: end.target };
           again(() => editor.add(id, entered, JSON.stringify(stuck)));
           showTargets(editor, [start.target, end.target]);
-        } else {
-          again(() => [...editor.add(id, entered, JSON.stringify(kind)), ...setDown(editor, [id])]);
-          showTargets(editor, editor.targetsOf([id]));
+          return;
         }
+        // Without what it draws, which a step before added.
+        const sketch = press;
+        const beside = () => (sketch.neighbours ??= editor.neighbours([id], entered));
+        const [start, end] = drawnOnto(press.start, at, beside, zoom);
+        press.ends = [start, end];
+        // A note shows nothing until written in.
+        overlay.marquee(shape === "note" ? rect(start, end) : undefined);
+        const kind = styled(shaped(shape, start, end, FONT_SIZE / zoom), zoom);
+        again(() => [...editor.add(id, entered, JSON.stringify(kind)), ...setDown(editor, [id])]);
+        showTargets(editor, editor.targetsOf([id]));
         return;
       }
       case "end": {
@@ -1322,6 +1438,7 @@ export function edits(
     wasClick = (press.kind === "move" || press.kind === "marquee") && !press.dragging;
     const held = holding() !== undefined;
     overlay.targets([]);
+    overlay.lineup([], []);
     if (press.kind === "marquee") {
       overlay.marquee(undefined);
     } else if (press.kind === "draw") {
@@ -1393,7 +1510,7 @@ export function edits(
           ...editor.add(
             id,
             entered,
-            JSON.stringify(aligned(styled(placed(shape, start, zoom), zoom), zoom)),
+            JSON.stringify(aligned(editor, styled(placed(shape, start, zoom), zoom), zoom)),
           ),
         );
         touched.push(...setDown(editor, [id]));
@@ -1973,6 +2090,7 @@ export function edits(
       overlay.marquee(undefined);
       overlay.entered(undefined);
       overlay.targets([]);
+      overlay.lineup([], []);
       overlay.crop(undefined);
       over = undefined;
       previewed = undefined;
@@ -2084,10 +2202,6 @@ function bounding(corners: Point[] | undefined): Rect | undefined {
   const [xs, ys] = [corners.map(({ x }) => x), corners.map(({ y }) => y)];
   const [x, y] = [Math.min(...xs), Math.min(...ys)];
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
-}
-
-function edges(start: number, size: number): number[] {
-  return [start, start + size / 2, start + size];
 }
 
 /** ⌘ on macOS, where Ctrl opens the context menu. */

@@ -395,6 +395,20 @@ body {
   stroke-dasharray: 4 4;
 }
 
+/* Thin as a preview, and dashed where they bridge, as they only come and go with a gesture. */
+.lineup > * {
+  fill: none;
+  stroke: var(--selected);
+  stroke-width: 1px;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.lineup .bridges {
+  stroke-dasharray: 4 3;
+  stroke-linecap: butt;
+}
+
 /* Wide and faint, so that it does not read as selected. */
 .targets > * {
   fill: none;
@@ -464,7 +478,8 @@ body {
 [data-contrast="high"] .pivot,
 [data-contrast="high"] .marquee,
 [data-contrast="high"] .entered,
-[data-contrast="high"] .handles > * {
+[data-contrast="high"] .handles > *,
+[data-contrast="high"] .lineup > * {
   stroke-width: 2px;
 }
 

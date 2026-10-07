@@ -2,7 +2,7 @@
 // of its own at the zoom it shows at, rounded up to a power of two so that zooming within the same
 // power reuses it, and follows the camera only once it settles.
 
-import type { Camera, Viewport } from "./camera.js";
+import { onScreen, type Camera, type Viewport } from "./camera.js";
 import type { Board, Rect } from "./core.js";
 
 /** WebGL2 guarantees textures this large. */
@@ -66,11 +66,6 @@ export function settling(again: () => void): Settling {
       seen = undefined;
     },
   };
-}
-
-/** What of the board shows. */
-export function onScreen(camera: Camera, { width, height }: Viewport): Rect {
-  return { x: camera.x, y: camera.y, width: width / camera.zoom, height: height / camera.zoom };
 }
 
 /** The assets of the images that show, among those `kept`, each with its largest image's area. */
