@@ -246,8 +246,8 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   let copied: { style: Style; natural: boolean } | undefined;
 
   /**
-   * The elements selected, and those of the groups selected, but the groups themselves, or else
-   * what the tool draws, which no element holds yet.
+   * The elements selected, and those of the groups selected, but the groups themselves and the
+   * locked elements, or else what the tool draws, which no element holds yet.
    */
   const targets = (): { id: string; kind: Kind }[] => {
     const opened = host.current();
@@ -258,10 +258,15 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     if (drawn) {
       return [{ id: "", kind: drawn }];
     }
-    const { board } = opened;
+    const { board, editor } = opened;
     const chosen = new Set(host.selection());
     return board.draw_order
-      .filter((id) => among(board, id, chosen) && board.elements[id]!.kind.type !== "group")
+      .filter(
+        (id) =>
+          among(board, id, chosen) &&
+          board.elements[id]!.kind.type !== "group" &&
+          editor.lockedBy(id) === undefined,
+      )
       .map((id) => ({ id, kind: board.elements[id]!.kind }));
   };
   const alone = () => loneImage(host.current()?.board, host.selection());

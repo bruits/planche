@@ -33,8 +33,15 @@ impl Board {
             .find(|id| hits(&self.elements[id].kind, point, tolerance))
     }
 
-    /// Every element that [`Board::hit`] would find anywhere on the way from `from` to `to`,
-    /// under others too, from back to front. The way is tried every `tolerance`, so that it
+    /// What [`Board::hit`] finds, but through the locked elements, as a click goes.
+    pub fn hit_unlocked(&self, point: Point, tolerance: f64) -> Option<ElementId> {
+        self.draw_order().into_iter().rev().find(|id| {
+            hits(&self.elements[id].kind, point, tolerance) && self.locked_by(*id).is_none()
+        })
+    }
+
+    /// Every element that [`Board::hit_unlocked`] would find anywhere on the way from `from` to
+    /// `to`, under others too, from back to front. The way is tried every `tolerance`, so that it
     /// misses nothing it passes over, or at most [`MOST_TRIES`] times, spread evenly along it.
     pub fn hit_along(&self, from: Point, to: Point, tolerance: f64) -> Vec<ElementId> {
         // With no tolerance, only its ends.
@@ -69,6 +76,7 @@ impl Board {
                 let kind = &self.elements[id].kind;
                 shape(kind).is_some_and(|shape| overlap(&shape, &around))
                     && hits_any(kind, &points, tolerance)
+                    && self.locked_by(*id).is_none()
             })
             .collect()
     }
@@ -91,12 +99,14 @@ impl Board {
             .collect()
     }
 
-    /// The top-level elements and outermost groups of what [`Board::touching`] finds, once
-    /// each, in the order it finds them.
+    /// The top-level elements and outermost groups of what [`Board::touching`] finds but for the
+    /// locked elements, as a selection rectangle goes through them, once each, in the order it
+    /// finds them.
     pub fn touching_top_level(&self, area: Rect) -> Vec<ElementId> {
         let mut seen = BTreeSet::new();
         self.touching(area)
             .into_iter()
+            .filter(|id| self.locked_by(*id).is_none())
             .filter_map(|id| self.top_level(id))
             .filter(|id| seen.insert(*id))
             .collect()
@@ -1134,7 +1144,7 @@ fn edges(shape: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{board, element, id, stroke};
+    use crate::tests::{board, element, id, locked, stroke};
     use crate::{
         AssetId, Colour, Corners, Dash, Fill, Heads, ImageEdits, Paper, Size, Text, Weight,
     };
@@ -1361,6 +1371,24 @@ mod tests {
         assert_eq!(board.hit(point(7.0, 5.0), 0.0), Some(id(3)));
         assert_eq!(board.hit(point(2.0, 5.0), 0.0), Some(id(1)));
         assert_eq!(board.hit(point(17.0, 5.0), 0.0), None);
+    }
+
+    #[test]
+    fn a_click_goes_through_what_is_locked_or_within_a_locked_group() {
+        let board = board([
+            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
+            (2, locked(None, "a1", image(0.0, 0.0, 10.0, 10.0, 0.0))),
+            (3, locked(None, "a2", ElementKind::Group)),
+            (4, element(Some(3), "a0", image(20.0, 0.0, 10.0, 10.0, 0.0))),
+        ]);
+        assert_eq!(board.hit(point(5.0, 5.0), 0.0), Some(id(2)));
+        assert_eq!(board.hit_unlocked(point(5.0, 5.0), 0.0), Some(id(1)));
+        assert_eq!(board.hit(point(25.0, 5.0), 0.0), Some(id(4)));
+        assert_eq!(board.hit_unlocked(point(25.0, 5.0), 0.0), None);
+        assert_eq!(
+            board.hit_along(point(5.0, 5.0), point(25.0, 5.0), 1.0),
+            [id(1)]
+        );
     }
 
     #[test]
@@ -2198,6 +2226,23 @@ mod tests {
             board
                 .touching_top_level(area(50.0, 5.0, 10.0, 10.0))
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_selection_rectangle_goes_through_what_is_locked() {
+        let board = board([
+            (1, element(None, "a0", ElementKind::Group)),
+            (2, locked(Some(1), "a0", image(0.0, 0.0, 20.0, 20.0, 0.0))),
+            (3, element(Some(1), "a1", image(50.0, 0.0, 20.0, 20.0, 0.0))),
+            (4, locked(None, "a1", comment(10.0, 10.0))),
+        ]);
+        let around_the_locked = area(5.0, 5.0, 10.0, 10.0);
+        assert_eq!(board.touching(around_the_locked), [id(2), id(4)]);
+        assert!(board.touching_top_level(around_the_locked).is_empty());
+        assert_eq!(
+            board.touching_top_level(area(0.0, 0.0, 60.0, 10.0)),
+            [id(1)]
         );
     }
 

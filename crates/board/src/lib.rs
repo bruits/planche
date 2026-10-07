@@ -95,6 +95,8 @@ pub enum Error {
     InvalidColour(String),
     #[error("element {0} of the copy has no new id")]
     Unnamed(ElementId),
+    #[error("element {0} is locked")]
+    Locked(ElementId),
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -217,6 +219,25 @@ impl Board {
             .map(|(id, _)| *id)
     }
 
+    /// The outermost of the element and its groups that is locked, the first to unlock, `None`
+    /// when none is.
+    pub fn locked_by(&self, id: ElementId) -> Option<ElementId> {
+        let mut locked = None;
+        let mut at = Some(id);
+        let mut seen = BTreeSet::new();
+        // A board fresh from a merge may hold a cycle until repaired.
+        while let Some(id) = at
+            && seen.insert(id)
+            && let Some(element) = self.elements.get(&id)
+        {
+            if element.locked {
+                locked = Some(id);
+            }
+            at = element.group;
+        }
+        locked
+    }
+
     /// With the elements of the groups among them, all the way down. Unknown ids are left out.
     fn with_descendants(&self, ids: &[ElementId]) -> BTreeSet<ElementId> {
         let mut found = BTreeSet::new();
@@ -286,6 +307,11 @@ pub struct Element {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub group: Option<ElementId>,
+    /// Clicks and selection rectangles go through it, and edits refuse it, until it is unlocked.
+    /// A locked group locks its elements too.
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub locked: bool,
     pub z: ZIndex,
     pub kind: ElementKind,
 }
@@ -1680,8 +1706,16 @@ mod tests {
     pub(crate) fn element(group: Option<u128>, key: &str, kind: ElementKind) -> Element {
         Element {
             group: group.map(id),
+            locked: false,
             z: z(key),
             kind,
+        }
+    }
+
+    pub(crate) fn locked(group: Option<u128>, key: &str, kind: ElementKind) -> Element {
+        Element {
+            locked: true,
+            ..element(group, key, kind)
         }
     }
 
@@ -1797,6 +1831,32 @@ mod tests {
         .map(|(element, group)| (id(element), group.map(id)));
         assert_eq!(groups, expected);
         assert_eq!(broken.draw_order().len(), broken.elements.len());
+    }
+
+    #[test]
+    fn an_element_is_locked_by_its_outermost_locked_group_or_itself() {
+        let mut board = board([
+            (1, locked(None, "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", ElementKind::Group)),
+            (3, locked(Some(2), "a0", arrow())),
+            (4, element(Some(2), "a1", arrow())),
+            (5, element(None, "a1", ElementKind::Group)),
+            (6, locked(Some(5), "a0", arrow())),
+            (7, element(Some(5), "a1", arrow())),
+            // Unrepaired, as fresh from a merge.
+            (8, locked(Some(9), "a0", ElementKind::Group)),
+            (9, element(Some(8), "a0", ElementKind::Group)),
+        ]);
+        assert_eq!(board.locked_by(id(3)), Some(id(1)));
+        assert_eq!(board.locked_by(id(4)), Some(id(1)));
+        assert_eq!(board.locked_by(id(6)), Some(id(6)));
+        assert_eq!(board.locked_by(id(7)), None);
+        assert_eq!(board.locked_by(id(5)), None);
+        assert_eq!(board.locked_by(id(9)), Some(id(8)));
+        assert_eq!(board.locked_by(id(10)), None);
+        board.elements.get_mut(&id(1)).unwrap().locked = false;
+        assert_eq!(board.locked_by(id(3)), Some(id(3)));
+        assert_eq!(board.locked_by(id(4)), None);
     }
 
     #[test]

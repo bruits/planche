@@ -137,6 +137,7 @@ async fn an_agent_with_the_token_reads_through_the_tools() {
         "align",
         "distribute",
         "group",
+        "lock",
         "remove",
         "restack",
         "select",
@@ -414,7 +415,7 @@ async fn turning_it_off_ends_every_connection() {
         answer: written.answer,
     };
     let client = ().serve(connected(address, &secrets).await).await.unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 17);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 18);
 
     drop(running);
     let ended = tokio::time::timeout(Duration::from_secs(5), client.waiting()).await;

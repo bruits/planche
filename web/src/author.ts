@@ -120,6 +120,15 @@ export async function write(
         ),
       };
     }
+    case "lock": {
+      await ready(page, target, clock);
+      const ids = known(target, args.ids);
+      return {
+        touched: page.apply((editor, touched) =>
+          touched.push(...editor.setLocked(ids, args.locked === true)),
+        ),
+      };
+    }
     case "remove": {
       await ready(page, target, clock);
       const ids = known(target, args.ids);
@@ -218,6 +227,9 @@ async function addImages(page: Writing, target: Opened, clock: Clock, images: Re
           : undefined;
       if (group !== undefined && kind?.type !== "group") {
         throw new Error(`${target.folder.name} has no group ${group}, so nothing changed`);
+      }
+      if (group !== undefined && target.editor.lockedBy(group) !== undefined) {
+        throw new Error(`Group ${group} of ${target.folder.name} is locked, so nothing changed`);
       }
     }
   } catch (error) {
@@ -524,8 +536,8 @@ async function transform(page: Writing, target: Opened, clock: Clock, given: Tra
   }
   await ready(page, target, clock);
   const ids = known(target, given.ids);
-  if (given.flip !== undefined && !holdsImage(target.board, ids)) {
-    throw new Error("Only images flip, and these hold none");
+  if (given.flip !== undefined && !holdsImage(target, ids)) {
+    throw new Error("Only unlocked images flip, and these hold none");
   }
   const scale =
     given.width === undefined

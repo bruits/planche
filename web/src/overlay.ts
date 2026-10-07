@@ -57,8 +57,8 @@ export interface Overlay {
   grab(grab: Grab | undefined, held: boolean): void;
   /** The box a gesture started from, and what it scales around when that is its centre, `undefined` to hide them. */
   start(corners: Point[] | undefined, pivot?: Point): void;
-  /** What a click would select, as `outline` takes it, `undefined` for nothing. */
-  preview(outline: Float64Array | undefined): void;
+  /** What a click would select, or what is `locked`, as `outline` takes it, `undefined` for nothing. */
+  preview(outline: Float64Array | undefined, locked?: boolean): void;
   /** The ends of an arrow or a line, each with a handle, or `undefined` to hide them. */
   ends(points: Point[] | undefined): void;
   /** `undefined` hides it. */
@@ -279,8 +279,9 @@ export function overlay(host: HTMLElement): Overlay {
       started.setAttribute("points", box.flatMap(({ x, y }) => [x, y]).join(" "));
       start.removeAttribute("display");
     },
-    preview(outline) {
+    preview(outline, locked = false) {
       preview.replaceChildren(...shapes(outline ? [outline] : []));
+      preview.classList.toggle("locked", locked);
     },
     ends(points) {
       ends = points;

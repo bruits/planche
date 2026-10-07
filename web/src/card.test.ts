@@ -11,6 +11,7 @@ import { styles } from "./style.js";
 const IMAGE = "a".repeat(32);
 const ARROW = "d".repeat(32);
 const OTHER = "e".repeat(32);
+const GROUP = "f".repeat(32);
 const ASSET = "b".repeat(64);
 const frame = { x: 0, y: 0, width: 160, height: 120 };
 const ORIGIN = { x: 0, y: 0 };
@@ -488,6 +489,17 @@ describe("the card of an image and an arrow", () => {
     select([IMAGE, OTHER]);
     expect(button("Ink")).toBeNull();
     expect(button("Yellow").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("styles the elements of a group selected but those locked", () => {
+    const { board, select, shown, kind } = both();
+    board.editor.group(GROUP, [IMAGE, ARROW]);
+    board.editor.setLocked([ARROW], true);
+    board.board = core.board(board.editor);
+    select([GROUP]);
+    shown.set({ opacity: 50 });
+    expect(kind(IMAGE)).toMatchObject({ opacity: 50 });
+    expect(kind(ARROW)).not.toHaveProperty("opacity");
   });
 
   it("offers what the arrow takes, as an image narrows it to nothing but opacity", () => {

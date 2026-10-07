@@ -31,7 +31,6 @@ import {
   exposing,
   extent,
   files,
-  holdsImage,
   imageKind,
   loneImage,
   placed,
@@ -75,7 +74,7 @@ import { heapInUse, megabytes, milliseconds, percentile, rate, timed } from "./m
 import { overlay } from "./overlay.js";
 import { testPhotos } from "./photos.js";
 import { sped } from "./playback.js";
-import { pinned, pins } from "./pins.js";
+import { lockedPin, pinned, pins } from "./pins.js";
 import { platform } from "./platform.js";
 import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE } from "./raster.js";
@@ -405,17 +404,23 @@ const fewImages = () =>
   editing.selection().filter((id) => opened?.board.elements[id]?.kind.type === "image").length < 2
     ? "Select two images or more"
     : undefined;
-/** What is selected, with what the groups selected hold. */
+/**
+ * What is selected, with what the groups selected hold, but for what is locked, whose looks edits
+ * leave alone.
+ */
 const selectedKinds = (): Kind[] => {
-  const board = opened?.board;
+  if (!opened) {
+    return [];
+  }
+  const { board, editor } = opened;
   const chosen = new Set(editing.selection());
-  return board
-    ? Object.entries(board.elements).flatMap(([id, { kind }]) =>
-        among(board, id, chosen) ? [kind] : [],
-      )
-    : [];
+  return Object.entries(board.elements).flatMap(([id, { kind }]) =>
+    among(board, id, chosen) && editor.lockedBy(id) === undefined ? [kind] : [],
+  );
 };
 const selectedImages = () => selectedKinds().filter((kind) => kind.type === "image");
+/** What the lock command unlocks, as nothing is selected. */
+const unlocking = () => (editing.selection().length === 0 ? editing.lockedUnder() : undefined);
 const selectedImage = () => loneImage(opened?.board, editing.selection())?.image;
 const greyed = () => {
   const images = selectedImages();
@@ -433,8 +438,7 @@ const elliptical = () => {
   return cropping === undefined ? shapedAs("ellipse") : cropping === "ellipse";
 };
 const croppable = () =>
-  noneSelected() ??
-  (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images are cropped");
+  noneSelected() ?? (selectedImages().length > 0 ? undefined : "Only images are cropped");
 const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet" : undefined);
 const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection()) : []);
 const selectedMoving = () =>
@@ -457,10 +461,30 @@ const frameStep = (label: string, by: number, keys: Shortcut[]): Command => ({
     refreshBar();
   },
 });
+/**
+ * The animated images and videos of the selection's assets, wherever they show, that the speed
+ * commands set, as a still selected with them takes no speed, and those locked take it from the
+ * others of their asset.
+ */
+const paced = (): string[] => {
+  if (!opened) {
+    return [];
+  }
+  const { board, editor } = opened;
+  const assets = new Set(selectedMoving());
+  return Object.entries(board.elements).flatMap(([id, { kind }]) =>
+    kind.type === "image" && assets.has(kind.asset) && editor.lockedBy(id) === undefined
+      ? [id]
+      : [],
+  );
+};
+/** Of an asset the speed commands set, which leave out those whose images are all locked. */
 const speedOf = (): number => {
-  const [asset] = selectedMoving();
+  const board = opened?.board;
+  const [id] = paced();
+  const kind = id === undefined ? undefined : board?.elements[id]?.kind;
   return (
-    (asset === undefined ? undefined : opened && assetPlayback(opened.board).get(asset)?.speed) ?? 1
+    (kind?.type === "image" ? board && assetPlayback(board).get(kind.asset)?.speed : undefined) ?? 1
   );
 };
 const pace = (label: string, faster: boolean, keys: Shortcut[]): Command => ({
@@ -468,20 +492,16 @@ const pace = (label: string, faster: boolean, keys: Shortcut[]): Command => ({
   keys,
   unavailable: () =>
     noneSelected() ??
-    (selectedMoving().length > 0 ? undefined : "Only animated images and videos change speed") ??
+    (paced().length > 0 ? undefined : "Only animated images and videos change speed") ??
     (sped(speedOf(), faster) === undefined
       ? `Already at the ${faster ? "fastest" : "slowest"}`
       : undefined),
   run: () => {
     const speed = sped(speedOf(), faster);
-    const assets = new Set(selectedMoving());
-    if (speed === undefined || !opened) {
+    const ids = paced();
+    if (speed === undefined || ids.length === 0) {
       return;
     }
-    // Its animated images and videos alone, as a still selected with them takes no speed.
-    const ids = Object.entries(opened.board.elements)
-      .filter(([, { kind }]) => kind.type === "image" && assets.has(kind.asset))
-      .map(([id]) => id);
     editing.apply((editor, touched) => touched.push(...editor.setSpeed(ids, speed)));
   },
 });
@@ -495,8 +515,7 @@ const flip = (label: string, key: string, horizontally: boolean): Command => ({
   label,
   keys: [{ key, shift: true }],
   unavailable: () =>
-    noneSelected() ??
-    (opened && holdsImage(opened.board, editing.selection()) ? undefined : "Only images flip"),
+    noneSelected() ?? (selectedImages().length > 0 ? undefined : "Only images flip"),
   run: () => editing.flip(horizontally),
   once: true,
 });
@@ -876,10 +895,7 @@ const commands = {
     label: "Greyscale",
     keys: [{ key: "g", alt: true }],
     unavailable: () =>
-      noneSelected() ??
-      (opened && holdsImage(opened.board, editing.selection())
-        ? undefined
-        : "Only images turn grey"),
+      noneSelected() ?? (selectedImages().length > 0 ? undefined : "Only images turn grey"),
     run: () => editing.greyscale(!greyed()),
     once: true,
   },
@@ -944,6 +960,20 @@ const commands = {
     keys: [{ key: "g", command: true, shift: true }],
     unavailable: () => noneSelected() ?? (selectsGroup() ? undefined : "Only groups ungroup"),
     run: () => editing.ungroup(),
+  },
+  lock: {
+    label: () => (unlocking() === undefined ? "Lock" : "Unlock"),
+    keys: [{ key: "l", command: true, shift: true }],
+    unavailable: () => (unlocking() === undefined ? noneSelected() : undefined),
+    run: () => {
+      const under = unlocking();
+      if (under === undefined) {
+        editing.lock();
+      } else {
+        editing.unlock([under]);
+      }
+    },
+    once: true,
   },
   goInside: {
     label: "Go inside",
@@ -1495,7 +1525,9 @@ document.addEventListener("contextmenu", (event) => {
   if (at === undefined || menuOpen() || busy()) {
     return;
   }
-  contextMenu(editing.aim(at, pinned(event.target)), at, { x: event.clientX, y: event.clientY });
+  const pin = pinned(event.target) ?? lockedPin(event.target);
+  const locked = editing.lockedAt(at, pin);
+  contextMenu(editing.aim(at, pin), at, { x: event.clientX, y: event.clientY }, locked);
 });
 
 // The window outlives a reload of the page, so it follows how the page starts, even when the
@@ -1992,6 +2024,9 @@ function hint(): string {
       .map((command) => `${describe(command.keys[0]!)} to ${named(command).toLowerCase()} · `);
     return `Drag to move, holding ${centreKey} to copy · corners scale · turn from outside a corner · ${crops}${keys.join("")}${styling}right-click for more`;
   }
+  if (unlocking() !== undefined) {
+    return `Locked · right-click or ${describe(commands.lock.keys[0]!)} to unlock`;
+  }
   return `Drop or paste images · scroll to move around · right-click or ${describe(commands.find.keys[0]!)} for more`;
 }
 
@@ -2000,8 +2035,16 @@ function hint(): string {
  * three groups, and each submenu to two, so that it stays quick to scan. What the style card and
  * the keys already reach, such as colours, stays out.
  */
-function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: number }): void {
+function contextMenu(
+  onSelection: boolean,
+  at: Point,
+  place: { x: number; y: number },
+  locked?: string,
+): void {
   const paste = { ...commands.paste, run: () => pasteAt(at) };
+  // What the right-click landed on, though the selection's box may hold it.
+  const unlock =
+    locked === undefined ? [] : [{ label: "Unlock", run: () => editing.unlock([locked]) }];
   const entries: Entry[] = onSelection
     ? [
         commands.cut,
@@ -2054,6 +2097,8 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         commands.group,
         commands.ungroup,
         commands.goInside,
+        commands.lock,
+        ...unlock,
         relevantSubmenu("Order", [
           commands.front,
           commands.forward,
@@ -2089,6 +2134,8 @@ function contextMenu(onSelection: boolean, at: Point, place: { x: number; y: num
         { ...commands.addImages, run: () => addPicked(at) },
         paste,
         commands.selectAll,
+        // Which the lock command does too, as nothing is selected then.
+        ...unlock.map((entry) => ({ ...entry, keys: commands.lock.keys })),
         "separator",
         commands.fit,
         grids(),

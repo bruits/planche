@@ -36,6 +36,12 @@ export type Heads = "end" | "both";
 
 export type Ids = { ids: Array<string>, };
 
+export type LockArguments = { ids: Array<string>, 
+/**
+ * False unlocks them.
+ */
+locked: boolean, };
+
 export type NewElement = { "type": "note", x: number, y: number, width?: number, text: string, font_size?: number, 
 /**
  * Clockwise, in degrees.

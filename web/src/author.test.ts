@@ -2,8 +2,18 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { answer as reply, type Reading } from "./agent.js";
 import { write, type Writing } from "./author.js";
-import { untitled, type Opened } from "./board.js";
+import { imageKind, newId, untitled, type Opened } from "./board.js";
 import * as core from "./core.js";
+
+// Decoding needs a browser, which a refusal comes before.
+vi.mock("./board.js", async (original) => ({
+  ...(await original<typeof import("./board.js")>()),
+  prepare: async () => ({
+    asset: "a".repeat(64),
+    bytes: new Blob([]),
+    natural: { width: 10, height: 10 },
+  }),
+}));
 
 const arrow = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
 const comment = { type: "comment", at: { x: 40, y: 60 }, text: "Why here?" };
@@ -250,6 +260,79 @@ describe("write", () => {
     ]);
     opened.editor.undo();
     expect(pinned()[1]).toEqual({ x: 30, y: 0 });
+  });
+
+  it("locks what an agent names, whose edits it then refuses, and unlocks it", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const { added } = (await write("add", { elements: [arrow] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const ids = added.map(({ id }) => id);
+    await write("lock", { ids, locked: true }, writing, later());
+    const reading = {
+      ...writing,
+      unsaved: () => false,
+      shown: () => undefined,
+    } as unknown as Reading & Writing;
+    const read = (await reply({ id: 1, tool: "board", args: {}, deadline: later() }, reading)) as {
+      elements: { locked_by?: string }[];
+    };
+    expect(read.elements[0]?.locked_by).toBe(ids[0]);
+    const before = opened.editor.json();
+    await expect(write("remove", { ids }, writing, later())).rejects.toThrow("is locked");
+    expect(opened.editor.json()).toBe(before);
+    await write("lock", { ids, locked: false }, writing, later());
+    await write("remove", { ids }, writing, later());
+    expect(opened.board.elements).toEqual({});
+  });
+
+  it("names the locked group to unlock of what it holds, and adds no image into it", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const keep = vi.spyOn(writing, "keep");
+    const { added } = (await write("add", { elements: [arrow, arrow] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const ids = added.map(({ id }) => id);
+    const { group } = (await write("group", { ids }, writing, later())) as { group: string };
+    await write("lock", { ids: [group], locked: true }, writing, later());
+    const reading = {
+      ...writing,
+      unsaved: () => false,
+      shown: () => undefined,
+    } as unknown as Reading & Writing;
+    const read = (await reply({ id: 1, tool: "board", args: {}, deadline: later() }, reading)) as {
+      elements: { id: string; locked_by?: string }[];
+    };
+    expect(read.elements.find(({ id }) => id === ids[0])?.locked_by).toBe(group);
+    const before = opened.editor.json();
+    await expect(
+      write("add_images", { images: [{ data: "", group }] }, writing, later()),
+    ).rejects.toThrow("is locked");
+    expect(opened.editor.json()).toBe(before);
+    expect(keep).not.toHaveBeenCalled();
+  });
+
+  it("flips no group whose only images are locked, and says so", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const image = newId();
+    const size = { width: 10, height: 10 };
+    const kind = imageKind("a".repeat(64), size, { x: 0, y: 0, ...size });
+    opened.editor.add(image, undefined, JSON.stringify(kind));
+    opened.board = core.board(opened.editor);
+    const { added } = (await write("add", { elements: [arrow] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const ids = [image, ...added.map(({ id }) => id)];
+    const { group } = (await write("group", { ids }, writing, later())) as { group: string };
+    await write("lock", { ids: [image], locked: true }, writing, later());
+    const before = opened.editor.json();
+    await expect(
+      write("transform", { ids: [group], flip: "horizontal" }, writing, later()),
+    ).rejects.toThrow("locked");
+    expect(opened.editor.json()).toBe(before);
   });
 
   it("refuses a transform that cannot be made, which changes nothing", async () => {

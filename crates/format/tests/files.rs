@@ -34,6 +34,7 @@ fn z(key: &str) -> ZIndex {
 fn note(group: Option<ElementId>, text: &str) -> Element {
     Element {
         group,
+        locked: false,
         z: z("a0"),
         kind: ElementKind::Note {
             frame: frame(200.0, 80.0),
@@ -53,6 +54,7 @@ fn sample() -> Board {
             group,
             Element {
                 group: None,
+                locked: false,
                 z: z("a0"),
                 kind: ElementKind::Group,
             },
@@ -61,6 +63,7 @@ fn sample() -> Board {
             ElementId::from_random(2),
             Element {
                 group: Some(group),
+                locked: false,
                 z: z("a1"),
                 kind: ElementKind::Image {
                     asset: AssetId::of(IMAGE),
@@ -92,6 +95,7 @@ fn sample() -> Board {
             ELLIPSE,
             Element {
                 group: None,
+                locked: false,
                 z: z("a1"),
                 kind: ElementKind::Shape {
                     frame: frame(100.0, 100.0),
@@ -112,6 +116,7 @@ fn sample() -> Board {
             ARROW,
             Element {
                 group: None,
+                locked: false,
                 z: z("a2"),
                 kind: ElementKind::Arrow {
                     from: Point { x: 0.0, y: 0.0 },
@@ -134,6 +139,7 @@ fn sample() -> Board {
             STICKY,
             Element {
                 group: None,
+                locked: false,
                 z: z("a3"),
                 kind: ElementKind::Sticky {
                     frame: frame(160.0, 160.0),
@@ -149,6 +155,7 @@ fn sample() -> Board {
             ElementId::from_random(7),
             Element {
                 group: None,
+                locked: false,
                 z: z("a4"),
                 kind: ElementKind::Line {
                     from: Point { x: -10.0, y: 5.0 },
@@ -166,6 +173,7 @@ fn sample() -> Board {
             ElementId::from_random(9),
             Element {
                 group: None,
+                locked: false,
                 z: z("a6"),
                 kind: ElementKind::Comment {
                     at: Point { x: 12.5, y: -3.0 },
@@ -178,6 +186,7 @@ fn sample() -> Board {
             ElementId::from_random(8),
             Element {
                 group: None,
+                locked: false,
                 z: z("a5"),
                 kind: ElementKind::Shape {
                     frame: frame(40.0, 40.0),
@@ -198,6 +207,7 @@ fn sample() -> Board {
             STROKE,
             Element {
                 group: None,
+                locked: false,
                 z: z("a7"),
                 kind: ElementKind::Stroke {
                     tip: Tip::Pen,
@@ -275,7 +285,7 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
     fn id(bits: u128) -> ElementId {
         ElementId::from_random(bits)
     }
-    let cases: [(Edit, &[u128]); 27] = [
+    let cases: [(Edit, &[u128]); 28] = [
         (
             |editor| editor.add(id(10), None, note(None, "New").kind),
             &[10],
@@ -301,6 +311,7 @@ fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
             &[4, 5, 10],
         ),
         (|editor| editor.ungroup(id(1)), &[1, 2, 3]),
+        (|editor| editor.set_locked(&[id(1)], true), &[1]),
         (|editor| editor.remove(&[ARROW]), &[5]),
         // The arrow's ends stick to the ellipse and the sticky note, and the comment to the
         // ellipse.
@@ -433,6 +444,7 @@ fn an_unknown_background_is_refused() {
 fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
     let styled = |kind| Element {
         group: None,
+        locked: false,
         z: z("a0"),
         kind,
     };
@@ -524,6 +536,22 @@ fn a_crop_shape_is_written_only_once_not_a_rectangle_and_reads_back() {
 
     let files = format::write(editor.board()).unwrap();
     assert_eq!(shape(&files), Some("ellipse".into()));
+    assert_eq!(format::read(&files).unwrap(), *editor.board());
+}
+
+#[test]
+fn a_lock_is_written_only_once_set_and_reads_back() {
+    let mut editor = Editor::new(sample());
+    let locked = |files: &Files| {
+        let bytes = &files[&format!("elements/{NOTE}.json")];
+        serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["locked"].as_bool()
+    };
+    assert_eq!(locked(&format::write(editor.board()).unwrap()), None);
+
+    editor.set_locked(&[NOTE], true).unwrap();
+
+    let files = format::write(editor.board()).unwrap();
+    assert_eq!(locked(&files), Some(true));
     assert_eq!(format::read(&files).unwrap(), *editor.board());
 }
 
@@ -843,6 +871,7 @@ fn equal_boards_write_the_same_bytes() {
     for (bits, kind) in [(20, image), (21, shape)] {
         let element = Element {
             group: None,
+            locked: false,
             z: z("a0"),
             kind,
         };
@@ -925,6 +954,7 @@ fn a_star_or_a_polygon_writes_its_corners_only_when_not_five_and_reads_back() {
                 };
                 let element = Element {
                     group: None,
+                    locked: false,
                     z: z("a0"),
                     kind,
                 };

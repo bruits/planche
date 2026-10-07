@@ -150,6 +150,7 @@ impl Editor {
         }
         if let Some(group) = group {
             self.existing_group(group)?;
+            self.check_unlocked(&[group])?;
         }
         let kind = self.played_alike(kind.canonical());
         check_valid(id, &kind)?;
@@ -158,7 +159,12 @@ impl Editor {
         let mut keys = place(&siblings, siblings.len(), &[id]);
         let (_, z) = keys.remove(0);
         let mut step = self.rekey(keys);
-        let after = Element { group, z, kind };
+        let after = Element {
+            group,
+            locked: false,
+            z,
+            kind,
+        };
         step.insert(
             id,
             Change {
@@ -180,6 +186,7 @@ impl Editor {
     ) -> Result<Vec<ElementId>> {
         if let Some(group) = group {
             self.existing_group(group)?;
+            self.check_unlocked(&[group])?;
         }
         let mut renamed = BTreeMap::new();
         let mut taken = BTreeSet::new();
@@ -199,8 +206,13 @@ impl Editor {
                 *target = target.and_then(|target| renamed.get(&target).copied());
             }
             let group = element.group.and_then(|group| renamed.get(&group).copied());
-            let z = element.z.clone();
-            pasted.elements.insert(id, Element { group, z, kind });
+            let element = Element {
+                group,
+                locked: element.locked,
+                z: element.z.clone(),
+                kind,
+            };
+            pasted.elements.insert(id, element);
         }
         pasted.repair();
         let outermost: Vec<ElementId> = pasted
@@ -216,6 +228,8 @@ impl Editor {
             let element = pasted.elements.get_mut(&id).expect("pasted");
             element.group = group;
             element.z = z;
+            // Or nothing could move it into place.
+            element.locked = false;
         }
         for (id, element) in pasted.elements {
             let after = Some(element);
@@ -233,6 +247,7 @@ impl Editor {
     /// With the elements of the removed groups, and the groups that the removal empties. What
     /// sticks to them comes free where it is.
     pub fn remove(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         let removed = with_emptied(&self.board.elements, self.with_descendants(ids)?);
         let mut step: Changes = removed
             .iter()
@@ -263,6 +278,7 @@ impl Editor {
     /// end that a shape's new form leaves off goes onto its outline, and what no longer lies whole
     /// on what it sticks to, as a new form leaves it, lands again where it lies.
     pub fn update(&mut self, id: ElementId, kind: ElementKind) -> Result<Vec<ElementId>> {
+        self.check_unlocked(&[id])?;
         if mem::discriminant(&self.get(id)?.kind) != mem::discriminant(&kind) {
             return Err(Error::KindChanged(id));
         }
@@ -282,6 +298,7 @@ impl Editor {
     /// does. What sticks to it keeps to the same parts of its frame, and what sticks whole keeps
     /// its size.
     pub fn stretch(&mut self, id: ElementId, kind: ElementKind) -> Result<Vec<ElementId>> {
+        self.check_unlocked(&[id])?;
         let before = &self.get(id)?.kind;
         if mem::discriminant(before) != mem::discriminant(&kind) {
             return Err(Error::KindChanged(id));
@@ -302,6 +319,12 @@ impl Editor {
     /// Sticks each note, sticky note, shape, stroke, and comment among the elements, with those of
     /// the groups among them, to what it lies on whole, or frees it when it lies on nothing.
     pub fn land(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
+        self.land_each(ids)
+    }
+
+    /// As [`Editor::land`] does, the locked elements among them too.
+    fn land_each(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
         let landing: Vec<ElementId> = self
             .with_descendants(ids)?
             .into_iter()
@@ -321,6 +344,7 @@ impl Editor {
     /// Frees each note, sticky note, shape, stroke, and comment among the elements, with those of
     /// the groups among them, from what it sticks to.
     pub fn unstick(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         let stuck = self
             .with_descendants(ids)?
             .into_iter()
@@ -331,6 +355,7 @@ impl Editor {
 
     /// With the elements of the moved groups.
     pub fn translate(&mut self, ids: &[ElementId], dx: f64, dy: f64) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         self.reshape(ids, |kind| shift(kind, dx, dy))
     }
 
@@ -351,9 +376,7 @@ impl Editor {
             sticking,
         } = *transform;
         // Before measuring them, which leaves unknown ones out.
-        for id in ids {
-            self.get(*id)?;
-        }
+        self.check_unlocked(ids)?;
         let room = |board: &Board| board.extent(ids).ok_or(Error::NoRoom);
         let factor = match scale {
             Some(Scaling::By(factor)) => Some(factor),
@@ -407,9 +430,7 @@ impl Editor {
     /// Packs the images among the elements into rows, each keeping its size and turn. The other
     /// elements stay, but for what sticks to the images, which follows them.
     pub fn arrange(&mut self, ids: &[ElementId], order: &Order) -> Result<Vec<ElementId>> {
-        for id in ids {
-            self.get(*id)?;
-        }
+        self.check_unlocked(ids)?;
         let moved = arrangement(&self.board, ids, order)
             .into_iter()
             .map(|(id, by)| {
@@ -425,9 +446,7 @@ impl Editor {
     /// much of `side` as they do on average. The other elements stay, but for what sticks to the
     /// images, which follows them.
     pub fn normalize(&mut self, ids: &[ElementId], side: Side) -> Result<Vec<ElementId>> {
-        for id in ids {
-            self.get(*id)?;
-        }
+        self.check_unlocked(ids)?;
         self.replace(normalization(&self.board, ids, side))
     }
 
@@ -435,18 +454,21 @@ impl Editor {
     /// what its groups hold, and sets them down where they land. One stuck to what another of them
     /// moves follows it instead.
     pub fn align(&mut self, ids: &[ElementId], to: Alignment) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         let movers = self.movers(ids)?;
         self.move_each(alignment(&self.board, &movers, to))
     }
 
     /// As [`Editor::align`] does, with the gaps between three or more elements made alike.
     pub fn distribute(&mut self, ids: &[ElementId], axis: Axis) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         let movers = self.movers(ids)?;
         self.move_each(distribution(&self.board, &movers, axis))
     }
 
     /// Shows only `area` of the image, in its pixels as displayed.
     pub fn crop(&mut self, id: ElementId, area: Rect) -> Result<Vec<ElementId>> {
+        self.check_unlocked(&[id])?;
         let kind = &self.get(id)?.kind;
         let ElementKind::Image { natural_size, .. } = kind else {
             return Err(Error::NotAnImage(id));
@@ -462,7 +484,7 @@ impl Editor {
     /// Shows the whole of each image among the elements, with those of the groups among them,
     /// as a rectangle.
     pub fn reset_crop(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
-        self.reshape(ids, |kind| {
+        self.restyle(ids, |kind| {
             if let Some(whole) = cropped(kind, None) {
                 *kind = whole;
             }
@@ -479,7 +501,7 @@ impl Editor {
         ids: &[ElementId],
         shape: CropShape,
     ) -> Result<Vec<ElementId>> {
-        self.reshape(ids, |kind| {
+        self.restyle(ids, |kind| {
             if let ElementKind::Image { edits, .. } = kind {
                 edits.crop_shape = shape;
             }
@@ -490,6 +512,7 @@ impl Editor {
     /// whole of it when `None`, and as much of every other image of their assets, as an asset
     /// plays one way wherever it shows.
     pub fn set_trim(&mut self, ids: &[ElementId], trim: Option<Trim>) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         let alike = self.same_assets(ids)?;
         self.reshape(&alike, |kind| {
             if let ElementKind::Image { edits, .. } = kind {
@@ -500,6 +523,7 @@ impl Editor {
 
     /// As [`Editor::set_trim`] does, for how fast they play.
     pub fn set_speed(&mut self, ids: &[ElementId], speed: Speed) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         let alike = self.same_assets(ids)?;
         self.reshape(&alike, |kind| {
             if let ElementKind::Image { edits, .. } = kind {
@@ -510,7 +534,7 @@ impl Editor {
 
     /// Greys each image among the elements, with those of the groups among them, or not.
     pub fn set_greyscale(&mut self, ids: &[ElementId], greyscale: bool) -> Result<Vec<ElementId>> {
-        self.reshape(ids, |kind| {
+        self.restyle(ids, |kind| {
             if let ElementKind::Image { edits, .. } = kind {
                 edits.greyscale = greyscale;
             }
@@ -522,9 +546,13 @@ impl Editor {
     /// keeps to its pixel, but for a stroke, drawn as it lies on what it sticks to, which only
     /// follows when that ends up turned.
     pub fn straighten(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         let mut pending = self.with_descendants(ids)?;
         // Turning one would turn all its elements at once, those it holds back included.
-        pending.retain(|id| !matches!(self.board.elements[id].kind, ElementKind::Group));
+        pending.retain(|id| {
+            !matches!(self.board.elements[id].kind, ElementKind::Group)
+                && self.board.locked_by(*id).is_none()
+        });
         let straightened = pending.clone();
         let turns = |id: &ElementId| {
             held_by(&self.board, *id)
@@ -584,6 +612,7 @@ impl Editor {
         if !(factor.is_finite() && factor > 0.0) {
             return Err(Error::NotAScale);
         }
+        self.check_unlocked(ids)?;
         // Its arithmetic would not give the same floats back.
         if factor == 1.0 {
             return self.with_descendants(ids).map(|_| Vec::new());
@@ -629,6 +658,7 @@ impl Editor {
         pivot: Point,
         degrees: f64,
     ) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         if degrees == 0.0 {
             return self.with_descendants(ids).map(|_| Vec::new());
         }
@@ -665,6 +695,7 @@ impl Editor {
     /// Puts back on the grid's lines the coordinates that float arithmetic left a hair off them,
     /// so that they write as they read. With the elements of the groups among them.
     pub fn settle_on_grid(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         self.reshape(ids, |kind| match kind {
             ElementKind::Image { frame, .. }
             | ElementKind::Note { frame, .. }
@@ -696,7 +727,7 @@ impl Editor {
 
     /// Flips each image among the elements, with those of the flipped groups, in its place.
     pub fn flip(&mut self, ids: &[ElementId], horizontally: bool) -> Result<Vec<ElementId>> {
-        self.reshape(ids, |kind| {
+        self.restyle(ids, |kind| {
             if let ElementKind::Image { edits, .. } = kind {
                 let flipped = if horizontally {
                     &mut edits.flip_horizontal
@@ -711,6 +742,7 @@ impl Editor {
     /// Moves the elements among their siblings and keeps their order, forward or backward past
     /// the nearest sibling that stays, or to an end.
     pub fn restack(&mut self, ids: &[ElementId], to: Restack) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
         let mut moving: BTreeMap<Option<ElementId>, BTreeSet<ElementId>> = BTreeMap::new();
         for id in ids {
             moving.entry(self.get(*id)?.group).or_default().insert(*id);
@@ -812,6 +844,7 @@ impl Editor {
         if self.board.elements.contains_key(&group) {
             return Err(Error::TakenId(group));
         }
+        self.check_unlocked(members)?;
         let members: BTreeSet<ElementId> = members.iter().copied().collect();
         let parents = members
             .iter()
@@ -832,6 +865,7 @@ impl Editor {
         let mut step = self.rekey(keys);
         let after = Element {
             group: parent,
+            locked: false,
             z,
             kind: ElementKind::Group,
         };
@@ -860,6 +894,7 @@ impl Editor {
     /// Moves a group's elements into its own group, in its place, and removes it.
     pub fn ungroup(&mut self, group: ElementId) -> Result<Vec<ElementId>> {
         let parent = self.existing_group(group)?.group;
+        self.check_unlocked(&[group])?;
         let members: Vec<ElementId> = self
             .siblings(Some(group), &BTreeSet::new())
             .into_iter()
@@ -885,6 +920,20 @@ impl Editor {
             step.insert(id, change);
         }
         step.insert(group, self.change(group, |_| None));
+        self.record(step)
+    }
+
+    /// Locks or unlocks each element itself, which leaves the lock of its groups and of its own
+    /// elements as it is.
+    pub fn set_locked(&mut self, ids: &[ElementId], locked: bool) -> Result<Vec<ElementId>> {
+        let mut step = Changes::new();
+        for id in ids {
+            self.get(*id)?;
+            step.insert(
+                *id,
+                self.change(*id, |element| Some(Element { locked, ..element })),
+            );
+        }
         self.record(step)
     }
 
@@ -1097,7 +1146,7 @@ impl Editor {
             });
             let landing: Vec<ElementId> =
                 moving.into_iter().chain(left.map(|(id, ..)| id)).collect();
-            editor.land(&landing)?;
+            editor.land_each(&landing)?;
             Ok(())
         })
     }
@@ -1159,6 +1208,28 @@ impl Editor {
         edit: impl Fn(&mut ElementKind),
     ) -> Result<Vec<ElementId>> {
         self.reshape_each(ids, |_, kind| edit(kind), |_, _| true, &BTreeSet::new())
+    }
+
+    /// As [`Editor::reshape`] does, of elements that are not locked, and leaves the locked elements
+    /// of their groups as they look, as carrying them changes only where they lie.
+    fn restyle(
+        &mut self,
+        ids: &[ElementId],
+        edit: impl Fn(&mut ElementKind),
+    ) -> Result<Vec<ElementId>> {
+        self.check_unlocked(ids)?;
+        let locked: BTreeSet<ElementId> = self
+            .board
+            .with_descendants(ids)
+            .into_iter()
+            .filter(|id| self.board.locked_by(*id).is_some())
+            .collect();
+        let edit = |id, kind: &mut ElementKind| {
+            if !locked.contains(&id) {
+                edit(kind);
+            }
+        };
+        self.reshape_each(ids, edit, |_, _| true, &BTreeSet::new())
     }
 
     /// As [`Editor::reshape`] does, with `alike` as [`Editor::free_ends_moved_off`] takes it, and
@@ -1371,6 +1442,17 @@ impl Editor {
             && self.board.stuck_to(id).contains(&target)
         {
             return Err(Error::StuckToItself(id));
+        }
+        Ok(())
+    }
+
+    /// Refuses the elements that are locked, or within a locked group.
+    fn check_unlocked(&self, ids: &[ElementId]) -> Result<()> {
+        for id in ids {
+            self.get(*id)?;
+            if self.board.locked_by(*id).is_some() {
+                return Err(Error::Locked(*id));
+            }
         }
         Ok(())
     }
@@ -1633,7 +1715,7 @@ fn held_by(board: &Board, id: ElementId) -> impl Iterator<Item = ElementId> + '_
 mod tests {
     use super::*;
     use crate::stick::Surface;
-    use crate::tests::{arrow, board, element, id, stroke};
+    use crate::tests::{arrow, board, element, id, locked, stroke};
     use crate::{Colour, Dash, Fill, Heads, Rect, Text, Tip, Weight};
 
     fn note(x: f64) -> ElementKind {
@@ -4774,5 +4856,202 @@ mod tests {
             (Point { x: 50.0, y: 50.0 }, Some(id(1)))
         );
         assert_eq!(editor.board().elements[&id(3)].kind, note);
+    }
+
+    #[test]
+    fn what_is_locked_or_within_a_locked_group_refuses_every_edit() {
+        let mut editor = Editor::new(board([
+            (1, locked(None, "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", picture(0.0, 0.0))),
+            (3, locked(None, "a1", picture(300.0, 0.0))),
+            (4, element(None, "a2", picture(600.0, 0.0))),
+        ]));
+        let before = editor.board().clone();
+        let origin = Point { x: 0.0, y: 0.0 };
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        for bits in [2, 3] {
+            let refused = id(bits);
+            let them = ids([4, bits]);
+            let results = [
+                editor.remove(&them),
+                editor.update(refused, picture(1.0, 0.0)),
+                editor.stretch(refused, picture(1.0, 0.0)),
+                editor.land(&them),
+                editor.unstick(&them),
+                editor.translate(&them, 1.0, 0.0),
+                editor.transform(&them, &Transform::default()),
+                editor.arrange(&them, &Order::Name),
+                editor.normalize(&them, Side::Height),
+                editor.align(&them, Alignment::Left),
+                editor.distribute(&them, Axis::Horizontal),
+                editor.crop(refused, area),
+                editor.reset_crop(&them),
+                editor.set_crop_shape(&them, CropShape::Ellipse),
+                editor.set_trim(&them, None),
+                editor.set_speed(&them, Speed::NORMAL),
+                editor.set_greyscale(&them, true),
+                editor.straighten(&them),
+                editor.scale(&them, origin, 2.0),
+                editor.rotate(&them, origin, 90.0),
+                editor.settle_on_grid(&them),
+                editor.flip(&them, true),
+                editor.restack(&them, Restack::Front),
+                editor.group(id(9), &them),
+            ];
+            for result in results {
+                assert_eq!(result, Err(Error::Locked(refused)));
+            }
+        }
+        let copied = editor.board().copy(&ids([4]));
+        assert_eq!(editor.ungroup(id(1)), Err(Error::Locked(id(1))));
+        assert_eq!(
+            editor.add(id(9), Some(id(1)), note(0.0)),
+            Err(Error::Locked(id(1)))
+        );
+        assert_eq!(
+            editor.paste(&copied, &renamed(&copied, 9), Some(id(1))),
+            Err(Error::Locked(id(1)))
+        );
+        assert_eq!(editor.board(), &before);
+        assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn a_lock_is_an_edit_of_the_element_alone_whatever_its_group_or_its_elements() {
+        let mut editor = editor();
+
+        assert_eq!(editor.set_locked(&ids([3]), true), Ok(ids([3])));
+        assert_eq!(editor.set_locked(&ids([1, 3]), true), Ok(ids([1])));
+        assert_eq!(
+            editor.translate(&ids([2]), 1.0, 0.0),
+            Err(Error::Locked(id(2)))
+        );
+        assert_eq!(editor.set_locked(&ids([1]), false), Ok(ids([1])));
+        assert_eq!(editor.translate(&ids([2]), 1.0, 0.0), Ok(ids([2])));
+        assert_eq!(
+            editor.translate(&ids([3]), 1.0, 0.0),
+            Err(Error::Locked(id(3)))
+        );
+        assert_eq!(
+            editor.set_locked(&ids([3, 9]), false),
+            Err(Error::UnknownElement(id(9)))
+        );
+        editor.undo();
+        assert_eq!(editor.undo(), ids([1]));
+        assert!(editor.board().elements[&id(1)].locked);
+    }
+
+    #[test]
+    fn what_holds_a_locked_element_carries_it() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", picture(0.0, 0.0))),
+            (3, locked(Some(1), "a1", picture(300.0, 0.0))),
+            (4, locked(None, "a1", on(framed(40.0, 40.0, 20.0, 10.0), 2))),
+            (
+                5,
+                locked(
+                    None,
+                    "a2",
+                    stuck((500.0, 500.0), None, (200.0, 100.0), Some(2)),
+                ),
+            ),
+        ]));
+
+        assert_eq!(
+            editor.translate(&ids([1]), 10.0, 5.0),
+            Ok(ids([2, 3, 4, 5]))
+        );
+        assert_eq!(picture_at(&editor, 3), (310.0, 5.0));
+        assert_placed(&editor, 4, 2, [50.0, 45.0, 20.0, 10.0], 0.0, 2.0);
+        assert_at(ends(&editor, 5)[1].0, 210.0, 105.0);
+        assert_eq!(editor.remove(&ids([1])), Ok(ids([1, 2, 3, 4, 5])));
+        assert_eq!(placement(&editor, 4).3, None);
+    }
+
+    #[test]
+    fn what_stays_sets_what_it_holds_down_again_locked_or_not() {
+        // The group lines up already.
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", picture(10.0, 0.0))),
+            (2, element(None, "a1", ElementKind::Group)),
+            (3, element(Some(2), "a0", picture(0.0, 300.0))),
+            (
+                4,
+                locked(Some(2), "a1", on(framed(50.0, 50.0, 20.0, 10.0), 1)),
+            ),
+        ]));
+
+        assert_eq!(editor.align(&ids([1, 2]), Alignment::Left), Ok(ids([1])));
+        assert_eq!(picture_at(&editor, 1), (0.0, 0.0));
+        assert_placed(&editor, 4, 1, [50.0, 50.0, 20.0, 10.0], 0.0, 2.0);
+    }
+
+    #[test]
+    fn restyling_a_group_leaves_its_locked_elements_as_they_look() {
+        let tilted = |x| {
+            let mut kind = picture(x, 0.0);
+            if let ElementKind::Image { rotation, .. } = &mut kind {
+                *rotation = 30.0;
+            }
+            kind
+        };
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", ElementKind::Group)),
+            (2, element(Some(1), "a0", tilted(0.0))),
+            (3, locked(Some(1), "a1", tilted(300.0))),
+        ]));
+        let looks = editor.board().elements[&id(3)].clone();
+
+        assert_eq!(editor.flip(&ids([1]), true), Ok(ids([2])));
+        assert_eq!(editor.set_greyscale(&ids([1]), true), Ok(ids([2])));
+        assert_eq!(
+            editor.set_crop_shape(&ids([1]), CropShape::Ellipse),
+            Ok(ids([2]))
+        );
+        assert_eq!(editor.reset_crop(&ids([1])), Ok(ids([2])));
+        assert_eq!(editor.straighten(&ids([1])), Ok(ids([2])));
+        assert_eq!(editor.board().elements[&id(3)], looks);
+    }
+
+    #[test]
+    fn a_locked_image_plays_as_the_others_of_its_asset() {
+        let still = crate::ImageEdits::default();
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", played(b"moving", still))),
+            (2, locked(None, "a1", played(b"moving", still))),
+        ]));
+        let fast = Speed::new(2.0).unwrap();
+
+        assert_eq!(editor.set_speed(&ids([1]), fast), Ok(ids([1, 2])));
+        assert_eq!(edits_of(&editor, 2).speed, fast);
+    }
+
+    #[test]
+    fn a_paste_comes_unlocked_and_its_elements_keep_their_lock() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", ElementKind::Group)),
+            (2, locked(Some(1), "a0", note(0.0))),
+            (3, element(Some(1), "a1", note(10.0))),
+            (4, locked(None, "a1", note(20.0))),
+        ]));
+        let copied = editor.board().copy(&ids([1, 4]));
+        let renamed = renamed(&copied, 10);
+
+        editor.paste(&copied, &renamed, None).unwrap();
+        let locked = |old| editor.board().elements[&renamed[&id(old)]].locked;
+        assert_eq!([1, 2, 3, 4].map(locked), [false, true, false, false]);
+    }
+
+    fn picture_at(editor: &Editor, bits: u128) -> (f64, f64) {
+        match &editor.board().elements[&id(bits)].kind {
+            ElementKind::Image { frame, .. } => (frame.x, frame.y),
+            other => panic!("{other:?}"),
+        }
     }
 }

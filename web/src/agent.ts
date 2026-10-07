@@ -95,6 +95,7 @@ function entry(opened: Opened, id: string) {
     id,
     type: kind.type,
     group,
+    locked_by: opened.editor.lockedBy(id),
     bounds: core.extent(opened.editor, [id]),
     rotation: "rotation" in kind ? kind.rotation : undefined,
     text: cut(textOf(kind)),

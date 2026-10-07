@@ -1,7 +1,8 @@
 // Comments, as pins over the board at one size on screen whatever the zoom, each showing its
 // text beside it while hovered or focused. They lie above whatever the board draws, so the
 // renderer leaves them out. A press on a pin or its text reaches the board as a press on its
-// comment, and keys pressed on a focused pin write in it.
+// comment, or on what lies under it when it is locked, and keys pressed on a focused pin write in
+// it.
 
 import type { Camera, Viewport } from "./camera.js";
 import type { Board, Point } from "./core.js";
@@ -18,11 +19,19 @@ export interface Pins {
   clear(): void;
 }
 
-/** The comment `target` is, or lies in. */
+/** The comment `target` is, or lies in, unless it is locked, as presses go through it then. */
 export function pinned(target: EventTarget | null): string | undefined {
-  return target instanceof Element
-    ? target.closest<HTMLElement>(".comment")?.dataset.comment
-    : undefined;
+  return commentOf(target, false);
+}
+
+/** The locked comment `target` is, or lies in. */
+export function lockedPin(target: EventTarget | null): string | undefined {
+  return commentOf(target, true);
+}
+
+function commentOf(target: EventTarget | null, locked: boolean): string | undefined {
+  const comment = target instanceof Element ? target.closest<HTMLElement>(".comment") : null;
+  return comment?.classList.contains("locked") === locked ? comment.dataset.comment : undefined;
 }
 
 /** How much of a comment names its pin, in characters. */
@@ -125,7 +134,8 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
   return {
     show(board, selected, writing) {
       const chosen = new Set(selected);
-      const marked = (id: string) => {
+      /** Whether `holds` the comment `id`, or one of its groups. */
+      const upFrom = (id: string, holds: (at: string) => boolean) => {
         // Boards are repaired on read, but a cycle would loop forever.
         const seen = new Set<string>();
         for (
@@ -133,7 +143,7 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
           at !== undefined && !seen.has(at);
           at = board.elements[at]?.group
         ) {
-          if (chosen.has(at)) {
+          if (holds(at)) {
             return true;
           }
           seen.add(at);
@@ -164,7 +174,14 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
             `Comment: ${name.length > NAMED ? `${name.slice(0, NAMED)}…` : name}`,
           );
         }
-        entry.comment.classList.toggle("selected", marked(id));
+        entry.comment.classList.toggle(
+          "selected",
+          upFrom(id, (at) => chosen.has(at)),
+        );
+        entry.comment.classList.toggle(
+          "locked",
+          upFrom(id, (at) => board.elements[at]?.locked === true),
+        );
         entry.comment.classList.toggle("writing", id === writing);
         entry.comment.classList.toggle("blank", kind.text.trim() === "");
         // Later ones on top, as the board stacks them. Moved only when out of place, which

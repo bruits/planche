@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
 import type { Board, Element, Kind } from "./core.js";
-import { pinned, pins } from "./pins.js";
+import { lockedPin, pinned, pins } from "./pins.js";
 
 const comment = (text: string, group?: string): Element => ({
   z: "a0",
@@ -86,6 +86,25 @@ describe("pins", () => {
     expect(shown("b").classList.contains("writing")).toBe(true);
     expect(shown("c").classList.contains("blank")).toBe(true);
     expect(shown("a").classList.contains("blank")).toBe(false);
+  });
+
+  it("lets presses through a comment locked, itself or through its group, but names it apart", () => {
+    layer().show(
+      board({
+        g: { z: "a0", locked: true, kind: { type: "group" } },
+        a: comment("Grouped", "g"),
+        b: { ...comment("Locked"), locked: true },
+        c: comment("Free"),
+      }),
+      [],
+    );
+    for (const id of ["a", "b"]) {
+      expect(shown(id).classList.contains("locked")).toBe(true);
+      expect(pinned(shown(id).querySelector(".pin"))).toBeUndefined();
+      expect(lockedPin(shown(id).querySelector(".pin"))).toBe(id);
+    }
+    expect(pinned(shown("c").querySelector(".pin"))).toBe("c");
+    expect(lockedPin(shown("c").querySelector(".pin"))).toBeUndefined();
   });
 
   it("keeps texts hidden after Escape until the pointer comes to a comment", () => {

@@ -384,6 +384,10 @@ body {
   stroke-width: 1px;
 }
 
+.preview.locked > * {
+  stroke-dasharray: 2 4;
+}
+
 .marquee {
   fill: color-mix(in srgb, var(--selected) 15%, transparent);
   stroke-width: 1px;

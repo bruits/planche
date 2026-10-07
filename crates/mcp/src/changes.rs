@@ -466,6 +466,16 @@ pub enum Restack {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+pub struct LockArguments {
+    #[schemars(length(min = 1, max = MOST_IDS))]
+    pub ids: Vec<String>,
+    /// False unlocks them.
+    pub locked: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct AlignArguments {
     #[schemars(length(min = 2, max = MOST_IDS))]
     pub ids: Vec<String>,
@@ -681,6 +691,7 @@ mod tests {
         found.visit::<UpdateArguments>();
         found.visit::<TransformArguments>();
         found.visit::<RestackArguments>();
+        found.visit::<LockArguments>();
         found.visit::<AlignArguments>();
         found.visit::<DistributeArguments>();
         found.visit::<SelectArguments>();

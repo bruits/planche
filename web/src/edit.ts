@@ -3,7 +3,9 @@
 // outermost group holding it, and a drag from where nothing is draws a rectangle that selects what
 // it touches, and the comments pinned in it. Double-clicking a group goes into it, where clicks
 // select its own elements instead, and double-clicking a note, a sticky note, a shape, or a
-// comment writes in it. A drag begun with ⌥, or Alt elsewhere than macOS, held moves a copy of the
+// comment writes in it. Clicks and rectangles go through what is locked, which shows dashed while
+// hovered and nothing selectable lies there, and a right-click on it offers to unlock it. A drag
+// begun with ⌥, or Alt elsewhere than macOS, held moves a copy of the
 // selection instead, which it selects. The dots on the selection's corners scale it around the
 // opposite one, or around its centre while ⌥ is held. The sides of a lone note, sticky note, or
 // shape stretch it, its text keeping its size, and a drag from just outside a corner turns the
@@ -264,10 +266,21 @@ export interface Edits {
   goInside(): void;
   loneSegment(): boolean;
   /**
-   * Selects what a right-click at `at` is about, the element there, or `on`, unless it is
-   * selected already, or nothing unless `at` is within the selection. Whether anything is.
+   * Selects what a right-click at `at` is about, the element topmost there, or `on`, unless it is
+   * selected already or locked, or nothing unless `at` is within the selection. Whether anything is.
    */
   aim(at: Point, on?: string): boolean;
+  /**
+   * The locked element, or its outermost locked group, that the pointer rests on with nothing
+   * over it, the first to unlock.
+   */
+  lockedUnder(): string | undefined;
+  /** As `lockedUnder`, where a right-click at `at` lands, or on the comment `on`. */
+  lockedAt(at: Point, on?: string): string | undefined;
+  /** The selection, which it lets go of. */
+  lock(): void;
+  /** Selects what it unlocks. */
+  unlock(ids: string[]): void;
   /** The selection's centre, `undefined` when nothing is selected. */
   centre(): Point | undefined;
   /** Clockwise from its top-left, the box around the selection, `undefined` when it draws nothing. */
@@ -475,6 +488,8 @@ export function edits(
   let previewed: string | undefined;
   /** The topmost element the pointer is on, as last told. */
   let under: string | undefined;
+  /** The first to unlock of what the pointer rests on, while it selects. */
+  let lockedUnder: string | undefined;
   /** The pointer's last event over the board, which hovering looks at again as the keys or the camera change. */
   let seen: PointerEvent | undefined;
   let keys: Keys | undefined;
@@ -726,14 +741,20 @@ export function edits(
     const editing = current();
     const at = seen && view.at(seen);
     const zoom = view.zoom();
-    const was = over?.kind;
+    const [was, wasLocked] = [over?.kind, lockedUnder];
     let corners: Point[] | undefined;
     over = undefined;
     previewed = undefined;
-    const hit =
-      editing && seen && at && zoom && hovers(seen)
-        ? editing.editor.hit(at.x, at.y, TOLERANCE / zoom)
-        : undefined;
+    lockedUnder = undefined;
+    let topmost: string | undefined;
+    let hit: string | undefined;
+    let locked: string | undefined;
+    if (editing && seen && at && zoom && hovers(seen)) {
+      const { editor } = editing;
+      topmost = editor.hit(at.x, at.y, TOLERANCE / zoom);
+      locked = topmost === undefined ? undefined : editor.lockedBy(topmost);
+      hit = locked === undefined ? topmost : editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom);
+    }
     if (editing && seen && at && zoom && hoverable(seen)) {
       const { editor } = editing;
       corners = selected.size > 0 && !lone(editing) ? box(editor, [...selected]) : undefined;
@@ -741,17 +762,21 @@ export function edits(
       const top =
         hit === undefined || over ? undefined : (level(editor, hit) ?? editor.topLevel(hit));
       previewed = top !== undefined && !selected.has(top) ? top : undefined;
+      lockedUnder = locked;
     }
+    const shownLocked = over || hit !== undefined ? undefined : lockedUnder;
+    const shown = previewed ?? shownLocked;
     overlay.preview(
-      editing && previewed !== undefined ? editing.editor.outline(previewed) : undefined,
+      editing && shown !== undefined ? editing.editor.outline(shown) : undefined,
+      shownLocked !== undefined,
     );
     showGrab(corners);
-    if (over?.kind !== was) {
+    if (over?.kind !== was || lockedUnder !== wasLocked) {
       hovered();
     }
-    if (hit !== under) {
-      under = hit;
-      pointed(hit);
+    if (topmost !== under) {
+      under = topmost;
+      pointed(topmost);
     }
   };
   /** On the next frame, once however many events come before it. */
@@ -824,7 +849,11 @@ export function edits(
     if (present.some((id) => level(editor, id) === undefined)) {
       leave(editor);
     }
-    selected = new Set(present.flatMap((id) => level(editor, id) ?? []));
+    selected = new Set(
+      present
+        .flatMap((id) => level(editor, id) ?? [])
+        .filter((id) => editor.lockedBy(id) === undefined),
+    );
   };
   /**
    * Whether the selection holds what a click would select of each of `ids` there, or but for those
@@ -897,8 +926,10 @@ export function edits(
    * already, or when none of it is left.
    */
   const edit = (editing: Editing, touched: string[], reselect = false) => {
-    const { board } = editing;
+    const { board, editor } = editing;
     const back = new Set(touched.filter((id) => !(id in board.elements)));
+    const unselectable = (id: string) =>
+      !(id in board.elements) || editor.lockedBy(id) !== undefined;
     // Read before the edit, which may remove the group gone into, and its emptied groups too.
     const around: string[] = [];
     for (
@@ -909,17 +940,17 @@ export function edits(
       around.push(at);
     }
     changed(touched);
-    if (entered !== undefined && !(entered in board.elements)) {
+    if (entered !== undefined && unselectable(entered)) {
       leave(
-        editing.editor,
-        around.find((id) => id in board.elements),
+        editor,
+        around.find((id) => !unselectable(id)),
       );
     }
     if (reselect && !holdsAll(editing, touched, back)) {
       select(editing, touched);
     }
     for (const id of selected) {
-      if (!(id in editing.board.elements)) {
+      if (unselectable(id)) {
         selected.delete(id);
       }
     }
@@ -971,7 +1002,7 @@ export function edits(
     }
     heed(event);
     if (erasing()) {
-      const hit = pressedPin ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
+      const hit = pressedPin ?? editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom);
       press = {
         kind: "erase",
         pointer,
@@ -1019,7 +1050,7 @@ export function edits(
       }
     }
     const corners = selected.size > 0 && !single ? box(editor, [...selected]) : undefined;
-    const hit = pressedPin ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
+    const hit = pressedPin ?? editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom);
     const grab =
       corners && pressedPin === undefined ? grabbing(editing, corners, at, zoom, hit) : undefined;
     // Ctrl on macOS opens the context menu instead.
@@ -1647,7 +1678,7 @@ export function edits(
       return;
     }
     const { editor, board } = editing;
-    const hit = pressedPin ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
+    const hit = pressedPin ?? editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom);
     const top = hit === undefined ? undefined : level(editor, hit);
     if (hit !== undefined && top !== undefined && board.elements[top]?.kind.type === "group") {
       const member = editor.memberOf(top, hit);
@@ -1755,6 +1786,7 @@ export function edits(
       (id) =>
         board.elements[id]!.kind.type === "shape" &&
         level(editor, id) === id &&
+        editor.lockedBy(id) === undefined &&
         within(at, box(editor, [id])),
     );
 
@@ -1778,11 +1810,14 @@ export function edits(
   };
   const writable = ({ board }: Editing) =>
     selected.size === 1 && writesIn(board.elements[[...selected][0]!]?.kind);
-  const choose = ({ board }: Editing, id: string) => {
-    if (id in board.elements) {
-      entered = board.elements[id]!.group;
-      selected = new Set([id]);
+  /** Whether it could, as what is locked takes no selection. */
+  const choose = ({ board, editor }: Editing, id: string) => {
+    if (!(id in board.elements) || editor.lockedBy(id) !== undefined) {
+      return false;
     }
+    entered = board.elements[id]!.group;
+    selected = new Set([id]);
+    return true;
   };
 
   const adjust = (work: (editor: Editor, touched: string[]) => void): string[] => {
@@ -1908,8 +1943,8 @@ export function edits(
     },
     write: (id) =>
       run((editing) => {
-        if (id !== undefined) {
-          choose(editing, id);
+        if (id !== undefined && !choose(editing, id)) {
+          return;
         }
         if (writable(editing)) {
           write(editing, [...selected][0]!, false);
@@ -1937,8 +1972,12 @@ export function edits(
     selectAll() {
       const editing = current();
       if (editing) {
-        const { board } = editing;
-        selected = new Set(board.draw_order.filter((id) => board.elements[id]!.group === entered));
+        const { board, editor } = editing;
+        selected = new Set(
+          board.draw_order.filter(
+            (id) => board.elements[id]!.group === entered && editor.lockedBy(id) === undefined,
+          ),
+        );
         show();
       }
     },
@@ -1953,14 +1992,16 @@ export function edits(
       return true;
     },
     goInside: () =>
-      run(({ board }, ids) => {
+      run(({ board, editor }, ids) => {
         const group = ids[0];
         if (ids.length !== 1 || board.elements[group!]?.kind.type !== "group") {
           return;
         }
         entered = group;
         selected = new Set(
-          Object.keys(board.elements).filter((id) => board.elements[id]!.group === group),
+          Object.keys(board.elements).filter(
+            (id) => board.elements[id]!.group === group && editor.lockedBy(id) === undefined,
+          ),
         );
         show();
       }),
@@ -1971,7 +2012,10 @@ export function edits(
         return selected.size > 0;
       }
       const { editor } = editing;
-      const hit = on ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
+      const topmost = on ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
+      // Unlike a left press, which goes through it, so that the menu offers to unlock it.
+      const hit =
+        topmost === undefined || editor.lockedBy(topmost) !== undefined ? undefined : topmost;
       // As a left press would, with no box around a lone arrow or line.
       const onSelection =
         hit === undefined && !lone(editing) && within(at, box(editor, [...selected]));
@@ -1984,6 +2028,19 @@ export function edits(
       show();
       return selected.size > 0;
     },
+    lockedUnder: () => lockedUnder,
+    lockedAt(at, on) {
+      const editing = current();
+      const zoom = view.zoom();
+      if (!editing || !zoom) {
+        return undefined;
+      }
+      const { editor } = editing;
+      const topmost = on ?? editor.hit(at.x, at.y, TOLERANCE / zoom);
+      return topmost === undefined ? undefined : editor.lockedBy(topmost);
+    },
+    lock: () => run((editing, ids) => edit(editing, editing.editor.setLocked(ids, true))),
+    unlock: (ids) => run((editing) => edit(editing, editing.editor.setLocked(ids, false), true)),
     centre() {
       const editing = current();
       const area = editing && core.extent(editing.editor, [...selected]);
@@ -2098,6 +2155,7 @@ export function edits(
       overlay.preview(undefined);
       showGrab(undefined);
       under = undefined;
+      lockedUnder = undefined;
       pointed(undefined);
       selectionChanged();
     },

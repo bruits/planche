@@ -1186,3 +1186,115 @@ describe("the end of a press", () => {
     expect(strokes(opened)).toEqual([]);
   });
 });
+
+function locked(opened: ReturnType<typeof page>["opened"], id: string) {
+  return opened.board.elements[id]?.locked === true;
+}
+
+describe("locking", () => {
+  afterEach(() => document.body.replaceChildren());
+
+  const OTHER = "b".repeat(32);
+  const GROUP = "e".repeat(32);
+  const BACKDROP = "f".repeat(32);
+  const apart: Kind = { ...sticky, frame: { x: 300, y: 0, width: 100, height: 100 } };
+
+  it("lets go of what it locks, which a click then goes through to what lies under it", () => {
+    const { opened, editing, pointer } = page([[OTHER, sticky]]);
+    editing.select([OTHER]);
+    editing.lock();
+    expect(locked(opened, OTHER)).toBe(true);
+    expect(editing.selection()).toEqual([]);
+    pointer("pointerdown", 50, 50);
+    pointer("pointerup", 50, 50);
+    expect(editing.selection()).toEqual([STICKY]);
+  });
+
+  it("leaves what is locked out of a selection rectangle and of Select all", async () => {
+    const { editing, pointer } = page([[OTHER, apart]]);
+    editing.select([STICKY]);
+    editing.lock();
+    pointer("pointerdown", 50, 150);
+    pointer("pointermove", 350, 50);
+    await nextFrame();
+    pointer("pointerup", 350, 50);
+    expect(editing.selection()).toEqual([OTHER]);
+    editing.select([]);
+    editing.selectAll();
+    expect(editing.selection()).toEqual([OTHER]);
+  });
+
+  it("selects what an undo unlocks, and nothing a redo locks again", () => {
+    const { editing } = page();
+    editing.select([STICKY]);
+    editing.lock();
+    editing.undo();
+    expect(editing.selection()).toEqual([STICKY]);
+    editing.redo();
+    expect(editing.selection()).toEqual([]);
+    editing.select([STICKY]);
+    expect(editing.selection()).toEqual([]);
+  });
+
+  it("offers to unlock what a right-click lands on, selecting nothing under it, and selects what it unlocks", () => {
+    const { opened, editing } = page([[OTHER, sticky]]);
+    editing.select([OTHER]);
+    editing.lock();
+    expect(editing.aim({ x: 50, y: 50 })).toBe(false);
+    expect(editing.lockedAt({ x: 50, y: 50 })).toBe(OTHER);
+    expect(editing.lockedAt({ x: 250, y: 50 })).toBeUndefined();
+    editing.unlock([OTHER]);
+    expect(locked(opened, OTHER)).toBe(false);
+    expect(editing.selection()).toEqual([OTHER]);
+  });
+
+  it("keeps the selection on a right-click within its box, though what it lands on is locked", () => {
+    const backdrop: Kind = { ...sticky, frame: { x: -100, y: -100, width: 600, height: 300 } };
+    const { editing } = page([
+      [BACKDROP, backdrop],
+      [OTHER, apart],
+    ]);
+    editing.select([BACKDROP]);
+    editing.lock();
+    editing.select([STICKY, OTHER]);
+    expect(editing.lockedAt({ x: 200, y: 50 })).toBe(BACKDROP);
+    expect(editing.aim({ x: 200, y: 50 })).toBe(true);
+    expect(editing.selection()).toEqual([STICKY, OTHER]);
+  });
+
+  it("tells what the pointer rests on is locked, outlined dashed where a click selects nothing", async () => {
+    const { host, editing, pointer } = page([[OTHER, apart]]);
+    editing.select([STICKY]);
+    editing.lock();
+    const outlined = () => host.querySelector(".preview")!;
+    pointer("pointermove", 50, 50);
+    await nextFrame();
+    expect(editing.lockedUnder()).toBe(STICKY);
+    expect(outlined().classList.contains("locked")).toBe(true);
+    expect(outlined().childElementCount).toBe(1);
+    pointer("pointermove", 350, 50);
+    await nextFrame();
+    expect(editing.lockedUnder()).toBeUndefined();
+    expect(outlined().classList.contains("locked")).toBe(false);
+  });
+
+  it("leaves the group gone into once an agent locks it", () => {
+    const { editing } = page([[OTHER, apart]]);
+    editing.select([STICKY, OTHER]);
+    editing.group(GROUP);
+    editing.goInside();
+    editing.apply((editor, touched) => touched.push(...editor.setLocked([GROUP], true)));
+    expect(editing.entered()).toBeUndefined();
+    expect(editing.selection()).toEqual([]);
+  });
+
+  it("goes inside a group with none of its locked elements selected", () => {
+    const { editing } = page([[OTHER, apart]]);
+    editing.select([STICKY, OTHER]);
+    editing.group(GROUP);
+    editing.apply((editor, touched) => touched.push(...editor.setLocked([OTHER], true)));
+    expect(editing.selection()).toEqual([GROUP]);
+    editing.goInside();
+    expect(editing.selection()).toEqual([STICKY]);
+  });
+});

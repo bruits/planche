@@ -270,6 +270,12 @@ impl Editor {
         Ok(strings(self.0.straighten(&parse(ids)?)?))
     }
 
+    /// Of each element itself, whatever its group's lock or its elements' own.
+    #[wasm_bindgen(js_name = setLocked)]
+    pub fn set_locked(&mut self, ids: Vec<String>, locked: bool) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.set_locked(&parse(ids)?, locked)?))
+    }
+
     /// Whether the board is as it was when read or last saved, however it got back there.
     #[wasm_bindgen(js_name = isSaved)]
     pub fn is_saved(&self) -> bool {
@@ -338,8 +344,15 @@ impl Editor {
         hit.as_ref().map(ElementId::to_string)
     }
 
-    /// Every element that draws within `tolerance` of the way from one point to another, under
-    /// others too, from back to front.
+    /// What `hit` finds, but through the locked elements, as a click goes.
+    #[wasm_bindgen(js_name = hitUnlocked)]
+    pub fn hit_unlocked(&self, x: f64, y: f64, tolerance: f64) -> Option<String> {
+        let hit = self.0.board().hit_unlocked(Point { x, y }, tolerance);
+        hit.as_ref().map(ElementId::to_string)
+    }
+
+    /// Every element not locked that draws within `tolerance` of the way from one point to
+    /// another, under others too, from back to front.
     #[wasm_bindgen(js_name = hitAlong)]
     pub fn hit_along(
         &self,
@@ -395,7 +408,8 @@ impl Editor {
         strings(self.0.board().touching(area))
     }
 
-    /// The top-level elements and outermost groups of what `touching` finds, once each.
+    /// The top-level elements and outermost groups of what `touching` finds but for the locked
+    /// elements, once each.
     #[wasm_bindgen(js_name = touchingTopLevel)]
     pub fn touching_top_level(&self, x: f64, y: f64, width: f64, height: f64) -> Vec<String> {
         let area = Rect {
@@ -418,6 +432,14 @@ impl Editor {
     pub fn top_level(&self, id: &str) -> Result<Option<String>, JsError> {
         let top = self.0.board().top_level(id.parse()?);
         Ok(top.as_ref().map(ElementId::to_string))
+    }
+
+    /// The outermost of the element and its groups that is locked, the first to unlock,
+    /// `undefined` when none is.
+    #[wasm_bindgen(js_name = lockedBy)]
+    pub fn locked_by(&self, id: &str) -> Result<Option<String>, JsError> {
+        let locked = self.0.board().locked_by(id.parse()?);
+        Ok(locked.as_ref().map(ElementId::to_string))
     }
 
     /// The element itself when in `group`, otherwise its group that is, `undefined` when it is

@@ -515,9 +515,13 @@ export function extent({ editor, board }: Opened, ids = board.draw_order): Rect 
   return core.extent(editor, ids);
 }
 
-/** Whether any of the elements is an image, or a group holding one. */
-export function holdsImage(board: Board, ids: string[]): boolean {
-  return assetsOf(board, ids).length > 0;
+/** Whether any of the elements is an unlocked image, or a group holding one, which edits reach. */
+export function holdsImage({ board, editor }: Opened, ids: string[]): boolean {
+  const chosen = new Set(ids);
+  return Object.entries(board.elements).some(
+    ([id, { kind }]) =>
+      kind.type === "image" && among(board, id, chosen) && editor.lockedBy(id) === undefined,
+  );
 }
 
 /** Those of the images among the elements, or within groups among them, once each. */
