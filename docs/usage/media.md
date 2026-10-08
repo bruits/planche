@@ -8,7 +8,7 @@ When a page hands over only an image's address, Planche downloads it. If that fa
 
 Planche shows what the platform can decode, so HEIC shows only on Apple platforms. SVGs draw as images do, so their scripts never run and they load nothing from elsewhere, such as fonts or linked images. Animated GIF, PNG, and WebP files play. Videos play in MP4, QuickTime, WebM, and Matroska files, with the codecs the platform has.
 
-- On Linux, the desktop app needs `gst-libav` to play H.264.
+- On Linux, the desktop app needs `gst-libav` to play H.264. The AppImage brings it, and the deb recommends it.
 - On Windows, HEVC videos may stay blank without saying why.
 - A video over 300 MB, or over 4096 pixels a side, is refused.
 

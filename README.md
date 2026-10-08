@@ -10,6 +10,10 @@ A cross-platform board for your references and visual research. Fast, open sourc
   <img alt="A board comparing two abbeys in the south of France, with photos, notes, drawings, and a sticky note's style card open" src="./.github/assets/screenshot.webp" />
 </picture>
 
+## Getting Planche
+
+Planche runs in the browser at [planche.bruits.org](https://planche.bruits.org), and as a desktop app for macOS, Windows, and Linux from the [latest release](https://github.com/bruits/planche/releases/latest). The desktop app needs macOS 13, Windows 10, or a Linux as recent as Ubuntu 22.04 or Debian 12. It is not signed yet, so macOS asks you to allow it in System Settings, under Privacy & Security, and Windows SmartScreen warns when you run the installer.
+
 ## Documentation
 
 - [Boards](./docs/usage/boards.md), [editing](./docs/usage/editing.md), [shortcuts](./docs/usage/shortcuts.md), [images and videos](./docs/usage/media.md), [settings](./docs/usage/settings.md), and [agents](./docs/usage/agents.md) explain how to use Planche. So far Planche has run for real in Chromium and in the macOS app, so what these pages say of other browsers and systems is still to be tried.

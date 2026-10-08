@@ -4,12 +4,12 @@ The desktop app lets AI agents read and edit the open board over [MCP](https://m
 
 ## Connecting a client
 
-The agent's client starts Planche's executable with the argument `mcp`, which connects it to the Planche that is running. In the macOS app, the executable is `Planche.app/Contents/MacOS/Planche`, and in a build of this repository, `target/debug/desktop`. Most clients take a server like this:
+The agent's client starts Planche's executable with the argument `mcp`, which connects it to the Planche that is running. The executable is `Planche.app/Contents/MacOS/Planche` on macOS, `%LOCALAPPDATA%\Planche\Planche.exe` on Windows by default, `/usr/bin/Planche` from the deb, and the AppImage itself. In a build of this repository, it is `target/debug/desktop`. Most clients take a server like this:
 
 ```json
 {
   "mcpServers": {
-    "planche": { "command": "/path/to/desktop", "args": ["mcp"] }
+    "planche": { "command": "/path/to/Planche", "args": ["mcp"] }
   }
 }
 ```

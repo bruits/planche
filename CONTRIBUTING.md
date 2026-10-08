@@ -36,7 +36,7 @@ While Planche is 0.x, a feature or a breaking change is a `minor` bump, and a fi
 
 A description starts with `Added`, `Removed`, `Fixed`, `Changed`, `Deprecated`, or `Improved`, and says in one or two sentences what changed for users, without the implementation. A breaking change opens with `**⚠️ breaking change:**`.
 
-Changesets wait in `.sampo/changesets/`. Sampo gathers them into a release PR, and merging it tags the version, publishes its GitHub release, and deploys the web app. CI on that PR waits for approval, so approve its run before merging. Running the Release workflow by hand with `deploy` ticked deploys the newest release again, without the commits on `main` since.
+Changesets wait in `.sampo/changesets/`. Sampo gathers them into a release PR, and merging it tags the version, publishes its GitHub release with the desktop app's installers for macOS, Windows, and Linux, and deploys the web app. CI on that PR waits for approval, so approve its run before merging. Running the Release workflow by hand with `deploy` ticked deploys the newest release again, and with `bundle` ticked attaches its installers again, without the commits on `main` since.
 
 ## Getting Started
 
