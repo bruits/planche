@@ -1553,3 +1553,130 @@ describe("hiding annotations", () => {
     return { ...made, hide, shown: () => annotated };
   }
 });
+
+function shaped(shape: "rectangle" | "ellipse", y: number): Kind {
+  return {
+    type: "shape",
+    frame: { x: 0, y, width: 50, height: 50 },
+    shape,
+    text: { content: "", font_size: 20 },
+  };
+}
+
+describe("inverting and matching the selection", () => {
+  afterEach(() => document.body.replaceChildren());
+
+  const OTHER = "b".repeat(32);
+  const GROUP = "e".repeat(32);
+  const apart: Kind = { ...sticky, frame: { x: 0, y: 300, width: 100, height: 100 } };
+  const note: Kind = {
+    type: "note",
+    frame: { x: 0, y: 500, width: 100, height: 40 },
+    rotation: 0,
+    text: { content: "", font_size: 20 },
+  };
+
+  it("selects what is not selected, and back again", () => {
+    const { editing } = page([
+      [IMAGE, image],
+      [OTHER, apart],
+    ]);
+    editing.select([IMAGE]);
+    editing.invertSelection();
+    expect(editing.selection()).toEqual([STICKY, OTHER]);
+    editing.invertSelection();
+    expect(editing.selection()).toEqual([IMAGE]);
+    editing.select([]);
+    editing.invertSelection();
+    expect(editing.selection()).toEqual([STICKY, IMAGE, OTHER]);
+  });
+
+  it("takes a group whole at the top level, and only its own elements once gone into", () => {
+    const { editing } = page([
+      [IMAGE, image],
+      [OTHER, apart],
+    ]);
+    editing.select([STICKY, OTHER]);
+    editing.group(GROUP);
+    editing.select([IMAGE]);
+    editing.invertSelection();
+    expect(editing.selection()).toEqual([GROUP]);
+    editing.goInside();
+    editing.select([STICKY]);
+    editing.invertSelection();
+    expect(editing.selection()).toEqual([OTHER]);
+    expect(editing.entered()).toBe(GROUP);
+  });
+
+  it("selects every element of the types selected", () => {
+    const { editing } = page([
+      [IMAGE, image],
+      [OTHER, apart],
+      [NOTE, note],
+    ]);
+    editing.select([STICKY]);
+    editing.selectSameType();
+    expect(editing.selection()).toEqual([STICKY, OTHER]);
+    editing.select([STICKY, IMAGE]);
+    editing.selectSameType();
+    expect(editing.selection()).toEqual([STICKY, IMAGE, OTHER]);
+    editing.select([]);
+    editing.selectSameType();
+    expect(editing.selection()).toEqual([]);
+  });
+
+  it("tells shapes by their outline and strokes by their tip, and stays at its level", () => {
+    const line = [
+      { x: 0, y: 600 },
+      { x: 50, y: 650 },
+    ];
+    const RECTANGLE = "1".repeat(32);
+    const ELLIPSE = "2".repeat(32);
+    const INNER = "3".repeat(32);
+    const PEN = "4".repeat(32);
+    const HIGHLIGHT = "5".repeat(32);
+    const { editing } = page([
+      [RECTANGLE, shaped("rectangle", 300)],
+      [ELLIPSE, shaped("ellipse", 400)],
+      [INNER, shaped("rectangle", 500)],
+      [OTHER, apart],
+      [PEN, core.strokeKind(line, 0, "pen")],
+      [HIGHLIGHT, core.strokeKind(line, 0, "highlighter")],
+    ]);
+    editing.select([INNER, OTHER]);
+    editing.group(GROUP);
+    editing.select([RECTANGLE]);
+    editing.selectSameType();
+    expect(editing.selection()).toEqual([RECTANGLE]);
+    editing.select([HIGHLIGHT]);
+    editing.selectSameType();
+    expect(editing.selection()).toEqual([HIGHLIGHT]);
+    editing.select([GROUP]);
+    editing.goInside();
+    editing.select([INNER]);
+    editing.selectSameType();
+    expect(editing.selection()).toEqual([INNER]);
+  });
+
+  it("leaves out what is locked and the annotations hidden", () => {
+    let shown = true;
+    const { editing } = page(
+      [
+        [IMAGE, image],
+        [OTHER, apart],
+      ],
+      { showsAnnotations: () => shown },
+    );
+    editing.select([OTHER]);
+    editing.lock();
+    editing.select([STICKY]);
+    editing.selectSameType();
+    expect(editing.selection()).toEqual([STICKY]);
+    editing.invertSelection();
+    expect(editing.selection()).toEqual([IMAGE]);
+    shown = false;
+    editing.select([]);
+    editing.invertSelection();
+    expect(editing.selection()).toEqual([IMAGE]);
+  });
+});

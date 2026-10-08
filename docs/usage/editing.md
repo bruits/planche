@@ -13,7 +13,7 @@ The toolbar groups its tools. Select, Hand, and Add images come first, then the 
 
 ## Selecting and groups
 
-A click selects the outermost group under the pointer, and a click with ⇧ or ⌘ adds to the selection or takes from it. Double-click a group, or use Go inside, to select its own elements. Esc steps back one thing at a time. It closes a card, then leaves the tool, then goes back up out of a group, then clears the selection.
+A click selects the outermost group under the pointer, and a click with ⇧ or ⌘ adds to the selection or takes from it. Double-click a group, or use Go inside, to select its own elements. Select same type adds every element drawn like one already selected, rectangles to a rectangle and highlights to a highlight. Like Select all and Invert selection, it stays within the group gone into, or the top level, where a group counts as one. Esc steps back one thing at a time. It closes a card, then leaves the tool, then goes back up out of a group, then clears the selection.
 
 The style card of a group selected alone sets its background, a panel behind its elements that grows and shrinks with them, and the opacity of its elements. Go inside to style them otherwise. A click on the panel selects the group.
 

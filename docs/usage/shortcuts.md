@@ -54,6 +54,8 @@ Scrolling pans. Scrolling with ⌘ or Ctrl held, or pinching, zooms.
 | Undo | ⌘Z |
 | Redo | ⇧⌘Z, or Ctrl+Y |
 | Select all | ⌘A |
+| Invert selection | ⇧⌘A |
+| Select same type | ⌥⌘A |
 | Go back up, or deselect | Esc |
 | Cut, copy, paste | ⌘X, ⌘C, ⌘V |
 | Duplicate | ⌘D |

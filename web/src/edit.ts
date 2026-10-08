@@ -64,6 +64,7 @@ import type {
 import { among, anchors, isAnnotation, newId, nudge, renamed } from "./board.js";
 import { cursor, dotted, type Crop, type Grab, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
+import { toolOf } from "./style.js";
 import { onTitle, titledGroup } from "./titles.js";
 import { anchored, fitted, holdsText, LINE_HEIGHT, needed, type Holder } from "./text.js";
 import type { View } from "./view.js";
@@ -272,6 +273,10 @@ export interface Edits {
   choose(id: string): void;
   /** Everything in the group gone into, or on the board. */
   selectAll(): void;
+  /** What the group gone into, or the board, holds but the selection. */
+  invertSelection(): void;
+  /** Everything in the group gone into, or on the board, like an element selected, a shape by its outline and a stroke by its tip. */
+  selectSameType(): void;
   /** Selects the group gone into, which leaves it. Whether there was one. */
   up(): boolean;
   /** Into the one group selected, selecting its elements. */
@@ -880,6 +885,10 @@ export function edits(
   const selectable = ({ editor, board }: Editing, id: string) =>
     editor.lockedBy(id) === undefined &&
     (showsAnnotations() || !isAnnotation(board.elements[id]!.kind));
+  const atLevel = (editing: Editing) =>
+    editing.board.draw_order.filter(
+      (id) => editing.board.elements[id]!.group === entered && selectable(editing, id),
+    );
   const select = (editing: Editing, ids: string[]) => {
     const { editor, board } = editing;
     const present = ids.filter((id) => id in board.elements);
@@ -2053,15 +2062,25 @@ export function edits(
     selectAll() {
       const editing = current();
       if (editing) {
-        const { board } = editing;
-        selected = new Set(
-          board.draw_order.filter(
-            (id) => board.elements[id]!.group === entered && selectable(editing, id),
-          ),
-        );
+        selected = new Set(atLevel(editing));
         show();
       }
     },
+    invertSelection: () =>
+      run((editing) => {
+        selected = new Set(atLevel(editing).filter((id) => !selected.has(id)));
+        show();
+      }),
+    selectSameType: () =>
+      run((editing, ids) => {
+        const type = (id: string) => {
+          const kind = editing.board.elements[id]?.kind;
+          return kind && (toolOf(kind) ?? kind.type);
+        };
+        const types = new Set(ids.map(type));
+        selected = new Set(atLevel(editing).filter((id) => types.has(type(id))));
+        show();
+      }),
     up() {
       const editing = current();
       if (!editing || entered === undefined || press) {
@@ -2080,11 +2099,7 @@ export function edits(
           return;
         }
         entered = group;
-        selected = new Set(
-          Object.keys(board.elements).filter(
-            (id) => board.elements[id]!.group === group && selectable(editing, id),
-          ),
-        );
+        selected = new Set(atLevel(editing));
         show();
       }),
     aim(at, on) {

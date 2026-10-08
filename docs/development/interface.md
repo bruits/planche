@@ -17,6 +17,7 @@ A new control goes into one of them. Find a command and comments' pins are the e
 - A menu holds three groups at most, and a submenu two, so that it stays quick to scan.
 - A new entry joins an existing group. When none fits, the menu needs rethinking.
 - The right-click menu mostly leaves out what the style card and the keys already reach, such as colours.
+- On a selection, the menu goes from what copies or removes the elements, to what changes each one, to their place among the others.
 - A menu offers only what applies where it opens. Find a command lists them all.
 
 ## Keys

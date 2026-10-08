@@ -480,6 +480,9 @@ const elliptical = () => {
 const croppable = () =>
   noneSelected() ?? (selectedImages().length > 0 ? undefined : "Only images are cropped");
 const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet" : undefined);
+// Not before the board shows, which would select what nobody sees yet.
+const nothingToSelect = () =>
+  noneShown() ?? (opened?.board.draw_order.length ? undefined : "The board is empty");
 const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection()) : []);
 const selectedMoving = () =>
   selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
@@ -809,10 +812,21 @@ const commands = {
   selectAll: {
     label: "Select all",
     keys: [{ key: "a", command: true }],
-    // Not before the board shows, which would select what nobody sees yet.
-    unavailable: () =>
-      noneShown() ?? (opened?.board.draw_order.length ? undefined : "The board is empty"),
+    unavailable: nothingToSelect,
     run: () => editing.selectAll(),
+  },
+  invertSelection: {
+    label: "Invert selection",
+    keys: [{ key: "a", command: true, shift: true }],
+    unavailable: nothingToSelect,
+    run: () => editing.invertSelection(),
+    once: true,
+  },
+  selectSameType: {
+    label: "Select same type",
+    keys: [{ key: "a", code: "KeyA", command: true, alt: true }],
+    unavailable: noneSelected,
+    run: () => editing.selectSameType(),
   },
   escape: { label: "Go back up, or deselect", keys: [{ key: "escape" }], run: escape },
   cut: {
@@ -1261,6 +1275,9 @@ const colourCommands = [
 const SWITCHES = new Map<Command, () => boolean>([
   [commands.ellipticalCrop, elliptical],
   [commands.greyscale, greyed],
+  [commands.bold, () => styleCard.value("bold") === true],
+  [commands.italic, () => styleCard.value("italic") === true],
+  [commands.strike, () => styleCard.value("strike") === true],
   [commands.snap, () => snapping],
   [commands.snapNeighbours, () => aligning],
   [commands.highContrast, () => appearance.highContrast()],
@@ -2171,32 +2188,33 @@ function contextMenu(
         "separator",
         commands.write,
         rename,
-        commands.play,
-        commands.sound,
         commands.openSource,
-        relevantSubmenu("Frames", [
+        relevantSubmenu("Playback", [
+          commands.play,
+          commands.sound,
+          "separator",
           commands.previousFrame,
           commands.nextFrame,
-          "separator",
           commands.slower,
           commands.faster,
         ]),
         {
-          ...submenu("Style", [
-            commands.style,
-            "separator",
-            commands.copyStyle,
-            commands.pasteStyle,
-          ]),
+          ...submenu(
+            "Style",
+            sectioned([
+              [commands.style, commands.copyStyle, commands.pasteStyle],
+              relevant([
+                commands.crop,
+                commands.resetCrop,
+                stated(commands.ellipticalCrop),
+                stated(commands.greyscale),
+                stated(commands.bold),
+                stated(commands.italic),
+              ]),
+            ]),
+          ),
           unavailable: commands.style.unavailable,
         },
-        relevantSubmenu("Image", [
-          commands.crop,
-          commands.resetCrop,
-          "separator",
-          stated(commands.ellipticalCrop),
-          stated(commands.greyscale),
-        ]),
         relevantSubmenu("Transform", [
           commands.rotateLeft,
           commands.rotateRight,
@@ -2212,6 +2230,11 @@ function contextMenu(
         commands.goInside,
         commands.lock,
         ...unlock,
+        relevantSubmenu("Select", [
+          { ...commands.selectAll, label: "All" },
+          { ...commands.invertSelection, label: "Invert" },
+          { ...commands.selectSameType, label: "Same type" },
+        ]),
         relevantSubmenu("Order", [
           commands.front,
           commands.forward,
