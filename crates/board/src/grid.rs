@@ -6,7 +6,7 @@ use crate::Point;
 
 /// Between the finest lines, in board units. Every level's is a whole multiple of it, so that
 /// a coordinate on a line writes as it reads.
-pub const GRID_SPACING: f64 = 20.0;
+pub const GRID_SPACING: f64 = 40.0;
 /// Lines of a level per line of the next one up.
 pub const GRID_STEP: f64 = 5.0;
 /// The fewest screen pixels between the lines of a level that shows. Denser, the next one up
@@ -156,19 +156,19 @@ mod tests {
     #[test]
     fn a_level_gives_way_before_its_lines_crowd_together() {
         assert_eq!(
-            GridLevel::at(0.6),
+            GridLevel::at(0.3),
             GridLevel {
-                spacing: 20.0,
+                spacing: 40.0,
                 fade: 0.5
             }
         );
-        assert_eq!(GridLevel::at(0.8).fade, 1.0);
-        assert_eq!(GridLevel::at(100.0).spacing, 20.0);
+        assert_eq!(GridLevel::at(0.4).fade, 1.0);
+        assert_eq!(GridLevel::at(100.0).spacing, 40.0);
         assert_eq!(GridLevel::at(100.0).fade, 1.0);
-        assert_eq!(GridLevel::at(0.4).fade, 0.0);
-        assert_eq!(GridLevel::at(0.39).spacing, 100.0);
-        assert_eq!(GridLevel::at(0.01).spacing, 2500.0);
-        for zoom in [0.01, 0.013, 0.1, 0.39, 0.4, 1.0, 3.7, 100.0] {
+        assert_eq!(GridLevel::at(0.2).fade, 0.0);
+        assert_eq!(GridLevel::at(0.19).spacing, 200.0);
+        assert_eq!(GridLevel::at(0.005).spacing, 5000.0);
+        for zoom in [0.005, 0.0065, 0.05, 0.19, 0.2, 1.0, 3.7, 100.0] {
             let GridLevel { spacing, fade } = GridLevel::at(zoom);
             assert!(spacing * zoom >= DENSEST, "{zoom}");
             assert_eq!(spacing % GRID_SPACING, 0.0, "{zoom}");
@@ -178,8 +178,8 @@ mod tests {
 
     #[test]
     fn levels_take_over_from_each_other_unseen() {
-        let crowded = GridLevel::at(0.4);
-        let zoomed_out = GridLevel::at(0.4 * (1.0 - 1e-9));
+        let crowded = GridLevel::at(0.2);
+        let zoomed_out = GridLevel::at(0.2 * (1.0 - 1e-9));
         assert_eq!(crowded.fade, 0.0);
         assert_eq!(zoomed_out.spacing, crowded.spacing * GRID_STEP);
         assert!(zoomed_out.fade > 1.0 - 1e-6);
@@ -188,30 +188,30 @@ mod tests {
     #[test]
     fn the_nearest_value_within_reach_lands_on_its_line() {
         // 8 screen pixels at a zoom of 2 are 4 board units.
-        assert_eq!(snap_to_grid(&[43.0], 2.0), Some(-3.0));
-        assert_eq!(snap_to_grid(&[36.5], 2.0), Some(3.5));
-        assert_eq!(snap_to_grid(&[45.0], 2.0), None);
-        assert_eq!(snap_to_grid(&[45.0, 58.0, 71.0], 2.0), Some(2.0));
+        assert_eq!(snap_to_grid(&[83.0], 2.0), Some(-3.0));
+        assert_eq!(snap_to_grid(&[76.5], 2.0), Some(3.5));
+        assert_eq!(snap_to_grid(&[85.0], 2.0), None);
+        assert_eq!(snap_to_grid(&[85.0, 118.0, 151.0], 2.0), Some(2.0));
         assert_eq!(snap_to_grid(&[], 2.0), None);
     }
 
     #[test]
     fn crowded_lines_pull_from_less_far() {
-        // 16 pixels apart at a zoom of 0.8, and a pull of 8 would reach everywhere.
-        assert_eq!(snap_to_grid(&[44.5], 0.8), Some(-4.5));
-        assert_eq!(snap_to_grid(&[45.5], 0.8), None);
+        // 16 pixels apart at a zoom of 0.4, and a pull of 8 would reach everywhere.
+        assert_eq!(snap_to_grid(&[89.0], 0.4), Some(-9.0));
+        assert_eq!(snap_to_grid(&[91.0], 0.4), None);
         // Zoomed out further, the next level's lines are the ones that pull.
-        assert_eq!(snap_to_grid(&[590.0], 0.2), Some(10.0));
+        assert_eq!(snap_to_grid(&[1180.0], 0.1), Some(20.0));
     }
 
     #[test]
     fn faint_lines_leave_the_pull_to_the_next_level() {
-        // At a zoom of 0.4, the lines 20 apart have faded out, and those 100 apart show in full.
-        assert_eq!(snap_to_grid(&[41.0], 0.4), None);
-        assert_eq!(snap_to_grid(&[95.0], 0.4), Some(5.0));
-        // At 0.6, the lines 20 apart show by half, which is not enough to pull.
-        assert_eq!(snap_to_grid(&[41.0], 0.6), None);
-        assert_eq!(snap_to_grid(&[95.0], 0.6), Some(5.0));
+        // At a zoom of 0.2, the lines 40 apart have faded out, and those 200 apart show in full.
+        assert_eq!(snap_to_grid(&[82.0], 0.2), None);
+        assert_eq!(snap_to_grid(&[190.0], 0.2), Some(10.0));
+        // At 0.3, the lines 40 apart show by half, which is not enough to pull.
+        assert_eq!(snap_to_grid(&[82.0], 0.3), None);
+        assert_eq!(snap_to_grid(&[190.0], 0.3), Some(10.0));
     }
 
     #[test]
@@ -230,21 +230,24 @@ mod tests {
     #[test]
     fn a_scaled_corner_lands_on_the_line_it_moves_the_least_to_reach() {
         let at = |x, y| Point { x, y };
-        let snapped = snap_scale_to_grid(at(3.0, 7.0), at(103.0, 107.0), 1.0, 1.0).unwrap();
+        let snapped = snap_scale_to_grid(at(6.0, 14.0), at(206.0, 214.0), 1.0, 0.5).unwrap();
         assert!((snapped - 0.97).abs() < 1e-12, "{snapped}");
-        // A line across is 0.6 off and one down 2, but reaching the one down changes the scale less.
-        let wide = (at(0.0, 5.0), at(100.0, 25.0));
-        assert_eq!(snap_scale_to_grid(wide.0, wide.1, 0.78, 1.0), Some(0.8));
-        // A line across is 1.8 off, but landing on it would move the corner 36 along.
-        let long = (at(0.0, 0.0), at(400.0, 20.0));
-        assert_eq!(snap_scale_to_grid(long.0, long.1, 1.91, 1.0), Some(1.9));
+        // A line across is 1.2 off and one down 4, but reaching the one down changes the scale less.
+        let wide = (at(0.0, 10.0), at(200.0, 50.0));
+        assert_eq!(snap_scale_to_grid(wide.0, wide.1, 0.78, 0.5), Some(0.8));
+        // A line across is 3.6 off, but landing on it would move the corner 72 along.
+        let long = (at(0.0, 0.0), at(800.0, 40.0));
+        assert_eq!(snap_scale_to_grid(long.0, long.1, 1.91, 0.5), Some(1.9));
         // A line across within reach would move a thin selection's corner hundreds along.
-        let thin = (at(0.0, 13.0), at(800.0, 16.0));
-        assert_eq!(snap_scale_to_grid(thin.0, thin.1, 0.6685, 1.0), None);
-        assert_eq!(snap_scale_to_grid(thin.0, thin.1, 0.672, 1.0), Some(0.675));
+        let thin = (at(0.0, 26.0), at(1600.0, 32.0));
+        assert_eq!(snap_scale_to_grid(thin.0, thin.1, 0.6685, 0.5), None);
+        assert_eq!(snap_scale_to_grid(thin.0, thin.1, 0.672, 0.5), Some(0.675));
         // So small on screen that its origin's own line is the nearest, it keeps to the other one.
-        let small = (at(-7.0, 1.7), at(93.0, 101.7));
-        assert_eq!(snap_scale_to_grid(small.0, small.1, 0.01, 0.05), Some(0.07));
+        let small = (at(-14.0, 3.4), at(186.0, 203.4));
+        assert_eq!(
+            snap_scale_to_grid(small.0, small.1, 0.01, 0.025),
+            Some(0.07)
+        );
     }
 
     #[test]
@@ -291,10 +294,10 @@ mod tests {
 
     #[test]
     fn only_what_is_a_hair_off_a_line_settles_on_it() {
-        assert_eq!(settled(899.999_999_999_999_9), 900.0);
-        assert_eq!(settled(220.000_000_000_000_03), 220.0);
-        assert_eq!(settled(-40.000_000_000_000_01), -40.0);
-        assert_eq!(settled(899.9), 899.9);
+        assert_eq!(settled(1_799.999_999_999_999_8), 1800.0);
+        assert_eq!(settled(440.000_000_000_000_06), 440.0);
+        assert_eq!(settled(-80.000_000_000_000_01), -80.0);
+        assert_eq!(settled(1_799.9), 1_799.9);
         assert_eq!(settled(17.3), 17.3);
     }
 }

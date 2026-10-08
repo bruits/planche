@@ -897,7 +897,7 @@ mod tests {
     fn a_neighbour_wins_over_the_grid_which_takes_the_way_none_pulls() {
         let neighbour = [area(303.0, 200.0, 100.0, 100.0)];
         let moving = area(196.0, 3.0, 100.0, 100.0);
-        // The grid's line at 300 is nearer than the neighbour's side, and one at 0 pulls down.
+        // The grid's line at 200 is nearer than the neighbour's side, and one at 0 pulls down.
         let pull = snap_to_neighbours(moving, &neighbour, WINDOW, 1.0, true);
         assert_eq!((pull.x, pull.y), (Some(7.0), Some(-3.0)));
         // From where it lands, the grid's pull included.
@@ -1271,8 +1271,9 @@ mod tests {
 
     #[test]
     fn what_is_drawn_lands_on_the_grid_where_no_neighbour_pulls() {
-        let drawn = snap_drawn_to_neighbours(at(3.0, 4.0), at(57.0, 61.0), &[], WINDOW, 1.0, true);
-        assert_eq!((drawn.from, drawn.to), (at(0.0, 0.0), at(60.0, 60.0)));
+        let drawn =
+            snap_drawn_to_neighbours(at(3.0, 4.0), at(117.0, 121.0), &[], WINDOW, 1.0, true);
+        assert_eq!((drawn.from, drawn.to), (at(0.0, 0.0), at(120.0, 120.0)));
         assert!(drawn.bridges.is_empty() && drawn.gaps.is_empty());
     }
 
@@ -1313,28 +1314,28 @@ mod tests {
 
     #[test]
     fn what_is_drawn_never_ends_behind_where_it_started() {
-        // Zoomed out, the grid's lines 100 apart pull from 20 away, and one lies just behind, but
+        // Zoomed out, the grid's lines 200 apart pull from 40 away, and one lies just behind, but
         // the line it started on is nearer.
-        let neighbour = [area(303.0, 200.0, 50.0, 50.0)];
+        let neighbour = [area(606.0, 400.0, 100.0, 100.0)];
         let drawn = snap_drawn_to_neighbours(
-            at(285.0, 0.0),
-            at(306.0, 0.0),
+            at(570.0, 0.0),
+            at(612.0, 0.0),
             &neighbour,
             WINDOW,
-            0.4,
+            0.2,
             true,
         );
-        assert_eq!((drawn.from.x, drawn.to.x), (303.0, 303.0));
+        assert_eq!((drawn.from.x, drawn.to.x), (606.0, 606.0));
     }
 
     #[test]
     fn what_is_drawn_thin_keeps_its_size_with_nothing_beside_it() {
         let alone = snap_drawn_to_neighbours(at(0.0, 0.0), at(300.0, 6.0), &[], WINDOW, 1.0, false);
         assert_eq!(alone.to, at(300.0, 6.0));
-        // Out of the reach of the grid's lines, which pull from 5 away at a zoom of 1.
+        // Out of the reach of the grid's lines, which pull from 8 away at a zoom of 1.
         let gridded =
-            snap_drawn_to_neighbours(at(3.0, 4.0), at(57.0, 11.0), &[], WINDOW, 1.0, true);
-        assert_eq!((gridded.from, gridded.to), (at(0.0, 0.0), at(60.0, 11.0)));
+            snap_drawn_to_neighbours(at(3.0, 4.0), at(117.0, 11.0), &[], WINDOW, 1.0, true);
+        assert_eq!((gridded.from, gridded.to), (at(0.0, 0.0), at(120.0, 11.0)));
     }
 
     #[test]

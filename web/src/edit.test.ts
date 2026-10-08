@@ -697,25 +697,25 @@ describe("lining up", () => {
       snapping: () => true,
       aligning: () => false,
     });
-    pointer("pointerdown", 297, 23);
-    pointer("pointermove", 397, 118);
+    pointer("pointerdown", 277, 37);
+    pointer("pointermove", 397, 158);
     await nextFrame();
     expect(linedUp(host, "bridges")).toBe("");
-    pointer("pointerup", 397, 118);
+    pointer("pointerup", 397, 158);
     const shapes = Object.values(opened.board.elements).filter(({ kind }) => kind.type === "shape");
     expect(shapes.map(({ kind }) => kind)).toMatchObject([
-      { frame: { x: 300, y: 20, width: 100, height: 100 } },
+      { frame: { x: 280, y: 40, width: 120, height: 120 } },
     ]);
   });
 
   it("places a shape with a click lined up with what is beside it", () => {
     const { opened, pointer } = beside([{ x: 300, y: 200 }], { drawing: () => "rectangle" });
-    // Centred on the click, 100 wide, its left side 3 from the sticky note's.
-    pointer("pointerdown", 353, 450);
-    pointer("pointerup", 353, 450);
+    // Centred on the click, 120 wide, its left side 3 from the sticky note's.
+    pointer("pointerdown", 357, 450);
+    pointer("pointerup", 357, 450);
     const shapes = Object.values(opened.board.elements).filter(({ kind }) => kind.type === "shape");
     expect(shapes.map(({ kind }) => kind)).toMatchObject([
-      { frame: { x: 300, y: 400, width: 100, height: 100 } },
+      { frame: { x: 300, y: 390, width: 120, height: 120 } },
     ]);
   });
 
@@ -924,7 +924,7 @@ describe("nudging", () => {
     editing.select([STICKY]);
     key("keydown", { key: "ArrowDown" });
     key("keyup", { key: "ArrowDown" });
-    expect(at()).toEqual({ x: 0, y: 20 });
+    expect(at()).toEqual({ x: 0, y: 40 });
   });
 
   it("holds a held key's moves as one edit, keeping others out until it comes up", async () => {

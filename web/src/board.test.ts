@@ -401,20 +401,20 @@ describe("nudge", () => {
   });
 
   it("moves by the step between the grid's lines that show, but those still fading in", () => {
-    expect(nudge(1, false, true)).toBe(20);
-    expect(nudge(1, true, true)).toBe(200);
-    expect(nudge(0.5, false, true)).toBe(100);
+    expect(nudge(1, false, true)).toBe(40);
+    expect(nudge(1, true, true)).toBe(400);
+    expect(nudge(0.25, false, true)).toBe(200);
   });
 });
 
 describe("centring", () => {
   it("brings an area's centre to within half a step of the grid of a point", () => {
-    const area = { x: 3, y: 7, width: 40, height: 10 };
-    const at = { x: 113, y: -52 };
+    const area = { x: 6, y: 14, width: 80, height: 20 };
+    const at = { x: 226, y: -104 };
     const by = centring(area, at, 1);
-    expect(by).toEqual({ x: 100, y: -60 });
-    expect(Math.abs(area.x + area.width / 2 + by.x - at.x)).toBeLessThanOrEqual(10);
-    expect(Math.abs(area.y + area.height / 2 + by.y - at.y)).toBeLessThanOrEqual(10);
+    expect(by).toEqual({ x: 200, y: -120 });
+    expect(Math.abs(area.x + area.width / 2 + by.x - at.x)).toBeLessThanOrEqual(20);
+    expect(Math.abs(area.y + area.height / 2 + by.y - at.y)).toBeLessThanOrEqual(20);
   });
 });
 

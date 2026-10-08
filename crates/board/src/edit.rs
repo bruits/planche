@@ -2711,22 +2711,22 @@ mod tests {
             }
             Editor::new(board([(1, element(None, "a0", kind))]))
         };
-        // Moved onto the line at 900, it lands a hair short of it.
-        let x = -242.154_545_454_545_43;
+        // Moved onto the line at 1800, it lands a hair short of it.
+        let x = -484.309_090_909_090_86;
         let mut editor = at(x, 10.0);
-        editor.translate(&ids([1]), 900.0 - x, 0.0).unwrap();
-        assert_ne!(frame(&editor).x, 900.0);
+        editor.translate(&ids([1]), 1800.0 - x, 0.0).unwrap();
+        assert_ne!(frame(&editor).x, 1800.0);
         assert_eq!(editor.settle_on_grid(&ids([1])).unwrap(), ids([1]));
-        assert_eq!((frame(&editor).x, frame(&editor).y), (900.0, 17.3));
+        assert_eq!((frame(&editor).x, frame(&editor).y), (1800.0, 17.3));
 
-        // Its right edge scaled from 60 onto the line at 180, it is a hair too wide.
-        let mut editor = at(-40.0, 100.0);
+        // Its right edge scaled from 120 onto the line at 360, it is a hair too wide.
+        let mut editor = at(-80.0, 200.0);
         editor
-            .scale(&ids([1]), Point { x: -40.0, y: 0.0 }, 2.2)
+            .scale(&ids([1]), Point { x: -80.0, y: 0.0 }, 2.2)
             .unwrap();
-        assert_ne!(frame(&editor).width, 220.0);
+        assert_ne!(frame(&editor).width, 440.0);
         editor.settle_on_grid(&ids([1])).unwrap();
-        assert_eq!((frame(&editor).x, frame(&editor).width), (-40.0, 220.0));
+        assert_eq!((frame(&editor).x, frame(&editor).width), (-80.0, 440.0));
 
         assert!(editor.settle_on_grid(&ids([1])).unwrap().is_empty());
     }
@@ -3073,9 +3073,9 @@ mod tests {
 
     #[test]
     fn an_end_follows_what_a_drag_moves_then_settles_on_the_grid() {
-        // Moved onto the line at 900, the note lands a hair short of it. `to` on the middle of
+        // Moved onto the line at 1800, the note lands a hair short of it. `to` on the middle of
         // its left side.
-        let x = -242.154_545_454_545_43;
+        let x = -484.309_090_909_090_86;
         let mut editor = Editor::new(board([
             (1, element(None, "a0", framed(x, 0.0, 100.0, 50.0))),
             (
@@ -3088,7 +3088,7 @@ mod tests {
         // As each move of a drag does, from where the gesture began.
         editor.begin_gesture();
         let mut settled = Vec::new();
-        for dx in [100.0, 900.0 - x] {
+        for dx in [100.0, 1800.0 - x] {
             editor.rewind_gesture();
             assert_eq!(editor.translate(&ids([1]), dx, 0.0).unwrap(), ids([1, 2]));
             settled = editor.settle_on_grid(&ids([1])).unwrap();
@@ -3098,10 +3098,10 @@ mod tests {
         let ElementKind::Note { frame, .. } = editor.board().elements[&id(1)].kind else {
             unreachable!()
         };
-        assert_eq!(frame.x, 900.0);
+        assert_eq!(frame.x, 1800.0);
         let [(from, _), (to, target)] = ends(&editor, 2);
         assert_at(from, 0.0, 300.0);
-        assert_eq!(to, Point { x: 900.0, y: 25.0 });
+        assert_eq!(to, Point { x: 1800.0, y: 25.0 });
         assert_eq!(target, Some(id(1)));
         assert_sound(&editor);
 

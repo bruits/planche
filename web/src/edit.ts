@@ -88,8 +88,11 @@ const STICK = 12;
 const DRAG = 3;
 /** Scaling down further would turn the selection over. */
 const SMALLEST_SCALE = 0.01;
-/** A shape placed by a click, in CSS pixels. */
-export const PLACED_SIZE = 100;
+/**
+ * A shape placed by a click, in CSS pixels. A whole number of the grid's cells at a zoom of 1, so
+ * that both its sides land on lines.
+ */
+export const PLACED_SIZE = 120;
 /** A sticky note placed by a click, in CSS pixels. */
 export const STICKY_SIZE = 200;
 /** How wide a note placed by a click wraps, in CSS pixels. */

@@ -9,7 +9,7 @@ use std::str::Chars;
 use serde::Deserialize;
 
 use crate::geometry::{around, corners};
-use crate::{Board, ElementId, ElementKind, GRID_SPACING, Point, Rect};
+use crate::{Board, ElementId, ElementKind, Point, Rect};
 
 /// How [`crate::Editor::arrange`] orders the images it packs, row by row. Images that it cannot
 /// tell apart keep the order they read in, from the top.
@@ -41,7 +41,8 @@ pub enum Side {
     Width,
 }
 
-const GAP: f64 = GRID_SPACING;
+/// Between packed images, in board units.
+const GAP: f64 = 20.0;
 /// How far apart, in board units, two positions count as one, so that arranging again changes
 /// nothing.
 pub(crate) const HAIR: f64 = 1e-6;
@@ -377,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn images_pack_into_rows_from_their_top_left_a_grid_cell_apart() {
+    fn images_pack_into_rows_from_their_top_left_a_gap_apart() {
         let editor = arranged(
             [
                 image(10.0, 400.0, 100.0, 100.0),

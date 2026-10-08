@@ -823,21 +823,21 @@ mod tests {
 
     #[test]
     fn an_end_let_go_sticks_or_else_the_grid_pulls_it() {
-        let board = board([(1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0))))]);
-        // At a zoom of 1, lines 20 apart pull from 5 away.
-        let near = point(57.0, 102.0);
+        let board = board([(1, element(None, "a0", image(area(0.0, 0.0, 120.0, 120.0))))]);
+        // At a zoom of 1, lines 40 apart pull from 8 away.
+        let near = point(77.0, 122.0);
         assert_eq!(
             board.land_end(near, None, Some(5.0), Some(1.0)),
-            end(point(57.0, 100.0), Some(1))
+            end(point(77.0, 120.0), Some(1))
         );
         assert_eq!(
             board.land_end(near, None, None, Some(1.0)),
-            end(point(60.0, 100.0), None)
+            end(point(80.0, 120.0), None)
         );
         assert_eq!(board.land_end(near, None, None, None), end(near, None));
         assert_eq!(
-            board.land_end(point(157.0, 102.0), None, Some(5.0), Some(1.0)),
-            end(point(160.0, 100.0), None)
+            board.land_end(point(157.0, 122.0), None, Some(5.0), Some(1.0)),
+            end(point(160.0, 120.0), None)
         );
     }
 
@@ -845,20 +845,20 @@ mod tests {
     fn an_end_locked_around_the_other_keeps_to_its_angle() {
         let board = board([(1, element(None, "a0", image(area(90.0, 90.0, 40.0, 40.0))))]);
         let origin = point(0.0, 0.0);
-        let aslant = 100.0_f64.hypot(90.0) * FRAC_1_SQRT_2;
+        let aslant = 120.0_f64.hypot(110.0) * FRAC_1_SQRT_2;
         // On what it lies on, with no pull and no snap onto its outline.
         assert_eq!(
-            board.land_end(point(100.0, 90.0), Some(origin), Some(5.0), Some(1.0)),
+            board.land_end(point(120.0, 110.0), Some(origin), Some(5.0), Some(1.0)),
             end(point(aslant, aslant), Some(1))
         );
         // Along its way onto a line, which keeps it at 45°.
         assert_eq!(
-            board.land_end(point(60.0, 54.0), Some(origin), Some(5.0), Some(1.0)),
-            end(point(60.0, 60.0), None)
+            board.land_end(point(80.0, 74.0), Some(origin), Some(5.0), Some(1.0)),
+            end(point(80.0, 80.0), None)
         );
         assert_eq!(
-            board.land_end(point(57.0, 2.0), Some(point(0.0, 10.0)), None, Some(1.0)),
-            end(point(60.0, 10.0), None)
+            board.land_end(point(77.0, 2.0), Some(point(0.0, 10.0)), None, Some(1.0)),
+            end(point(80.0, 10.0), None)
         );
         // Never onto the other end's own line, nor past it.
         let short = point(3.0, 2.5);
