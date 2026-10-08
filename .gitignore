@@ -2,6 +2,7 @@
 /crates/desktop/gen
 /web/node_modules
 /web/public/js
+/.wrangler
 .DS_Store
 /.claude/*
 !/.claude/launch.json

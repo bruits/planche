@@ -1,0 +1,8 @@
+name = "planche"
+compatibility_date = "2026-10-07"
+# One origin only, as a browser keeps a board's session per origin.
+workers_dev = false
+routes = [{ pattern = "planche.bruits.org", custom_domain = true }]
+
+[assets]
+directory = "web/public"

@@ -40,7 +40,11 @@ pub struct Running {
 }
 
 /// Needs a Tokio runtime.
-pub async fn start<R: Relay + Clone>(directory: &Path, relay: R) -> Result<Running, StartError> {
+pub async fn start<R: Relay + Clone>(
+    directory: &Path,
+    version: String,
+    relay: R,
+) -> Result<Running, StartError> {
     if let Ok(other) = Discovery::read(directory)
         && other.pid != std::process::id()
         && other.is_live().await
@@ -56,7 +60,7 @@ pub async fn start<R: Relay + Clone>(directory: &Path, relay: R) -> Result<Runni
     };
     discovery.write(directory)?;
     let secrets = (discovery.token.clone(), discovery.answer.clone());
-    let task = tokio::spawn(listen(listener, secrets, relay));
+    let task = tokio::spawn(listen(listener, secrets, version, relay));
     Ok(Running {
         task,
         directory: directory.to_owned(),

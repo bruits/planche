@@ -28,6 +28,16 @@ Three priorities guide the trade-offs.
 - The core builds for `wasm32-unknown-unknown` and does no I/O, see [architecture](./docs/development/architecture.md).
 - Board files are deterministic, so nothing on their path iterates a `HashMap`, see [format](./docs/development/format.md).
 
+## Writing Changesets
+
+[Sampo](https://github.com/bruits/sampo) versions the app and writes its changelog from changesets. A change users meet ships with one, for `desktop`, the package that carries the app's version. Install Sampo with `cargo install sampo`, then run `sampo add -p desktop -b minor -m "Added …"`. A changeset for another crate is never released. A new crate joins `packages.ignore` in `.sampo/config.toml`, or the Release workflow fails trying to publish it.
+
+While Planche is 0.x, a feature or a breaking change is a `minor` bump, and a fix a `patch`.
+
+A description starts with `Added`, `Removed`, `Fixed`, `Changed`, `Deprecated`, or `Improved`, and says in one or two sentences what changed for users, without the implementation. A breaking change opens with `**⚠️ breaking change:**`.
+
+Changesets wait in `.sampo/changesets/`. Sampo gathers them into a release PR, and merging it tags the version, publishes its GitHub release, and deploys the web app. CI on that PR waits for approval, so approve its run before merging. Running the Release workflow by hand with `deploy` ticked deploys the newest release again, without the commits on `main` since.
+
 ## Getting Started
 
 Planche is a Rust monorepo using [Cargo workspaces](https://doc.rust-lang.org/book/ch14-03-cargo-workspaces.html). The core needs [rustup](https://rustup.rs/), which installs the toolchain and WASM target pinned in `rust-toolchain.toml`, and [just](https://github.com/casey/just) for the recipes in [AGENTS.md](./AGENTS.md). The web app also needs [Node.js](https://nodejs.org/) and [pnpm](https://pnpm.io/). Run `just setup` once, which installs the web app's tools and the wasm-bindgen CLI at the version `Cargo.lock` pins. `just serve` needs Python 3, and the desktop app on Linux needs the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). On Windows, `just` runs its recipes with the `sh` of [Git for Windows](https://gitforwindows.org/).

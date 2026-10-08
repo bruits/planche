@@ -923,9 +923,13 @@ async fn agent_allow(app: AppHandle, agent: State<'_, Agent>, on: bool) -> Resul
         return Ok(());
     }
     let directory = mcp::directory(&app.config().identifier).ok_or(NO_DIRECTORY)?;
-    let running = mcp::start(&directory, agent.bridge.clone())
-        .await
-        .map_err(|error| error.to_string())?;
+    let running = mcp::start(
+        &directory,
+        app.package_info().version.to_string(),
+        agent.bridge.clone(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     *agent.running.lock().expect("never poisoned") = Some(running);
     Ok(())
 }

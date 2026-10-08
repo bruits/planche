@@ -1,9 +1,11 @@
 [package]
 name = "desktop"
+# The app's version, which Sampo bumps at each release and Tauri shows.
 version = "0.0.0"
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+# Not inherited, since Sampo reads only a literal one and would try to publish the app.
+publish = false
 
 # Tauri needs WebKitGTK on Linux, and there is nothing to test here, so tests skip it.
 [[bin]]

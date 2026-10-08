@@ -99,13 +99,16 @@ pub struct RenderArguments {
 
 struct Server<R: Relay> {
     relay: R,
+    /// The app's, since Sampo versions the app and no library crate.
+    version: String,
     tool_router: ToolRouter<Self>,
 }
 
 impl<R: Relay> Server<R> {
-    fn new(relay: R) -> Self {
+    fn new(relay: R, version: String) -> Self {
         Self {
             relay,
+            version,
             tool_router: Self::tool_router(),
         }
     }
@@ -418,7 +421,7 @@ impl<R: Relay> Server<R> {
 impl<R: Relay> ServerHandler for Server<R> {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("planche", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new("planche", &self.version))
             .with_instructions(
                 "Reads and edits the board open in Planche, a board of reference images, notes, \
                  sticky notes, shapes, arrows, lines, pen and highlighter strokes, and comments, in groups. Positions are in board \
@@ -441,6 +444,7 @@ impl<R: Relay> ServerHandler for Server<R> {
 pub async fn listen<R: Relay + Clone>(
     listener: TcpListener,
     (token, answer): (String, String),
+    version: String,
     relay: R,
 ) {
     let mut connections = JoinSet::new();
@@ -453,10 +457,11 @@ pub async fn listen<R: Relay + Clone>(
                     continue;
                 };
                 if connections.len() < MOST_CONNECTIONS {
-                    let (token, answer, relay) = (token.clone(), answer.clone(), relay.clone());
+                    let (token, answer, version, relay) =
+                        (token.clone(), answer.clone(), version.clone(), relay.clone());
                     connections.spawn(async move {
                         // Whatever goes wrong, the agent sees the connection close.
-                        let _ = serve(stream, &token, &answer, relay).await;
+                        let _ = serve(stream, &token, &answer, version, relay).await;
                     });
                 }
             }
@@ -465,7 +470,13 @@ pub async fn listen<R: Relay + Clone>(
     }
 }
 
-async fn serve<R: Relay>(stream: TcpStream, token: &str, answer: &str, relay: R) -> io::Result<()> {
+async fn serve<R: Relay>(
+    stream: TcpStream,
+    token: &str,
+    answer: &str,
+    version: String,
+    relay: R,
+) -> io::Result<()> {
     let (read, mut write) = stream.into_split();
     // Handed on to rmcp, as it may hold bytes past the first line already.
     let mut read = BufReader::new(read);
@@ -477,7 +488,7 @@ async fn serve<R: Relay>(stream: TcpStream, token: &str, answer: &str, relay: R)
         return Ok(());
     }
     write.write_all(format!("{answer}\n").as_bytes()).await?;
-    let running = Server::new(relay)
+    let running = Server::new(relay, version)
         .serve((read, write))
         .await
         .map_err(io::Error::other)?;

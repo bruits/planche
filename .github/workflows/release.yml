@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy the newest release's web app even if nothing was published
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Every run waits its turn, as a merged release whose run was dropped would never be tagged.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  queue: max
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.sampo.outputs.published }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Sampo refreshes Cargo.lock once it bumps the app's version.
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install --no-self-update
+      - id: sampo
+        uses: bruits/sampo/crates/sampo-github-action@main
+        with:
+          command: auto
+          create-github-release: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    name: Deploy the web app
+    needs: release
+    # A later run finds the tag already pushed and publishes nothing, so a dispatch can force the deploy.
+    if: needs.release.outputs.published == 'true' || inputs.deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Comes first, as every step below reads the tree.
+      - if: github.event_name == 'workflow_dispatch'
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match 'v*')
+          git checkout "$tag"
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          # rust-cache keys on every installed toolchain: keep only the pinned one.
+          rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
+          rustup toolchain uninstall stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      # The CLI must match the wasm-bindgen crate that Cargo.lock pins.
+      - id: wasm-bindgen
+        run: echo "version=$(cargo pkgid wasm-bindgen | sed 's/.*@//')" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+      - run: pnpm --dir web install --frozen-lockfile
+      # CI runs beside this job and gates nothing, and a release regenerates Cargo.lock, so the deploy
+      # tests what it ships. `just test` builds the web app first.
+      - run: just test
+      - uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4"
+          command: deploy

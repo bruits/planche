@@ -23,6 +23,8 @@ impl Relay for Echo {
     }
 }
 
+const VERSION: &str = "1.2.3";
+
 struct Secrets {
     token: String,
     answer: String,
@@ -36,7 +38,7 @@ async fn serving(relay: impl Relay + Clone) -> (SocketAddr, Secrets, JoinHandle<
         answer: token().unwrap(),
     };
     let given = (secrets.token.clone(), secrets.answer.clone());
-    let task = tokio::spawn(listen(listener, given, relay));
+    let task = tokio::spawn(listen(listener, given, VERSION.to_owned(), relay));
     (address, secrets, task)
 }
 
@@ -375,7 +377,9 @@ fn the_discovery_file_is_the_users_and_goes_with_its_app() {
 #[tokio::test]
 async fn the_file_lives_as_long_as_agent_access() {
     let directory = scratch("lifetime");
-    let running = start(&directory, Echo(None)).await.unwrap();
+    let running = start(&directory, VERSION.to_owned(), Echo(None))
+        .await
+        .unwrap();
     let written = Discovery::read(&directory).unwrap();
     assert_eq!(written.pid, std::process::id());
     assert!(written.is_live().await);
@@ -391,14 +395,19 @@ async fn another_live_app_keeps_it_and_a_dead_one_gives_it_up() {
     let (address, secrets, other) = serving(Echo(None)).await;
     let theirs = discovery(address, secrets, std::process::id() + 1);
     theirs.write(&directory).unwrap();
-    let error = start(&directory, Echo(None)).await.err().unwrap();
+    let error = start(&directory, VERSION.to_owned(), Echo(None))
+        .await
+        .err()
+        .unwrap();
     assert!(matches!(error, StartError::InUse(pid) if pid == theirs.pid));
     assert_eq!(Discovery::read(&directory).unwrap(), theirs);
 
     // It died without removing its file.
     other.abort();
     let _ = other.await;
-    let running = start(&directory, Echo(None)).await.unwrap();
+    let running = start(&directory, VERSION.to_owned(), Echo(None))
+        .await
+        .unwrap();
     assert_eq!(Discovery::read(&directory).unwrap().pid, std::process::id());
     drop(running);
     std::fs::remove_dir_all(&directory).unwrap();
@@ -407,7 +416,9 @@ async fn another_live_app_keeps_it_and_a_dead_one_gives_it_up() {
 #[tokio::test]
 async fn turning_it_off_ends_every_connection() {
     let directory = scratch("off");
-    let running = start(&directory, Echo(None)).await.unwrap();
+    let running = start(&directory, VERSION.to_owned(), Echo(None))
+        .await
+        .unwrap();
     let written = Discovery::read(&directory).unwrap();
     let address = SocketAddr::from(([127, 0, 0, 1], written.port));
     let secrets = Secrets {
@@ -438,6 +449,7 @@ fn the_gateway_passes_bytes_both_ways() {
     client_reads.read_line(&mut line).unwrap();
     let answer: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(answer["result"]["serverInfo"]["name"], "planche");
+    assert_eq!(answer["result"]["serverInfo"]["version"], VERSION);
     assert_eq!(answer["result"]["protocolVersion"], "2025-06-18");
 
     drop(client_writes);

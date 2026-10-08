@@ -1,0 +1,15 @@
+version = 1
+
+[git]
+short_tags = "desktop"
+
+[packages]
+# The library crates ship inside the app, which carries the version. A new crate joins them here.
+ignore = [
+  "cargo/bindings",
+  "cargo/board",
+  "cargo/folder",
+  "cargo/format",
+  "cargo/mcp",
+  "cargo/renderer",
+]
