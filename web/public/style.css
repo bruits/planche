@@ -301,6 +301,98 @@ body {
   background: var(--surface);
 }
 
+/* Centred in the room above the toolbar. */
+#viewport > .welcome {
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding-bottom: 64px;
+  color: var(--muted);
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 150ms ease-out,
+    visibility 0s 150ms;
+}
+
+#viewport > .welcome.shown {
+  opacity: 1;
+  visibility: visible;
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #viewport > .welcome {
+    transition: none;
+  }
+}
+
+.welcome p {
+  margin: 0;
+  font-size: 15px;
+}
+
+.welcome .logo {
+  width: 104px;
+  height: 104px;
+  margin-bottom: 8px;
+}
+
+.welcome .frame {
+  fill: none;
+  stroke: var(--line);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.welcome .under {
+  fill: var(--board);
+}
+
+.welcome .rim {
+  fill: color-mix(in srgb, var(--accent-soft), var(--accent) 15%);
+}
+
+.welcome .head {
+  fill: var(--accent-soft);
+}
+
+/* Without the toolbar, which compact mode hides, it would point at nothing. */
+:root[data-compact] .welcome .tools {
+  display: none;
+}
+
+.welcome .tools {
+  position: relative;
+  font-size: 13px;
+}
+
+.welcome .arrow {
+  position: absolute;
+  top: calc(50% - 4px);
+  left: calc(100% - 6px);
+  width: 52px;
+  height: 76px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.welcome .arrow.cramped {
+  visibility: hidden;
+}
+
 /* A thumbtack's head, ringed to stand apart from any image. */
 .pin {
   position: absolute;

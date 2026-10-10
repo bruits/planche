@@ -31,6 +31,7 @@ A new control goes into one of them. Find a command and comments' pins are the e
 
 - Labels, hints, and messages are short and plain, in British English.
 - A hint gives the main actions of what is under way, three at most. Those for the board and the selection end with "right-click for more".
+- Until the first edit on a browser, an empty board shows a welcome over it, which takes the place of the board's hint.
 - Rarer keys stay in [shortcuts](../usage/shortcuts.md), and hints never point to Find a command.
 
 ## Look

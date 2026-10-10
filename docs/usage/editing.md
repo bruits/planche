@@ -1,6 +1,6 @@
 # Editing
 
-Press ⌘K, or Ctrl+K outside macOS, to find any command by name. The list gives each command's keys and says why one cannot run right now. A right-click opens the commands that apply to the selection, or to the board when nothing is under the pointer. The line above the toolbar says what the current tool or gesture does and which keys change it. Every key is in [shortcuts](./shortcuts.md).
+Press ⌘K, or Ctrl+K outside macOS, to find any command by name. The list gives each command's keys and says why one cannot run right now. A right-click opens the commands that apply to the selection, or to the board when nothing is under the pointer. The line above the toolbar says what the current tool or gesture does and which keys change it. Until your first edit, an empty board says how to start instead. Every key is in [shortcuts](./shortcuts.md).
 
 ## Tools
 

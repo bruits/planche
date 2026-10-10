@@ -101,6 +101,7 @@ import { toolbar, type Button } from "./toolbar.js";
 import { vectors } from "./vector.js";
 import { videos } from "./video.js";
 import { view } from "./view.js";
+import { welcome } from "./welcome.js";
 import { writeZip } from "./zip.js";
 
 /** Where the browser remembers that hints are hidden. */
@@ -265,6 +266,7 @@ const comments = pins(byId("viewport"), {
   choose: (id) => editing.choose(id),
   write: (id) => editing.write(id),
 });
+const greeting = welcome(byId("viewport"), () => bar.top());
 const appearance = theme(restyle);
 
 const life = lifecycle({
@@ -305,6 +307,7 @@ const present = showing({
     showTitle();
     editing.reset();
     viewport.clear();
+    greeting.follow(next.board);
     refreshBar();
   },
   async attach(next, camera, wanted) {
@@ -1492,10 +1495,12 @@ const pictureCard = exportCard(
   recalled(recall),
   { save: commands.savePng.keys[0]!, copy: commands.copy.keys[0]! },
 );
-// As a message or a hint showing in the toolbar raises it, which the cards stay above.
+// As a message or a hint showing in the toolbar raises it, which the cards stay above, and the
+// welcome's arrow clear of.
 new ResizeObserver(() => {
   styleCard.frame();
   pictureCard.frame();
+  greeting.fit();
 }).observe(byId("toolbar"));
 styleCard.keepOpen(styleKept);
 const picker = sampler(
@@ -2150,7 +2155,9 @@ function hint(): string {
   if (unlocking() !== undefined) {
     return "Locked · right-click to unlock";
   }
-  return "Drop or paste images · scroll to move around · right-click for more";
+  return greeting.quietsHint()
+    ? ""
+    : "Drop or paste images · scroll to move around · right-click for more";
 }
 
 /**
@@ -2658,6 +2665,9 @@ function changed(touched: string[]): void {
     (touched.length === 0 && core.background(opened.editor) === opened.board.background)
   ) {
     return;
+  }
+  if (touched.length > 0) {
+    greeting.end();
   }
   const undrawn = refresh(opened, touched);
   pictureCard.refresh();
