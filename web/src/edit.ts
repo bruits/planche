@@ -470,7 +470,9 @@ type Press =
       grip?: [number, number] | undefined;
       start: Point;
       from: Rect;
-    };
+    }
+  /** A finger outside the crop, which crops once it lifts. */
+  | { kind: "leave"; pointer: number };
 
 export function edits(
   view: View,
@@ -1089,6 +1091,9 @@ export function edits(
         press = { kind: "crop", pointer, grip: GRIPS[nearest], start, from: area };
       } else if (start && within(at, lying(editing, id, area, CORNERS))) {
         press = { kind: "crop", pointer, start, from: area };
+      } else if (event.pointerType === "touch") {
+        // As a second finger may land meanwhile, to pan and zoom.
+        press = { kind: "leave", pointer };
       } else {
         finishCropping(editing, true);
         return;
@@ -1197,7 +1202,7 @@ export function edits(
       rehover();
       return;
     }
-    if (event.pointerId !== press.pointer) {
+    if (event.pointerId !== press.pointer || press.kind === "leave") {
       return;
     }
     if (press.kind === "pen") {
@@ -1594,6 +1599,11 @@ export function edits(
       editing?.editor.endGesture();
     } else if (press.kind === "crop") {
       // Its gesture lasts until the crop is done.
+    } else if (press.kind === "leave") {
+      const editing = current();
+      if (editing && completed) {
+        finishCropping(editing, true);
+      }
     } else if (press.kind !== "move" || press.dragging) {
       current()?.editor.endGesture();
     } else if (press.clicked !== undefined) {
@@ -1624,9 +1634,9 @@ export function edits(
     overlay.marquee(undefined);
     if (press.kind === "pen") {
       inked(undefined);
-    } else if (press.kind === "crop") {
-      // Its gesture holds the whole crop, which goes on.
-      if (cropping) {
+    } else if (press.kind === "crop" || press.kind === "leave") {
+      // The crop's gesture holds the whole crop, which goes on.
+      if (press.kind === "crop" && cropping) {
         cropping.area = press.from;
       }
     } else if (editing) {

@@ -743,6 +743,13 @@ function cropping() {
   return shown;
 }
 
+/** From the whole image `cropping` starts from to 200 by 180 pixels. */
+function dragCorner(pointer: ReturnType<typeof page>["pointer"]) {
+  pointer("pointerdown", 500, 200);
+  pointer("pointermove", 400, 180);
+  pointer("pointerup", 400, 180);
+}
+
 /**
  * Sticky notes beside the one that moves, each at its own top-left, 100 wide and tall unless
  * told, in a window that shows them.
@@ -1087,6 +1094,37 @@ describe("lining up", () => {
 describe("cropping", () => {
   afterEach(() => {
     document.body.replaceChildren();
+  });
+
+  it("crops at a click outside it", () => {
+    const { opened, editing, pointer } = cropping();
+    dragCorner(pointer);
+    pointer("pointerdown", 100, 300);
+    expect(editing.cropping()).toBeUndefined();
+    expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
+  });
+
+  it("crops once a finger outside it lifts, wherever it went", async () => {
+    const { opened, editing, pointer } = cropping();
+    dragCorner(pointer);
+    pointer("pointerdown", 100, 300, { finger: 1 });
+    pointer("pointermove", 150, 350, { finger: 1 });
+    await nextFrame();
+    expect(editing.cropping()).toBe(IMAGE);
+    pointer("pointerup", 150, 350, { finger: 1 });
+    expect(editing.cropping()).toBeUndefined();
+    expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
+  });
+
+  it("goes on once a finger outside it is lost", () => {
+    const { editing, pointer } = cropping();
+    pointer("pointerdown", 100, 300, { finger: 1 });
+    pointer("pointercancel", 100, 300, { finger: 1 });
+    expect(editing.cropping()).toBe(IMAGE);
+    // Another finger, as a lost press left set would turn every later one away.
+    pointer("pointerdown", 100, 300, { finger: 2 });
+    pointer("pointerup", 100, 300, { finger: 2 });
+    expect(editing.cropping()).toBeUndefined();
   });
 
   it("keeps the crop's proportions while Shift drags a corner, to a pixel", () => {
@@ -1644,10 +1682,7 @@ describe("a second finger", () => {
 
   it("puts a crop back to where the press found it, and goes on cropping", async () => {
     const { opened, editing, pointer } = cropping();
-    // A first drag, from the whole image to 200 by 180 pixels, which is where the next one starts.
-    pointer("pointerdown", 500, 200);
-    pointer("pointermove", 400, 180);
-    pointer("pointerup", 400, 180);
+    dragCorner(pointer);
     pointer("pointerdown", 400, 180, { finger: 1 });
     pointer("pointermove", 350, 150, { finger: 1 });
     await nextFrame();
@@ -1658,6 +1693,20 @@ describe("a second finger", () => {
     pointer("pointerup", 100, 300, { finger: 2 });
     key("keydown", { key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
+  });
+
+  it("goes on cropping when the first one landed outside the crop", () => {
+    const { opened, editing, pointer } = cropping();
+    dragCorner(pointer);
+    pointer("pointerdown", 100, 300, { finger: 1 });
+    pointer("pointerdown", 150, 300, { finger: 2 });
+    pointer("pointerup", 100, 300, { finger: 1 });
+    pointer("pointerup", 150, 300, { finger: 2 });
+    expect(editing.cropping()).toBe(IMAGE);
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
+    editing.undo();
+    expect(cropOf(opened)?.crop).toBeFalsy();
   });
 
   it("leaves the crop's edit open, to be cropped afresh and undone as one", async () => {
