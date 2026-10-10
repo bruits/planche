@@ -108,6 +108,8 @@ export function tauri({ core, event }: TauriApi): Platform {
   };
   return {
     name: "desktop",
+    // Tauri's own command, which the default capability allows.
+    version: () => core.invoke<string>("plugin:app|version"),
     layout: async () => new Map(await core.invoke<[string, string][]>("keyboard_layout")),
 
     agent: {

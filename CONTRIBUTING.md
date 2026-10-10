@@ -12,6 +12,10 @@ Three priorities guide the trade-offs.
 - Agents. They read and edit a board through the app as people do, and work on its plain files like any other file in a repository.
 - Every platform. The browser, Windows, macOS, and Linux first, then iOS and Android, all on the same Rust core.
 
+## Before Opening Issues
+
+- Do not report a security vulnerability publicly, such as in an issue: follow the [security policy](./SECURITY.md).
+
 ## Quality Guidelines
 
 - Write self-documenting code, with clear names and straightforward logic, and no cryptic abbreviations, hidden state, or hidden side effects. Comments explain why, such as intent, invariants, and trade-offs, and never serve as decoration or separators.

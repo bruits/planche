@@ -19,6 +19,7 @@ import type {
 import { pick, receive, type Incoming } from "./add.js";
 import { answer } from "./agent.js";
 import { animations } from "./animation.js";
+import { bugReport } from "./bugreport.js";
 import {
   among,
   assetSizes,
@@ -316,7 +317,10 @@ const present = showing({
   },
   async attach(next, camera, wanted) {
     const { width, height } = viewport.size();
-    const created = await create(viewport.host, width, height);
+    const created = await create(viewport.host, width, height).catch((error: unknown) => {
+      backend = `failed: ${message(error).replace(/\s+/g, " ")}`;
+      throw error;
+    });
     if (!wanted()) {
       created.destroy();
       return undefined;
@@ -324,6 +328,7 @@ const present = showing({
     // Edits may have changed it while the renderer was created.
     created.backdrop(next.board.background);
     details.set("renderer", created.backend);
+    backend = created.backend;
     renderer = created;
     placeNow(created, next);
     viewport.show(created, camera ?? fit(extent(next), viewport.size()));
@@ -378,6 +383,8 @@ const present = showing({
 
 let opened: Opened | undefined;
 let renderer: Renderer | undefined;
+/** The last renderer's backend, or why it failed, kept through a board's opening. */
+let backend: string | undefined;
 let halfDrawn = false;
 let looking: Promise<void> | undefined;
 /** On the desktop, a second export to the same file would take over the first one's draft. */
@@ -1276,6 +1283,10 @@ const commands = {
       }
     },
   },
+  reportBug: {
+    label: "Report a bug",
+    run: () => report(openBugReport()),
+  },
 } satisfies Record<string, Command>;
 const leaveCompact: Command = { ...commands.compact, label: "Leave compact mode" };
 const colourCommands = [
@@ -1423,6 +1434,7 @@ const bar = toolbar(
   () => [
     commands.find,
     ...(platform.desktopApp ? [commands.desktopApp] : []),
+    commands.reportBug,
     "separator",
     commands.newBoard,
     commands.open,
@@ -2895,6 +2907,19 @@ function showMetrics(): void {
 
 function report(work: Promise<void>): void {
   work.catch(fail);
+}
+
+async function openBugReport(): Promise<void> {
+  // Awaits nothing in a browser, which opens a tab only right after a click or a key.
+  const version = platform.version ? await platform.version() : undefined;
+  await platform.openAddress(
+    bugReport({
+      platform: platform.name,
+      version,
+      renderer: backend,
+      userAgent: navigator.userAgent,
+    }),
+  );
 }
 
 function fail(error: unknown): void {

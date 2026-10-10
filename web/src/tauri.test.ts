@@ -48,6 +48,11 @@ describe("tauri", () => {
     expect(await tauri(api).layout!()).toEqual(new Map([["KeyQ", "a"]]));
   });
 
+  it("reads the app's version from the shell", async () => {
+    const { api } = shell(true, null, { "plugin:app|version": "0.2.0" });
+    expect(await tauri(api).version!()).toBe("0.2.0");
+  });
+
   it("closing an unsaved board asks first, and keeps the window when the user declines", async () => {
     const { api, sent, close } = shell(false);
     tauri(api).whenClosing!(async () => false);

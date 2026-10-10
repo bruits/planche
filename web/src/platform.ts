@@ -131,6 +131,8 @@ export interface Platform {
   cannotSave?: string | undefined;
   /** Where to download the desktop app. Missing within it. */
   desktopApp?: string;
+  /** The app's version. Missing where the page cannot tell, such as in a browser. */
+  version?(): Promise<string>;
   /** What each key types without a modifier, by `KeyboardEvent.code`. Missing where none can tell. */
   layout?: (() => Promise<ReadonlyMap<string, string>>) | undefined;
   /** A home where the board can save itself. `null` when the user cancels. */
