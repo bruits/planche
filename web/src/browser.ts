@@ -30,6 +30,7 @@ const { keyboard } = navigator;
 export const browser: Platform = {
   name: "browser",
   cannotSave: CANNOT_SAVE,
+  desktopApp: "https://github.com/bruits/planche/releases/latest",
   layout: keyboard ? async () => new Map(await keyboard.getLayoutMap()) : undefined,
 
   async open() {

@@ -1,6 +1,6 @@
 # Settings
 
-The toolbar's menu holds the board's grid, the theme, the view, and the settings. Preferences stay in the browser, or in the desktop app's webview, apart from any board. They do not travel with a board, and clearing the site's data resets them.
+The toolbar's menu holds the board's grid, the theme, the view, and the settings. In a browser, Get the desktop app opens its latest release, with the installers. Preferences stay in the browser, or in the desktop app's webview, apart from any board. They do not travel with a board, and clearing the site's data resets them.
 
 ## Grid
 

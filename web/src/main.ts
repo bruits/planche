@@ -1264,6 +1264,14 @@ const commands = {
     run: () => openFinder(listed),
     once: true,
   },
+  desktopApp: {
+    label: "Get the desktop app",
+    run: () => {
+      if (platform.desktopApp !== undefined) {
+        report(platform.openAddress(platform.desktopApp));
+      }
+    },
+  },
 } satisfies Record<string, Command>;
 const leaveCompact: Command = { ...commands.compact, label: "Leave compact mode" };
 const colourCommands = [
@@ -1352,6 +1360,7 @@ const UNLISTED = new Set<Command>([
   commands.find,
   // The export card's own button, which says its keys.
   commands.savePng,
+  ...(platform.desktopApp === undefined ? [commands.desktopApp] : []),
 ]);
 
 const bar = toolbar(
@@ -1409,6 +1418,7 @@ const bar = toolbar(
   ],
   () => [
     commands.find,
+    ...(platform.desktopApp ? [commands.desktopApp] : []),
     "separator",
     commands.newBoard,
     commands.open,
