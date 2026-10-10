@@ -45,7 +45,7 @@ Triangle, diamond, star, and polygon have no keys. They sit with the other shape
 | Show or hide annotations | ⇧⌘H |
 | Compact mode | ⌘\\, in the desktop app |
 
-Scrolling pans. Scrolling with ⌘ or Ctrl held, or pinching, zooms. A double-click on an image, a stroke, an arrow, or a line zooms to it, and another on it or on nothing goes back.
+Scrolling pans. Scrolling with ⌘ or Ctrl held, or pinching, zooms. On a touch screen, two fingers pan as they move together and zoom as they pinch, and a second finger put down during a drag takes the drag back. A double-click on an image, a stroke, an arrow, or a line zooms to it, and another on it or on nothing goes back.
 
 ## Selection
 

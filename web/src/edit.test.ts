@@ -2,12 +2,13 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { refresh, untitled } from "./board.js";
 import * as core from "./core.js";
-import type { Kind, Point } from "./core.js";
+import type { Board, Kind, Point } from "./core.js";
 import { fit } from "./camera.js";
 import { edits, type Edits, type Hooks } from "./edit.js";
 import { closeMenu, openMenu } from "./menu.js";
 import { overlay } from "./overlay.js";
 import type { Renderer } from "./renderer.js";
+import { titles } from "./titles.js";
 import { view } from "./view.js";
 
 const STICKY = "a".repeat(32);
@@ -53,6 +54,7 @@ function page(
     failed(error) {
       throw error;
     },
+    panned() {},
   });
   // Draws nothing, as only where things are matters here.
   const renderer = {
@@ -89,7 +91,12 @@ function page(
     type: string,
     clientX: number,
     clientY: number,
-    { shiftKey = false, altKey = false, free = false } = {},
+    {
+      shiftKey = false,
+      altKey = false,
+      free = false,
+      finger,
+    }: { shiftKey?: boolean; altKey?: boolean; free?: boolean; finger?: number } = {},
   ) =>
     host.dispatchEvent(
       new PointerEvent(type, {
@@ -101,7 +108,8 @@ function page(
         metaKey: free,
         ctrlKey: free,
         button: 0,
-        pointerId: 1,
+        pointerId: finger ?? 1,
+        pointerType: finger === undefined ? "mouse" : "touch",
         bubbles: true,
       }),
     );
@@ -1492,6 +1500,18 @@ describe("the end of a press", () => {
     expect(opened.board.elements).toEqual({});
   });
 
+  it("gives back what the eraser took, and the selection, when the capture goes while the button is held", async () => {
+    const { opened, editing, host, pointer } = page([], { erasing: () => true });
+    editing.selectAll();
+    pointer("pointerdown", 150, 50);
+    pointer("pointermove", 50, 50);
+    await nextFrame();
+    captureLost(host, 50, 50, 1);
+    pointer("pointerup", 50, 50);
+    expect(Object.keys(opened.board.elements)).toEqual([STICKY]);
+    expect(editing.selection()).toEqual([STICKY]);
+  });
+
   it("gives up what it drew when the capture goes while the button is held", async () => {
     const { opened, host, pointer } = page([], { drawing: () => "pen" });
     pointer("pointerdown", 200, 200);
@@ -1500,6 +1520,214 @@ describe("the end of a press", () => {
     captureLost(host, 300, 250, 1);
     pointer("pointerup", 300, 250);
     expect(strokes(opened)).toEqual([]);
+  });
+});
+
+describe("a second finger", () => {
+  afterEach(() => document.body.replaceChildren());
+
+  it("takes back what the first one moved", async () => {
+    const { editing, pointer, at } = page();
+    pointer("pointerdown", 50, 50, { finger: 1 });
+    pointer("pointermove", 90, 70, { finger: 1 });
+    await nextFrame();
+    expect(at()).toEqual({ x: 40, y: 20 });
+    pointer("pointerdown", 300, 200, { finger: 2 });
+    expect(at()).toEqual({ x: 0, y: 0 });
+    expect(editing.selection()).toEqual([]);
+    expect(editing.busy()).toBe(false);
+    pointer("pointermove", 100, 80, { finger: 1 });
+    await nextFrame();
+    pointer("pointerup", 100, 80, { finger: 1 });
+    pointer("pointerup", 300, 200, { finger: 2 });
+    expect(at()).toEqual({ x: 0, y: 0 });
+    // What undoes next is the note's adding, as the page made it.
+    editing.undo();
+    expect(at()).toBeUndefined();
+  });
+
+  it("takes back what the first one moved, though the second lands on a group's title", async () => {
+    const { host, pointer, at } = page();
+    const group = "f".repeat(32);
+    const board: Board = {
+      elements: { [group]: { z: "a0", kind: { type: "group" }, locked: false } },
+      draw_order: [group],
+      background: "plain",
+    };
+    const labels = titles(host, () => {});
+    labels.frame({ x: 0, y: 0, zoom: 1 });
+    // Selected alone and untitled, the group offers a title, whose label keeps a press to itself.
+    labels.show(board, () => ({ x: 300, y: 300, width: 100, height: 100 }), [group], group);
+    pointer("pointerdown", 50, 50, { finger: 1 });
+    pointer("pointermove", 90, 70, { finger: 1 });
+    await nextFrame();
+    host.querySelector(".group-title.offered")!.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        clientX: 310,
+        clientY: 290,
+        button: 0,
+        pointerId: 2,
+        pointerType: "touch",
+        bubbles: true,
+      }),
+    );
+    expect(at()).toEqual({ x: 0, y: 0 });
+  });
+
+  it("takes back the marquee, and leaves the selection as it was", async () => {
+    const { editing, host, pointer } = page();
+    editing.selectAll();
+    pointer("pointerdown", 300, 300, { finger: 1 });
+    pointer("pointermove", 350, 350, { finger: 1 });
+    await nextFrame();
+    expect(editing.selection()).toEqual([]);
+    pointer("pointerdown", 400, 300, { finger: 2 });
+    expect(editing.selection()).toEqual([STICKY]);
+    expect(host.querySelector(".marquee")?.getAttribute("display")).toBe("none");
+  });
+
+  it("takes back what the pen drew", async () => {
+    const { opened, hooks, pointer } = page([], { drawing: () => "pen" });
+    pointer("pointerdown", 200, 200, { finger: 1 });
+    pointer("pointermove", 300, 300, { finger: 1 });
+    await nextFrame();
+    pointer("pointerdown", 400, 300, { finger: 2 });
+    expect(hooks.inked).toHaveBeenLastCalledWith(undefined);
+    pointer("pointerup", 300, 300, { finger: 1 });
+    expect(strokes(opened)).toEqual([]);
+  });
+
+  it("takes back what the eraser took", async () => {
+    const { opened, pointer } = page([], { erasing: () => true });
+    pointer("pointerdown", 150, 50, { finger: 1 });
+    pointer("pointermove", 50, 50, { finger: 1 });
+    await nextFrame();
+    pointer("pointerdown", 300, 200, { finger: 2 });
+    pointer("pointerup", 50, 50, { finger: 1 });
+    expect(Object.keys(opened.board.elements)).toEqual([STICKY]);
+  });
+
+  it("presses nothing more until a finger lifts", async () => {
+    const { editing, pointer } = page();
+    pointer("pointerdown", 300, 300, { finger: 1 });
+    pointer("pointerdown", 400, 300, { finger: 2 });
+    pointer("pointerdown", 50, 50, { finger: 3 });
+    pointer("pointerup", 50, 50, { finger: 3 });
+    expect(editing.selection()).toEqual([]);
+    pointer("pointerup", 400, 300, { finger: 2 });
+    pointer("pointerdown", 50, 50, { finger: 2 });
+    pointer("pointerup", 50, 50, { finger: 2 });
+    expect(editing.selection()).toEqual([]);
+  });
+
+  it("leaves a stylus its stroke when two fingers land beside it", async () => {
+    const { opened, host, pointer } = page([], { drawing: () => "pen" });
+    const stylus = (type: string, clientX: number, clientY: number) =>
+      host.dispatchEvent(
+        new PointerEvent(type, {
+          clientX,
+          clientY,
+          button: 0,
+          pointerId: 9,
+          pointerType: "pen",
+          bubbles: true,
+        }),
+      );
+    stylus("pointerdown", 200, 200);
+    pointer("pointerdown", 400, 300, { finger: 1 });
+    pointer("pointerdown", 420, 320, { finger: 2 });
+    stylus("pointermove", 300, 300);
+    await nextFrame();
+    stylus("pointerup", 300, 300);
+    expect(strokes(opened)).toHaveLength(1);
+  });
+
+  it("puts a crop back to where the press found it, and goes on cropping", async () => {
+    const { opened, editing, pointer } = cropping();
+    // A first drag, from the whole image to 200 by 180 pixels, which is where the next one starts.
+    pointer("pointerdown", 500, 200);
+    pointer("pointermove", 400, 180);
+    pointer("pointerup", 400, 180);
+    pointer("pointerdown", 400, 180, { finger: 1 });
+    pointer("pointermove", 350, 150, { finger: 1 });
+    await nextFrame();
+    pointer("pointerdown", 100, 300, { finger: 2 });
+    expect(editing.cropping()).toBe(IMAGE);
+    expect(editing.busy()).toBe(true);
+    pointer("pointerup", 350, 150, { finger: 1 });
+    pointer("pointerup", 100, 300, { finger: 2 });
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
+  });
+
+  it("leaves the crop's edit open, to be cropped afresh and undone as one", async () => {
+    const kept = { x: 100, y: 0, width: 150, height: 100 };
+    const { opened, editing, pointer } = page([
+      [IMAGE, { ...image, edits: { ...core.editsOf(image), crop: kept } }],
+    ]);
+    editing.select([IMAGE]);
+    editing.crop();
+    const corner = core.pointOfPixel(opened.editor, IMAGE, { x: 250, y: 100 })!;
+    pointer("pointerdown", corner.x, corner.y, { finger: 1 });
+    pointer("pointermove", corner.x + 40, corner.y + 40, { finger: 1 });
+    await nextFrame();
+    pointer("pointerdown", 100, 300, { finger: 2 });
+    // The image still shows whole, as the open edit left it.
+    expect(cropOf(opened)?.crop).toBeFalsy();
+    pointer("pointerup", corner.x + 40, corner.y + 40, { finger: 1 });
+    pointer("pointerup", 100, 300, { finger: 2 });
+    // The whole image shows twice as large as it was cropped, so 40 CSS pixels are 20 of its own.
+    pointer("pointerdown", corner.x, corner.y);
+    pointer("pointermove", corner.x - 40, corner.y - 40);
+    pointer("pointerup", corner.x - 40, corner.y - 40);
+    key("keydown", { key: "Enter" });
+    expect(cropOf(opened)?.crop).toEqual({ x: 100, y: 0, width: 130, height: 80 });
+    editing.undo();
+    expect(cropOf(opened)?.crop).toEqual(kept);
+  });
+
+  describe("pressing outside the group gone into", () => {
+    const OTHER = "b".repeat(32);
+    const OUTSIDE = "d".repeat(32);
+    const GROUP = "e".repeat(32);
+
+    function inside() {
+      const shown = page([
+        [OTHER, { ...sticky, frame: { x: 300, y: 0, width: 100, height: 100 } }],
+        [OUTSIDE, { ...sticky, frame: { x: 0, y: 300, width: 100, height: 100 } }],
+      ]);
+      shown.editing.select([STICKY, OTHER]);
+      shown.editing.group(GROUP);
+      shown.editing.goInside();
+      shown.editing.select([STICKY]);
+      return shown;
+    }
+
+    it("goes back inside the group, with what was selected there, when a second finger takes the press", () => {
+      const { editing, pointer } = inside();
+      pointer("pointerdown", 50, 350, { finger: 1 });
+      expect(editing.entered()).toBeUndefined();
+      expect(editing.selection()).toEqual([OUTSIDE]);
+      pointer("pointerdown", 600, 500, { finger: 2 });
+      expect(editing.entered()).toBe(GROUP);
+      expect(editing.selection()).toEqual([STICKY]);
+      pointer("pointerup", 50, 350, { finger: 1 });
+      pointer("pointerup", 600, 500, { finger: 2 });
+      expect(editing.entered()).toBe(GROUP);
+      expect(editing.selection()).toEqual([STICKY]);
+    });
+
+    it("goes back inside the group too when the press was on nothing", async () => {
+      const { editing, pointer } = inside();
+      pointer("pointerdown", 600, 500, { finger: 1 });
+      pointer("pointermove", 650, 550, { finger: 1 });
+      await nextFrame();
+      expect(editing.entered()).toBeUndefined();
+      expect(editing.selection()).toEqual([]);
+      pointer("pointerdown", 700, 500, { finger: 2 });
+      expect(editing.entered()).toBe(GROUP);
+      expect(editing.selection()).toEqual([STICKY]);
+    });
   });
 });
 

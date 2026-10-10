@@ -47,6 +47,9 @@ export interface View {
   mirror(on: boolean): void;
   mirrored(): boolean;
   pans(event: MouseEvent): boolean;
+  /** Whether two fingers pan and zoom it, `pointer` one of them. */
+  pinches(pointer: number): boolean;
+  /** Whether a pointer pans it, or two fingers do. */
   panning(): boolean;
 }
 
@@ -58,12 +61,20 @@ export interface Drawing {
   /** Once it drew one, which the GPU may not have finished yet. */
   painted(): void;
   failed(error: unknown): void;
+  /** Once nothing pans it any more. */
+  panned(): void;
 }
 
-/** How much a CSS pixel of scrolling zooms. */
+/**
+ * How much a CSS pixel of scrolling zooms, so that a pinch, which browsers report as scrolling,
+ * follows the fingers.
+ */
 const ZOOM_SPEED = 0.01;
-/** The most CSS pixels of scrolling that zoom at once, so that a mouse wheel's notch zooms by a step. */
-const LARGEST_ZOOM_STEP = 25;
+/**
+ * The most CSS pixels one wheel event zooms by, so that a mouse wheel's notch, or each event of a
+ * quick trackpad scroll, zooms by a step.
+ */
+const LARGEST_ZOOM_STEP = 10;
 /** CSS pixels per line, which some browsers count scrolling in. */
 const LINE = 16;
 
@@ -71,17 +82,32 @@ const LINE = 16;
  * Scrolling pans, and zooms with Ctrl or ⌘ held, which is how browsers report pinching a
  * trackpad. The middle button pans, and so does the main one with the hand tool.
  */
-export function view(host: HTMLElement, { advance, frame, painted, failed }: Drawing): View {
+export function view(
+  host: HTMLElement,
+  { advance, frame, painted, failed, panned }: Drawing,
+): View {
   let shown: { renderer: Renderer; camera: Camera } | undefined;
   let pending = false;
   /** Whether the next frame draws, which a step alone does not ask for. */
   let drawing = false;
-  let panning: number | undefined;
+  let panning: { pointer: number; clientX: number; clientY: number } | undefined;
   let hand = false;
   let greyed = false;
   let mirrored = false;
   /** Safari's pinch, as the scale it has reached, `undefined` when none is under way. */
   let pinching: number | undefined;
+  /** The fingers on the viewport, two at most. */
+  const fingers = new Map<number, { clientX: number; clientY: number }>();
+  const twoFingers = () => fingers.size === 2;
+  const moving = () => panning !== undefined || twoFingers();
+  const spread = () => {
+    const [a, b] = fingers.values();
+    return {
+      clientX: (a!.clientX + b!.clientX) / 2,
+      clientY: (a!.clientY + b!.clientY) / 2,
+      apart: Math.hypot(b!.clientX - a!.clientX, b!.clientY - a!.clientY),
+    };
+  };
   const size = () => ({ width: host.clientWidth, height: host.clientHeight });
   const paint = (grey: boolean) => {
     if (!shown) {
@@ -138,6 +164,13 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
       redraw();
     }
   };
+  const drag = (dx: number, dy: number) => {
+    if (shown) {
+      const { x, y, zoom } = shown.camera;
+      shown.camera = { x: x - (sideways() * dx) / zoom, y: y - dy / zoom, zoom };
+      redraw();
+    }
+  };
   host.addEventListener(
     "wheel",
     (event) => {
@@ -158,9 +191,7 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
       if (event.shiftKey && dx === 0) {
         [dx, dy] = [dy, 0];
       }
-      const { x, y, zoom } = shown.camera;
-      shown.camera = { x: x + (sideways() * dx) / zoom, y: y + dy / zoom, zoom };
-      redraw();
+      drag(-dx, -dy);
     },
     { passive: false },
   );
@@ -175,7 +206,10 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
   document.addEventListener("gesturechange", (event) => {
     event.preventDefault();
     if (pinching !== undefined) {
-      zoomAt(event.scale / pinching, event.clientX, event.clientY);
+      // Fingers on the viewport pinch it themselves, which Safari reports as its own pinch too.
+      if (fingers.size === 0) {
+        zoomAt(event.scale / pinching, event.clientX, event.clientY);
+      }
       pinching = event.scale;
     }
   });
@@ -184,37 +218,95 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
     pinching = undefined;
   });
   const pans = (event: MouseEvent) =>
-    event.button === 1 || (event.button === 0 && !opensMenu(event) && hand);
+    event.button === 1 ||
+    (event.button === 0 && !opensMenu(event) && hand) ||
+    (twoFingers() && "pointerType" in event && event.pointerType === "touch");
+  // Before anything over the board keeps a finger to itself, and before the board acts on it.
+  host.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (event.pointerType === "touch" && fingers.size < 2) {
+        fingers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+        if (twoFingers()) {
+          stopPanning();
+        }
+      }
+    },
+    { capture: true },
+  );
+  // On the window, as a finger whose capture went moves over whatever lies under it.
+  addEventListener(
+    "pointermove",
+    (event) => {
+      const finger = fingers.get(event.pointerId);
+      if (!finger) {
+        return;
+      }
+      const from = twoFingers() ? spread() : undefined;
+      finger.clientX = event.clientX;
+      finger.clientY = event.clientY;
+      if (from) {
+        const to = spread();
+        drag(to.clientX - from.clientX, to.clientY - from.clientY);
+        // Fingers pressed together zoom nowhere.
+        if (from.apart > 0 && to.apart > 0) {
+          zoomAt(to.apart / from.apart, to.clientX, to.clientY);
+        }
+      }
+    },
+    { capture: true },
+  );
   host.addEventListener("pointerdown", (event) => {
-    if (panning === undefined && pans(event)) {
+    if (panning === undefined && !twoFingers() && pans(event)) {
       // Middle-clicking would otherwise scroll on some platforms.
       event.preventDefault();
-      panning = event.pointerId;
+      panning = { pointer: event.pointerId, clientX: event.clientX, clientY: event.clientY };
       host.setPointerCapture(event.pointerId);
       host.classList.add("panning");
     }
   });
   host.addEventListener("pointermove", (event) => {
-    if (shown && event.pointerId === panning) {
-      const { x, y, zoom } = shown.camera;
-      const dx = sideways() * event.movementX;
-      shown.camera = { x: x - dx / zoom, y: y - event.movementY / zoom, zoom };
-      redraw();
+    if (event.pointerId !== panning?.pointer) {
+      return;
     }
+    // From where the pointer last was, as not every engine counts `movementX` in CSS pixels, or for
+    // each pointer apart.
+    const [dx, dy] = [event.clientX - panning.clientX, event.clientY - panning.clientY];
+    panning = { ...panning, clientX: event.clientX, clientY: event.clientY };
+    drag(dx, dy);
   });
   const stopPanning = () => {
     panning = undefined;
     host.classList.remove("panning");
   };
-  // A pan left on would follow the mouse without a button held.
+  // A pan left on would follow the mouse without a button held. On the window, as for a finger's
+  // moves.
   for (const type of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
-    host.addEventListener(type, (event) => {
-      if (event.pointerId === panning) {
-        stopPanning();
-      }
-    });
+    addEventListener(
+      type,
+      (event) => {
+        const was = moving();
+        if (event.pointerId === panning?.pointer) {
+          stopPanning();
+        }
+        if (type !== "lostpointercapture" || event.buttons === 0) {
+          fingers.delete(event.pointerId);
+        }
+        if (was && !moving()) {
+          panned();
+        }
+      },
+      { capture: true },
+    );
   }
-  addEventListener("blur", stopPanning);
+  addEventListener("blur", () => {
+    const was = moving();
+    stopPanning();
+    fingers.clear();
+    if (was) {
+      panned();
+    }
+  });
   const resize = () => {
     if (shown) {
       shown.renderer.resize(host.clientWidth, host.clientHeight);
@@ -313,7 +405,8 @@ export function view(host: HTMLElement, { advance, frame, painted, failed }: Dra
     },
     mirrored: () => mirrored,
     pans,
-    panning: () => panning !== undefined,
+    pinches: (pointer) => twoFingers() && fingers.has(pointer),
+    panning: moving,
   };
 }
 

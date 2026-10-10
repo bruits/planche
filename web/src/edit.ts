@@ -452,7 +452,7 @@ type Press =
     }
   /**
    * `within` what a drag starts within, which it leaves with the groups holding it, whatever the
-   * level. `selection` and `entered` as they were, which a lost press gets back with what it erased.
+   * level.
    */
   | {
       kind: "erase";
@@ -462,8 +462,6 @@ type Press =
       dragging: boolean;
       clicked?: string | undefined;
       within: string[];
-      selection: Set<string>;
-      entered?: string | undefined;
     }
   /** A crop's `grip`, or the crop itself without one, from `start`, a pixel, and the crop it had. */
   | {
@@ -502,6 +500,8 @@ export function edits(
   let selected = new Set<string>();
   let entered: string | undefined;
   let press: Press | undefined;
+  /** The selection and the group gone into before the press, which a press taken back leaves. */
+  let unpressed: { selected: Set<string>; entered: string | undefined } = { selected, entered };
   /** How long each of the press's steps took to handle, in milliseconds. */
   let handled: number[] = [];
   /** The pointer's last move during the press, which waits for the next frame. */
@@ -1040,6 +1040,17 @@ export function edits(
     show();
   };
 
+  // In capture, once the view counted the finger, and before what lies over the board keeps it to
+  // itself.
+  view.host.addEventListener(
+    "pointerdown",
+    () => {
+      if (press && view.pinches(press.pointer)) {
+        abandon();
+      }
+    },
+    { capture: true },
+  );
   view.host.addEventListener("pointerdown", (event) => {
     wasClick = false;
     pressedTitle = titledGroup(event.target);
@@ -1063,6 +1074,7 @@ export function edits(
       return;
     }
     last = at;
+    unpressed = { selected: new Set(selected), entered };
     over = undefined;
     previewed = undefined;
     overlay.preview(undefined);
@@ -1098,8 +1110,6 @@ export function edits(
         dragging: false,
         clicked: hit === undefined ? undefined : erasable(editor, hit),
         within: editor.covering(at.x, at.y, showsAnnotations()),
-        selection: new Set(selected),
-        entered,
       };
       editor.beginGesture();
       view.host.setPointerCapture(pointer);
@@ -1576,8 +1586,7 @@ export function edits(
     } else if (press.kind === "erase") {
       const editing = current();
       if (editing && !completed) {
-        selected = press.selection;
-        entered = press.entered;
+        ({ selected, entered } = unpressed);
         edit(editing, editing.editor.rewindGesture());
       } else if (editing && !press.dragging && press.clicked !== undefined) {
         edit(editing, editing.editor.remove([press.clicked]));
@@ -1602,6 +1611,30 @@ export function edits(
       show();
     }
     rehover();
+    settled();
+  };
+  const abandon = () => {
+    if (!press) {
+      return;
+    }
+    const editing = current();
+    ({ selected, entered } = unpressed);
+    overlay.targets([]);
+    overlay.lineup([], []);
+    overlay.marquee(undefined);
+    if (press.kind === "pen") {
+      inked(undefined);
+    } else if (press.kind === "crop") {
+      // Its gesture holds the whole crop, which goes on.
+      if (cropping) {
+        cropping.area = press.from;
+      }
+    } else if (editing) {
+      edit(editing, editing.editor.rewindGesture());
+      editing.editor.endGesture();
+    }
+    settle();
+    show();
     settled();
   };
   /**

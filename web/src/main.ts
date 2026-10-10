@@ -155,6 +155,10 @@ const draws = rate((perSecond) => {
 const overlaid = overlay(byId("viewport"));
 const viewport = view(byId("viewport"), {
   advance: () => editing.catchUp(),
+  panned() {
+    styleCard.refresh();
+    reframe();
+  },
   frame(camera, size) {
     bar.zoomed();
     overlaid.frame(camera, size);
