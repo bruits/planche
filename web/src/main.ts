@@ -2143,8 +2143,9 @@ function hint(): string {
     return "Drag to move · drag an end to move it · right-click for more";
   }
   if (editing.selection().length > 0) {
-    const crops = commands.crop.unavailable() === undefined ? "double-click to crop · " : "";
-    return `Drag to move · ${crops}right-click for more`;
+    const focuses =
+      editing.selection().length === 1 ? "double-click to zoom to it and back · " : "";
+    return `Drag to move · ${focuses}right-click for more`;
   }
   if (unlocking() !== undefined) {
     return "Locked · right-click to unlock";

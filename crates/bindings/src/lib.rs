@@ -435,6 +435,13 @@ impl Editor {
         strings(self.0.board().touching(area))
     }
 
+    /// Whether the element draws something within the four corners, each x then y, a group's
+    /// panel included, as `touching` finds it.
+    #[wasm_bindgen(js_name = drawsWithin)]
+    pub fn draws_within(&self, id: &str, corners: &[f64]) -> Result<bool, JsError> {
+        Ok(self.0.board().draws_within(id.parse()?, &quad(corners)?))
+    }
+
     /// The top-level elements and outermost groups of what `touching` finds but for the locked
     /// elements, and the annotations unless they are `shown`, once each.
     #[wasm_bindgen(js_name = touchingTopLevel)]
@@ -1144,6 +1151,18 @@ fn point(values: &[f64]) -> Result<Point, JsError> {
     match *values {
         [x, y] => Ok(Point { x, y }),
         _ => Err(JsError::new("A point is two numbers")),
+    }
+}
+
+fn quad(values: &[f64]) -> Result<[Point; 4], JsError> {
+    match *values {
+        [ax, ay, bx, by, cx, cy, dx, dy] => Ok([
+            Point { x: ax, y: ay },
+            Point { x: bx, y: by },
+            Point { x: cx, y: cy },
+            Point { x: dx, y: dy },
+        ]),
+        _ => Err(JsError::new("Four corners are eight numbers")),
     }
 }
 

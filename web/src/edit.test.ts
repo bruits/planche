@@ -3,6 +3,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { refresh, untitled } from "./board.js";
 import * as core from "./core.js";
 import type { Kind, Point } from "./core.js";
+import { fit } from "./camera.js";
 import { edits, type Edits, type Hooks } from "./edit.js";
 import { closeMenu, openMenu } from "./menu.js";
 import { overlay } from "./overlay.js";
@@ -10,7 +11,7 @@ import type { Renderer } from "./renderer.js";
 import { view } from "./view.js";
 
 const STICKY = "a".repeat(32);
-const sticky: Kind = {
+const sticky: Extract<Kind, { type: "sticky" }> = {
   type: "sticky",
   frame: { x: 0, y: 0, width: 100, height: 100 },
   rotation: 0,
@@ -153,6 +154,26 @@ function lower(editing: Edits, y: number) {
 
 function nextFrame(): Promise<number> {
   return new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
+/**
+ * `beneath`, and above it a sticky note at (300, 0), 100 wide and tall, turned by `rotation` degrees,
+ * selected and pressed at `x` and `y`.
+ */
+function turning(beneath: Kind, x: number, y: number, zoom = 1, rotation = 0) {
+  const [below, top] = ["b".repeat(32), "d".repeat(32)];
+  const { editing, pointer } = page(
+    [
+      [below, beneath],
+      [top, { ...sticky, rotation, frame: { x: 300, y: 0, width: 100, height: 100 } }],
+    ],
+    { zoom },
+  );
+  editing.select([top]);
+  pointer("pointerdown", x, y);
+  const grab = editing.grab();
+  pointer("pointerup", x, y);
+  return { grab, selection: editing.selection(), below };
 }
 
 describe("edits", () => {
@@ -434,6 +455,276 @@ describe("edits", () => {
     expect(to!.x - from!.x).toBeCloseTo(to!.y - from!.y, 9);
     expect(to!.x - from!.x).toBeCloseTo(Math.hypot(100, 90) * Math.SQRT1_2, 9);
   });
+
+  it("turns from just outside a corner, over what lies beneath it", async () => {
+    const other = "b".repeat(32);
+    const { opened, editing, pointer } = page([
+      [other, { ...sticky, frame: { x: 20, y: 20, width: 50, height: 50 } }],
+    ]);
+    editing.select([other]);
+    // Over the sticky note beneath, 11 pixels out from the top-right corner, at (70, 20).
+    pointer("pointerdown", 78, 12);
+    expect(editing.grab()).toBe("turn");
+    pointer("pointermove", 90, 60);
+    await nextFrame();
+    pointer("pointerup", 90, 60);
+    const turned = (id: string) => core.rotationOf(core.element(opened.editor, id)!.kind);
+    expect(editing.selection()).toEqual([other]);
+    expect(turned(other)).not.toBe(0);
+    expect(turned(STICKY)).toBe(0);
+    expect(core.element(opened.editor, STICKY)?.kind).toMatchObject({ frame: sticky.frame });
+  });
+
+  it("shows the turn grip from just outside a corner, over what lies beneath it", async () => {
+    const other = "b".repeat(32);
+    const { editing, pointer } = page([
+      [other, { ...sticky, frame: { x: 20, y: 20, width: 50, height: 50 } }],
+    ]);
+    editing.select([other]);
+    pointer("pointermove", 78, 12);
+    await nextFrame();
+    expect(editing.grab()).toBe("turn");
+  });
+
+  it("leaves a press just outside a corner to what lies above the selection", () => {
+    const above = "b".repeat(32);
+    const { editing, pointer } = page([
+      [above, { ...sticky, frame: { x: 80, y: -40, width: 60, height: 60 } }],
+    ]);
+    editing.select([STICKY]);
+    // On the sticky note poking out, 11 pixels out from the top-right corner, at (100, 0).
+    pointer("pointerdown", 108, -8);
+    expect(editing.grab()).toBeUndefined();
+    pointer("pointerup", 108, -8);
+    expect(editing.selection()).toEqual([above]);
+  });
+
+  it("leaves a press just outside a corner to what lies beneath but beside the selection", () => {
+    const around: Kind = {
+      type: "shape",
+      frame: { x: 290, y: -10, width: 120, height: 120 },
+      shape: "rectangle",
+      text: { content: "", font_size: 20 },
+    };
+    const besides: [Kind, number, number][] = [
+      [{ ...sticky, frame: { x: 400, y: 0, width: 100, height: 100 } }, 411, 5],
+      // As floats land a hair over the side shared.
+      [{ ...sticky, frame: { x: 399.99, y: 0, width: 100, height: 100 } }, 411, 5],
+      // The same on the other sides.
+      [{ ...sticky, frame: { x: 200.01, y: 0, width: 100, height: 100 } }, 289, 5],
+      [{ ...sticky, frame: { x: 300, y: -99.99, width: 100, height: 100 } }, 312, -10],
+      [{ ...sticky, frame: { x: 300, y: 99.99, width: 100, height: 100 } }, 312, 110],
+      // Past the corner, though its frame is over the selection.
+      [
+        core.strokeKind(
+          [
+            { x: 380, y: -30 },
+            { x: 430, y: 20 },
+          ],
+          0,
+        ),
+        410,
+        0,
+      ],
+      // Around it, which its inside lets through.
+      [around, 405, -10],
+    ];
+    for (const [kind, x, y] of besides) {
+      const { grab, selection, below } = turning(kind, x, y);
+      expect(grab).toBeUndefined();
+      expect(selection).toEqual([below]);
+    }
+  });
+
+  it("leaves a press just outside a corner to what lies beside the selection, zoomed out", () => {
+    // A screen pixel spans two board units, so overlapping by one and a half is still beside.
+    for (const x of [420, 398.5]) {
+      const { grab, selection, below } = turning(
+        { ...sticky, frame: { x, y: 0, width: 100, height: 100 } },
+        211,
+        1,
+        0.5,
+      );
+      expect(grab).toBeUndefined();
+      expect(selection).toEqual([below]);
+    }
+  });
+
+  it("turns over what lies beneath once it overlaps the selection by a screen pixel, zoomed out", () => {
+    const { grab } = turning(
+      { ...sticky, frame: { x: 397.5, y: 0, width: 100, height: 100 } },
+      211,
+      1,
+      0.5,
+    );
+    expect(grab).toBe("turn");
+  });
+
+  it("goes by the sides of a turned selection, not by its upright bounds", () => {
+    // The neighbour's bottom-left corner lies 0.5 and 2.3 units inside the top-right side.
+    const shallow = turning(
+      { ...sticky, frame: { x: 415, y: -55, width: 100, height: 100 } },
+      428,
+      38,
+      1,
+      45,
+    );
+    expect(shallow.grab).toBeUndefined();
+    expect(shallow.selection).toEqual([shallow.below]);
+    const deep = turning(
+      { ...sticky, frame: { x: 415, y: -52.5, width: 100, height: 100 } },
+      428,
+      38,
+      1,
+      45,
+    );
+    expect(deep.grab).toBe("turn");
+  });
+
+  it("goes by the draw order of the whole board, not by siblings, once inside a group", () => {
+    const [group, far, above] = ["b", "d", "e"].map((letter) => letter.repeat(32)) as [
+      string,
+      string,
+      string,
+    ];
+    const { opened, editing, pointer } = page([
+      [far, { ...sticky, frame: { x: 300, y: 300, width: 60, height: 60 } }],
+    ]);
+    opened.editor.group(group, [STICKY, far]);
+    opened.editor.add(
+      above,
+      undefined,
+      JSON.stringify({ ...sticky, frame: { x: 80, y: -40, width: 60, height: 60 } }),
+    );
+    opened.board = core.board(opened.editor);
+    editing.select([group]);
+    editing.goInside();
+    editing.select([STICKY]);
+    pointer("pointerdown", 108, -8);
+    expect(editing.grab()).toBeUndefined();
+    pointer("pointerup", 108, -8);
+    expect(editing.selection()).toEqual([above]);
+  });
+
+  it("leaves what lies beyond the turn's reach of a corner to a press", () => {
+    const other = "b".repeat(32);
+    const { editing, pointer } = page([
+      [other, { ...sticky, frame: { x: 20, y: 20, width: 50, height: 50 } }],
+    ]);
+    editing.select([other]);
+    pointer("pointerdown", 85, 5);
+    expect(editing.grab()).toBeUndefined();
+    pointer("pointerup", 85, 5);
+    expect(editing.selection()).toEqual([STICKY]);
+  });
+});
+
+/** The sticky note and `more`, in a viewport 600 by 400 CSS pixels. */
+function viewed(more: [string, Kind][]) {
+  const shown = page(more);
+  Object.defineProperties(shown.host, {
+    clientWidth: { value: 600 },
+    clientHeight: { value: 400 },
+  });
+  const twice = (clientX: number, clientY: number) => {
+    for (const type of ["pointerdown", "pointerup", "pointerdown", "pointerup"]) {
+      shown.pointer(type, clientX, clientY);
+    }
+    shown.host.dispatchEvent(
+      new MouseEvent("dblclick", { clientX, clientY, button: 0, bubbles: true }),
+    );
+  };
+  return { ...shown, twice };
+}
+
+describe("a double-click", () => {
+  const BESIDE = "d".repeat(32);
+  const next: Kind = { ...image, frame: { x: 500, y: 0, width: 300, height: 200 } };
+  /** The image, and another just right of it. */
+  const images = () =>
+    viewed([
+      [IMAGE, image],
+      [BESIDE, next],
+    ]);
+  const size = { width: 600, height: 400 };
+  const start = { x: 0, y: 0, zoom: 1 };
+
+  it("zooms to an image, and back to the view it left once on it again", () => {
+    const { editing, viewport, twice } = images();
+    twice(350, 100);
+    expect(viewport.camera()).toEqual(fit({ x: 200, y: 0, width: 300, height: 200 }, size));
+    expect(editing.cropping()).toBeUndefined();
+    // The image's centre, now in the viewport's.
+    twice(300, 200);
+    expect(viewport.camera()).toEqual(start);
+  });
+
+  it("zooms from one image to another, then back to the view the first left", () => {
+    const { viewport, twice } = images();
+    twice(350, 100);
+    // The other image, at the right edge.
+    twice(590, 200);
+    expect(viewport.camera()).toEqual(fit({ x: 500, y: 0, width: 300, height: 200 }, size));
+    twice(300, 200);
+    expect(viewport.camera()).toEqual(start);
+  });
+
+  it("zooms to an image again once the view moved away from it", () => {
+    const { viewport, twice } = images();
+    twice(350, 100);
+    const zoomed = viewport.camera()!;
+    viewport.look({ ...zoomed, x: zoomed.x + 10 });
+    twice(300, 200);
+    expect(viewport.camera()).toEqual(zoomed);
+  });
+
+  it("writes in a sticky note rather than zoom to it", () => {
+    const { editing, viewport, twice } = images();
+    twice(50, 50);
+    expect(viewport.camera()).toEqual(start);
+    expect(editing.writing()).toBe(STICKY);
+  });
+
+  it("zooms to a stroke, an arrow, or a line", () => {
+    const LINED = "e".repeat(32);
+    const from = { x: 100, y: 250 };
+    const to = { x: 400, y: 350 };
+    const kinds: Kind[] = [
+      core.strokeKind([from, to], 0),
+      { type: "arrow", from, to },
+      { type: "line", from, to },
+    ];
+    for (const kind of kinds) {
+      const { opened, viewport, twice } = images();
+      opened.editor.add(LINED, undefined, JSON.stringify(kind));
+      opened.board = core.board(opened.editor);
+      // Halfway along it.
+      twice(250, 300);
+      const area = core.extent(opened.editor, [LINED])!;
+      expect(viewport.camera()).toEqual(fit(area, size));
+    }
+  });
+
+  it("goes back from a double-click on nothing, where what it zoomed to was", () => {
+    const area = { x: 150, y: 0, width: 100, height: 300 };
+    const { viewport, twice } = viewed([[IMAGE, { ...image, frame: area }]]);
+    twice(160, 200);
+    const zoomed = viewport.camera()!;
+    expect(zoomed).toEqual(fit(area, size));
+    // Centred, it now starts right of the pointer.
+    expect((area.x - zoomed.x) * zoomed.zoom).toBeGreaterThan(160);
+    twice(160, 200);
+    expect(viewport.camera()).toEqual(start);
+  });
+
+  it("does nothing on nothing once the view moved away from what it zoomed to", () => {
+    const { viewport, twice } = images();
+    twice(350, 100);
+    const moved = { ...viewport.camera()!, y: 300 };
+    viewport.look(moved);
+    twice(300, 20);
+    expect(viewport.camera()).toEqual(moved);
+  });
 });
 
 /** A board whose image is being cropped, from its whole. */
@@ -459,7 +750,7 @@ function beside(
   } as unknown as CanvasRenderingContext2D);
   const others = corners.map((corner, at): [string, Kind] => [
     String(at).repeat(32),
-    { ...sticky, frame: { width: 100, height: 100, ...corner } } as Kind,
+    { ...sticky, frame: { width: 100, height: 100, ...corner } },
   ]);
   const shown = page(others, { aligning: () => true, ...options });
   Object.defineProperties(shown.host, {
@@ -1264,6 +1555,23 @@ describe("a group's panel", () => {
     host.dispatchEvent(new MouseEvent("dblclick", at));
     expect(hooks.retitle).toHaveBeenCalledExactlyOnceWith(GROUP);
     expect(editing.entered()).toBeUndefined();
+  });
+
+  it("goes inside on a double-click on one of its elements, rather than zoom to it", () => {
+    const { editing, host, viewport, pointer } = framed();
+    Object.defineProperties(host, {
+      clientWidth: { value: 600 },
+      clientHeight: { value: 400 },
+    });
+    for (const type of ["pointerdown", "pointerup", "pointerdown", "pointerup"]) {
+      pointer(type, 50, 50);
+    }
+    host.dispatchEvent(
+      new MouseEvent("dblclick", { clientX: 50, clientY: 50, button: 0, bubbles: true }),
+    );
+    expect(editing.entered()).toBe(GROUP);
+    expect(editing.selection()).toEqual([STICKY]);
+    expect(viewport.camera()).toEqual({ x: 0, y: 0, zoom: 1 });
   });
 
   it("moves its group from its title, even over the corner's grip it covers", async () => {

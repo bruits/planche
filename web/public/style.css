@@ -421,12 +421,13 @@ body {
   }
 }
 
-/* Out of the way while the style card is used, as it would hide the strokes the card changes. */
+/* Out of the way while the style card or the pipette is used, as it hides what they look at. */
 .selection {
   transition: opacity 0.15s;
 }
 
-:root:has(.style-card:hover, .style-card:focus-within, .style-card :active) .selection {
+:root:has(.style-card:hover, .style-card:focus-within, .style-card :active, #viewport.sampling)
+  .selection {
   opacity: 0;
 }
 

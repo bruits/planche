@@ -250,9 +250,6 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
   let trimming: { id: string; asset: string; span: Span; playing: boolean } | undefined;
   /** While a pointer moves the frame shown or an end of the trim, which the card must not build under. */
   let dragging = false;
-  const letGo = () => {
-    dragging = false;
-  };
   /** With whether the alignment it holds is only the one its holder takes by default. */
   let copied: { style: Style; natural: boolean } | undefined;
 
@@ -827,11 +824,14 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       const [first, final] = trimming.span;
       trim(asset, last ? [first, Math.max(first, at)] : [Math.min(at, final), final], at);
     };
+    /** The frame shown before a pointer took this end. */
+    let shown: number | undefined;
     made.addEventListener("pointerdown", (event) => {
       if (event.button === 0 && !opensMenu(event)) {
         event.preventDefault();
         made.setPointerCapture(event.pointerId);
         dragging = true;
+        shown = host.media.playback(asset)?.at;
       }
     });
     made.addEventListener("pointermove", (event) => {
@@ -845,9 +845,18 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       const along = (event.clientX - left - THUMB / 2) / Math.max(1, width - THUMB);
       move(Math.round(clamp(along, 0, 1) * (count - 1)));
     });
-    made.addEventListener("pointerup", letGo);
-    made.addEventListener("lostpointercapture", letGo);
-    made.addEventListener("pointercancel", letGo);
+    const release = () => {
+      dragging = false;
+      const back = shown;
+      shown = undefined;
+      if (back !== undefined && trimming) {
+        host.media.seek(asset, clamp(back, trimming.span[0], trimming.span[1]));
+        live();
+      }
+    };
+    for (const ending of ["pointerup", "lostpointercapture", "pointercancel"]) {
+      made.addEventListener(ending, release);
+    }
     made.addEventListener("keydown", (event) => {
       const by = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
       if (by !== undefined && trimming) {
@@ -890,10 +899,10 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     dragging = false;
     host.media.preview(asset, undefined);
     const playback = host.media.playback(asset);
+    // Staying on the frame it shows, which the trim keeps.
     if (keep && playback) {
       const trimmed = trimOf(playback.starts, span);
       edit((editor, touched) => touched.push(...core.setTrim(editor, [id], trimmed)));
-      host.media.seek(asset, span[0]);
     }
     host.media.play([asset], was);
     show();

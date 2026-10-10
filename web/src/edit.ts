@@ -3,7 +3,9 @@
 // outermost group holding it, and a drag from where nothing is draws a rectangle that selects what
 // it touches, and the comments pinned in it. Double-clicking a group goes into it, where clicks
 // select its own elements instead, and double-clicking a note, a sticky note, a shape, or a
-// comment writes in it. Clicks and rectangles go through what is locked, which shows dashed while
+// comment writes in it. Double-clicking an image, a stroke, an arrow, or a line zooms to it, and
+// double-clicking it again, or on nothing, goes back to the view it left, unless the view has
+// changed meanwhile. Clicks and rectangles go through what is locked, which shows dashed while
 // hovered and nothing selectable lies there, and a right-click on it offers to unlock it. While the
 // annotations are hidden, clicks, rectangles, and selections go through them too, until an edit
 // adds one on its own, an undo or a redo would otherwise select nothing, or a selection asks for
@@ -39,7 +41,7 @@
 // Resetting the crop meanwhile starts it over from the whole image, and its shape changes as
 // asked.
 
-import { onScreen } from "./camera.js";
+import { fit, onScreen, sameCamera, type Camera } from "./camera.js";
 import { composing, mac, opensMenu, typed, typing } from "./commands.js";
 import * as core from "./core.js";
 import type {
@@ -544,6 +546,8 @@ export function edits(
   let pressedPin: string | undefined;
   /** As `pressedPin`, the group whose title the last press was on. */
   let pressedTitle: string | undefined;
+  /** The element a double-click zoomed to, the view it left, and the one it showed. */
+  let focused: { id: string; from: Camera; to: Camera } | undefined;
   /**
    * The image being cropped, in pixels the part of it that will show. Its gesture stays open, the
    * image shown whole, until the crop is done, so that meanwhile the board reads as unsaved and
@@ -651,8 +655,8 @@ export function edits(
   };
   /**
    * What a press at `at` takes of the selection's box `corners`, a dot before a side, a note's only
-   * across as its text sets its height, and the zone outside a corner unless something else lies
-   * there.
+   * across as its text sets its height, and the zone outside a corner unless `hit`, under the
+   * pointer, lies above or beside the selection.
    */
   const grabbing = (
     editing: Editing,
@@ -681,10 +685,18 @@ export function edits(
         return { kind: "side", at: sides[off.indexOf(closest)]! };
       }
     }
-    const elsewhere = hit !== undefined && !among(editing.board, hit, selected);
-    return far[nearest]! <= TURN_REACH && !elsewhere && !within(at, corners)
-      ? { kind: "turn", at: nearest }
-      : undefined;
+    if (far[nearest]! > TURN_REACH || within(at, corners)) {
+      return undefined;
+    }
+    // A side shared or a pixel's overlap counts as beside.
+    const taken =
+      hit !== undefined &&
+      !among(editing.board, hit, selected) &&
+      !(
+        beneath(editing.board, hit, selected) &&
+        core.drawsWithin(editing.editor, hit, inset(corners, 1 / zoom))
+      );
+    return taken ? undefined : { kind: "turn", at: nearest };
   };
   const gripped = (
     editing: Editing,
@@ -1776,16 +1788,37 @@ export function edits(
       show();
       return;
     }
-    if (top !== undefined && board.elements[top]?.kind.type === "image") {
-      crop(editing, top);
-      return;
-    }
     // Within a shape, whose text fills it once written.
     const target = top ?? surrounding(editing, at);
     if (target !== undefined && writesIn(board.elements[target]?.kind)) {
       write(editing, target, false);
+    } else if (top !== undefined) {
+      focus(editing, top);
+    } else {
+      back();
     }
   });
+
+  const focus = (editing: Editing, id: string) => {
+    const from = view.camera();
+    const area = core.extent(editing.editor, [id]);
+    if (!from || !area || (focused?.id === id && back())) {
+      return;
+    }
+    const still = focused && sameCamera(from, focused.to) ? focused : undefined;
+    const to = fit(area, view.size());
+    focused = { id, from: still?.from ?? from, to };
+    view.look(to);
+  };
+  const back = (): boolean => {
+    const now = view.camera();
+    if (!focused || !now || !sameCamera(now, focused.to)) {
+      return false;
+    }
+    view.look(focused.from);
+    focused = undefined;
+    return true;
+  };
 
   const crop = (editing: Editing, id: string) => {
     const kind = editing.board.elements[id]?.kind;
@@ -2493,6 +2526,37 @@ export function isTip(tool: string | undefined): tool is Tip {
 
 function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** Whether `id` draws before, so under, every one of the `chosen` and what they hold. */
+function beneath({ draw_order }: Board, id: string, chosen: Set<string>): boolean {
+  for (const drawn of draw_order) {
+    if (drawn === id) {
+      return true;
+    }
+    if (chosen.has(drawn)) {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * A box's `corners`, clockwise from its top-left, moved `by` inwards from each side, as far as its
+ * middle.
+ */
+function inset(corners: Point[], by: number): Point[] {
+  const [a, b, d] = [corners[0]!, corners[1]!, corners[3]!];
+  const towards = (to: Point) => {
+    const length = distance(a, to);
+    const step = Math.min(by, length / 2) / (length || 1);
+    return { x: (to.x - a.x) * step, y: (to.y - a.y) * step };
+  };
+  const [across, down] = [towards(b), towards(d)];
+  return corners.map(({ x, y }, at) => {
+    const [right, below] = [at === 0 || at === 3 ? 1 : -1, at < 2 ? 1 : -1];
+    return { x: x + right * across.x + below * down.x, y: y + right * across.y + below * down.y };
+  });
 }
 
 function offSegment(point: Point, from: Point, to: Point): number {

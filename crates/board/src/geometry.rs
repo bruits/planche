@@ -137,6 +137,17 @@ impl Board {
             .collect()
     }
 
+    /// Whether element `id` draws something within `area`, turned or not, a group's panel
+    /// included, as [`Board::touching`] finds it.
+    pub fn draws_within(&self, id: ElementId, area: &[Point; 4]) -> bool {
+        self.elements
+            .get(&id)
+            .is_some_and(|element| touches(&element.kind, area))
+            || self
+                .panel(id)
+                .is_some_and(|panel| overlap(&corners(&panel, 0.0), area))
+    }
+
     /// The top-level elements and outermost groups of what [`Board::touching`] finds but for the
     /// locked elements and the `annotations` hidden, as a selection rectangle goes through them,
     /// once each, in the order it finds them.
@@ -1577,6 +1588,10 @@ mod tests {
         assert_eq!(board.hit(point(-20.0, 50.0), 5.0, Shown), Some(id(1)));
         assert_eq!(board.hit(point(200.0, 550.0), 0.0, Shown), None);
         assert_eq!(board.touching(area(190.0, 40.0, 10.0, 10.0)), [id(1)]);
+        let gap = corners(&area(190.0, 40.0, 10.0, 10.0), 45.0);
+        assert!(board.draws_within(id(1), &gap));
+        assert!(!board.draws_within(id(4), &gap));
+        assert!(!board.draws_within(id(4), &corners(&area(190.0, 540.0, 10.0, 10.0), 45.0)));
         assert_eq!(
             board.hit_along(point(150.0, 50.0), point(250.0, 50.0), 1.0, Shown),
             []
@@ -2874,5 +2889,43 @@ mod tests {
         assert!(board.touching(area(405.0, 45.0, 10.0, 10.0)).is_empty());
         assert_eq!(board.touching(area(640.0, -10.0, 20.0, 20.0)), [id(4)]);
         assert!(board.touching(area(655.0, -10.0, 20.0, 20.0)).is_empty());
+    }
+
+    #[test]
+    fn an_element_draws_within_a_turned_area_by_what_it_draws() {
+        let board = board([
+            // Beside the top-right side of a diamond, within its upright bounds.
+            (1, element(None, "a0", image(62.0, -25.0, 18.0, 10.0, 0.0))),
+            // Past the corner at (100, 0), its frame over the box.
+            (
+                2,
+                element(
+                    None,
+                    "a1",
+                    pen(
+                        area(80.0, -30.0, 50.0, 50.0),
+                        0.0,
+                        &[(0.0, 0.0), (1.0, 1.0)],
+                    ),
+                ),
+            ),
+            (
+                3,
+                element(
+                    None,
+                    "a2",
+                    framed(Shape::Rectangle, area(-10.0, -10.0, 120.0, 120.0), 0.0),
+                ),
+            ),
+            (4, element(None, "a3", image(20.0, 20.0, 50.0, 50.0, 0.0))),
+        ]);
+        let diamond = corners(&area(0.0, 0.0, 100.0, 100.0), 45.0);
+        let upright = corners(&area(0.0, 0.0, 100.0, 100.0), 0.0);
+        assert!(!board.draws_within(id(1), &diamond));
+        assert!(board.draws_within(id(1), &corners(&area(-21.0, -21.0, 142.0, 142.0), 0.0)));
+        assert!(!board.draws_within(id(2), &upright));
+        assert!(!board.draws_within(id(3), &upright));
+        assert!(board.draws_within(id(4), &upright));
+        assert!(!board.draws_within(id(9), &upright));
     }
 }

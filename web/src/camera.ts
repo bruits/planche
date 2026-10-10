@@ -34,6 +34,10 @@ export function fit(bounds: Rect | undefined, viewport: Viewport): Camera {
   };
 }
 
+export function sameCamera(a: Camera, b: Camera): boolean {
+  return a.x === b.x && a.y === b.y && a.zoom === b.zoom;
+}
+
 /** Zoomed by `factor`, keeping the board point under `x` and `y`, in CSS pixels from the viewport's top-left. */
 export function zoomAbout(camera: Camera, factor: number, x: number, y: number): Camera {
   const zoom = clampZoom(camera.zoom * factor);

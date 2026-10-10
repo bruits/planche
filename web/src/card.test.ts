@@ -376,6 +376,34 @@ describe("the card of a lone animated image", () => {
     expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
   });
 
+  it("shows the frame it showed again once an end is let go, or the nearest one kept", () => {
+    const playback = gif();
+    const { media, image } = opened(playback);
+    named("Trim").click();
+    const drag = (name: string, to: number) => {
+      const end = named(name);
+      end.setPointerCapture = () => {};
+      end.hasPointerCapture = () => true;
+      // A frame every 10 pixels, from the thumb's centre.
+      end.parentElement!.getBoundingClientRect = () => new DOMRect(0, 0, 23 * 10 + 14, 14);
+      end.dispatchEvent(new PointerEvent("pointerdown", { button: 0, pointerId: 1 }));
+      end.dispatchEvent(new PointerEvent("pointermove", { clientX: 7 + to * 10, pointerId: 1 }));
+      expect(media.seek).toHaveBeenLastCalledWith(ASSET, to);
+      end.dispatchEvent(new PointerEvent("lostpointercapture", { pointerId: 1 }));
+      end.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1 }));
+    };
+    drag("Trim end", 10);
+    expect(media.seek).toHaveBeenLastCalledWith(ASSET, 2);
+    drag("Trim start", 5);
+    expect(media.seek).toHaveBeenLastCalledWith(ASSET, 5);
+    expect(media.preview).toHaveBeenLastCalledWith(ASSET, [5, 10]);
+    const sought = media.seek.mock.calls.length;
+    typed(document.body, "Enter");
+    expect(image()?.edits?.trim).toEqual(trimOf(playback.starts, [5, 10]));
+    expect(media.seek).toHaveBeenCalledTimes(sought);
+    expect(media.play).toHaveBeenLastCalledWith([ASSET], true);
+  });
+
   it("tells once it starts trimming, and once it stops, which the hint follows", () => {
     const { trimmed } = opened(gif());
     named("Trim").click();

@@ -404,6 +404,11 @@ export function bounds(editor: Editor, ids: string[]): Rect | undefined {
   return rect(editor.bounds(ids));
 }
 
+/** Whether `id` draws something within the four `corners`, a group's panel included. */
+export function drawsWithin(editor: Editor, id: string, corners: Point[]): boolean {
+  return editor.drawsWithin(id, Float64Array.from(corners.flatMap(({ x, y }) => [x, y])));
+}
+
 /** As `bounds`, with the points where the comments among them are pinned. */
 export function extent(editor: Editor, ids: string[]): Rect | undefined {
   return rect(editor.extent(ids));
