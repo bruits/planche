@@ -1,8 +1,9 @@
 use std::mem;
+use std::panic;
 use std::sync::{Arc, Mutex};
 
 use wasm_bindgen::prelude::*;
-use web_sys::js_sys::Uint8ClampedArray;
+use web_sys::js_sys::{Function, Uint8ClampedArray};
 use web_sys::{HtmlCanvasElement, HtmlMediaElement, HtmlVideoElement, ImageBitmap};
 
 /// Uniform buffers take multiples of 16 bytes on WebGL2, hence the padding.
@@ -560,6 +561,8 @@ pub struct Renderer {
     webgpu: bool,
     /// wgpu's default is to panic, which would leave the page waiting on a dead module.
     error: Arc<Mutex<Option<String>>>,
+    /// Told why once the GPU or the canvas's surface is lost, which only a new page recovers from.
+    lost: Function,
 }
 
 struct Pipelines {
@@ -576,8 +579,24 @@ struct Texture {
     bytes: u64,
 }
 
+/// Hands each panic's message to `report` before the module traps, as wasm's own hook prints
+/// nothing and the page would only see an `unreachable`. The module is unusable afterwards.
+#[wasm_bindgen(js_name = reportPanics)]
+pub fn report_panics(report: Function) {
+    panic::set_hook(Box::new(move |info| {
+        // The module traps next, so a failed report has nowhere left to go.
+        let _ = report.call1(&JsValue::NULL, &info.to_string().into());
+    }));
+}
+
+/// `lost` is told why once the GPU or the canvas's surface is lost. On WebGL2, wgpu notices only
+/// once a later call fails, so the canvas's `webglcontextlost` tells it first.
 #[wasm_bindgen]
-pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer, JsError> {
+pub async fn create(
+    canvas: HtmlCanvasElement,
+    webgpu: bool,
+    lost: Function,
+) -> Result<Renderer, JsError> {
     let (width, height) = (canvas.width().max(1), canvas.height().max(1));
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = if webgpu {
@@ -608,6 +627,13 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
             .expect("never poisoned")
             .get_or_insert(raised.to_string());
     }));
+    let told = lost.clone();
+    device.set_device_lost_callback(move |reason, message| {
+        // Dropping the renderer destroys its device on purpose.
+        if reason != wgpu::DeviceLostReason::Destroyed {
+            let _ = told.call1(&JsValue::NULL, &message.into());
+        }
+    });
     let capabilities = surface.get_capabilities(&adapter);
     let mut config = surface
         .get_default_config(&adapter, width, height)
@@ -808,6 +834,7 @@ pub async fn create(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Renderer,
         backend: format!("wgpu {:?}, {}", info.backend, info.name),
         webgpu,
         error,
+        lost,
     })
 }
 
@@ -949,9 +976,8 @@ impl Renderer {
         grid: &[f32],
     ) -> Result<(), JsError> {
         check_grid(grid)?;
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-            other => return Err(JsError::new(&format!("no frame to draw: {other:?}"))),
+        let Some((frame, suboptimal)) = self.next_frame()? else {
+            return Ok(());
         };
         let view = frame.texture.create_view(&Default::default());
         let size = frame.texture.size();
@@ -980,6 +1006,10 @@ impl Renderer {
         );
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
+        // Only once presented, as configuring panics while a frame of the surface lives.
+        if suboptimal {
+            self.surface.configure(&self.device, &self.config);
+        }
         self.check()
     }
 
@@ -1428,6 +1458,38 @@ impl Renderer {
                 "a {width} by {height} frame does not fit a {} by {} texture",
                 size.width, size.height
             )))
+        }
+    }
+
+    /// The surface's next frame to draw on, and whether the surface wants configuring again once
+    /// it is presented, or none when this frame is to be skipped. A lost surface tells `lost`.
+    fn next_frame(&mut self) -> Result<Option<(wgpu::SurfaceTexture, bool)>, JsError> {
+        use wgpu::CurrentSurfaceTexture::{
+            Lost, Occluded, Outdated, Suboptimal, Success, Timeout, Validation,
+        };
+        let mut configured = false;
+        loop {
+            match self.surface.get_current_texture() {
+                Success(frame) => return Ok(Some((frame, false))),
+                Suboptimal(frame) => return Ok(Some((frame, true))),
+                Timeout | Occluded => return Ok(None),
+                Outdated if !configured => {
+                    self.surface.configure(&self.device, &self.config);
+                    configured = true;
+                }
+                Outdated => return Err(JsError::new("the canvas cannot be drawn to")),
+                Lost => {
+                    let _ = self
+                        .lost
+                        .call1(&JsValue::NULL, &"the canvas is lost".into());
+                    return Ok(None);
+                }
+                // The error itself waits for `check`.
+                Validation => {
+                    self.check()?;
+                    return Err(JsError::new("the canvas cannot be drawn to"));
+                }
+            }
         }
     }
 

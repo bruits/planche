@@ -112,6 +112,14 @@ export interface Agent {
   allow(on: boolean): Promise<void>;
 }
 
+/** Where failures are kept, for the user to report them. */
+export interface ErrorLog {
+  /** One entry, ending its line. */
+  append(entry: string): Promise<void>;
+  /** In the system's app for it. Whether there was one, as nothing may be logged yet. */
+  show(): Promise<boolean>;
+}
+
 export interface TitleBar {
   /** Throws why it cannot, such as in full screen. */
   show(shown: boolean): Promise<void>;
@@ -127,6 +135,8 @@ export interface Platform {
   keepOnTop?(on: boolean): Promise<void>;
   /** Missing where the app has no window of its own. */
   titleBar?: TitleBar;
+  /** Missing where nothing keeps failures, as in a browser. */
+  errorLog?: ErrorLog;
   /** Why saving into a folder is impossible here, if it is. */
   cannotSave?: string | undefined;
   /** Where to download the desktop app. Missing within it. */

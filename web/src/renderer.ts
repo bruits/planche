@@ -3,8 +3,14 @@
 import type { Camera } from "./camera.js";
 import * as core from "./core.js";
 import type { Background, Bytes, Item, Rect, Size } from "./core.js";
+import { GpuLost, message, NoRenderer, Panic } from "./errors.js";
 import { greyed, lightPaints, paints, reader, type Paint, type Paints } from "./paint.js";
-import start, { Animation, create as createWgpu, type Readback } from "./wasm/renderer.js";
+import start, {
+  Animation,
+  create as createWgpu,
+  reportPanics,
+  type Readback,
+} from "./wasm/renderer.js";
 
 /** Where a text draws, from its texture, turned clockwise, in degrees, around its frame's centre. */
 export interface Lettering {
@@ -139,18 +145,43 @@ function gridStrength(host: HTMLElement): number {
   return Number(getComputedStyle(host).getPropertyValue("--grid-strength")) || 1;
 }
 
-/** Appends its canvas to `host`, sized in CSS pixels. */
-export async function create(host: HTMLElement, width: number, height: number): Promise<Renderer> {
-  await start();
-  if ("gpu" in navigator) {
-    try {
-      return await on(true, host, width, height);
-    } catch (error) {
-      // A browser may have WebGPU and still find no adapter for it.
-      console.warn("WebGPU failed, falling back to WebGL2:", error);
+/**
+ * Appends its canvas to `host`, sized in CSS pixels. `stopped` is told why once no renderer can go
+ * on, as when the GPU is lost, or the renderer panicked.
+ */
+export async function create(
+  host: HTMLElement,
+  width: number,
+  height: number,
+  stopped: (why: unknown) => void,
+): Promise<Renderer> {
+  try {
+    await start();
+    reportPanics((text: string) => stopped(new Panic(text)));
+    let webgpu: string | undefined;
+    if ("gpu" in navigator) {
+      try {
+        return await on(true, host, width, height, stopped);
+      } catch (error) {
+        if (!(error instanceof NoRenderer)) {
+          throw error;
+        }
+        // A browser may have WebGPU and still find no adapter for it.
+        console.warn("WebGPU failed, falling back to WebGL2:", error);
+        webgpu = error.message;
+      }
     }
+    try {
+      return await on(false, host, width, height, stopped);
+    } catch (error) {
+      throw error instanceof NoRenderer && webgpu !== undefined
+        ? new NoRenderer(`WebGPU: ${webgpu}; WebGL2: ${error.message}`, { cause: error.cause })
+        : error;
+    }
+  } catch (error) {
+    stopped(error);
+    throw error;
   }
-  return on(false, host, width, height);
 }
 
 async function on(
@@ -158,20 +189,30 @@ async function on(
   host: HTMLElement,
   width: number,
   height: number,
+  stopped: (why: GpuLost) => void,
 ): Promise<Renderer> {
   // Before the renderer exists, which nothing would free if this threw.
   let painted = paints(host);
   let light = lightPaints();
   let strength = gridStrength(host);
   const output = appended(host, width, height);
+  // The browser's words, which may be none.
+  const gone = (why: string) => stopped(new GpuLost(why || "no reason given"));
   // A canvas keeps the first kind of context it gives, so a failed one is no use to the other backend.
-  const renderer = await createWgpu(output, webgpu).catch((error: unknown) => {
+  const renderer = await createWgpu(output, webgpu, gone).catch((error: unknown) => {
     if (!webgpu) {
       lose(output.getContext("webgl2"));
     }
     output.remove();
-    throw error;
+    // A trap never rejects it, but reaches the page as an error, which stops the app all the same.
+    throw new NoRenderer(message(error), { cause: error });
   });
+  // On WebGL2, wgpu hears of it only once a later call fails. A lost context stays lost, as
+  // nothing asks to restore it.
+  const lost = () => gone("the WebGL2 context is lost");
+  if (!webgpu) {
+    output.addEventListener("webglcontextlost", lost);
+  }
   // Drawing a texture that was never uploaded would panic, and kill the module.
   const images = new Map<string, number>();
   const texts = new Map<string, number>();
@@ -357,8 +398,10 @@ async function on(
     },
     destroy() {
       renderer.free();
-      // wgpu never frees its WebGL2 context itself.
+      // wgpu never frees its WebGL2 context itself, so it is lost here on purpose, once the
+      // listener is gone, which would report it as the GPU's.
       if (!webgpu) {
+        output.removeEventListener("webglcontextlost", lost);
         lose(output.getContext("webgl2"));
       }
       output.remove();

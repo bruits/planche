@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::panic;
 
 use board::{
     Alignment, Annotations, AssetId, Axis, Board, Colour, Copied, Corners, ElementId, ElementKind,
@@ -12,11 +13,21 @@ use board::{
     Style, Tip, Transform, Weight,
 };
 use format::{save, zip};
-use js_sys::{Map, Uint8Array};
+use js_sys::{Function, Map, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(typescript_custom_section)]
 const TYPES: &str = include_str!(concat!(env!("OUT_DIR"), "/types.d.ts"));
+
+/// Hands each panic's message to `report` before the module traps, as wasm's own hook prints
+/// nothing and the page would only see an `unreachable`. The module is unusable afterwards.
+#[wasm_bindgen(js_name = reportPanics)]
+pub fn report_panics(report: Function) {
+    panic::set_hook(Box::new(move |info| {
+        // The module traps next, so a failed report has nowhere left to go.
+        let _ = report.call1(&JsValue::NULL, &info.to_string().into());
+    }));
+}
 
 /// A board being edited, and the history of its edits. Every edit, undo, and redo returns the
 /// ids of the elements it touched, which leaves out the background.

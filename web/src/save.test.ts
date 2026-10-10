@@ -272,6 +272,23 @@ describe("saving", () => {
     expect(failed).toEqual(["the disk is full"]);
   });
 
+  it("keeps edits waiting once the core can take no snapshot, as after its panic, and says so", async () => {
+    const { store, written } = memoryStore();
+    const { around, failed } = hooks();
+    const saver = saving(store, {
+      ...around,
+      snapshot() {
+        throw new Error("recursive use of an object detected");
+      },
+    });
+    saver.touched(["a"]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(written).toEqual([]);
+    expect(failed).toEqual(["recursive use of an object detected"]);
+    expect(await saver.drain()).toBe(false);
+    expect(saver.unwritten()).toBe(true);
+  });
+
   it("drains edits that land during its passes even when a flush comes meanwhile", async () => {
     const { store, written, finish } = memoryStore({ gated: true });
     const saver = saving(store, hooks().around);

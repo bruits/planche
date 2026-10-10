@@ -9,7 +9,10 @@ import { memoryHome, sample } from "../test/folders.js";
 const MISSING = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
 const STICKY = "b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74";
 
-async function page(change: (files: Map<string, Bytes>) => void, halfDrawn = false) {
+async function page(
+  change: (files: Map<string, Bytes>) => void,
+  { halfDrawn = false, stopped = (): boolean => false } = {},
+) {
   const files = sample("demo");
   change(files);
   const opened = (await open(async () => memoryHome("demo", files).home, new Map()))!.opened;
@@ -18,6 +21,7 @@ async function page(change: (files: Map<string, Bytes>) => void, halfDrawn = fal
     unsaved: () => false,
     shown: () => undefined,
     halfDrawn: () => halfDrawn,
+    stopped,
     crossedOut: (asset: string) => (asset === MISSING ? "its file is missing" : undefined),
   } as unknown as Reading & Writing;
 }
@@ -53,8 +57,32 @@ describe("answer", () => {
   });
 
   it("says when the images are not all read yet", async () => {
-    const read = await outline(await page(() => {}, true));
+    const read = await outline(await page(() => {}, { halfDrawn: true }));
     expect(read.images_read).toBe(false);
     expect(read.left_out).toEqual([]);
+  });
+
+  it("tells an agent that Planche stopped, whatever it asks", async () => {
+    const reading = await page(() => {}, { halfDrawn: true, stopped: () => true });
+    for (const tool of ["board", "elements", "add", "screenshot"]) {
+      const call = { id: 1, tool, args: {}, deadline: Date.now() + 60_000 };
+      await expect(answer(call, reading)).rejects.toThrow(
+        "Planche stopped working, so ask the user to reload it",
+      );
+    }
+  });
+
+  it("tells the agent whose call stopped Planche so", async () => {
+    let stopped = false;
+    const reading = await page(() => {}, { stopped: () => stopped });
+    // A call that panics the core, which a throw from within stands for.
+    reading.opened = () => {
+      stopped = true;
+      throw new WebAssembly.RuntimeError("unreachable");
+    };
+    const call = { id: 1, tool: "board", args: {}, deadline: Date.now() + 60_000 };
+    await expect(answer(call, reading)).rejects.toThrow(
+      "Planche stopped working, so ask the user to reload it",
+    );
   });
 });

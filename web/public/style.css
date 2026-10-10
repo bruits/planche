@@ -330,6 +330,15 @@ body {
   transition: none;
 }
 
+:root[data-stopped] [inert] {
+  opacity: 0.4;
+}
+
+:root[data-stopped] #viewport > .welcome,
+:root[data-stopped] .hint {
+  visibility: hidden;
+}
+
 @media (prefers-reduced-motion: reduce) {
   #viewport > .welcome {
     transition: none;
@@ -685,6 +694,7 @@ body {
 
 .bar,
 #message,
+.failure,
 #measurements,
 .menu,
 .finder,
@@ -798,7 +808,8 @@ body {
 
 .bar button,
 .style-card button,
-.style-card .custom {
+.style-card .custom,
+.failure button {
   position: relative;
   display: grid;
   place-items: center;
@@ -814,7 +825,8 @@ body {
 
 .bar button:hover,
 .style-card button:hover,
-.style-card .custom:hover {
+.style-card .custom:hover,
+.failure button:hover {
   background: var(--hover);
 }
 
@@ -831,7 +843,8 @@ body {
 
 .bar button:focus-visible,
 .style-card button:focus-visible,
-.style-card .custom:focus-within {
+.style-card .custom:focus-within,
+.failure button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -1476,8 +1489,39 @@ body {
   pointer-events: auto;
 }
 
-/* Hidden from sight only, where screen readers keep listening to it. */
-#message:empty {
+.failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 12px;
+  max-width: 40rem;
+  padding: 4px 4px 4px 12px;
+  border-radius: 8px;
+  pointer-events: auto;
+}
+
+.failure p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.failure div {
+  display: flex;
+  gap: 4px;
+}
+
+/* Lower than the bar's, as they hold words. */
+.failure button {
+  width: auto;
+  height: 28px;
+  padding: 0 9px;
+  font: inherit;
+}
+
+/* Hidden from sight only, where screen readers keep listening to them. */
+#message:empty,
+.failure:not(.showing) {
   position: absolute;
   width: 1px;
   height: 1px;

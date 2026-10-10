@@ -412,13 +412,16 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
       dirty.clear();
       const over = overwriting;
       overwriting = false;
-      const snapshot = hooks.snapshot();
       const keep = () => {
         touched.forEach((id) => dirty.add(id));
         due = true;
         overwriting ||= over;
       };
+      let snapshot: Snapshot | undefined;
       try {
+        // Within, as a core that panicked in the middle of an edit fails it, which leaves the
+        // edits waiting.
+        snapshot = hooks.snapshot();
         if (over) {
           await store.overwrite(snapshot, hooks.source);
         } else if (!(await store.save(snapshot, touched, hooks.source))) {
@@ -441,7 +444,7 @@ export function saving(store: Store, hooks: SavingHooks): Saving {
         return;
       } finally {
         writing = false;
-        snapshot.free();
+        snapshot?.free();
       }
       // Edits made meanwhile wait as if made now, or saves would follow one another while they go on.
       if (due && passes >= flushed && !stopped) {

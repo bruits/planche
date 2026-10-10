@@ -67,6 +67,7 @@ import {
 import { edits, isTip, type Draw, type Pen } from "./edit.js";
 import { message } from "./errors.js";
 import { exportCard, recalled, remembered } from "./exportcard.js";
+import { failures } from "./failures.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
 import { lifecycle } from "./lifecycle.js";
@@ -78,7 +79,7 @@ import { testPhotos } from "./photos.js";
 import { sped } from "./playback.js";
 import { lockedPin, pinned, pins } from "./pins.js";
 import { titledGroup, titles } from "./titles.js";
-import { platform } from "./platform.js";
+import { platform, type ErrorLog } from "./platform.js";
 import { recall, remember } from "./preferences.js";
 import { LONGEST_SIDE } from "./raster.js";
 import {
@@ -146,7 +147,33 @@ const TEST_PHOTOS = [10, 50, 100];
 const NOT_FOR_TEST_PHOTOS = "Only on a board not saved in a folder or a ZIP file";
 
 const measurements = byId("measurements");
+/** What the measurements show, which the details of a failure tell too. */
 const details = new Map<string, string>();
+// First after them, to hear of whatever fails while the rest is set up.
+const failing = failures(byId("toolbar"), {
+  say,
+  log: platform.errorLog,
+  // Async, so that a page without a clipboard, served over plain HTTP, rejects rather than throws.
+  copy: async (text) => navigator.clipboard.writeText(text),
+  about: () => [navigator.userAgent, details.get("renderer") ?? "No renderer yet"],
+  closing: () => life.closing(),
+  confirm: (question) => platform.confirm(question),
+  reload() {
+    // So that the browser asks no more, once the user chose.
+    platform.markUnsaved(false);
+    location.reload();
+  },
+  halt() {
+    viewport.halt();
+    // Not the animated images, whose reset would free what the renderer holds.
+    films.halt();
+    // Such as a progress, which `say` would no longer end.
+    bar.say("");
+  },
+});
+failing.watch(window);
+const { fail, report } = failing;
+
 /** The rows of the measurements that the next draw ends, with when each began. */
 const untilDrawn = new Map<string, number>();
 const draws = rate((perSecond) => {
@@ -186,7 +213,7 @@ const viewport = view(byId("viewport"), {
       untilDrawn.clear();
     }
   },
-  failed: (error) => fail(error),
+  failed: fail,
 });
 const lettering = texts(() => viewport.redraw());
 const drawings = vectors(() => viewport.redraw());
@@ -201,7 +228,7 @@ const films = videos(
     // Its frames, once read, give it its timeline.
     styleCard.refresh();
   },
-  () => bar.say("A video cannot play here"),
+  () => say("A video cannot play here"),
 );
 const media: CardMedia = {
   playback: (asset) => animated.playback(asset) ?? films.playback(asset),
@@ -221,6 +248,8 @@ const media: CardMedia = {
 const editing = edits(viewport, overlaid, () => opened, {
   changed,
   retitle: (id) => groupTitles.write(id),
+  failed: fail,
+  stopped: () => failing.stopped(),
   selectionChanged() {
     films.select(loneImage(opened?.board, editing.selection())?.image.asset);
     refreshBar();
@@ -279,7 +308,7 @@ const life = lifecycle({
   opened: () => opened,
   show,
   camera: () => viewport.camera(),
-  say: (...said) => bar.say(...said),
+  say,
   loadingChanged: () => refreshBar(),
   titleChanged() {
     bar.unsaved(life.unsaved());
@@ -293,7 +322,7 @@ const present = showing({
   saver: () => life.saver(),
   camera: () => viewport.camera(),
   size: () => viewport.size(),
-  say: (...said) => bar.say(...said),
+  say,
   reset(next) {
     // The core's memory holds it until freed.
     opened?.editor.free();
@@ -317,10 +346,12 @@ const present = showing({
   },
   async attach(next, camera, wanted) {
     const { width, height } = viewport.size();
-    const created = await create(viewport.host, width, height).catch((error: unknown) => {
-      backend = `failed: ${message(error).replace(/\s+/g, " ")}`;
-      throw error;
-    });
+    const created = await create(viewport.host, width, height, failing.stop).catch(
+      (error: unknown) => {
+        details.set("renderer", `failed: ${message(error).replace(/\s+/g, " ")}`);
+        throw error;
+      },
+    );
     if (!wanted()) {
       created.destroy();
       return undefined;
@@ -328,7 +359,6 @@ const present = showing({
     // Edits may have changed it while the renderer was created.
     created.backdrop(next.board.background);
     details.set("renderer", created.backend);
-    backend = created.backend;
     renderer = created;
     placeNow(created, next);
     viewport.show(created, camera ?? fit(extent(next), viewport.size()));
@@ -383,8 +413,6 @@ const present = showing({
 
 let opened: Opened | undefined;
 let renderer: Renderer | undefined;
-/** The last renderer's backend, or why it failed, kept through a board's opening. */
-let backend: string | undefined;
 let halfDrawn = false;
 let looking: Promise<void> | undefined;
 /** On the desktop, a second export to the same file would take over the first one's draft. */
@@ -906,7 +934,7 @@ const commands = {
     run: () => editing.normalize("height"),
   },
   sameWidth: { label: "Same width", unavailable: fewImages, run: () => editing.normalize("width") },
-  // Figma's keys.
+  // Web design tools' keys.
   alignLeft: alignment("Left", "left", "a"),
   alignCentre: alignment("Centre", "centre", "h"),
   alignRight: alignment("Right", "right", "d"),
@@ -1160,6 +1188,15 @@ const commands = {
     unavailable: () => (platform.agent ? undefined : "Only the desktop app lets agents in"),
     run: () => report(allowAgents(!agentsAllowed)),
   },
+  errorLog: {
+    label: "Open the error log",
+    unavailable: () => (platform.errorLog ? undefined : "Only the desktop app keeps one"),
+    run: () => {
+      if (platform.errorLog) {
+        report(showErrorLog(platform.errorLog));
+      }
+    },
+  },
   alwaysOnTop: {
     label: "Always on top",
     unavailable: () =>
@@ -1363,7 +1400,10 @@ const WITHIN = new Map<Command, string>(
           commands.compact,
         ],
       ],
-      ["Settings", [commands.hoverPlay, commands.keepStyle, commands.agentAccess]],
+      [
+        "Settings",
+        [commands.hoverPlay, commands.keepStyle, commands.agentAccess, commands.errorLog],
+      ],
       ["Colour", colourCommands],
     ] satisfies [string, Command[]][]
   ).flatMap(([name, members]) => members.map((member): [Command, string] => [member, name])),
@@ -1472,7 +1512,7 @@ const styleCard = card(
     adjusting: () => editing.adjusting(),
     pick: () => picker.start(false),
     explain: (element, explanation) => bar.explain(element, explanation),
-    say: (said) => bar.say(said),
+    say,
     media,
     trimmed: () => refreshBar(),
   },
@@ -1537,7 +1577,7 @@ const picker = sampler(
         styleCard.set({ colour });
       } else {
         look.pick(colour);
-        bar.say(`Picked ${colour}, which the style card keeps`);
+        say(`Picked ${colour}, which the style card keeps`);
       }
       styleCard.refresh();
     },
@@ -1650,8 +1690,14 @@ if (platform.keepOnTop) {
 if (platform.titleBar) {
   report(platform.titleBar.show(true));
 }
-await Promise.all([core.start(), loadFont()]);
-receive(viewport, (incoming, at) => report(addImages(incoming, at)));
+// Nothing after it runs when the core fails to load.
+await failing.started(Promise.all([core.start(failing.stop), loadFont()]));
+receive(viewport, (incoming, at) => {
+  // The shell's own drops come with no event that a stopped page holds back.
+  if (!failing.stopped()) {
+    report(addImages(incoming, at));
+  }
+});
 const clip = clipboard(viewport, {
   copy(cut) {
     const ids = editing.selection();
@@ -1685,13 +1731,14 @@ const clip = clipboard(viewport, {
     return copying.png;
   },
   failed: (error, copied) =>
-    bar.say(`${copied ? "Copied without the image" : "Nothing was copied"}. ${message(error)}`),
+    say(`${copied ? "Copied without the image" : "Nothing was copied"}. ${message(error)}`),
   pasted: (pasted, at) => report(pasteElements(pasted, at)),
   received: (incoming, at) => report(addImages(incoming, at)),
 });
 report(serveAgents());
 // Something to drop images on from the start.
 report(life.start());
+failing.ready();
 
 /** A drag under way, which a command or a menu would cut across. */
 function busy(): boolean {
@@ -1888,6 +1935,7 @@ function settings(): Entry {
     stated(commands.hoverPlay),
     stated(commands.keepStyle),
     ...(platform.agent ? [stated(commands.agentAccess)] : []),
+    ...(platform.errorLog ? [commands.errorLog] : []),
   ]);
 }
 
@@ -1912,6 +1960,7 @@ async function serveAgents(): Promise<void> {
         return camera && onScreen(camera, viewport.size());
       },
       halfDrawn: () => halfDrawn || present.reloading(),
+      stopped: () => failing.stopped(),
       crossedOut: (asset) =>
         crossedOut.has(asset) ? (present.crossedOut(asset) ?? "it cannot show") : undefined,
       drawNow() {
@@ -1974,12 +2023,18 @@ async function keepOnTop(on: boolean): Promise<void> {
   }
 }
 
+async function showErrorLog(log: ErrorLog): Promise<void> {
+  if (!(await log.show())) {
+    say("No error was logged yet");
+  }
+}
+
 async function useCompact(on: boolean): Promise<void> {
   await platform.titleBar?.show(!on);
   compact = on;
   document.documentElement.toggleAttribute("data-compact", on);
   if (on) {
-    bar.say(
+    say(
       `Compact mode: drag the top edge to move, ${describe(commands.compact.keys[0]!)} or right-click to leave`,
     );
   }
@@ -2048,7 +2103,7 @@ async function arrange(label: string, order: Ordering): Promise<void> {
     const working = order(target, ids);
     const slow = working instanceof Promise;
     if (slow) {
-      bar.say(`Arranging ${label.toLowerCase()}…`, true);
+      say(`Arranging ${label.toLowerCase()}…`, true);
     }
     const chosen = await working;
     await editing.idle();
@@ -2058,11 +2113,11 @@ async function arrange(label: string, order: Ordering): Promise<void> {
       selection.size !== ids.length ||
       ids.some((id) => !selection.has(id))
     ) {
-      bar.say("Not arranged, as the selection changed");
+      say("Not arranged, as the selection changed");
     } else {
       editing.arrange(chosen);
       if (slow) {
-        bar.say(`Arranged ${label.toLowerCase()}`);
+        say(`Arranged ${label.toLowerCase()}`);
       }
     }
   } finally {
@@ -2095,7 +2150,7 @@ function retitle(id: string, title: string): void {
       touched.push(...editor.update(id, JSON.stringify({ ...kind, title }))),
     );
   } catch (error) {
-    bar.say(message(error));
+    say(message(error));
   }
 }
 
@@ -2443,7 +2498,7 @@ async function pasteElements({ copied, assets }: Pasted, at: Point): Promise<voi
   );
   await editing.idle();
   const zoom = viewport.zoom();
-  if (target !== opened || renderer === undefined || zoom === undefined) {
+  if (target !== opened || renderer === undefined || zoom === undefined || failing.stopped()) {
     prepared.forEach(({ decoded }) => release(decoded));
     return;
   }
@@ -2454,7 +2509,7 @@ async function pasteElements({ copied, assets }: Pasted, at: Point): Promise<voi
     placeCopy(pasting, (area) => centring(area, at, zoom));
   }
   if (Object.keys(pasting.elements).length < Object.keys(copied.elements).length) {
-    bar.say("Not pasted, the images whose files are out of reach here");
+    say("Not pasted, the images whose files are out of reach here");
   }
 }
 
@@ -2490,6 +2545,10 @@ function fleeting(): Saving | undefined {
 }
 
 function lookAgain(): void {
+  // Not once the app stopped, which reads the disk again as it reloads.
+  if (failing.stopped()) {
+    return;
+  }
   // Images after the board, which reading it again shows afresh. Focus and visibility come
   // together, and the second check would return before the first one ends.
   looking ??= (life.saver()?.check() ?? Promise.resolve())
@@ -2526,7 +2585,7 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   const into = renderer;
   // By where each came, which they are laid out in.
   const prepared: (Added | undefined)[] = [];
-  const failures: (string | undefined)[] = [];
+  const notAdded: (string | undefined)[] = [];
   const images = await incoming;
   // Once read, as the user's pace and the platform's reading are not the app's.
   const since = performance.now();
@@ -2537,7 +2596,7 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
     async ([index, image]) => {
       try {
         if ("failure" in image) {
-          failures[index] = `${image.name}: ${image.failure}`;
+          notAdded[index] = `${image.name}: ${image.failure}`;
           return;
         }
         const one: Added = {
@@ -2548,11 +2607,11 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
         loadAtOnce(one, target, into);
         prepared[index] = one;
       } catch (error) {
-        failures[index] = `${image.name}: this app cannot open it here (${message(error)})`;
+        notAdded[index] = `${image.name}: this app cannot open it here (${message(error)})`;
       } finally {
         done += 1;
         if (images.length > 1) {
-          bar.say(`Adding ${done} of ${images.length} images…`, true);
+          say(`Adding ${done} of ${images.length} images…`, true);
         }
       }
     },
@@ -2560,7 +2619,8 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   const added = prepared.filter((one) => one !== undefined);
   // Nor the time an edit under way takes to end.
   const [, waited] = await timed(() => editing.idle());
-  if (added.length > 0 && target !== undefined && target === opened && renderer !== undefined) {
+  const landing = target !== undefined && target === opened && renderer !== undefined;
+  if (added.length > 0 && landing && !failing.stopped()) {
     keep(target, added);
     const frames = row(
       added.map(({ natural }) => natural),
@@ -2586,11 +2646,11 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
   } else {
     added.forEach(({ decoded }) => release(decoded));
   }
-  const failed = failures.filter((failure) => failure !== undefined);
+  const failed = notAdded.filter((failure) => failure !== undefined);
   if (failed.length > 0) {
-    bar.say(`Not added, ${failed.join("; ")}`);
+    say(`Not added, ${failed.join("; ")}`);
   } else if (images.length > 1) {
-    bar.say("");
+    say("");
   }
 }
 
@@ -2617,15 +2677,13 @@ async function addTestPhotos(count: number): Promise<void> {
   if (at === undefined) {
     return;
   }
-  const photos = testPhotos(count, (done) =>
-    bar.say(`Making test photos, ${done} of ${count}…`, true),
-  );
+  const photos = testPhotos(count, (done) => say(`Making test photos, ${done} of ${count}…`, true));
   await addImages(
     photos.then((made) => {
       if (!savesToFiles()) {
         return made;
       }
-      bar.say("Not added, as the board now saves into a folder or a ZIP file");
+      say("Not added, as the board now saves into a folder or a ZIP file");
       return [];
     }),
     at,
@@ -2720,13 +2778,13 @@ async function exportZip(): Promise<void> {
     if (sink === null) {
       return;
     }
-    bar.say(`Exporting ${sink.name}…`, true);
+    say(`Exporting ${sink.name}…`, true);
     // Its images from where they lie once no save moves them.
     const write = () => writeZip(snapshot, files(current), sink);
     const saver = life.saver();
     const [count, writing] = await timed(() => (saver ? saver.during(write) : write()));
     details.set(`export ${count} files`, milliseconds(writing));
-    bar.say(`Exported ${sink.name}`);
+    say(`Exported ${sink.name}`);
     life.saved(editor, snapshot);
   } finally {
     snapshot.free();
@@ -2755,7 +2813,7 @@ async function exportPng(options: Options): Promise<void> {
     if (sink === null) {
       return;
     }
-    bar.say(`Exporting ${sink.name}…`, true);
+    say(`Exporting ${sink.name}…`, true);
     let made: Picture;
     try {
       if (opened !== current) {
@@ -2768,7 +2826,7 @@ async function exportPng(options: Options): Promise<void> {
       throw error;
     }
     await sink.close();
-    bar.say(`Exported ${sink.name}, ${sized(made)}`);
+    say(`Exported ${sink.name}, ${sized(made)}`);
     pictureCard.close();
   } finally {
     exporting = false;
@@ -2783,13 +2841,13 @@ function copyPng(options: Options): void {
   const copy = pngCopies;
   const made = selectionPng(opened, editing.selection(), options, annotationsShown);
   const written = clip.copyImage(made.then(({ blob }) => blob));
-  bar.say("Copying as PNG…", true);
+  say("Copying as PNG…", true);
   report(
     (async () => {
       if (await written) {
-        bar.say(`Copied as PNG, ${sized(await made)}`);
+        say(`Copied as PNG, ${sized(await made)}`);
       } else if (copy === pngCopies) {
-        bar.say("");
+        say("");
       }
     })(),
   );
@@ -2905,10 +2963,6 @@ function showMetrics(): void {
   );
 }
 
-function report(work: Promise<void>): void {
-  work.catch(fail);
-}
-
 async function openBugReport(): Promise<void> {
   // Awaits nothing in a browser, which opens a tab only right after a click or a key.
   const version = platform.version ? await platform.version() : undefined;
@@ -2916,14 +2970,17 @@ async function openBugReport(): Promise<void> {
     bugReport({
       platform: platform.name,
       version,
-      renderer: backend,
+      renderer: details.get("renderer"),
       userAgent: navigator.userAgent,
     }),
   );
 }
 
-function fail(error: unknown): void {
-  bar.say(message(error));
+/** Nothing once the app stopped, whose failure then says all there is, such as a save's. */
+function say(text: string, lasting?: boolean): void {
+  if (!failing.stopped()) {
+    bar.say(text, lasting);
+  }
 }
 
 function withText<K extends keyof HTMLElementTagNameMap>(

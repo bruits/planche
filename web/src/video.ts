@@ -174,6 +174,11 @@ export interface Videos {
   sound(assets: string[], on: boolean): void;
   /** Forgets them all, as their renderer is gone. */
   reset(): void;
+  /**
+   * Stops them all, once nothing draws any more to start or stop them. It calls into no renderer,
+   * which may have just panicked.
+   */
+  halt(): void;
 }
 
 interface Clip {
@@ -715,6 +720,9 @@ export function videos(again: () => void, changed: () => void, failed: () => voi
       clips.clear();
       previews.clear();
       held = undefined;
+    },
+    halt() {
+      clips.forEach(stop);
     },
   };
 }

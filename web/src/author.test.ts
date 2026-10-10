@@ -34,7 +34,8 @@ function page(
     busy = () => false,
     idle = async () => {},
     loading = false,
-  }: Partial<Pick<Writing, "busy" | "idle">> & { loading?: boolean } = {},
+    stopped = () => false,
+  }: Partial<Pick<Writing, "busy" | "idle" | "stopped">> & { loading?: boolean } = {},
 ) {
   let shown = opened;
   const writing: Writing = {
@@ -55,6 +56,7 @@ function page(
     selection: () => [],
     entered: () => undefined,
     frame() {},
+    stopped,
   };
   return { writing, show: (next: Opened) => void (shown = next) };
 }
@@ -98,7 +100,11 @@ describe("write", () => {
       points: [0, 0, 1, 1, 1, 0],
       colour: "red",
     });
-    const reading = { ...writing, unsaved: () => false } as unknown as Reading & Writing;
+    const reading = {
+      ...writing,
+      unsaved: () => false,
+      stopped: () => false,
+    } as unknown as Reading & Writing;
     const read = (await reply(
       { id: 1, tool: "elements", args: { ids: [id] }, deadline: later() },
       reading,
@@ -199,6 +205,38 @@ describe("write", () => {
     expect(opened.editor.json()).toBe(before);
   });
 
+  it("changes nothing once the app stopped while the user finished dragging", async () => {
+    const opened = untitled();
+    let dragging = true;
+    let stopped = false;
+    const { writing } = page(opened, {
+      busy: () => dragging,
+      idle: async () => {
+        stopped = true;
+        dragging = false;
+      },
+      stopped: () => stopped,
+    });
+    const before = opened.editor.json();
+    await expect(write("add", { elements: [arrow] }, writing, later())).rejects.toThrow(
+      "Planche stopped working, so nothing changed",
+    );
+    expect(opened.editor.json()).toBe(before);
+  });
+
+  it("waits on no gesture once the app stopped, which may never end it", async () => {
+    vi.useFakeTimers();
+    const opened = untitled();
+    const { writing } = page(opened, {
+      busy: () => true,
+      idle: () => new Promise(() => {}),
+      stopped: () => true,
+    });
+    await expect(write("add", { elements: [arrow] }, writing, later())).rejects.toThrow(
+      "Planche stopped working, so nothing changed",
+    );
+  });
+
   it("changes nothing while a board opens", async () => {
     const opened = untitled();
     const { writing } = page(opened, { loading: true });
@@ -274,6 +312,7 @@ describe("write", () => {
       unsaved: () => false,
       shown: () => undefined,
       halfDrawn: () => false,
+      stopped: () => false,
     } as unknown as Reading & Writing;
     const read = (await reply({ id: 1, tool: "board", args: {}, deadline: later() }, reading)) as {
       elements: { locked_by?: string }[];
@@ -302,6 +341,7 @@ describe("write", () => {
       unsaved: () => false,
       shown: () => undefined,
       halfDrawn: () => false,
+      stopped: () => false,
     } as unknown as Reading & Writing;
     const read = (await reply({ id: 1, tool: "board", args: {}, deadline: later() }, reading)) as {
       elements: { id: string; locked_by?: string }[];

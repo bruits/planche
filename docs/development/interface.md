@@ -30,6 +30,7 @@ A new control goes into one of them. Find a command and comments' pins are the e
 ## Text
 
 - Labels, hints, and messages are short and plain, in British English.
+- A failed action shows in the bar's message for a moment. An uncaught fault stays above the bar until dismissed, and a failure the app cannot go on from dims the page and offers to reload. Both come with details to copy, and the desktop app logs all three.
 - A hint gives the main actions of what is under way, three at most. Those for the board and the selection end with "right-click for more".
 - Until the first edit on a browser, an empty board shows a welcome over it, which takes the place of the board's hint.
 - Rarer keys stay in [shortcuts](../usage/shortcuts.md), and hints never point to Find a command.

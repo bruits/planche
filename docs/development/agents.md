@@ -6,7 +6,7 @@
 
 An agent's client spawns the app's own binary as `desktop mcp`, a gateway that passes bytes between its standard streams and the running app. The app listens on a loopback port. Both sides prove themselves before any byte passes, the gateway with a token, which keeps a page in a browser from using the port, and the app with an answer. They find each other, the port, and both secrets in `agent.json` in the app's data folder, which only the user can read and which exists only while agent access is on. One app at a time can turn access on, and it takes eight connections.
 
-The app answers each tool call by asking the web app, which holds the board. `crates/mcp` needs no Tauri, so its tests run on every platform.
+The app answers each tool call by asking the web app, which holds the board. `crates/mcp` needs no Tauri, so its tests run on every platform. Once the web app stops (see [rendering](./rendering.md)), every call fails and tells the agent to have the user reload.
 
 ## Edits
 

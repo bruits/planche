@@ -24,6 +24,8 @@ export interface Reading {
    * an edit brought back images whose textures were freed.
    */
   halfDrawn(): boolean;
+  /** Whether the app stopped, after which agents may neither read nor edit it. */
+  stopped(): boolean;
   /** Why the asset's images show crossed out, if they do. */
   crossedOut(asset: string): string | undefined;
   drawNow(): HTMLCanvasElement | undefined;
@@ -38,9 +40,25 @@ const MOST_TEXT = 280;
 const MOST_LEFT_OUT = 100;
 /** Pixels along the longest side, at least, of an SVG, which draws sharp at any size. */
 const SMALLEST_VECTOR = 512;
+const STOPPED = "Planche stopped working, so ask the user to reload it";
 
-/** Rejects with what the agent reads when there is no answer. */
-export async function answer(
+/**
+ * Rejects with what the agent reads when there is no answer. Once the app stopped, nothing more,
+ * as edits nobody sees would still be saved.
+ */
+export async function answer(call: AgentCall, page: Reading & Writing): Promise<unknown> {
+  if (page.stopped()) {
+    throw new Error(STOPPED);
+  }
+  try {
+    return await answered(call, page);
+  } catch (error) {
+    // As the call that stopped it fails with words that mean nothing to an agent, such as a panic's.
+    throw page.stopped() ? new Error(STOPPED, { cause: error }) : error;
+  }
+}
+
+async function answered(
   { tool, args, deadline }: AgentCall,
   page: Reading & Writing,
 ): Promise<unknown> {

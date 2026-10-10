@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { learnLayout, listen, typed, type Command } from "./commands.js";
+import { learnLayout, listen, reloads, typed, type Command } from "./commands.js";
 
 const stops: (() => void)[] = [];
 
@@ -232,5 +232,43 @@ describe("typed", () => {
 
   it("reads a character the layout types as itself", () => {
     expect(typed(new KeyboardEvent("keydown", { key: "+", code: "BracketRight" }))).toBe("+");
+  });
+});
+
+describe("reloads", () => {
+  afterEach(() => {
+    learnLayout(undefined);
+  });
+
+  const DVORAK = new Map([
+    ["KeyO", "r"],
+    ["KeyR", "p"],
+  ]);
+  const RUSSIAN = new Map([["KeyR", "к"]]);
+  it.each<[string, Map<string, string> | undefined, KeyboardEventInit, boolean]>([
+    ["F5", undefined, { key: "F5", code: "F5" }, true],
+    ["Ctrl R", undefined, { key: "r", code: "KeyR", ctrlKey: true }, true],
+    ["⌘R", undefined, { key: "r", code: "KeyR", metaKey: true }, true],
+    ["Ctrl Shift R", undefined, { key: "R", code: "KeyR", ctrlKey: true, shiftKey: true }, true],
+    ["Ctrl R on a Russian layout", RUSSIAN, { key: "к", code: "KeyR", ctrlKey: true }, true],
+    [
+      "Ctrl R on a layout it cannot tell",
+      undefined,
+      { key: "к", code: "KeyR", ctrlKey: true },
+      true,
+    ],
+    ["Ctrl R on Dvorak", DVORAK, { key: "r", code: "KeyO", ctrlKey: true }, true],
+    [
+      "Ctrl P on Dvorak, where QWERTY has R",
+      DVORAK,
+      { key: "p", code: "KeyR", ctrlKey: true },
+      false,
+    ],
+    ["R alone", undefined, { key: "r", code: "KeyR" }, false],
+    ["Shift R", undefined, { key: "R", code: "KeyR", shiftKey: true }, false],
+    ["Alt R", undefined, { key: "r", code: "KeyR", altKey: true }, false],
+  ])("tells whether %s reloads the page", (_, layout, init, reloading) => {
+    learnLayout(layout);
+    expect(reloads(new KeyboardEvent("keydown", init))).toBe(reloading);
   });
 });

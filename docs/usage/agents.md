@@ -38,3 +38,4 @@ An agent adds at most 12 images at a time, 25 MB each and 50 MB in all.
 | Agent access stays off, as another Planche has it on already | Turn agent access off in the other Planche, or quit it |
 | Planche closed the connection before it answered | Close another agent's session and try again |
 | Planche does not answer on port … | Planche stopped unexpectedly, so open it again |
+| Planche stopped working, so ask the user to reload it | Reload Planche with its Reload button, ⌘R, or F5 |

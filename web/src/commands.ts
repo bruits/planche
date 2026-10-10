@@ -109,6 +109,10 @@ export function typed(event: KeyboardEvent): string {
   return letter ? event.code.slice(3).toLowerCase() : key;
 }
 
+export function reloads(event: KeyboardEvent): boolean {
+  return event.key === "F5" || ((event.ctrlKey || event.metaKey) && typed(event) === "r");
+}
+
 function latin(character: string): boolean {
   return /^[\x20-\x7e]$/.test(character);
 }

@@ -1,6 +1,7 @@
 // The Rust core, compiled to WASM. It owns the board model and file format; the shells only
 // move bytes.
 
+import { Panic } from "./errors.js";
 import init, {
   AssetHasher,
   Crc32,
@@ -40,6 +41,7 @@ import init, {
   strokeWidth as width,
   cornerParts,
   plainStyle,
+  reportPanics,
   styleSettings,
   textArea,
   withStyle as styled,
@@ -162,8 +164,10 @@ export interface GridLevel {
 
 let memory: WebAssembly.Memory | undefined;
 
-export async function start(): Promise<void> {
+/** `panicked` is told of the core's panic, after which the core is unusable. */
+export async function start(panicked: (panic: Panic) => void): Promise<void> {
   ({ memory } = await init());
+  reportPanics((text: string) => panicked(new Panic(text)));
 }
 
 /** The core's memory, which grows with the boards it reads and never shrinks. */

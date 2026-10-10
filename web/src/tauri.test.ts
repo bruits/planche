@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import type { Bytes, Files } from "./core.js";
 import { pack, tauri, unpack } from "./tauri.js";
 
 /**
  * The desktop shell, which answers its confirm dialog with `answer`, its save dialog with
- * `picked`, and other commands as `more` says.
+ * `picked`, and other commands as `more` says, failing those it answers with an error.
  */
 function shell(answer: boolean, picked: string | null = null, more: Record<string, unknown> = {}) {
   let closing: (() => Promise<void>) | undefined;
@@ -25,7 +25,11 @@ function shell(answer: boolean, picked: string | null = null, more: Record<strin
           pick_export: picked,
           ...more,
         };
-        return answers[command] as never;
+        const answered = answers[command];
+        if (answered instanceof Error) {
+          throw answered;
+        }
+        return answered as never;
       },
     },
     event: {
@@ -43,6 +47,10 @@ function shell(answer: boolean, picked: string | null = null, more: Record<strin
 }
 
 describe("tauri", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("reads what each key types alone from the shell, by where it sits", async () => {
     const { api } = shell(true);
     expect(await tauri(api).layout!()).toEqual(new Map([["KeyQ", "a"]]));
@@ -74,6 +82,32 @@ describe("tauri", () => {
     });
     await close();
     expect(sent).toEqual(["confirm", "keep_window"]);
+  });
+
+  it("reports a window that fails to close", async () => {
+    const reported = vi.fn<typeof reportError>();
+    vi.stubGlobal("reportError", reported);
+    const failure = new Error("the window is gone");
+    const { api, close } = shell(true, null, { close_window: failure });
+    tauri(api).whenClosing!(async () => true);
+    await close();
+    expect(reported).toHaveBeenCalledExactlyOnceWith(failure);
+  });
+
+  it("keeps failures in the shell's log, and opens it there", async () => {
+    const { api, calls } = shell(true, null, { show_error_log: true });
+    const { errorLog } = tauri(api);
+    await errorLog!.append("2026-10-10T12:00:00.000Z Failed: Error: the disk is full\n");
+    expect(await errorLog!.show()).toBe(true);
+    expect(calls).toEqual([
+      ["log_error", { entry: "2026-10-10T12:00:00.000Z Failed: Error: the disk is full\n" }],
+      ["show_error_log"],
+    ]);
+  });
+
+  it("tells when there is no log to open yet, which is no failure", async () => {
+    const { api } = shell(true, null, { show_error_log: false });
+    expect(await tauri(api).errorLog!.show()).toBe(false);
   });
 
   it.each([

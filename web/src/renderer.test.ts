@@ -1,6 +1,32 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { Point } from "./core.js";
-import { packed, type Placed } from "./renderer.js";
+import { GpuLost, NoRenderer, Panic } from "./errors.js";
+import { create, packed, type Placed } from "./renderer.js";
+import start, { create as createWgpu, reportPanics } from "./wasm/renderer.js";
+
+// The wasm renderer is not the core, and has no place in Node, so the module is faked.
+vi.mock("./wasm/renderer.js", () => {
+  const renderer = {
+    backend: "fake",
+    maxTextureSide: 1,
+    textureBytes: 0,
+    free() {},
+    resize() {},
+  };
+  return {
+    default: vi.fn<() => Promise<void>>(async () => {}),
+    reportPanics: vi.fn<(report: (text: string) => void) => void>(),
+    create: vi.fn<
+      (
+        canvas: HTMLCanvasElement,
+        webgpu: boolean,
+        gone: (why: string) => void,
+      ) => Promise<typeof renderer>
+    >(async () => renderer),
+    Animation: function () {},
+  };
+});
 
 /** Floats per item, its kind first, its extra then its opacity last. */
 const STRIDE = 15;
@@ -127,5 +153,145 @@ describe("the board in greys the renderer takes", () => {
     const floats = both(false);
     expect([...floats.subarray(9, 12)]).toEqual([1, 0, 0]);
     expect(floats[STRIDE + 11]).toBe(0);
+  });
+});
+
+/** A tick of the event loop, which is when a browser fires the event `loseContext` queues. */
+const tick = () => new Promise((done) => setTimeout(done));
+
+/** A browser that has WebGPU, whose warning when it fails stays out of the output. */
+function withWebGpu(): void {
+  Object.defineProperty(navigator, "gpu", { value: {}, configurable: true });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+}
+
+describe("a renderer that cannot go on", () => {
+  let lost: Mock<(why: unknown) => void>;
+  let host: HTMLElement;
+
+  beforeEach(() => {
+    lost = vi.fn<(why: unknown) => void>();
+    vi.mocked(createWgpu).mockClear();
+    vi.mocked(reportPanics).mockClear();
+    host = document.body.appendChild(document.createElement("div"));
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    // happy-dom has no `navigator.gpu`, so `create` takes the WebGL2 path.
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (
+      this: HTMLCanvasElement,
+      kind: string,
+    ) {
+      if (kind === "webgl2") {
+        // As a browser does, the loss comes as a queued event.
+        return {
+          getExtension: () => ({
+            loseContext: () => {
+              setTimeout(() => this.dispatchEvent(new Event("webglcontextlost")));
+            },
+          }),
+        } as unknown as WebGL2RenderingContext;
+      }
+      // The 2D context `paints` reads colours through.
+      return {
+        clearRect() {},
+        fillRect() {},
+        getImageData: () => ({ data: Uint8ClampedArray.from([0, 0, 0, 255]) }),
+      } as unknown as CanvasRenderingContext2D;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(navigator, "gpu");
+    document.body.replaceChildren();
+  });
+
+  it("stops the app when no backend can draw here, keeping wgpu's words", async () => {
+    const said = "Failed to create surface for any enabled backend";
+    vi.mocked(createWgpu).mockRejectedValueOnce(new Error(said));
+    await expect(create(host, 100, 100, lost)).rejects.toEqual(new NoRenderer(said));
+    expect(lost).toHaveBeenCalledExactlyOnceWith(new NoRenderer(said));
+  });
+
+  it("keeps why each backend failed", async () => {
+    withWebGpu();
+    vi.mocked(createWgpu)
+      .mockRejectedValueOnce(new Error("No available adapters."))
+      .mockRejectedValueOnce(new Error("canvas.getContext() returned null"));
+    await expect(create(host, 100, 100, lost)).rejects.toThrow(
+      "WebGPU: No available adapters.; WebGL2: canvas.getContext() returned null",
+    );
+  });
+
+  it("falls back to WebGL2 without stopping the app, and drops the WebGPU canvas", async () => {
+    withWebGpu();
+    let first: HTMLCanvasElement | undefined;
+    vi.mocked(createWgpu).mockImplementationOnce(async (canvas) => {
+      first = canvas;
+      throw new Error("No available adapters.");
+    });
+    const renderer = await create(host, 100, 100, lost);
+    expect(vi.mocked(createWgpu).mock.calls.map(([, webgpu]) => webgpu)).toEqual([true, false]);
+    expect(first?.isConnected).toBe(false);
+    expect([...host.querySelectorAll("canvas")]).toEqual([renderer.canvas]);
+    await tick();
+    expect(lost).not.toHaveBeenCalled();
+  });
+
+  it("stops the app with why its module did not load", async () => {
+    const failed = new TypeError("Failed to fetch");
+    vi.mocked(start).mockRejectedValueOnce(failed);
+    await expect(create(host, 100, 100, lost)).rejects.toBe(failed);
+    expect(lost).toHaveBeenCalledExactlyOnceWith(failed);
+  });
+
+  it("stops the app with a bug of its own as it is", async () => {
+    withWebGpu();
+    const bug = new TypeError("getComputedStyle is not a function");
+    vi.stubGlobal("getComputedStyle", () => {
+      throw bug;
+    });
+    await expect(create(host, 100, 100, lost)).rejects.toBe(bug);
+    expect(createWgpu).not.toHaveBeenCalled();
+    expect(lost).toHaveBeenCalledExactlyOnceWith(bug);
+  });
+
+  it("stops the app when its module panics, telling its words as a Panic", async () => {
+    await create(host, 100, 100, lost);
+    // What Rust calls with the panic's text, which names where it happened.
+    const panicked = vi.mocked(reportPanics).mock.calls[0]![0];
+    panicked("panicked at crates/renderer/src/web.rs:1:1");
+    expect(lost).toHaveBeenCalledExactlyOnceWith(
+      new Panic("panicked at crates/renderer/src/web.rs:1:1"),
+    );
+  });
+
+  it("stops the app when WebGPU loses its device, whatever the browser says", async () => {
+    withWebGpu();
+    await create(host, 100, 100, lost);
+    // What Rust calls with the browser's words, which may be none.
+    const gone = vi.mocked(createWgpu).mock.calls[0]![2];
+    gone("");
+    gone("the GPU process crashed");
+    expect(lost.mock.calls).toEqual([
+      [new GpuLost("no reason given")],
+      [new GpuLost("the GPU process crashed")],
+    ]);
+  });
+
+  it("stops the app when the browser loses the WebGL2 context", async () => {
+    const renderer = await create(host, 100, 100, lost);
+    renderer.canvas.dispatchEvent(new Event("webglcontextlost"));
+    expect(lost).toHaveBeenCalledExactlyOnceWith(new GpuLost("the WebGL2 context is lost"));
+  });
+
+  it("does not stop the app for the context that destroy loses on purpose", async () => {
+    const renderer = await create(host, 100, 100, lost);
+    const canvas = renderer.canvas;
+    renderer.destroy();
+    // The event `destroy`'s own `loseContext` queued, then one more by hand.
+    await tick();
+    canvas.dispatchEvent(new Event("webglcontextlost"));
+    expect(lost).not.toHaveBeenCalled();
   });
 });

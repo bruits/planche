@@ -11,6 +11,8 @@ export interface View {
   /** Takes `renderer` over, and destroys the one shown before. */
   show(renderer: Renderer, camera: Camera): void;
   clear(): void;
+  /** Draws no more, once the app cannot go on. */
+  halt(): void;
   /** On the next frame, however often it is called before. */
   redraw(): void;
   /** Advances on the next frame as `redraw` does, but draws only if a redraw asks for it by then. */
@@ -87,6 +89,7 @@ export function view(
   { advance, frame, painted, failed, panned }: Drawing,
 ): View {
   let shown: { renderer: Renderer; camera: Camera } | undefined;
+  let halted = false;
   let pending = false;
   /** Whether the next frame draws, which a step alone does not ask for. */
   let drawing = false;
@@ -110,7 +113,7 @@ export function view(
   };
   const size = () => ({ width: host.clientWidth, height: host.clientHeight });
   const paint = (grey: boolean) => {
-    if (!shown) {
+    if (!shown || halted) {
       return undefined;
     }
     frame(shown.camera, size());
@@ -126,12 +129,14 @@ export function view(
     }
   };
   const step = () => {
-    if (!pending) {
+    if (!pending && !halted) {
       pending = true;
       requestAnimationFrame(() => {
         // The redraws it asks for are this frame's.
         try {
           advance();
+        } catch (error) {
+          failed(error);
         } finally {
           pending = false;
           // Before drawing, as what the draw shows may ask for the next frame's.
@@ -340,6 +345,9 @@ export function view(
     clear() {
       shown?.renderer.destroy();
       shown = undefined;
+    },
+    halt() {
+      halted = true;
     },
     redraw,
     step,

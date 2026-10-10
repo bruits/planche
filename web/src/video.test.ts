@@ -548,6 +548,18 @@ describe("videos", () => {
     expect(films.playing(ASSET)).toBe(false);
   });
 
+  it("stops playing, sound and all, once halted, and still holds what it played", async () => {
+    await kept();
+    const shown = scene({ asset: ASSET });
+    films.sound([ASSET], true);
+    update(shown);
+    const [video] = elements;
+    expect(video).toMatchObject({ paused: false, muted: false });
+    films.halt();
+    expect(video!.paused).toBe(true);
+    expect(films.holds(ASSET)).toBe(true);
+  });
+
   it("plays on without sound once the page refuses it", async () => {
     await kept();
     const shown = scene({ asset: ASSET });

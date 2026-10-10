@@ -174,6 +174,10 @@ export interface Hooks {
   stepped(steps: number[], moves: number): void;
   /** Once a double-click lands on the title of group `id`, to write it. */
   retitle(id: string): void;
+  /** Once an edit from a key, or what a press caught up with, failed. */
+  failed(error: unknown): void;
+  /** Whether the app stopped, after which no edit starts, as nobody would see it. */
+  stopped(): boolean;
 }
 
 export type Pen = Extract<Item, { kind: "stroke" }>;
@@ -245,8 +249,9 @@ export interface Edits {
   /** Once none is under way. */
   idle(): Promise<void>;
   /**
-   * Runs `work`, which pushes what it touches, as one edit that undoes in one step. Throws when a
-   * gesture or some writing is under way, or when `work` throws, after which none of it stays.
+   * Runs `work`, which pushes what it touches, as one edit that undoes in one step. Throws once the
+   * app stopped, when a gesture or some writing is under way, or when `work` throws, after which
+   * none of it stays.
    */
   apply(work: (editor: Editor, touched: string[]) => void): string[];
   /**
@@ -255,7 +260,10 @@ export interface Edits {
    */
   adjust(work: (editor: Editor, touched: string[]) => void): string[];
   finishAdjusting(): void;
-  /** Whether `adjust` holds its edit open, until it is finished, its work throws, or the board goes. */
+  /**
+   * Whether `adjust` holds its edit open, until it is finished, its work throws, or the board goes.
+   * Refused once the app stopped, it stays open.
+   */
   adjusting(): boolean;
   /** The element being written in, whose text the renderer leaves to the field. */
   writing(): string | undefined;
@@ -497,6 +505,8 @@ export function edits(
     stepped,
     inked,
     retitle,
+    failed,
+    stopped,
   }: Hooks,
 ): Edits {
   let selected = new Set<string>();
@@ -1242,7 +1252,7 @@ export function edits(
     try {
       catchUp();
     } catch (error) {
-      reportError(error);
+      failed(error);
     }
   };
   /** Carries any press on to `at`, erasing and cropping too, which `drag` leaves to it. */
@@ -1955,10 +1965,13 @@ export function edits(
         within(at, box(editing.editor, [id])),
     );
 
-  /** Unless a gesture, some writing, or a crop is under way, since it would carry on over the edit. */
+  /**
+   * Unless a gesture, some writing, or a crop is under way, since it would carry on over the edit,
+   * or the app stopped, as a command that took long may still end after.
+   */
   const run = (edited: (editing: Editing, ids: string[]) => void) => {
     const editing = current();
-    if (editing && !underway()) {
+    if (editing && !underway() && !stopped()) {
       edited(editing, [...selected]);
     }
   };
@@ -1986,7 +1999,13 @@ export function edits(
     return true;
   };
 
+  const refuseOnceStopped = () => {
+    if (stopped()) {
+      throw new Error("Planche stopped working, so nothing changed");
+    }
+  };
   const adjust = (work: (editor: Editor, touched: string[]) => void): string[] => {
+    refuseOnceStopped();
     const editing = current();
     if (editing === undefined || (underway() && !adjusting)) {
       throw new Error("Someone is editing in Planche");
@@ -2065,7 +2084,7 @@ export function edits(
       });
     } catch (error) {
       nudging.clear();
-      reportError(error);
+      failed(error);
     }
   });
   addEventListener("keyup", (event) => {
@@ -2080,6 +2099,7 @@ export function edits(
     busy: underway,
     idle: () => (underway() ? new Promise((wake) => waiting.push(wake)) : Promise.resolve()),
     apply(work) {
+      refuseOnceStopped();
       const editing = current();
       if (editing === undefined || underway()) {
         throw new Error("Someone is editing in Planche");

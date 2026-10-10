@@ -28,5 +28,10 @@ Hints, Always on top, and the theme are remembered. Greyscale board, Mirror boar
 - Play videos on hover, see [media](./media.md#playback).
 - Keep style open keeps the style card up after a click on nothing, which otherwise closes it.
 - Agent access, in the desktop app, lets agents read and edit the open board, see [agents](./agents.md).
+- Open the error log, in the desktop app, opens the errors it recorded, to attach to a bug report. It is `errors.log` in the app's data folder, which moves to `errors.log.1` past 1 MB, so the log never takes more than 2 MB.
 
-All three are remembered.
+The first three are remembered.
+
+## When something goes wrong
+
+An unexpected error stays above the toolbar until dismissed. When Planche cannot go on, such as after losing the GPU, it greys out and offers to reload. Reload, ⌘R, and F5 save what they can first, and ask before losing anything. "Planche cannot draw on this device" means neither WebGPU nor WebGL2 started, which a reload may fix. Copy details copies the error, the browser, and the GPU, to paste into a bug report.

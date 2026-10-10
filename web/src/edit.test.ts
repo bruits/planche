@@ -33,9 +33,13 @@ function page(
     aligning,
     showsAnnotations,
     reveal,
+    stopped,
     zoom = 1,
   }: Partial<
-    Pick<Hooks, "drawing" | "erasing" | "snapping" | "aligning" | "showsAnnotations" | "reveal">
+    Pick<
+      Hooks,
+      "drawing" | "erasing" | "snapping" | "aligning" | "showsAnnotations" | "reveal" | "stopped"
+    >
   > & {
     zoom?: number;
   } = {},
@@ -83,6 +87,8 @@ function page(
     stepped() {},
     retitle: vi.fn<Hooks["retitle"]>(),
     inked: vi.fn<Hooks["inked"]>(),
+    failed: vi.fn<Hooks["failed"]>(),
+    stopped: stopped ?? (() => false),
   };
   let gone = false;
   leaving.push(() => (gone = true));
@@ -385,6 +391,23 @@ describe("edits", () => {
     ).toThrow("Someone is editing in Planche");
     pointer("pointerup", 90, 50);
     expect(at()).toEqual({ x: 40, y: 0 });
+  });
+
+  it("starts no edit once the app stopped, from outside, a slider, or a command", () => {
+    let stopped = false;
+    const { opened, editing, at } = page([], { stopped: () => stopped });
+    editing.select([STICKY]);
+    lower(editing, 10);
+    stopped = true;
+    expect(() => lower(editing, 30)).toThrow("Planche stopped working, so nothing changed");
+    // Else what is adjusted would hold the rest back anyway.
+    editing.finishAdjusting();
+    expect(() =>
+      editing.apply((editor, touched) => touched.push(...editor.translate([STICKY], 0, 20))),
+    ).toThrow("Planche stopped working, so nothing changed");
+    editing.remove();
+    expect(at()).toEqual({ x: 0, y: 10 });
+    expect(core.element(opened.editor, STICKY)).toBeDefined();
   });
 
   it("holds what is adjusted open, keeping others out, and undoes it in one step", async () => {
@@ -1245,6 +1268,17 @@ describe("nudging", () => {
     expect(at()).toEqual({ x: 0.5, y: -5 });
   });
 
+  it("reports a nudge the core refuses, and leaves the board as it was", () => {
+    const { opened, editing, hooks, at } = page();
+    editing.select([STICKY]);
+    // Locked from elsewhere, as an agent would, while still selected here.
+    opened.editor.setLocked([STICKY], true);
+    key("keydown", { key: "ArrowRight" });
+    key("keyup", { key: "ArrowRight" });
+    expect(hooks.failed).toHaveBeenCalledOnce();
+    expect(at()).toEqual({ x: 0, y: 0 });
+  });
+
   it("moves the selection along the arrow as a mirrored board shows", () => {
     const { editing, host, viewport, at } = page();
     mirrored(host, viewport);
@@ -1558,6 +1592,24 @@ describe("the end of a press", () => {
     captureLost(host, 300, 250, 1);
     pointer("pointerup", 300, 250);
     expect(strokes(opened)).toEqual([]);
+  });
+
+  it("reports a move the core refuses at the release, and still ends the press", () => {
+    const { opened, hooks, pointer, at } = page();
+    pointer("pointerdown", 50, 50);
+    // Short of a frame, so that the release carries it on.
+    pointer("pointermove", 90, 70);
+    // Locked from elsewhere, as an agent would, while pressed here.
+    opened.editor.setLocked([STICKY], true);
+    pointer("pointerup", 90, 70);
+    expect(hooks.failed).toHaveBeenCalledOnce();
+    expect(at()).toEqual({ x: 0, y: 0 });
+    opened.editor.setLocked([STICKY], false);
+    pointer("pointerdown", 50, 50);
+    pointer("pointermove", 60, 50);
+    pointer("pointerup", 60, 50);
+    expect(hooks.failed).toHaveBeenCalledOnce();
+    expect(at()).toEqual({ x: 10, y: 0 });
   });
 });
 

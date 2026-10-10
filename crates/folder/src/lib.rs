@@ -3,8 +3,9 @@
 //! nothing leads out of it. Links are no part of it, and neither are dot files and folders,
 //! such as `.git/`, though the app may create a missing top-level dot file, such as
 //! `.gitattributes`, which it never reads or lists. A single file the user picks, such as a
-//! ZIP file, is read in ranges and written in parts. It knows nothing of boards, and needs no
-//! Tauri, so its tests run on every platform.
+//! ZIP file, is read in ranges and written in parts, and a log of the app's grows by entries,
+//! within a size. It knows nothing of boards, and needs no Tauri, so its tests run on every
+//! platform.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -421,6 +422,29 @@ pub fn read_range(file: &Path, range: Range<u64>, stamp: Stamp) -> io::Result<Ve
     file.seek(SeekFrom::Start(range.start))?;
     file.read_exact(&mut bytes)?;
     Ok(bytes)
+}
+
+/// Appends `entry` to the log `file`, which first moves to `<file>.1`, in place of the one there,
+/// when the entry would take it past `most` bytes. So the two never hold more than `most` bytes
+/// each, and an entry longer than that keeps only its start.
+pub fn append(file: &Path, entry: &[u8], most: u64) -> io::Result<()> {
+    let kept = entry.len().min(usize::try_from(most).unwrap_or(usize::MAX));
+    let entry = &entry[..kept];
+    let held = match fs::metadata(file) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(error),
+    };
+    if held > 0 && held + entry.len() as u64 > most {
+        let mut older = file.as_os_str().to_owned();
+        older.push(".1");
+        retried(|| fs::rename(file, &older))?;
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)?
+        .write_all(entry)
 }
 
 /// The segments of `path`, unless it could climb out of the folder. A `~` could name a dot
@@ -918,6 +942,60 @@ mod tests {
         assert_eq!(read(&root, "elements/a.json").unwrap(), b"before");
         assert_eq!(names(&root.join("elements")), ["a.json"]);
         assert_eq!(names(&root), ["assets", "elements"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_log_grows_by_entries() {
+        let root = scratch("log-grows");
+        let log = root.join("errors.log");
+        append(&log, b"one\n", 100).unwrap();
+        append(&log, b"two\n", 100).unwrap();
+        assert_eq!(fs::read(&log).unwrap(), b"one\ntwo\n");
+        assert_eq!(names(&root), ["errors.log"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_full_log_moves_aside_in_place_of_the_older_one() {
+        let root = scratch("log-rolls");
+        let log = root.join("errors.log");
+        append(&log, b"first\n", 10).unwrap();
+        append(&log, b"second\n", 10).unwrap();
+        append(&log, b"third\n", 10).unwrap();
+        assert_eq!(fs::read(&log).unwrap(), b"third\n");
+        assert_eq!(fs::read(root.join("errors.log.1")).unwrap(), b"second\n");
+        assert_eq!(names(&root), ["errors.log", "errors.log.1"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_entry_longer_than_a_log_keeps_its_start() {
+        let root = scratch("log-entry-too-long");
+        let log = root.join("errors.log");
+        append(&log, b"0123456789", 4).unwrap();
+        assert_eq!(fs::read(&log).unwrap(), b"0123");
+        append(&log, b"abcdef", 4).unwrap();
+        assert_eq!(fs::read(&log).unwrap(), b"abcd");
+        assert_eq!(fs::read(root.join("errors.log.1")).unwrap(), b"0123");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_log_that_cannot_move_aside_refuses_what_would_grow_it_past_its_size() {
+        let root = scratch("log-cannot-roll");
+        let log = root.join("errors.log");
+        append(&log, b"first\n", 10).unwrap();
+        // A non-empty folder in place of `.1` makes the rename fail, as a viewer holding the
+        // file open without delete sharing would on Windows.
+        let older = root.join("errors.log.1");
+        fs::create_dir(&older).unwrap();
+        fs::write(older.join("x"), b"x").unwrap();
+        assert!(append(&log, b"second\n", 10).is_err());
+        assert!(append(&log, b"third\n", 10).is_err());
+        assert_eq!(fs::read(&log).unwrap(), b"first\n");
+        append(&log, b"abc\n", 10).unwrap();
+        assert_eq!(fs::read(&log).unwrap(), b"first\nabc\n");
         fs::remove_dir_all(root).unwrap();
     }
 }

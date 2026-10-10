@@ -14,23 +14,17 @@ Three priorities guide the trade-offs.
 
 ## Before Opening Issues
 
-- Do not report a security vulnerability publicly, such as in an issue: follow the [security policy](./SECURITY.md).
+- Report a security vulnerability privately, as the [security policy](./SECURITY.md) explains.
 
 ## Quality Guidelines
 
-- Write self-documenting code, with clear names and straightforward logic, and no cryptic abbreviations, hidden state, or hidden side effects. Comments explain why, such as intent, invariants, and trade-offs, and never serve as decoration or separators.
-- Write idiomatic, maintainable Rust and TypeScript. Avoid duplication, and prefer small, clear functions to clever ones.
-- Import standard library types explicitly, such as `use std::collections::BTreeMap;`.
-- Propagate errors with `?`, and keep `.expect()` and `.unwrap()` for failures that would be a programmer bug.
-- Library crates use typed error enums derived with `thiserror`, with a per-crate `pub type Result<T>` alias. Keep the core's error messages concise, and add context in the shells.
-- Keep the web app's TypeScript `strict`-clean. Honour null checks without casting them away with `!` or `as`, and never use `any`. Return `undefined` for something absent and read it with `?.` and `??`. Keep `!` for what would be a programmer bug, and throw an `Error` with a message a user or an agent can read for a failure.
-- Every promise is awaited, returned, or marked `void` with its failure reported, such as through `report` in `main.ts`, so that the failure reaches the user.
-- Import types with `import type`, and the core as a namespace with `import * as core`, so its calls read as the core's. `just fmt` and `just lint` settle style, with oxfmt and oxlint for the web app.
-- Tests assert observable behaviour, stay deterministic, and depend on no global state.
-- Web tests sit next to their module, such as `save.test.ts`, and run with Vitest in Node, or in happy-dom when they need the DOM. They drive the real core, which they never mock, and fake only what surrounds the unit, such as the browser, the shell, timers, and the collaborators it is handed. New web behaviour ships with tests, and touched behaviour gains them.
-- Web modules do no work on the page when imported, such as a DOM lookup, a page listener, or a top-level `await`, so tests can import them. Only `main.ts`, which wires them together, and `platform.ts` and `browser.ts`, which set up the shell, do. A test that reaches them runs in happy-dom.
-- The core builds for `wasm32-unknown-unknown` and does no I/O, see [architecture](./docs/development/architecture.md).
-- Board files are deterministic, so nothing on their path iterates a `HashMap`, see [format](./docs/development/format.md).
+- Write self-documenting, idiomatic code, with clear names, plain logic, small functions, and no hidden state or side effects. Avoid duplication. Comments say why (intent, invariants, trade-offs), and never decorate or separate. `just fmt` and `just lint` settle style.
+- In Rust, import standard library types explicitly (e.g. `use std::collections::BTreeMap;`), propagate errors with `?`, and keep `.expect()` and `.unwrap()` for programmer bugs. Library crates have a `thiserror` error enum and a `pub type Result<T>` alias, with concise messages in the core and context added by the shells.
+- In TypeScript, stay `strict`-clean with no `any`. Never cast a null check away with `as`, and keep `!` for a programmer bug. An absent value is `undefined`, read with `?.` and `??`, and a failure throws an `Error` whose message a user or an agent can read.
+- Every promise is awaited, returned, or marked `void` with its failure reported (e.g. through `report` in `main.ts`), so the user sees it. Import types with `import type`, and the core with `import * as core` so its calls read as the core's.
+- Web modules do no work on the page when imported (e.g. a DOM lookup, a page listener, a top-level `await`), so tests can import them. Only `main.ts`, which wires them, and `platform.ts` and `browser.ts`, which set up the shell, do.
+- Tests assert observable behaviour, stay deterministic, and share no global state. Web tests sit beside their module (e.g. `save.test.ts`) and run with Vitest in Node, or in happy-dom for the DOM. They drive the real core and fake only what surrounds the unit (e.g. the browser, the shell, timers, the collaborators it is handed). New web behaviour ships with tests, and touched behaviour gains them.
+- The core builds for `wasm32-unknown-unknown` with no I/O, and board files are deterministic, so nothing on their path iterates a `HashMap`. See [architecture](./docs/development/architecture.md) and [format](./docs/development/format.md).
 
 ## Writing Changesets
 

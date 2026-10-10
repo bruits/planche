@@ -24,5 +24,6 @@ Each text and SVG gets its own texture at the zoom it shows at, rounded up to a 
 
 - WebGL2 stays a first-class target, since WebKitGTK has no WebGPU.
 - wgpu panics on a validation error, and a panic kills the WASM module. The renderer catches errors with `Device::on_uncaptured_error` and hands them to the app.
+- Both WASM modules hand their panics to the app, as wasm's own hook prints nothing. A panic, a lost GPU, or no backend that starts stops the app, which then draws nothing more. On WebGL2, wgpu notices a lost GPU only when a later call fails, so the canvas's `webglcontextlost` reports it.
 - Dropping a texture, a buffer, or a device frees nothing on WebGPU, so destroy each one.
 - WASM memory never shrinks, so large bytes cross the boundary in slices.

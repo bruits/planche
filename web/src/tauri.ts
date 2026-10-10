@@ -2,7 +2,7 @@
 // checks every file access itself, since it cannot trust the page.
 
 import type { Incoming } from "./add.js";
-import { typed } from "./commands.js";
+import { reloads } from "./commands.js";
 import type { Bytes, Files } from "./core.js";
 import { message } from "./errors.js";
 import type { AgentCall, Export, Home, Platform, Slices } from "./platform.js";
@@ -19,9 +19,7 @@ export function tauri({ core, event }: TauriApi): Platform {
   // Reloading would lose the changes without asking, as the webview never does before. With or
   // without Shift, as WebView2 reloads either way.
   addEventListener("keydown", (pressed) => {
-    const reload =
-      pressed.key === "F5" || ((pressed.ctrlKey || pressed.metaKey) && typed(pressed) === "r");
-    if (reload && unsaved) {
+    if (reloads(pressed) && unsaved) {
       pressed.preventDefault();
     }
   });
@@ -131,7 +129,9 @@ export function tauri({ core, event }: TauriApi): Platform {
               id: call.id,
               error: `Planche could not send its answer: ${String(error)}`,
             };
-            void core.invoke("agent_reply", { reply: failure });
+            core
+              .invoke("agent_reply", { reply: failure })
+              .catch((failed: unknown) => reportError(failed));
           });
         };
         await core.invoke("agent_attach", { channel });
@@ -196,11 +196,11 @@ export function tauri({ core, event }: TauriApi): Platform {
 
     markUnsaved(value) {
       unsaved = value;
-      void core.invoke("mark_unsaved", { value });
+      core.invoke("mark_unsaved", { value }).catch((error: unknown) => reportError(error));
     },
 
     whenClosing(write) {
-      void event.listen("closing", async () => {
+      const closing = async () => {
         let close: boolean;
         try {
           close = (await write()) || (await core.invoke<boolean>("confirm", { question: LOSING }));
@@ -208,22 +208,34 @@ export function tauri({ core, event }: TauriApi): Platform {
           close = await core.invoke<boolean>("confirm", { question: LOSING });
         }
         await core.invoke(close ? "close_window" : "keep_window");
-      });
+      };
+      event
+        .listen("closing", () => closing().catch((error: unknown) => reportError(error)))
+        .catch((error: unknown) => reportError(error));
     },
 
     keepOnTop: (on) => core.invoke("keep_on_top", { on }),
 
     titleBar: {
       show: (shown) => core.invoke("show_title_bar", { shown }),
-      drag: () => void core.invoke("drag_window"),
+      drag() {
+        core.invoke("drag_window").catch((error: unknown) => reportError(error));
+      },
+    },
+
+    errorLog: {
+      append: (entry) => core.invoke("log_error", { entry }),
+      show: () => core.invoke<boolean>("show_error_log"),
     },
 
     // Only on Linux, where the shell takes drops itself.
     watchDrops(dropped) {
       type Dropped = [string[], string[], number, number];
-      void event.listen<Dropped>("dropped", ({ payload: [paths, addresses, clientX, clientY] }) => {
-        dropped(() => Promise.all(paths.map(readDropped)), addresses, { clientX, clientY });
-      });
+      event
+        .listen<Dropped>("dropped", ({ payload: [paths, addresses, clientX, clientY] }) => {
+          dropped(() => Promise.all(paths.map(readDropped)), addresses, { clientX, clientY });
+        })
+        .catch((error: unknown) => reportError(error));
     },
   };
 }

@@ -101,6 +101,40 @@ describe("browser session", () => {
     expect(root.folders.get("session")!.files.size).toBeGreaterThan(0);
     expect(persist).toHaveBeenCalledTimes(1);
   });
+
+  it("reports a request to persist the storage that fails, and saves all the same", async () => {
+    const reported = vi.fn<typeof reportError>();
+    vi.stubGlobal("reportError", reported);
+    const refused = new TypeError("persisting is not allowed here");
+    const root = new MemoryFolder();
+    const session = await sessionIn(root, async () => {
+      throw refused;
+    });
+    await session.write("board.json", new TextEncoder().encode("{}"));
+    await vi.waitFor(() => expect(reported).toHaveBeenCalledExactlyOnceWith(refused));
+    expect(root.folders.get("session")!.files.has("board.json")).toBe(true);
+  });
+
+  it("fails to open when the browser cannot lock it", async () => {
+    vi.stubGlobal("FileSystemFileHandle", MemoryFile);
+    Object.defineProperty(navigator, "storage", {
+      configurable: true,
+      value: { getDirectory: async () => new MemoryFolder() },
+    });
+    const refused = new DOMException("The document is not fully active", "InvalidStateError");
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: async () => {
+          throw refused;
+        },
+      },
+    });
+    // A fresh module, as the page holds the session, or not, for as long as it lives.
+    vi.resetModules();
+    const fresh = await import("./browser.js");
+    await expect(fresh.browser.session()).rejects.toBe(refused);
+  });
 });
 
 describe("browser folder", () => {

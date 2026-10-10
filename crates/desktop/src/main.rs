@@ -32,6 +32,10 @@ const NO_DIRECTORY: &str = "this machine has no folder for the app's data";
 /// In the app's folder, what board to reopen at launch: `folder` or `zip`, a line break, and
 /// its path.
 const LAST: &str = "last-board";
+/// In the app's folder, the failures the page met, after the older ones in `errors.log.1`.
+const ERRORS: &str = "errors.log";
+/// The most bytes each of the two logs holds.
+const ERRORS_SIZE: u64 = 1 << 20;
 
 fn main() {
     let context = tauri::generate_context!();
@@ -47,6 +51,7 @@ fn main() {
         .manage(Picked::default())
         .manage(Unsaved::default())
         .manage(Session::default())
+        .manage(ErrorLog::default())
         .manage(Agent::default())
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Started {
@@ -129,6 +134,8 @@ fn main() {
             remember_board,
             forget_board,
             reopen_board,
+            log_error,
+            show_error_log,
             list_files,
             read_file,
             read_files,
@@ -266,6 +273,10 @@ struct Unsaved {
 /// app at a time holds, with the file that locks it.
 #[derive(Default)]
 struct Session(Mutex<Option<(PathBuf, File)>>);
+
+/// Taken for each entry, which moving the log aside midway would split.
+#[derive(Default)]
+struct ErrorLog(Mutex<()>);
 
 /// How agents reach the web app's board, while agent access is on.
 struct Agent {
@@ -555,6 +566,24 @@ fn reopen_board(
         }
         _ => Ok(None),
     }
+}
+
+#[tauri::command(async)]
+fn log_error(app: AppHandle, log: State<'_, ErrorLog>, entry: String) -> Result<(), String> {
+    let file = app_directory(&app)?.join(ERRORS);
+    let _entry = log.0.lock().expect("never poisoned");
+    folder::append(&file, entry.as_bytes(), ERRORS_SIZE).map_err(|error| describe(&file, error))
+}
+
+/// The page names no file, so that it opens nothing else.
+#[tauri::command(async)]
+fn show_error_log(app: AppHandle) -> Result<bool, String> {
+    let file = app_directory(&app)?.join(ERRORS);
+    if !file.exists() {
+        return Ok(false);
+    }
+    open::that_detached(&file).map_err(|error| describe(&file, error))?;
+    Ok(true)
 }
 
 fn app_directory(app: &AppHandle) -> Result<PathBuf, String> {

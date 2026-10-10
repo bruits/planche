@@ -40,6 +40,8 @@ export interface Writing {
   entered(): string | undefined;
   /** Turns the view on the elements. */
   frame(ids: string[]): void;
+  /** Whether the app stopped, after which no edit lands, as nobody would see it. */
+  stopped(): boolean;
 }
 
 const IDLE_WAIT = 10_000;
@@ -155,7 +157,8 @@ export async function write(
 
 async function ready(page: Writing, target: Opened, { started, deadline }: Clock): Promise<void> {
   const until = started + IDLE_WAIT;
-  while (page.busy()) {
+  // Its gesture may never end once the app stopped.
+  while (page.busy() && !page.stopped()) {
     const left = until - performance.now();
     const waited =
       left > 0 &&
@@ -165,6 +168,9 @@ async function ready(page: Writing, target: Opened, { started, deadline }: Clock
         "The user is editing in Planche, dragging, writing a text, or cropping an image, so nothing changed: try again",
       );
     }
+  }
+  if (page.stopped()) {
+    throw new Error("Planche stopped working, so nothing changed");
   }
   if (page.opened() !== target) {
     throw new Error("Another board opened in Planche meanwhile, so nothing changed");

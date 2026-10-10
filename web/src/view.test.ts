@@ -9,7 +9,7 @@ function nextFrame(): Promise<number> {
 }
 
 /** Over a board shown from the origin at `zoom`, in a viewport 400 CSS pixels wide. */
-function shown(zoom = 1) {
+function shown(zoom = 1, drawing: Partial<Pick<Drawing, "advance" | "failed">> = {}) {
   const host = document.body.appendChild(document.createElement("div"));
   host.getBoundingClientRect = () => new DOMRect(0, 0, 400, 300);
   const panned = vi.fn<Drawing["panned"]>();
@@ -21,6 +21,7 @@ function shown(zoom = 1) {
       throw error;
     },
     panned,
+    ...drawing,
   });
   const draw = vi.fn<Renderer["draw"]>();
   const renderer = {
@@ -368,5 +369,37 @@ describe("a greyed view", () => {
     expect(draw).toHaveBeenLastCalledWith(expect.anything(), false);
     await nextFrame();
     expect(draw).toHaveBeenLastCalledWith(expect.anything(), true);
+  });
+});
+
+describe("a frame", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("reports what failed before it, and still draws", async () => {
+    const failed = vi.fn<Drawing["failed"]>();
+    const caught = new Error("the press could not catch up");
+    const { viewport, draw } = shown(1, {
+      advance() {
+        throw caught;
+      },
+      failed,
+    });
+    draw.mockClear();
+    viewport.redraw();
+    await nextFrame();
+    expect(failed).toHaveBeenCalledExactlyOnceWith(caught);
+    expect(draw).toHaveBeenCalledOnce();
+  });
+
+  it("draws no more once the view halts, at once or on a frame", async () => {
+    const { viewport, draw } = shown();
+    draw.mockClear();
+    viewport.halt();
+    viewport.redraw();
+    await nextFrame();
+    expect(viewport.drawNow()).toBeUndefined();
+    expect(draw).not.toHaveBeenCalled();
   });
 });

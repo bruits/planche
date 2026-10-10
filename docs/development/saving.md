@@ -4,7 +4,7 @@ How a board saves itself. What users see of it is in [boards](../usage/boards.md
 
 ## When
 
-A board saves a second after the last edit, or ten seconds after the first while edits go on. A ZIP file is rewritten whole, so it waits ten seconds after the last edit. Losing focus, hiding, closing, and an explicit Save write at once. An edit made during a save counts as made at its end, so saves never chain while you work. Leaving a board writes until nothing waits, once the images still being read are in, and asks only when it cannot.
+A board saves a second after the last edit, or ten seconds after the first while edits go on. A ZIP file is rewritten whole, so it waits ten seconds after the last edit. Losing focus, hiding, closing, and an explicit Save write at once. An edit made during a save counts as made at its end, so saves never chain while you work. Leaving a board writes until nothing waits, once the images still being read are in, and asks only when it cannot. Once the app stopped, autosave goes on, and a reload writes the same way for five seconds at most, as a stopped app may never finish. A core that panicked during an edit can no longer be read, so its edits stay unsaved and the reload asks. If asking fails too, it reloads anyway.
 
 ## Where
 

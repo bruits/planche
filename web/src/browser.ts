@@ -113,7 +113,7 @@ export const browser: Platform = {
     const keep = () => {
       if (!persisting) {
         persisting = true;
-        void navigator.storage.persist?.();
+        navigator.storage.persist?.().catch((error: unknown) => reportError(error));
       }
     };
     return {
@@ -182,15 +182,17 @@ export const browser: Platform = {
 /** One tab at a time keeps its board in the session, for as long as it lives. */
 let held: Promise<boolean> | undefined;
 function holdSession(): Promise<boolean> {
-  held ??= new Promise((resolve) => {
+  held ??= new Promise((resolve, reject) => {
     if (!navigator.locks) {
       resolve(true);
       return;
     }
-    void navigator.locks.request("planche.session", { ifAvailable: true }, (lock) => {
-      resolve(lock !== null);
-      return lock === null ? undefined : new Promise(() => {});
-    });
+    navigator.locks
+      .request("planche.session", { ifAvailable: true }, (lock) => {
+        resolve(lock !== null);
+        return lock === null ? undefined : new Promise(() => {});
+      })
+      .catch(reject);
   });
   return held;
 }
