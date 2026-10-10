@@ -1,5 +1,12 @@
 # Planche
 
+## 0.3.0 — 2026-10-10
+
+### Minor changes
+
+- [28b7b5f](https://github.com/bruits/planche/commit/28b7b5f45079054b7b2bcca93b268767fc55388d) Added Report a bug to the menu. It opens a bug report on GitHub, with the platform, the desktop app's version, the renderer, and the browser filled in. — Thanks @goulvenclech!
+- [8cb51b1](https://github.com/bruits/planche/commit/8cb51b1247fbef2f71458c77557f2caf586108e1) Added error messages with details to copy for a bug report, and an error log in the desktop app's settings. When Planche cannot go on, such as after losing the GPU, it says so and offers to reload, saving what it can first. — Thanks @goulvenclech!
+
 ## 0.2.0 — 2026-10-10
 
 ### Minor changes
