@@ -3,7 +3,8 @@
 // follows the selection as it changes, until Esc, a press on nothing, or a save closes it, and
 // hides while a gesture or some writing is under way. Its choices last from one picture to the next.
 
-import { beneath, cardButton, clamp, letters, row, rule, type CardHost } from "./card.js";
+import { clamp } from "./geometry.js";
+import { beneath, cardButton, letters, row, rule, type CardHost } from "./card.js";
 import { composing, describe, typed, typing, type Shortcut } from "./commands.js";
 import { finderOpen } from "./finder.js";
 import { icon } from "./icons.js";

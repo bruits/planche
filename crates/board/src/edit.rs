@@ -17,7 +17,7 @@ use crate::grid::settled;
 use crate::stick::{Landing, Motion, lands_on};
 use crate::{
     AssetId, Background, Board, Copied, Corners, CropShape, Element, ElementId, ElementKind, Error,
-    ImageEdits, Point, Rect, Result, Shape, Speed, Trim, ZIndex, angle, with_emptied,
+    ImageEdits, Point, Rect, Result, Shape, Size, Speed, Trim, ZIndex, angle, with_emptied,
 };
 
 /// Where an element moves among the elements of its group.
@@ -616,16 +616,12 @@ impl Editor {
             else {
                 return;
             };
-            let (width, height) = edits.crop.map_or(
-                (natural_size.width.into(), natural_size.height.into()),
-                |crop| (crop.width, crop.height),
-            );
-            if !(width > 0.0 && height > 0.0 && width.is_finite() && height.is_finite()) {
+            let Some((width, height)) = actual(*natural_size, edits) else {
                 return;
-            }
+            };
             *rotation = 0.0;
             // Recomputed, the frame would come out a hair off, and each press would change it.
-            if (frame.width - width).abs() > HAIR || (frame.height - height).abs() > HAIR {
+            if !at_size(frame, width, height) {
                 let centre = frame.centre();
                 *frame = Rect {
                     x: centre.x - width / 2.0,
@@ -634,6 +630,26 @@ impl Editor {
                     height,
                 };
             }
+        })
+    }
+
+    /// Whether [`Editor::actual_size`] would leave the elements as they are.
+    pub fn at_actual_size(&self, ids: &[ElementId]) -> bool {
+        let board = &self.board;
+        board.with_descendants(ids).into_iter().all(|id| {
+            let ElementKind::Image {
+                natural_size,
+                frame,
+                rotation,
+                edits,
+                ..
+            } = &board.elements[&id].kind
+            else {
+                return true;
+            };
+            board.locked_by(id).is_some()
+                || actual(*natural_size, edits)
+                    .is_none_or(|(width, height)| *rotation == 0.0 && at_size(frame, width, height))
         })
     }
 
@@ -1749,6 +1765,20 @@ fn held_by(board: &Board, id: ElementId) -> impl Iterator<Item = ElementId> + '_
     iter::successors(board.elements[&id].kind.target(), |target| {
         board.elements.get(target)?.kind.target()
     })
+}
+
+/// The size an image shows its pixels at, one board unit each.
+fn actual(natural_size: Size, edits: &ImageEdits) -> Option<(f64, f64)> {
+    let (width, height) = edits.crop.map_or(
+        (natural_size.width.into(), natural_size.height.into()),
+        |crop| (crop.width, crop.height),
+    );
+    (width > 0.0 && height > 0.0 && width.is_finite() && height.is_finite())
+        .then_some((width, height))
+}
+
+fn at_size(frame: &Rect, width: f64, height: f64) -> bool {
+    (frame.width - width).abs() <= HAIR && (frame.height - height).abs() <= HAIR
 }
 
 #[cfg(test)]
@@ -3980,6 +4010,46 @@ mod tests {
         assert_eq!(kind(2), &upright(cropped, rect(320.0, 15.0, 40.0, 30.0)));
         assert_eq!(editor.undo(), ids([1, 2]));
         assert_eq!(editor.board(), &before);
+    }
+
+    #[test]
+    fn at_actual_size_is_told_apart_from_what_the_edit_would_change() {
+        let at = |x: f64, width: f64, height: f64| {
+            let mut kind = picture(x, 0.0);
+            if let ElementKind::Image { frame, .. } = &mut kind {
+                frame.width = width;
+                frame.height = height;
+            }
+            kind
+        };
+        let mut tilted = at(0.0, 100.0, 100.0);
+        if let ElementKind::Image { rotation, .. } = &mut tilted {
+            *rotation = 30.0;
+        }
+        let mut empty = picture(600.0, 0.0);
+        if let ElementKind::Image { natural_size, .. } = &mut empty {
+            *natural_size = crate::Size {
+                width: 0,
+                height: 0,
+            };
+        }
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", tilted)),
+            (2, element(None, "a1", at(300.0, 100.0 + 1e-7, 100.0))),
+            (3, element(None, "a2", empty)),
+            (4, element(None, "a3", note(0.0))),
+            (5, element(None, "a4", ElementKind::group())),
+            (6, element(Some(5), "a0", at(900.0, 50.0, 100.0))),
+            (7, locked(None, "a5", ElementKind::group())),
+            (8, element(Some(7), "a0", picture(1200.0, 0.0))),
+        ]));
+
+        assert!(!editor.at_actual_size(&ids([1])));
+        assert!(editor.at_actual_size(&ids([2, 3, 4])));
+        assert!(!editor.at_actual_size(&ids([5])));
+        assert!(editor.at_actual_size(&ids([7, 9])));
+        editor.actual_size(&ids([1, 5])).unwrap();
+        assert!(editor.at_actual_size(&ids([1, 2, 3, 4, 5, 7])));
     }
 
     #[test]

@@ -5,10 +5,10 @@ use std::collections::BTreeSet;
 
 use serde::{Serialize, Serializer};
 
-use crate::geometry::{smoothed, stroke_points};
+use crate::geometry::{around, corners, polygon, smoothed, stroke_points};
 use crate::{
-    AssetId, Board, Colour, CropShape, Dash, ElementId, ElementKind, Fill, Heads, ImageEdits,
-    Paper, Point, Rect, Shape, Size, Text, Tip, Weight,
+    Annotations, AssetId, Board, Colour, CropShape, Dash, ElementId, ElementKind, Fill, Heads,
+    ImageEdits, Paper, Point, Rect, Shape, Size, Text, Tip, Weight,
 };
 
 /// The longest an arrow's head is, in board units, then in widths of its stroke, and the most of
@@ -16,6 +16,9 @@ use crate::{
 const HEAD_LENGTH: f64 = 10.0;
 const HEAD_WIDTHS: f64 = 3.0;
 const HEAD_SHARE: f64 = 1.0 / 3.0;
+/// How far each stroke of an arrow's head turns back from its shaft, in degrees. The renderer's
+/// shader draws them so, as it knows nothing of boards.
+const BARB: f64 = 30.0;
 /// How much of its colour a tinted shape fills with.
 const TINT: f64 = 0.18;
 
@@ -148,6 +151,173 @@ impl Board {
             None => {}
         }
         items
+    }
+}
+
+impl Board {
+    /// The smallest upright rectangle around what the elements draw, as [`Board::drawn`] has it,
+    /// strokes as wide as they are and arrows' heads included, with their groups' elements and
+    /// panels. `None` when they draw nothing.
+    pub fn drawn_bounds(
+        &self,
+        ids: &[ElementId],
+        crossed_out: &BTreeSet<AssetId>,
+        annotations: Annotations,
+    ) -> Option<Rect> {
+        let mut points = Vec::new();
+        for id in self.with_descendants(ids) {
+            if annotations.hides(&self.elements[&id].kind) {
+                continue;
+            }
+            for item in self.drawn(id, crossed_out) {
+                self.reach(&item, &mut points);
+            }
+        }
+        around(&points)
+    }
+
+    fn reach(&self, item: &Item, points: &mut Vec<Point>) {
+        match item {
+            Item::Image {
+                frame,
+                rotation,
+                elliptical: true,
+                ..
+            } => points.extend(oval(frame, *rotation, 0.0)),
+            Item::Image {
+                frame, rotation, ..
+            }
+            | Item::Fill {
+                frame, rotation, ..
+            } => points.extend(corners(frame, *rotation)),
+            // As far as the frame it lies in, which the margin of its texture passes, but within a
+            // shape's outline when that holds it, as all but a rectangle's or a cross's do.
+            Item::Text { id, .. } => match &self.elements[id].kind {
+                kind if kind.text_area().is_some_and(|area| area.width < 1.0) => {}
+                ElementKind::Note {
+                    frame, rotation, ..
+                }
+                | ElementKind::Sticky {
+                    frame, rotation, ..
+                }
+                | ElementKind::Shape {
+                    frame, rotation, ..
+                } => points.extend(corners(frame, *rotation)),
+                _ => {}
+            },
+            Item::Line {
+                from, to, width, ..
+            } => widened(points, [*from, *to], *width),
+            Item::Arrow {
+                from,
+                to,
+                width,
+                head,
+                heads,
+                ..
+            } => widened(
+                points,
+                [*from, *to]
+                    .into_iter()
+                    .chain(barbs(*from, *to, *head, *heads)),
+                *width,
+            ),
+            Item::Stroke {
+                points: line,
+                width,
+                ..
+            } => widened(points, line.iter().copied(), *width),
+            Item::Outline {
+                shape,
+                corners: count,
+                frame,
+                rotation,
+                width,
+                ..
+            } => {
+                // An outline straddles the line it draws.
+                let half = width / 2.0;
+                if *shape == Shape::Ellipse {
+                    points.extend(oval(frame, *rotation, half));
+                } else if *count > 0 {
+                    let polygon = polygon(frame, *rotation, *count, *shape == Shape::Star);
+                    widened(points, polygon, *width);
+                } else {
+                    points.extend(corners(&outset(frame, half), *rotation));
+                }
+            }
+        }
+    }
+}
+
+/// Where the strokes of an arrow's heads end.
+fn barbs(from: Point, to: Point, head: f64, heads: Heads) -> Vec<Point> {
+    let span = (to.x - from.x).hypot(to.y - from.y);
+    if span == 0.0 {
+        return Vec::new();
+    }
+    let along = Point {
+        x: (to.x - from.x) / span,
+        y: (to.y - from.y) / span,
+    };
+    let (sin, cos) = BARB.to_radians().sin_cos();
+    let (back, across) = (head * cos, head * sin);
+    let ends = |tip: Point, way: f64| {
+        [1.0, -1.0].map(|side| Point {
+            x: tip.x - way * along.x * back - side * along.y * across,
+            y: tip.y - way * along.y * back + side * along.x * across,
+        })
+    };
+    match heads {
+        Heads::End => ends(to, 1.0).to_vec(),
+        Heads::Both => [ends(to, 1.0), ends(from, -1.0)].concat(),
+    }
+}
+
+fn widened(points: &mut Vec<Point>, line: impl IntoIterator<Item = Point>, width: f64) {
+    let half = width / 2.0;
+    for point in line {
+        points.push(Point {
+            x: point.x - half,
+            y: point.y - half,
+        });
+        points.push(Point {
+            x: point.x + half,
+            y: point.y + half,
+        });
+    }
+}
+
+/// Two opposite corners of the upright box around the ellipse that fills `frame`, turned clockwise
+/// by `degrees` around its centre, grown by `by` all round.
+fn oval(frame: &Rect, degrees: f64, by: f64) -> [Point; 2] {
+    let centre = frame.centre();
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let (across, down) = (frame.width / 2.0, frame.height / 2.0);
+    let half = Point {
+        x: (across * cos).hypot(down * sin) + by,
+        y: (across * sin).hypot(down * cos) + by,
+    };
+    [
+        Point {
+            x: centre.x - half.x,
+            y: centre.y - half.y,
+        },
+        Point {
+            x: centre.x + half.x,
+            y: centre.y + half.y,
+        },
+    ]
+}
+
+fn outset(frame: &Rect, by: f64) -> Rect {
+    let centre = frame.centre();
+    let (across, down) = (frame.width.abs() / 2.0 + by, frame.height.abs() / 2.0 + by);
+    Rect {
+        x: centre.x - across,
+        y: centre.y - down,
+        width: 2.0 * across,
+        height: 2.0 * down,
     }
 }
 
@@ -578,6 +748,136 @@ mod tests {
             head(Point { x: 30.0, y: 0.0 }, Weight::Thin, Heads::End),
             (10.0, Heads::End)
         );
+    }
+
+    #[test]
+    fn an_arrow_head_turns_back_thirty_degrees_from_its_shaft() {
+        // As the renderer's shader spells it.
+        let (back, across) = (0.866_025_4, 0.5);
+        let ends = barbs(
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 100.0, y: 0.0 },
+            10.0,
+            Heads::Both,
+        );
+        let expected = [
+            (100.0 - 10.0 * back, 10.0 * across),
+            (100.0 - 10.0 * back, -10.0 * across),
+            (10.0 * back, 10.0 * across),
+            (10.0 * back, -10.0 * across),
+        ];
+        assert_eq!(ends.len(), expected.len());
+        for (end, (x, y)) in ends.iter().zip(expected) {
+            assert!(
+                (end.x - x).abs() < 1e-6 && (end.y - y).abs() < 1e-6,
+                "{end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn what_elements_draw_reaches_as_far_as_their_strokes_and_heads() {
+        let near = |a: Rect, b: Rect| {
+            [
+                (a.x, b.x),
+                (a.y, b.y),
+                (a.width, b.width),
+                (a.height, b.height),
+            ]
+            .iter()
+            .all(|(a, b)| (a - b).abs() < 1e-9)
+        };
+        let to = Point { x: 100.0, y: 0.0 };
+        let board = board([
+            (
+                1,
+                element(None, "a0", arrow(to, Weight::Medium, Heads::Both)),
+            ),
+            (2, element(None, "a1", ElementKind::group())),
+            (3, element(Some(2), "a0", image(ImageEdits::default()))),
+            (4, element(Some(2), "a1", note("Dusk"))),
+            (5, element(None, "a2", note(""))),
+        ]);
+        let none = BTreeSet::new();
+        // A medium arrow's heads are 16 long, so they spread 8 across, and its stroke 1 more.
+        let across = 16.0 * 0.5 + 1.0;
+        let bounds = board.drawn_bounds(&[id(1)], &none, Annotations::Shown);
+        assert!(
+            bounds.is_some_and(|bounds| near(
+                bounds,
+                Rect {
+                    x: -1.0,
+                    y: -across,
+                    width: 102.0,
+                    height: 2.0 * across
+                }
+            )),
+            "{bounds:?}"
+        );
+        let image = board.drawn_bounds(&[id(3)], &none, Annotations::Shown);
+        let note = board.drawn_bounds(&[id(4)], &none, Annotations::Shown);
+        assert_eq!(
+            board.drawn_bounds(&[id(2)], &none, Annotations::Hidden),
+            image
+        );
+        assert_eq!(note, Some(FRAME));
+        assert_eq!(
+            board.drawn_bounds(&[id(5), id(9)], &none, Annotations::Shown),
+            None
+        );
+        // Crossed out, an image draws its outline, which straddles its frame, turned by 30°.
+        let crossed_out = BTreeSet::from([AssetId::of(b"dusk")]);
+        let outlined = board.drawn_bounds(&[id(3)], &crossed_out, Annotations::Shown);
+        let (sin, cos) = 30_f64.to_radians().sin_cos();
+        let grown = sin + cos;
+        assert!(
+            outlined.zip(image).is_some_and(|(outlined, image)| near(
+                outlined,
+                Rect {
+                    x: image.x - grown,
+                    y: image.y - grown,
+                    width: image.width + 2.0 * grown,
+                    height: image.height + 2.0 * grown,
+                }
+            )),
+            "{outlined:?} {image:?}"
+        );
+    }
+
+    #[test]
+    fn a_rectangle_or_cross_outline_on_a_frame_turned_over_by_a_negative_size_reaches_as_far() {
+        let turned = Rect {
+            x: 110.0,
+            y: 20.0,
+            width: -100.0,
+            height: 50.0,
+        };
+        for kind in [Shape::Rectangle, Shape::Cross] {
+            let mut shape = shape(kind, Fill::Hollow);
+            if let ElementKind::Shape {
+                frame,
+                rotation,
+                dash,
+                ..
+            } = &mut shape
+            {
+                (*frame, *rotation, *dash) = (turned, 0.0, Dash::Solid);
+            }
+            let board = board([(1, element(None, "a0", shape))]);
+            let bounds = board.drawn_bounds(&[id(1)], &BTreeSet::new(), Annotations::Shown);
+            // A thick outline straddles the frame's edge by 2, as the shader draws it about the
+            // centre whichever way the size goes.
+            assert_eq!(
+                bounds,
+                Some(Rect {
+                    x: 8.0,
+                    y: 18.0,
+                    width: 104.0,
+                    height: 54.0
+                }),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]

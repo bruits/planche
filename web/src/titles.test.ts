@@ -1,21 +1,34 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Board, Kind, Rect } from "./core.js";
+import { untitled, type Opened } from "./board.js";
+import * as core from "./core.js";
+import type { Kind, Rect } from "./core.js";
 import { titledGroup, titles } from "./titles.js";
 
 const GROUP = "a".repeat(32);
 const OTHER = "b".repeat(32);
 const AREA: Rect = { x: 100, y: 50, width: 400, height: 300 };
 
-function board(kinds: Record<string, Kind>, locked: string[] = []): Board {
-  const ids = Object.keys(kinds);
-  return {
-    elements: Object.fromEntries(
-      ids.map((id, at) => [id, { z: `a${at}`, kind: kinds[id]!, locked: locked.includes(id) }]),
-    ),
-    draw_order: ids,
-    background: "plain",
-  };
+const NOTE: Kind = {
+  type: "note",
+  frame: { x: 0, y: 0, width: 10, height: 10 },
+  rotation: 0,
+  text: { content: "", font_size: 20 },
+};
+
+function opened(kinds: Record<string, Kind>, locked: string[] = []): Opened {
+  const made = untitled();
+  Object.entries(kinds).forEach(([group, kind], at) => {
+    const members = [2 * at, 2 * at + 1].map((digit) => digit.toString(16).repeat(32));
+    for (const id of members) {
+      made.editor.add(id, undefined, JSON.stringify(NOTE));
+    }
+    made.editor.group(group, members);
+    made.editor.update(group, JSON.stringify(kind));
+  });
+  made.editor.setLocked(locked, true);
+  made.board = core.board(made.editor);
+  return made;
 }
 
 function shown() {
@@ -44,7 +57,7 @@ describe("titles", () => {
   it("names each titled group over the top-left of what it draws, at one size on screen", () => {
     const { made } = shown();
     made.show(
-      board({ [GROUP]: { type: "group", title: "Moods" }, [OTHER]: { type: "group" } }),
+      opened({ [GROUP]: { type: "group", title: "Moods" }, [OTHER]: { type: "group" } }),
       () => AREA,
       [GROUP],
     );
@@ -59,7 +72,7 @@ describe("titles", () => {
 
   it("asks for a group's area again only once told that group changed", () => {
     const { made } = shown();
-    const titled = board({
+    const titled = opened({
       [GROUP]: { type: "group", title: "Moods" },
       [OTHER]: { type: "group", title: "Colours" },
     });
@@ -75,7 +88,7 @@ describe("titles", () => {
 
   it("offers a title to the group selected alone that has none, which a click writes", () => {
     const { made, rename } = shown();
-    made.show(board({ [GROUP]: { type: "group" } }), () => AREA, [GROUP], GROUP);
+    made.show(opened({ [GROUP]: { type: "group" } }), () => AREA, [GROUP], GROUP);
     const offer = label(GROUP)!;
     expect(offer.textContent).toBe("Add title");
     expect(titledGroup(offer)).toBeUndefined();
@@ -89,7 +102,7 @@ describe("titles", () => {
 
   it("writes a title in place on a double-click, ended by a press elsewhere before the board hears of it", () => {
     const { made, rename } = shown();
-    made.show(board({ [GROUP]: { type: "group", title: "Moods" } }), () => AREA, []);
+    made.show(opened({ [GROUP]: { type: "group", title: "Moods" } }), () => AREA, []);
     const named = label(GROUP)!;
     expect(titledGroup(named)).toBe(GROUP);
     named.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
@@ -103,7 +116,7 @@ describe("titles", () => {
 
   it("renames nothing when Esc ends a title left as it was", () => {
     const { made, rename } = shown();
-    made.show(board({ [GROUP]: { type: "group", title: "Moods" } }), () => AREA, []);
+    made.show(opened({ [GROUP]: { type: "group", title: "Moods" } }), () => AREA, []);
     made.write(GROUP);
     key(label(GROUP)!.querySelector("input")!, "Escape");
     expect(rename).not.toHaveBeenCalled();
@@ -113,7 +126,7 @@ describe("titles", () => {
   it("lets presses through the title of a locked group, and hides one with nothing to stand over", () => {
     const { made } = shown();
     made.show(
-      board(
+      opened(
         { [GROUP]: { type: "group", title: "Moods" }, [OTHER]: { type: "group", title: "Later" } },
         [GROUP],
       ),

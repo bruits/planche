@@ -36,7 +36,7 @@ pub use animation::{frame_delay, frame_delays};
 pub use arrange::{Order, Side};
 pub use copy::Copied;
 pub use edit::{Editor, Placement, Restack, Scaling, Sticking, Transform};
-pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, snap_scale_to_grid, snap_to_grid};
+pub use grid::{GRID_SPACING, GRID_STEP, GridLevel, Placing, snap_scale_to_grid, snap_to_grid};
 pub use media::{EXTENSIONS, MEDIA_START, Media, extension, media};
 pub use neighbours::{
     Drawn, Pull, Scale, Scaled, snap_drawn_to_neighbours, snap_scale_to_neighbours,
@@ -308,8 +308,24 @@ impl Board {
         locked
     }
 
+    /// With the groups holding them, all the way up. Unknown ids are left out.
+    pub fn with_ancestors(&self, ids: &[ElementId]) -> BTreeSet<ElementId> {
+        let mut found = BTreeSet::new();
+        for id in ids {
+            let mut at = Some(*id);
+            // A board fresh from a merge may hold a cycle until repaired.
+            while let Some(id) = at
+                && let Some(element) = self.elements.get(&id)
+                && found.insert(id)
+            {
+                at = element.group;
+            }
+        }
+        found
+    }
+
     /// With the elements of the groups among them, all the way down. Unknown ids are left out.
-    fn with_descendants(&self, ids: &[ElementId]) -> BTreeSet<ElementId> {
+    pub fn with_descendants(&self, ids: &[ElementId]) -> BTreeSet<ElementId> {
         let mut found = BTreeSet::new();
         let mut pending: Vec<ElementId> = ids.to_vec();
         while let Some(id) = pending.pop() {
@@ -2003,6 +2019,28 @@ mod tests {
         // Each once, whether named, reached through a group, or both, and unknown ids left out.
         assert_eq!(found(&[3, 1, 2, 3, 9]), set(&[1, 2, 3, 4]));
         assert_eq!(found(&[5, 6]), set(&[5, 6]));
+        assert!(found(&[9]).is_empty());
+    }
+
+    #[test]
+    fn an_element_takes_the_groups_holding_it_all_the_way_up() {
+        let board = board([
+            (1, element(None, "a0", ElementKind::group())),
+            (2, element(Some(1), "a0", ElementKind::group())),
+            (3, element(Some(2), "a0", arrow())),
+            (4, element(Some(1), "a1", arrow())),
+            (5, element(None, "a1", arrow())),
+            // Unrepaired, as fresh from a merge.
+            (6, element(Some(7), "a2", ElementKind::group())),
+            (7, element(Some(6), "a2", ElementKind::group())),
+            (8, element(Some(6), "a0", arrow())),
+        ]);
+        let found =
+            |bits: &[u128]| board.with_ancestors(&bits.iter().copied().map(id).collect::<Vec<_>>());
+        let set = |bits: &[u128]| bits.iter().copied().map(id).collect::<BTreeSet<_>>();
+        assert_eq!(found(&[3]), set(&[1, 2, 3]));
+        assert_eq!(found(&[3, 4, 2, 5, 9]), set(&[1, 2, 3, 4, 5]));
+        assert_eq!(found(&[8]), set(&[6, 7, 8]));
         assert!(found(&[9]).is_empty());
     }
 

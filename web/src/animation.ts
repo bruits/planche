@@ -10,7 +10,7 @@ import type { Camera, Viewport } from "./camera.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Size, Trim } from "./core.js";
 import { spanOf, startsOf, stepped, type Playback, type Span } from "./playback.js";
-import { LONGEST_SIDE, shownAssets } from "./raster.js";
+import { TEXTURE_SIDE, shownAssets } from "./raster.js";
 import type { Playing, Renderer } from "./renderer.js";
 
 /** How long a frame spends on frames of animated images before it starts no more, in milliseconds. */
@@ -243,7 +243,7 @@ export function animations(again: () => void, changed: () => void): Animations {
   return {
     keep(images) {
       for (const { asset, natural, moving } of images) {
-        if (!moving || clips.has(asset) || Math.max(natural.width, natural.height) > LONGEST_SIDE) {
+        if (!moving || clips.has(asset) || Math.max(natural.width, natural.height) > TEXTURE_SIDE) {
           continue;
         }
         // Once it is known to play, as reading copies its bytes into the core.

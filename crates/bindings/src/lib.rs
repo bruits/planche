@@ -3,14 +3,14 @@
 //! shells do the I/O. Bytes named as an asset or checksummed for a ZIP file cross in slices, as
 //! the core's memory never shrinks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::panic;
 
 use board::{
-    Alignment, Annotations, AssetId, Axis, Board, Colour, Copied, Corners, ElementId, ElementKind,
-    GRID_STEP, GridLevel, MovieIndex, Order, Point, Rect, Restack, Scale, Shape, Side, Size, Speed,
-    Style, Tip, Transform, Weight,
+    Alignment, Annotations, AssetId, Axis, Board, Colour, Copied, ElementId, ElementKind,
+    GridLevel, MovieIndex, Order, Placing, Point, Rect, Restack, Scale, Side, Size, Speed, Style,
+    Tip, Transform, Weight,
 };
 use format::{save, zip};
 use js_sys::{Function, Map, Uint8Array};
@@ -99,10 +99,7 @@ impl Editor {
     }
 
     pub fn drawn(&self, ids: Vec<String>, crossed_out: Vec<String>) -> Result<String, JsError> {
-        let crossed_out = crossed_out
-            .iter()
-            .map(|asset| asset.parse())
-            .collect::<Result<_, board::Error>>()?;
+        let crossed_out = assets(crossed_out)?;
         let board = self.0.board();
         let drawn: Vec<_> = parse(ids)?
             .into_iter()
@@ -292,6 +289,12 @@ impl Editor {
     #[wasm_bindgen(js_name = actualSize)]
     pub fn actual_size(&mut self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
         Ok(strings(self.0.actual_size(&parse(ids)?)?))
+    }
+
+    /// Whether `actualSize` would leave the elements as they are.
+    #[wasm_bindgen(js_name = atActualSize)]
+    pub fn at_actual_size(&self, ids: Vec<String>) -> Result<bool, JsError> {
+        Ok(self.0.at_actual_size(&parse(ids)?))
     }
 
     /// Of each element itself, whatever its group's lock or its elements' own.
@@ -502,6 +505,18 @@ impl Editor {
         Ok(member.as_ref().map(ElementId::to_string))
     }
 
+    /// With the elements of the groups among them, all the way down. Unknown ids are left out.
+    #[wasm_bindgen(js_name = withDescendants)]
+    pub fn with_descendants(&self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.board().with_descendants(&parse(ids)?)))
+    }
+
+    /// With the groups holding them, all the way up. Unknown ids are left out.
+    #[wasm_bindgen(js_name = withAncestors)]
+    pub fn with_ancestors(&self, ids: Vec<String>) -> Result<Vec<String>, JsError> {
+        Ok(strings(self.0.board().with_ancestors(&parse(ids)?)))
+    }
+
     /// Each point's x then y, empty when the element draws nothing or is gone.
     pub fn outline(&self, id: &str) -> Result<Vec<f64>, JsError> {
         let outline = self.0.board().outline(id.parse()?).unwrap_or_default();
@@ -520,6 +535,23 @@ impl Editor {
     /// As `bounds`, with the points where the comments among them are pinned.
     pub fn extent(&self, ids: Vec<String>) -> Result<Option<Vec<f64>>, JsError> {
         Ok(self.0.board().extent(&parse(ids)?).map(rect))
+    }
+
+    /// As `bounds`, as far as what they draw reaches, strokes and arrows' heads included, as
+    /// `drawn` gives it with the same `crossedOut`, but for the annotations unless they are
+    /// `shown`.
+    #[wasm_bindgen(js_name = drawnBounds)]
+    pub fn drawn_bounds(
+        &self,
+        ids: Vec<String>,
+        crossed_out: Vec<String>,
+        shown: bool,
+    ) -> Result<Option<Vec<f64>>, JsError> {
+        let bounds =
+            self.0
+                .board()
+                .drawn_bounds(&parse(ids)?, &assets(crossed_out)?, annotations(shown));
+        Ok(bounds.map(rect))
     }
 
     /// As `bounds` gives them, one after another, each element, or group whole, at the level of
@@ -720,18 +752,6 @@ pub fn text_area(kind: &str) -> Result<Option<Vec<f64>>, JsError> {
     Ok(kind.text_area().map(rect))
 }
 
-/// The x and y of each corner of a `shape` drawn as a polygon, one after the other, in parts of
-/// its frame before it turns, with `corners` of its own when it counts them, `undefined` for any
-/// other shape.
-#[wasm_bindgen(js_name = cornerParts)]
-pub fn corner_parts(shape: String, corners: u8) -> Result<Option<Vec<f64>>, JsError> {
-    let shape: Shape = serde_json::from_value(shape.into())?;
-    let corners = Corners::new(corners).unwrap_or_default();
-    Ok(shape
-        .corner_parts(corners)
-        .map(|parts| parts.iter().flat_map(|part| [part.x, part.y]).collect()))
-}
-
 /// The parts of a style that `kind`, as JSON, takes, as a JSON array.
 #[wasm_bindgen(js_name = styleSettings)]
 pub fn style_settings(kind: &str) -> Result<String, JsError> {
@@ -781,13 +801,16 @@ pub fn checked_colour(colour: &str) -> Result<String, JsError> {
     Ok(colour.parse::<Colour>()?.to_string())
 }
 
-/// The grid's finest lines that show at `zoom`, CSS pixels per board unit. How far apart they
-/// are in board units, how much they show from 0 to 1, and how far apart are those that show in
-/// full.
+/// The grid's finest lines that show at `zoom`, CSS pixels per board unit, as JSON.
 #[wasm_bindgen(js_name = gridLevel)]
-pub fn grid_level(zoom: f64) -> Vec<f64> {
-    let GridLevel { spacing, fade } = GridLevel::at(zoom);
-    vec![spacing, fade, spacing * GRID_STEP]
+pub fn grid_level(zoom: f64) -> Result<String, JsError> {
+    Ok(serde_json::to_string(&GridLevel::at(zoom))?)
+}
+
+/// How large a click places what it adds at `zoom`, CSS pixels per board unit, as JSON.
+#[wasm_bindgen]
+pub fn placing(zoom: f64) -> Result<String, JsError> {
+    Ok(serde_json::to_string(&Placing::at(zoom))?)
 }
 
 /// How far to move along one axis for the nearest of `values` to land on a line of the grid
@@ -1126,6 +1149,13 @@ fn annotations(shown: bool) -> Annotations {
     } else {
         Annotations::Hidden
     }
+}
+
+fn assets(assets: Vec<String>) -> Result<BTreeSet<AssetId>, JsError> {
+    Ok(assets
+        .iter()
+        .map(|asset| asset.parse())
+        .collect::<Result<_, board::Error>>()?)
 }
 
 fn parse(ids: Vec<String>) -> Result<Vec<ElementId>, JsError> {

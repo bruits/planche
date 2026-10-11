@@ -31,6 +31,7 @@ import init, {
   movieFrames,
   movieIndex as indexIn,
   newBoardFiles,
+  placing as placed,
   snapScaleToGrid as snapScale,
   snapDrawnToNeighbours as drawnNeighbours,
   snapScaleToNeighbours as scaleNeighbours,
@@ -39,7 +40,6 @@ import init, {
   sizedSvg as sized,
   strokeKind as stroked,
   strokeWidth as width,
-  cornerParts,
   plainStyle,
   reportPanics,
   styleSettings,
@@ -62,6 +62,7 @@ import type {
   ElementKind as Kind,
   End,
   Fill,
+  GridLevel,
   Heads,
   ImageEdits,
   Item,
@@ -69,6 +70,7 @@ import type {
   Order,
   Paint,
   Paper,
+  Placing,
   Point,
   Pull,
   Rect,
@@ -127,6 +129,7 @@ export type {
   Kind,
   End,
   Fill,
+  GridLevel,
   Heads,
   ImageEdits,
   Item,
@@ -134,6 +137,7 @@ export type {
   Order,
   Paint,
   Paper,
+  Placing,
   Point,
   Pull,
   Rect,
@@ -151,16 +155,6 @@ export type {
   Trim,
   Weight,
 };
-
-/** The grid's lines that show at a zoom, in board units apart. */
-export interface GridLevel {
-  /** The finest ones. */
-  spacing: number;
-  /** How much the finest ones show, from 0 to 1. */
-  fade: number;
-  /** Those that show in full. */
-  coarse: number;
-}
 
 let memory: WebAssembly.Memory | undefined;
 
@@ -310,8 +304,12 @@ export function highlighted(painted: Colour): Paint {
 
 /** At `zoom` CSS pixels per board unit. */
 export function gridLevel(zoom: number): GridLevel {
-  const [spacing, fade, coarse] = level(zoom);
-  return { spacing: spacing!, fade: fade!, coarse: coarse! };
+  return JSON.parse(level(zoom)) as GridLevel;
+}
+
+/** At `zoom` CSS pixels per board unit. */
+export function placing(zoom: number): Placing {
+  return JSON.parse(placed(zoom)) as Placing;
 }
 
 /**
@@ -416,6 +414,19 @@ export function drawsWithin(editor: Editor, id: string, corners: Point[]): boole
 /** As `bounds`, with the points where the comments among them are pinned. */
 export function extent(editor: Editor, ids: string[]): Rect | undefined {
   return rect(editor.extent(ids));
+}
+
+/**
+ * As `bounds`, as far as what they draw reaches, strokes and arrows' heads included, as `drawn`
+ * gives it with the same `crossedOut`, but for the annotations unless they are `shown`.
+ */
+export function drawnBounds(
+  editor: Editor,
+  ids: string[],
+  crossedOut: ReadonlySet<string>,
+  shown: boolean,
+): Rect | undefined {
+  return rect(editor.drawnBounds(ids, [...crossedOut], shown));
 }
 
 function rect(box: Float64Array | undefined): Rect | undefined {
@@ -524,8 +535,6 @@ export function textAreaOf(kind: Extract<Kind, { type: "shape" }>): Readonly<Rec
   return found;
 }
 
-const polygons = new Map<string, readonly Point[] | undefined>();
-
 /** How far `kind` turns, which an element's file leaves out when it does not. */
 export function rotationOf(kind: Kind): number {
   return ("rotation" in kind ? kind.rotation : undefined) ?? 0;
@@ -541,26 +550,6 @@ const UNEDITED: Readonly<ImageEdits> = Object.freeze({
 /** An image's edits, which its file leaves out when it has none. */
 export function editsOf(image: Extract<Kind, { type: "image" }>): Readonly<ImageEdits> {
   return image.edits ?? UNEDITED;
-}
-
-/**
- * Where the corners of a `shape` drawn as a polygon lie, with `corners` of its own when it counts
- * them, in parts of its frame before it turns, `undefined` for any other shape.
- */
-export function cornerPartsOf(shape: Shape, corners: number): readonly Point[] | undefined {
-  const key = `${shape} ${corners}`;
-  if (!polygons.has(key)) {
-    const flat = cornerParts(shape, corners);
-    polygons.set(
-      key,
-      flat &&
-        Array.from({ length: flat.length / 2 }, (_, at) => ({
-          x: flat[2 * at]!,
-          y: flat[2 * at + 1]!,
-        })),
-    );
-  }
-  return polygons.get(key);
 }
 
 const plains = new Map<string, Readonly<Style>>();

@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
 
 use crate::{
-    Annotations, Board, Corners, CropShape, Element, ElementId, ElementKind, Fill, ImageEdits,
-    Point, Rect, Shape, Text, Tip,
+    Annotations, Board, CropShape, Element, ElementId, ElementKind, Fill, ImageEdits, Point, Rect,
+    Shape, Text, Tip,
 };
 
 /// The most points [`Board::hit_along`] tries, so that however long the way, it stays quick.
@@ -500,7 +500,7 @@ fn polygon_of(kind: &ElementKind) -> Option<Vec<Point>> {
 /// The corners of a regular polygon of `count` corners, or of a star of `count` points, one
 /// pointing up, stretched to touch every side of `frame` whichever way its size goes, then turned
 /// clockwise by `degrees` around its centre.
-fn polygon(frame: &Rect, degrees: f64, count: u8, star: bool) -> Vec<Point> {
+pub(crate) fn polygon(frame: &Rect, degrees: f64, count: u8, star: bool) -> Vec<Point> {
     let unit = unit_polygon(count, star);
     let Some(bounds) = around(&unit) else {
         return Vec::new();
@@ -516,21 +516,6 @@ fn polygon(frame: &Rect, degrees: f64, count: u8, star: bool) -> Vec<Point> {
             .turned(centre, degrees)
         })
         .collect()
-}
-
-impl Shape {
-    /// Where the corners of one drawn as a polygon lie, in parts of its frame before it turns,
-    /// `None` for any other.
-    pub fn corner_parts(self, corners: Corners) -> Option<Vec<Point>> {
-        let (count, star) = self.polygon(corners)?;
-        let whole = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 1.0,
-            height: 1.0,
-        };
-        Some(polygon(&whole, 0.0, count, star))
-    }
 }
 
 /// As [`polygon`] draws it, around the unit circle's centre, its points on the circle.

@@ -1,6 +1,6 @@
 // The viewport: the renderer it shows, and the camera that pans and zooms over it.
 
-import { zoomAbout, type Camera, type Viewport } from "./camera.js";
+import { flipped, toBoard, toScreen, zoomAbout, type Camera, type Viewport } from "./camera.js";
 import { opensMenu } from "./commands.js";
 import type { Point } from "./core.js";
 import type { Renderer } from "./renderer.js";
@@ -152,20 +152,13 @@ export function view(
     drawing = true;
     step();
   };
-  /** Where on the page the board shows what `clientX` is over. */
-  const across = (clientX: number) => {
-    if (!mirrored) {
-      return clientX;
-    }
-    const box = host.getBoundingClientRect();
-    return box.left + box.right - clientX;
-  };
   /** Which way a move across the page goes across the board. */
   const sideways = () => (mirrored ? -1 : 1);
   const zoomAt = (factor: number, clientX: number, clientY: number) => {
     if (shown) {
       const box = host.getBoundingClientRect();
-      shown.camera = zoomAbout(shown.camera, factor, across(clientX) - box.left, clientY - box.top);
+      const x = flipped(clientX - box.left, mirrored ? box : undefined);
+      shown.camera = zoomAbout(shown.camera, factor, x, clientY - box.top);
       redraw();
     }
   };
@@ -362,27 +355,23 @@ export function view(
       if (!shown) {
         return undefined;
       }
-      const { x, y, zoom } = shown.camera;
       const box = host.getBoundingClientRect();
-      return { x: x + (across(clientX) - box.left) / zoom, y: y + (clientY - box.top) / zoom };
+      const screen = { x: clientX - box.left, y: clientY - box.top };
+      return toBoard(shown.camera, screen, mirrored ? box : undefined);
     },
     client(point) {
       if (!shown) {
         return undefined;
       }
-      const { x, y, zoom } = shown.camera;
       const box = host.getBoundingClientRect();
-      return {
-        clientX: across(box.left + (point.x - x) * zoom),
-        clientY: box.top + (point.y - y) * zoom,
-      };
+      const { x, y } = toScreen(shown.camera, point, mirrored ? box : undefined);
+      return { clientX: box.left + x, clientY: box.top + y };
     },
     centre() {
       if (!shown) {
         return undefined;
       }
-      const { x, y, zoom } = shown.camera;
-      return { x: x + host.clientWidth / 2 / zoom, y: y + host.clientHeight / 2 / zoom };
+      return toBoard(shown.camera, { x: host.clientWidth / 2, y: host.clientHeight / 2 });
     },
     zoom: () => shown?.camera.zoom,
     camera: () => shown?.camera,

@@ -6,7 +6,7 @@
 import type { Camera, Viewport } from "./camera.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Kind, Size } from "./core.js";
-import { LONGEST_SIDE, MOST_AREA, overlaps, rounded, settling } from "./raster.js";
+import { TEXTURE_SIDE, scaleWithin, overlaps, rounded, settling } from "./raster.js";
 import type { Renderer } from "./renderer.js";
 
 /** Pixels along the longest side of an SVG out of view, enough to show until it refines. */
@@ -100,7 +100,7 @@ export function vectors(again: () => void): Vectors {
         const density = Math.min(
           rounded(here),
           inView ? Infinity : FAR / longest,
-          LONGEST_SIDE / longest,
+          TEXTURE_SIDE / longest,
         );
         const done = rasterised.get(asset);
         if (done !== undefined && (done === density || !settle.settled(inView))) {
@@ -120,15 +120,13 @@ export function vectors(again: () => void): Vectors {
       rasterised.delete(asset);
     },
     holds: (asset) => pictures.has(asset),
-    drawn(asset, density, side = LONGEST_SIDE) {
+    drawn(asset, density, side = TEXTURE_SIDE) {
       const drawing = pictures.get(asset);
       if (drawing === undefined) {
         return undefined;
       }
       const own = document.createElement("canvas");
-      const { width, height } = drawing.natural;
-      const within = Math.sqrt(MOST_AREA / (width * height));
-      rasterise(own, drawing, Math.min(density, side / Math.max(width, height), within));
+      rasterise(own, drawing, Math.min(density, scaleWithin(drawing.natural, side)));
       return own;
     },
     reset() {

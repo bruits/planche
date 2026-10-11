@@ -232,6 +232,58 @@ describe("the core", () => {
     }
   });
 
+  it("tells the groups holding elements and the elements groups hold, all the way", () => {
+    const editor = new core.Editor();
+    try {
+      editor.add(A, undefined, JSON.stringify(note()));
+      editor.add(B, undefined, JSON.stringify(arrow()));
+      editor.group(G, [A, B]);
+      expect(editor.withAncestors([A]).toSorted()).toEqual([A, G].toSorted());
+      expect(editor.withAncestors([G, "d".repeat(32)])).toEqual([G]);
+      expect(editor.withDescendants([G]).toSorted()).toEqual([A, B, G].toSorted());
+      expect(editor.withDescendants([A, "d".repeat(32)])).toEqual([A]);
+    } finally {
+      editor.free();
+    }
+  });
+
+  it("tells whether the images stand at a unit to the pixel they show already", () => {
+    const editor = new core.Editor();
+    try {
+      const upright = { x: 0, y: 0, width: 160, height: 120 };
+      editor.add(A, undefined, JSON.stringify(image({ frame: upright, rotation: 0 })));
+      editor.add(B, undefined, JSON.stringify(image()));
+      expect(editor.atActualSize([A])).toBe(true);
+      expect(editor.atActualSize([A, B])).toBe(false);
+      editor.actualSize([B]);
+      expect(editor.atActualSize([A, B])).toBe(true);
+    } finally {
+      editor.free();
+    }
+  });
+
+  it("bounds what elements draw as far as their strokes and arrows' heads reach", () => {
+    const editor = new core.Editor();
+    try {
+      editor.add(A, undefined, JSON.stringify(arrow({ to: { x: 100, y: 0 }, heads: "both" })));
+      // A medium arrow's heads are 16 long, so they spread 8 across, and its stroke 1 more.
+      const drawn = core.drawnBounds(editor, [A], new Set(), true);
+      expect(drawn?.x).toBeCloseTo(-1);
+      expect(drawn?.y).toBeCloseTo(-9);
+      expect(drawn?.width).toBeCloseTo(102);
+      expect(drawn?.height).toBeCloseTo(18);
+      expect(core.drawnBounds(editor, [A], new Set(), false)).toBeUndefined();
+    } finally {
+      editor.free();
+    }
+  });
+
+  it("tells the grid's lines and what a click places at a zoom", () => {
+    expect(core.gridLevel(0.3)).toEqual({ spacing: 40, fade: 0.5, coarse: 200, full: 200 });
+    expect(core.gridLevel(1)).toEqual({ spacing: 40, fade: 1, coarse: 200, full: 40 });
+    expect(core.placing(2)).toEqual({ shape: 60, sticky: 100, note: 120, font_size: 10 });
+  });
+
   it("a paste lays out the outermost of its copy where it goes, under new ids", () => {
     const editor = new core.Editor();
     try {

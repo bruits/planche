@@ -2,6 +2,7 @@
 // menu pattern, so that the keyboard reaches every item, and only one is open at a time, with
 // at most one submenu.
 
+import { clamp } from "./geometry.js";
 import { ariaKeys, describe, named, type Command } from "./commands.js";
 import { icon, type Icon } from "./icons.js";
 
@@ -361,8 +362,4 @@ function beside(menu: HTMLElement, owner: HTMLElement, parent: HTMLElement): voi
   const y = owner.getBoundingClientRect().top - first;
   menu.style.left = `${clamp(x, MARGIN, innerWidth - width - MARGIN)}px`;
   menu.style.top = `${clamp(y, MARGIN, innerHeight - height - MARGIN)}px`;
-}
-
-function clamp(value: number, low: number, high: number): number {
-  return Math.max(low, Math.min(value, Math.max(low, high)));
 }

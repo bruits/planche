@@ -41,8 +41,9 @@
 // Resetting the crop meanwhile starts it over from the whole image, and its shape changes as
 // asked.
 
-import { fit, onScreen, sameCamera, type Camera } from "./camera.js";
+import { fit, onScreen, sameCamera, topLeft, type Camera } from "./camera.js";
 import { composing, mac, opensMenu, typed, typing } from "./commands.js";
+import { direction, distance } from "./geometry.js";
 import * as core from "./core.js";
 import type {
   Alignment,
@@ -63,7 +64,7 @@ import type {
   Size,
   Tip,
 } from "./core.js";
-import { among, anchors, isAnnotation, newId, nudge, renamed } from "./board.js";
+import { anchors, isAnnotation, newId, nudge, renamed } from "./board.js";
 import { cursor, dotted, type Crop, type Grab, type Overlay } from "./overlay.js";
 import { pinned } from "./pins.js";
 import { toolOf } from "./style.js";
@@ -90,17 +91,6 @@ const STICK = 12;
 const DRAG = 3;
 /** Scaling down further would turn the selection over. */
 const SMALLEST_SCALE = 0.01;
-/**
- * A shape placed by a click, in CSS pixels. A whole number of the grid's cells at a zoom of 1, so
- * that both its sides land on lines.
- */
-export const PLACED_SIZE = 120;
-/** A sticky note placed by a click, in CSS pixels. */
-export const STICKY_SIZE = 200;
-/** How wide a note placed by a click wraps, in CSS pixels. */
-export const NOTE_WIDTH = 240;
-/** Of the text drawn or placed, in CSS pixels. */
-export const FONT_SIZE = 20;
 /** How far apart the pointer's positions are for the pen to take them, in CSS pixels. */
 const PEN_SPACING = 1;
 /** How far each point of the pen's line goes toward the pointer, the rest smoothing it. */
@@ -703,7 +693,7 @@ export function edits(
     // A side shared or a pixel's overlap counts as beside.
     const taken =
       hit !== undefined &&
-      !among(editing.board, hit, selected) &&
+      !editing.editor.withAncestors([hit]).some((id) => selected.has(id)) &&
       !(
         beneath(editing.board, hit, selected) &&
         core.drawsWithin(editing.editor, hit, inset(corners, 1 / zoom))
@@ -743,7 +733,7 @@ export function edits(
     const [id] = selected;
     const own = selected.size === 1 ? editing.board.elements[id!]?.kind : undefined;
     const pivot = middle(corners);
-    const from = Math.atan2(at.y - pivot.y, at.x - pivot.x);
+    const from = direction(pivot, at);
     const angle = own && "frame" in own ? core.rotationOf(own) : undefined;
     return {
       kind: "rotate",
@@ -956,15 +946,15 @@ export function edits(
     pins: string[],
     zoom: number,
   ) => {
-    const { editor, board } = editing;
+    const { editor } = editing;
     const { last: from, within: starts } = stroke;
     const hits = [
       ...editor.hitAlong(from.x, from.y, at.x, at.y, TOLERANCE / zoom, showsAnnotations()),
       ...pins,
     ];
-    const holds = (id: string) => starts.some((kept) => among(board, kept, new Set([id])));
+    const spared = new Set(editor.withAncestors(starts));
     const erased = new Set(
-      hits.flatMap((id) => erasable(editor, id) ?? []).filter((id) => !holds(id)),
+      hits.flatMap((id) => erasable(editor, id) ?? []).filter((id) => !spared.has(id)),
     );
     if (erased.size > 0) {
       edit(editing, editor.remove([...erased]));
@@ -1498,7 +1488,7 @@ export function edits(
       }
       case "rotate": {
         const { pivot, from, angle } = press;
-        const turned = ((Math.atan2(at.y - pivot.y, at.x - pivot.x) - from) * 180) / Math.PI;
+        const turned = direction(pivot, at) - from;
         // A lone element snaps its own angle, and several the angle they turn by.
         [press.turned, press.snapped] = turning(angle ?? 0, turned, held.shiftKey, pulling);
         const by = press.turned;
@@ -1533,7 +1523,7 @@ export function edits(
           const start = landed(editor, press.start, zoom);
           const end = landed(editor, at, zoom, true, held.shiftKey ? start.at : undefined);
           press.ends = [start.at, end.at];
-          const kind = styled(shaped(shape, start.at, end.at, FONT_SIZE / zoom), zoom);
+          const kind = styled(shaped(shape, start.at, end.at, core.placing(zoom).font_size), zoom);
           const stuck = { ...kind, from_target: start.target, to_target: end.target };
           again(() => editor.add(id, entered, JSON.stringify(stuck)));
           showTargets(editor, [start.target, end.target]);
@@ -1547,7 +1537,7 @@ export function edits(
         press.ends = [start, end];
         // A note shows nothing until written in.
         overlay.marquee(shape === "note" ? rect(start, end) : undefined);
-        const kind = styled(shaped(shape, start, end, FONT_SIZE / zoom), zoom);
+        const kind = styled(shaped(shape, start, end, core.placing(zoom).font_size), zoom);
         again(() => [...editor.add(id, entered, JSON.stringify(kind)), ...setDown(editor, [id])]);
         showTargets(editor, editor.targetsOf([id]));
         return;
@@ -1744,9 +1734,7 @@ export function edits(
         field.bubble(at);
       }
     } else if (holdsText(kind) && zoom !== undefined) {
-      // From its left as it shows.
-      const left = view.mirrored() ? kind.frame.x + kind.frame.width : kind.frame.x;
-      const at = view.client({ x: left, y: kind.frame.y });
+      const at = view.client(topLeft(kind.frame, view.mirrored()));
       if (at) {
         field.follow(kind, at, zoom, { mirrored: view.mirrored(), grey: view.greyed() });
       }
@@ -2542,20 +2530,16 @@ function annotation({ board }: Editing, id: string): boolean {
  * comment, pinned there.
  */
 function placed(shape: Shaped, at: Point, zoom: number): Kind {
-  const size = FONT_SIZE / zoom;
+  const placing = core.placing(zoom);
+  const size = placing.font_size;
   if (shape === "comment") {
     return shaped(shape, at, at, size);
   }
   if (shape === "note") {
     const top = { x: at.x, y: at.y - (size * LINE_HEIGHT) / 2 };
-    return shaped(
-      shape,
-      top,
-      { x: top.x + NOTE_WIDTH / zoom, y: top.y + size * LINE_HEIGHT },
-      size,
-    );
+    return shaped(shape, top, { x: top.x + placing.note, y: top.y + size * LINE_HEIGHT }, size);
   }
-  const half = (shape === "sticky" ? STICKY_SIZE : PLACED_SIZE) / zoom / 2;
+  const half = (shape === "sticky" ? placing.sticky : placing.shape) / 2;
   return shaped(
     shape,
     { x: at.x - half, y: at.y - half },
@@ -2585,10 +2569,6 @@ function isSegment(kind: Kind | undefined): kind is Segment {
 
 export function isTip(tool: string | undefined): tool is Tip {
   return tool !== undefined && Object.hasOwn(TIPS, tool);
-}
-
-function distance(a: Point, b: Point): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 /** Whether `id` draws before, so under, every one of the `chosen` and what they hold. */

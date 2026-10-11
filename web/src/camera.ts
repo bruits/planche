@@ -1,6 +1,7 @@
-// Where the viewport looks.
+// Where the viewport looks, and where the board's points show on it, mirrored or not.
 
-import type { Rect } from "./core.js";
+import type { Point, Rect } from "./core.js";
+import { clamp } from "./geometry.js";
 
 /** The board point at the viewport's top-left, and CSS pixels per board unit. */
 export interface Camera {
@@ -20,6 +21,32 @@ const LARGEST_ZOOM = 100;
 /** What of the board shows. */
 export function onScreen(camera: Camera, { width, height }: Viewport): Rect {
   return { x: camera.x, y: camera.y, width: width / camera.zoom, height: height / camera.zoom };
+}
+
+/**
+ * Where `point` shows, in CSS pixels from the viewport's top-left, across the viewport `mirrored`
+ * when the board shows mirrored.
+ */
+export function toScreen(camera: Camera, point: Point, mirrored?: Viewport): Point {
+  return {
+    x: flipped((point.x - camera.x) * camera.zoom, mirrored),
+    y: (point.y - camera.y) * camera.zoom,
+  };
+}
+
+export function toBoard(camera: Camera, screen: Point, mirrored?: Viewport): Point {
+  return {
+    x: camera.x + flipped(screen.x, mirrored) / camera.zoom,
+    y: camera.y + screen.y / camera.zoom,
+  };
+}
+
+export function flipped(x: number, mirrored?: Viewport): number {
+  return mirrored ? mirrored.width - x : x;
+}
+
+export function topLeft(rect: Rect, mirrored: boolean): Point {
+  return { x: mirrored ? rect.x + rect.width : rect.x, y: rect.y };
 }
 
 /** Centred on `bounds`, or on the origin at 1:1 when there is nothing to fit. */
@@ -49,5 +76,5 @@ export function zoomAbout(camera: Camera, factor: number, x: number, y: number):
 }
 
 function clampZoom(zoom: number): number {
-  return Math.min(Math.max(zoom, SMALLEST_ZOOM), LARGEST_ZOOM);
+  return clamp(zoom, SMALLEST_ZOOM, LARGEST_ZOOM);
 }

@@ -14,7 +14,7 @@ import type { Renderer } from "./renderer.js";
 /** In bytes. */
 export const VIDEO_LIMIT = 300e6;
 /** Nearly every GPU takes textures this large, and a video's frames go onto one as large as them. */
-const LONGEST_SIDE = 4096;
+const VIDEO_SIDE = 4096;
 /** Decoders are few, and Chromium allows 75 in a page. */
 const MOST_PLAYING = 8;
 /** How long a video may take to show a frame before it counts as one this machine cannot play, in milliseconds. */
@@ -39,8 +39,8 @@ export async function firstFrame(video: Blob): Promise<{ bitmap: ImageBitmap; na
   try {
     await loaded(element);
     const natural = { width: element.videoWidth, height: element.videoHeight };
-    if (Math.max(natural.width, natural.height) > LONGEST_SIDE) {
-      throw new Error(`it is larger than ${LONGEST_SIDE} px a side`);
+    if (Math.max(natural.width, natural.height) > VIDEO_SIDE) {
+      throw new Error(`it is larger than ${VIDEO_SIDE} px a side`);
     }
     return { bitmap: await createImageBitmap(element), natural };
   } finally {

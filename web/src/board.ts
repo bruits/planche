@@ -397,8 +397,7 @@ export function nudge(zoom: number, wide: boolean, grid: boolean): number {
   if (!grid) {
     return times / zoom;
   }
-  const { spacing, fade, coarse } = core.gridLevel(zoom);
-  return times * (fade < 1 ? coarse : spacing);
+  return times * core.gridLevel(zoom).full;
 }
 
 /** What `kind` sticks to, which carries it along. */
@@ -458,14 +457,11 @@ export function refresh(
       kept.add(element.kind.asset);
     }
   }
-  // A group's panel follows what its elements draw, all the way up.
-  const groups = new Set<string>();
-  for (const group of containers) {
-    for (let up: string | undefined = group; up !== undefined && !groups.has(up);) {
-      groups.add(up);
-      drawn.items.delete(up);
-      up = board.elements[up]?.group;
-    }
+  // A group's panel follows what its elements draw, all the way up. Those the edit removed are
+  // among them, which the editor knows nothing of any more.
+  const groups = new Set([...containers, ...editor.withAncestors([...containers])]);
+  for (const group of groups) {
+    drawn.items.delete(group);
   }
   if (reordered) {
     board.draw_order = editor.drawOrder();
@@ -527,12 +523,12 @@ export function placed(
   if (!adding) {
     return place(order);
   }
-  const chosen = new Set(adding.group === undefined ? [] : [adding.group]);
+  const held = new Set(
+    adding.group === undefined ? [] : opened.editor.withDescendants([adding.group]),
+  );
   // On top of what the group holds, which stacks right after it.
   const end =
-    adding.group === undefined
-      ? order.length
-      : order.findLastIndex((id) => among(board, id, chosen)) + 1;
+    adding.group === undefined ? order.length : order.findLastIndex((id) => held.has(id)) + 1;
   return [...place(order.slice(0, end)), adding.item, ...place(order.slice(end))];
 }
 
@@ -546,14 +542,14 @@ export function exposing(
   crossedOut?: ReadonlySet<string>,
   shown = true,
 ): Placed[] {
-  const { board } = opened;
-  const ids = new Set(chosen);
+  const { board, editor } = opened;
+  const ids = new Set(editor.withDescendants(chosen));
   const place = (order: string[]) =>
     placing(stacked(opened, crossedOut, order), board, texts, hidden);
   const order = shownOrder(board, shown);
-  const pictured = place(order.filter((id) => among(board, id, ids)));
+  const pictured = place(order.filter((id) => ids.has(id)));
   return [
-    ...place(order.filter((id) => !among(board, id, ids))),
+    ...place(order.filter((id) => !ids.has(id))),
     ...backing,
     ...(light ? pictured.map((item) => ({ ...item, light })) : pictured),
   ];
@@ -607,19 +603,17 @@ export function extent({ editor, board }: Opened, ids = board.draw_order): Rect 
 
 /** Whether any of the elements is an unlocked image, or a group holding one, which edits reach. */
 export function holdsImage({ board, editor }: Opened, ids: string[]): boolean {
-  const chosen = new Set(ids);
-  return Object.entries(board.elements).some(
-    ([id, { kind }]) =>
-      kind.type === "image" && among(board, id, chosen) && editor.lockedBy(id) === undefined,
-  );
+  return editor
+    .withDescendants(ids)
+    .some((id) => board.elements[id]?.kind.type === "image" && editor.lockedBy(id) === undefined);
 }
 
 /** Those of the images among the elements, or within groups among them, once each. */
-export function assetsOf(board: Board, ids: string[]): string[] {
-  const chosen = new Set(ids);
-  const assets = Object.entries(board.elements).flatMap(([id, { kind }]) =>
-    kind.type === "image" && among(board, id, chosen) ? [kind.asset] : [],
-  );
+export function assetsOf({ board, editor }: Opened, ids: string[]): string[] {
+  const assets = editor.withDescendants(ids).flatMap((id) => {
+    const kind = board.elements[id]?.kind;
+    return kind?.type === "image" ? [kind.asset] : [];
+  });
   return [...new Set(assets)];
 }
 
@@ -696,17 +690,6 @@ export function copiedAssets({ elements }: Copied): string[] {
     kind.type === "image" ? [kind.asset] : [],
   );
   return [...new Set(assets)];
-}
-
-/** Whether the element is one of `chosen`, or within a group among them. */
-export function among({ elements }: Board, id: string, chosen: Set<string>): boolean {
-  // Up through its groups, which reading a board leaves without cycles.
-  for (let at: string | undefined = id; at !== undefined; at = elements[at]?.group) {
-    if (chosen.has(at)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** The natural size of each asset its images show, in the order they draw. */

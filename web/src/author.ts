@@ -17,9 +17,8 @@ import {
 } from "./board.js";
 import * as core from "./core.js";
 import type { Alignment, Axis, Editor, Kind, Point, Rect, Restack, Size } from "./core.js";
-import { FONT_SIZE, NOTE_WIDTH, PLACED_SIZE, STICKY_SIZE } from "./edit.js";
 import { message } from "./errors.js";
-import { LONGEST_SIDE } from "./raster.js";
+import { TEXTURE_SIDE } from "./raster.js";
 import { restyled, settings, TEXT, type Style } from "./style.js";
 import { fitted, holdsText, isBlank } from "./text.js";
 
@@ -214,7 +213,7 @@ async function addImages(page: Writing, target: Opened, clock: Clock, images: Re
       const name = image.filename ?? `image ${at + 1}`;
       try {
         added.push({
-          ...(await prepare(fromBase64(image.data), LONGEST_SIDE)),
+          ...(await prepare(fromBase64(image.data), TEXTURE_SIDE)),
           filename: image.filename,
         });
       } catch (error) {
@@ -386,16 +385,17 @@ function kindOf(editor: Editor, element: NewElement, zoom: number, stick: boolea
       if (element.type === "note" && !text.trim()) {
         throw new Error("A note needs some text");
       }
-      const side = element.type === "sticky" ? STICKY_SIZE : PLACED_SIZE;
+      const placing = core.placing(zoom);
+      const side = element.type === "sticky" ? placing.sticky : placing.shape;
       const width = positive(
-        element.width ?? (element.type === "note" ? NOTE_WIDTH : side) / zoom,
+        element.width ?? (element.type === "note" ? placing.note : side),
         "width",
       );
       const height =
         "height" in element && element.height !== undefined
           ? positive(element.height, "height")
-          : side / zoom;
-      const font_size = positive(element.font_size ?? FONT_SIZE / zoom, "font_size");
+          : side;
+      const font_size = positive(element.font_size ?? placing.font_size, "font_size");
       const frame = { x: element.x, y: element.y, width, height };
       const content = { content: text, font_size };
       const kind: Kind =

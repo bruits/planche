@@ -8,7 +8,8 @@
 // turn on or off.
 
 import { clock, trimOf, type Playback, type Span } from "./playback.js";
-import { among, loneImage, shownOrder, type Opened } from "./board.js";
+import { loneImage, shownOrder, type Opened } from "./board.js";
+import { clamp } from "./geometry.js";
 import {
   ariaKeys,
   composing,
@@ -275,11 +276,11 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
       return [];
     }
     const { board, editor } = opened;
-    const chosen = new Set(host.selection());
+    const chosen = new Set(editor.withDescendants(host.selection()));
     return shownOrder(board, host.showsAnnotations())
       .filter(
         (id) =>
-          among(board, id, chosen) &&
+          chosen.has(id) &&
           board.elements[id]!.kind.type !== "group" &&
           editor.lockedBy(id) === undefined,
       )
@@ -1361,8 +1362,4 @@ export function rule(): HTMLElement {
   line.className = "rule";
   line.setAttribute("role", "separator");
   return line;
-}
-
-export function clamp(value: number, low: number, high: number): number {
-  return Math.max(low, Math.min(value, Math.max(low, high)));
 }

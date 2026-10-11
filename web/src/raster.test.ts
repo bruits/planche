@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MOST_AREA } from "./raster.js";
+import { CANVAS_AREA } from "./raster.js";
 import { lettered, type Holder } from "./text.js";
 import { vectors } from "./vector.js";
 
@@ -34,8 +34,8 @@ describe("a texture drawn for a picture", () => {
     const text = lettered("note", note, 2000, 16_384)!.canvas;
     for (const { width, height } of [vector, text]) {
       // Rounded up a pixel a side at most.
-      expect(width * height).toBeLessThanOrEqual(MOST_AREA + width + height + 1);
-      expect(width * height).toBeGreaterThan(MOST_AREA / 2);
+      expect(width * height).toBeLessThanOrEqual(CANVAS_AREA + width + height + 1);
+      expect(width * height).toBeGreaterThan(CANVAS_AREA / 2);
     }
   });
 });

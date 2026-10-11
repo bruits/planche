@@ -3,15 +3,26 @@
 // power reuses it, and follows the camera only once it settles.
 
 import { onScreen, type Camera, type Viewport } from "./camera.js";
-import type { Board, Rect } from "./core.js";
+import type { Board, Rect, Size } from "./core.js";
 
 /** WebGL2 guarantees textures this large. */
-export const LONGEST_SIDE = 2048;
-/** Within what a canvas holds in every engine, Safari's area being the least. */
-export const MOST_AREA = 4096 * 4096;
-export const MOST_SIDE = 16_384;
+export const TEXTURE_SIDE = 2048;
+/** Within what a canvas holds in every engine, Safari's area being the least, in pixels. */
+export const CANVAS_AREA = 4096 * 4096;
+export const CANVAS_SIDE = 16_384;
 /** How long the camera stays put before rasters follow it, in milliseconds. */
 const SETTLE = 150;
+
+/**
+ * The scale at which `size` stays within `side` pixels along its longest side and `area` pixels in
+ * all, which may pass 1.
+ */
+export function scaleWithin(size: Size, side: number, area = CANVAS_AREA): number {
+  return Math.min(
+    side / Math.max(size.width, size.height),
+    Math.sqrt(area / (size.width * size.height)),
+  );
+}
 
 export function rounded(wanted: number): number {
   return 2 ** Math.ceil(Math.log2(wanted));

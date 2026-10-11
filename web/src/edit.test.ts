@@ -2,7 +2,7 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { refresh, untitled } from "./board.js";
 import * as core from "./core.js";
-import type { Board, Kind, Point } from "./core.js";
+import type { Kind, Point } from "./core.js";
 import { fit } from "./camera.js";
 import { edits, type Edits, type Hooks } from "./edit.js";
 import { closeMenu, openMenu } from "./menu.js";
@@ -1637,17 +1637,17 @@ describe("a second finger", () => {
   });
 
   it("takes back what the first one moved, though the second lands on a group's title", async () => {
-    const { host, pointer, at } = page();
     const group = "f".repeat(32);
-    const board: Board = {
-      elements: { [group]: { z: "a0", kind: { type: "group" }, locked: false } },
-      draw_order: [group],
-      background: "plain",
-    };
+    const far = "d".repeat(32);
+    const { opened, host, pointer, at } = page([
+      [far, { ...sticky, frame: { x: 300, y: 300, width: 100, height: 100 } }],
+    ]);
+    opened.editor.group(group, [STICKY, far]);
+    opened.board = core.board(opened.editor);
     const labels = titles(host, () => {});
     labels.frame({ x: 0, y: 0, zoom: 1 });
     // Selected alone and untitled, the group offers a title, whose label keeps a press to itself.
-    labels.show(board, () => ({ x: 300, y: 300, width: 100, height: 100 }), [group], group);
+    labels.show(opened, () => ({ x: 300, y: 300, width: 100, height: 100 }), [group], group);
     pointer("pointerdown", 50, 50, { finger: 1 });
     pointer("pointermove", 90, 70, { finger: 1 });
     await nextFrame();

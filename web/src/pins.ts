@@ -4,15 +4,16 @@
 // comment, or on what lies under it when it is locked, and keys pressed on a focused pin write in
 // it.
 
-import type { Camera, Viewport } from "./camera.js";
-import type { Board, Point } from "./core.js";
+import type { Opened } from "./board.js";
+import { toScreen, type Camera, type Viewport } from "./camera.js";
+import type { Point } from "./core.js";
 
 export interface Pins {
   /**
-   * Those of `board`, marked when they or their groups are `selected`, and the text of `writing`
-   * left to the field that writes it.
+   * Those of the board, marked when they or their groups are `selected`, or locked, and the text
+   * of `writing` left to the field that writes it.
    */
-  show(board: Board, selected: string[], writing?: string): void;
+  show(opened: Pick<Opened, "board" | "editor">, selected: string[], writing?: string): void;
   /** Mirrored left to right across the viewport `mirrored` when given, as the board shows. */
   frame(camera: Camera, mirrored?: Viewport): void;
   /** Until the next board shows. */
@@ -87,8 +88,7 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
   let returning: string | undefined;
   const place = ({ comment, at }: { comment: HTMLElement; at: Point }) => {
     if (camera) {
-      const [left, y] = [(at.x - camera.x) * camera.zoom, (at.y - camera.y) * camera.zoom];
-      const x = mirrored ? mirrored.width - left : left;
+      const { x, y } = toScreen(camera, at, mirrored);
       comment.style.setProperty("transform", `translate(${x}px, ${y}px)`);
     }
   };
@@ -132,24 +132,8 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
     return { comment, pin, text, at: { x: 0, y: 0 } };
   };
   return {
-    show(board, selected, writing) {
-      const chosen = new Set(selected);
-      /** Whether `holds` the comment `id`, or one of its groups. */
-      const upFrom = (id: string, holds: (at: string) => boolean) => {
-        // Boards are repaired on read, but a cycle would loop forever.
-        const seen = new Set<string>();
-        for (
-          let at: string | undefined = id;
-          at !== undefined && !seen.has(at);
-          at = board.elements[at]?.group
-        ) {
-          if (holds(at)) {
-            return true;
-          }
-          seen.add(at);
-        }
-        return false;
-      };
+    show({ board, editor }, selected, writing) {
+      const chosen = new Set(editor.withDescendants(selected));
       const comments = board.draw_order.flatMap((id) => {
         const { kind } = board.elements[id]!;
         return kind.type === "comment" ? [{ id, kind }] : [];
@@ -174,14 +158,8 @@ export function pins(host: HTMLElement, { choose, write }: Keys): Pins {
             `Comment: ${name.length > NAMED ? `${name.slice(0, NAMED)}…` : name}`,
           );
         }
-        entry.comment.classList.toggle(
-          "selected",
-          upFrom(id, (at) => chosen.has(at)),
-        );
-        entry.comment.classList.toggle(
-          "locked",
-          upFrom(id, (at) => board.elements[at]?.locked === true),
-        );
+        entry.comment.classList.toggle("selected", chosen.has(id));
+        entry.comment.classList.toggle("locked", editor.lockedBy(id) !== undefined);
         entry.comment.classList.toggle("writing", id === writing);
         entry.comment.classList.toggle("blank", kind.text.trim() === "");
         // Later ones on top, as the board stacks them. Moved only when out of place, which

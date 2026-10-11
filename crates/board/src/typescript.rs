@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use ts_rs::{Config, TS, TypeVisitor};
 
 use crate::{
-    Alignment, Axis, BoardView, Copied, Drawn, Element, ElementKind, End, Item, Media, Order, Pull,
-    Restack, Scale, Scaled, Setting, Side, Style, Transform,
+    Alignment, Axis, BoardView, Copied, Drawn, Element, ElementKind, End, GridLevel, Item, Media,
+    Order, Placing, Pull, Restack, Scale, Scaled, Setting, Side, Style, Transform,
 };
 
 /// Each type the web app reads or writes, and those they hold, exported, in the order of their
@@ -26,9 +26,11 @@ pub fn typescript() -> String {
     found.visit::<Element>();
     found.visit::<ElementKind>();
     found.visit::<End>();
+    found.visit::<GridLevel>();
     found.visit::<Item>();
     found.visit::<Media>();
     found.visit::<Order>();
+    found.visit::<Placing>();
     found.visit::<Pull>();
     found.visit::<Restack>();
     found.visit::<Scale>();
@@ -89,10 +91,12 @@ mod tests {
             "Element",
             "ElementKind",
             "End",
+            "GridLevel",
             "Item",
             "Media",
             "Paint",
             "Order",
+            "Placing",
             "Pull",
             "Restack",
             "Scale",

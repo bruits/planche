@@ -3,7 +3,6 @@
 // window's canvas, camera, and textures as they are.
 
 import {
-  among,
   decodeAsset,
   files,
   loneImage,
@@ -17,12 +16,12 @@ import {
 import { pool } from "./pool.js";
 import { density } from "./capture.js";
 import * as core from "./core.js";
-import type { Background, Board, Item, Point, Rect, Size } from "./core.js";
-import { LONGEST_SIDE, MOST_AREA, MOST_SIDE, overlaps } from "./raster.js";
+import type { Background, Board, Item, Rect, Size } from "./core.js";
+import { CANVAS_AREA, CANVAS_SIDE, TEXTURE_SIDE, scaleWithin, overlaps } from "./raster.js";
 import type { Paint } from "./paint.js";
 import type { Lettering, Placed, Renderer } from "./renderer.js";
 import { SMALLEST_VECTOR } from "./still.js";
-import { holdsText, lettered, type Holder } from "./text.js";
+import { holdsText, lettered } from "./text.js";
 import { unitsPerPixel, type Vectors } from "./vector.js";
 
 /** Either `area` of the board, or `ids` to frame, at most `size` pixels along the longest side. */
@@ -93,18 +92,16 @@ const CHECKED = 0.12;
 /** As floats leave a frame of whole pixels a hair over them. */
 const HAIR = 1e-6;
 /** The pixels a picture's stand-ins take at most, which images stacked or cropped could pass. */
-const STAND_INS = 4 * MOST_AREA;
-/** Where an arrow's heads reach back along its shaft and across it, per length, at 30° from it. */
-const BARB = { back: Math.sqrt(3) / 2, across: 0.5 };
+const STAND_INS = 4 * CANVAS_AREA;
 
 /** Throws what the agent reads when there is nothing to draw. */
 export async function render(scene: Scene, request: Request): Promise<Rendered> {
   const { opened, crossedOut } = scene;
-  const { board } = opened;
-  const chosen = request.ids && new Set(request.ids);
-  const ids = chosen ? board.draw_order.filter((id) => among(board, id, chosen)) : board.draw_order;
+  const { board, editor } = opened;
+  const chosen = request.ids && new Set(editor.withDescendants(request.ids));
+  const ids = chosen ? board.draw_order.filter((id) => chosen.has(id)) : board.draw_order;
   const items = stacked(opened, crossedOut, ids);
-  const wanted = request.area ?? framed(chosen ? items : [], board, request.ids ?? []);
+  const wanted = request.area ?? framed(opened, request.ids ?? [], crossedOut);
   const zoom = density(wanted, request.size);
   const size: Size = {
     width: Math.max(1, Math.floor(wanted.width * zoom)),
@@ -129,10 +126,11 @@ export async function exported(
 ): Promise<Exported> {
   const { opened, renderer, drawings, crossedOut } = scene;
   // As it stands now, as edits landing while its assets decode replace its elements.
-  const board = selected(opened.board, ids, shown);
+  const board = selected(opened, ids, shown);
   const items = stacked(opened, crossedOut, board.draw_order);
-  const side = Math.min(MOST_SIDE, renderer.maxTextureSide);
-  const laid = plan(board, items, crossedOut, drawings, options, side);
+  const side = Math.min(CANVAS_SIDE, renderer.maxTextureSide);
+  const drawn = core.drawnBounds(opened.editor, ids, crossedOut, shown);
+  const laid = plan(board, drawn, crossedOut, drawings, options, side);
   if (laid === undefined) {
     throw new Error("The selection draws nothing");
   }
@@ -168,24 +166,23 @@ export function planned(
   side: number,
   shown = true,
 ): Plan | undefined {
-  const board = selected(opened.board, ids, shown);
-  const items = stacked(opened, crossedOut, board.draw_order);
-  return plan(board, items, crossedOut, drawings, options, Math.min(MOST_SIDE, side));
+  const board = selected(opened, ids, shown);
+  const drawn = core.drawnBounds(opened.editor, ids, crossedOut, shown);
+  return plan(board, drawn, crossedOut, drawings, options, Math.min(CANVAS_SIDE, side));
 }
 
 /**
- * Cut to what `items` draw over, with a margin if any, at the zoom at which the sharpest of their
- * images shows all its pixels, or fewer as `options` ask.
+ * Cut to what `board` draws over, `drawn`, with a margin if any, at the zoom at which the sharpest
+ * of its images shows all its pixels, or fewer as `options` ask.
  */
 function plan(
   board: Board,
-  items: Item[],
+  drawn: Rect | undefined,
   crossedOut: ReadonlySet<string>,
   drawings: Pick<Vectors, "holds">,
   options: Options,
   side: number,
 ): Plan | undefined {
-  const drawn = tight(items, board);
   if (drawn === undefined) {
     return undefined;
   }
@@ -246,8 +243,7 @@ export function drawnOver(
   crossedOut: ReadonlySet<string>,
   shown = true,
 ): Rect | undefined {
-  const { board } = opened;
-  return tight(stacked(opened, crossedOut, selected(board, ids, shown).draw_order), board);
+  return core.drawnBounds(opened.editor, ids, crossedOut, shown);
 }
 
 /**
@@ -263,7 +259,7 @@ export function sizing(area: Size, images: number[], side: number, limit?: numbe
     limit === undefined
       ? (finest ?? SMALLEST_VECTOR / longest)
       : Math.min(finest ?? Infinity, limit / longest);
-  const most = Math.min(side / longest, Math.sqrt(MOST_AREA / (area.width * area.height)));
+  const most = scaleWithin(area, side);
   const zoom = Math.min(wanted, most);
   const covering = (whole: (pixels: number) => number): Size => ({
     width: Math.max(1, whole(area.width * zoom)),
@@ -271,7 +267,7 @@ export function sizing(area: Size, images: number[], side: number, limit?: numbe
   });
   // Rounded up, so that its edges show whole, unless that passes the limits.
   const size = covering((pixels) => Math.ceil(pixels - HAIR));
-  const fits = size.width * size.height <= MOST_AREA && Math.max(size.width, size.height) <= side;
+  const fits = size.width * size.height <= CANVAS_AREA && Math.max(size.width, size.height) <= side;
   return { zoom, size: fits ? size : covering(Math.floor), capped: wanted > most * (1 + HAIR) };
 }
 
@@ -290,131 +286,11 @@ export function pictureName(board: Board, ids: string[], boardName: string): str
  * The elements `ids`, their groups' elements included but for the annotations unless they are
  * `shown`, as a board of their own.
  */
-function selected(board: Board, ids: string[], shown: boolean): Board {
-  const chosen = new Set(ids);
-  const order = shownOrder(board, shown).filter((id) => among(board, id, chosen));
+function selected({ board, editor }: Opened, ids: string[], shown: boolean): Board {
+  const chosen = new Set(editor.withDescendants(ids));
+  const order = shownOrder(board, shown).filter((id) => chosen.has(id));
   const elements = Object.fromEntries(order.map((id) => [id, board.elements[id]!]));
   return { ...board, draw_order: order, elements };
-}
-
-/** What `items` draw over, strokes and arrows' heads included, `undefined` when nothing. */
-function tight(items: Item[], board: Board): Rect | undefined {
-  const texts = {
-    // As far as the frame it lies in, which the margin of its texture passes, but within a
-    // shape's outline when that holds it, as all but a rectangle's or a cross's do.
-    placed: (id: string, kind: Holder): Lettering | undefined =>
-      kind.type === "shape" && core.textAreaOf(kind).width < 1
-        ? undefined
-        : { id, frame: kind.frame, rotation: core.rotationOf(kind), paint: "ink" },
-  };
-  return reach(placing(items, board, texts));
-}
-
-function reach(items: Placed[]): Rect | undefined {
-  const points = items.flatMap((item): Point[] => {
-    switch (item.kind) {
-      case "image":
-        return item.elliptical
-          ? oval(item.frame, item.rotation, 0)
-          : corners(item.frame, item.rotation);
-      case "text":
-      case "fill":
-        return corners(item.frame, item.rotation);
-      case "line":
-        return [item.from, item.to].flatMap((end) => around(end, item.width / 2));
-      case "stroke":
-        return item.points.flatMap((point) => around(point, item.width / 2));
-      case "arrow":
-        return [item.from, item.to, ...barbs(item)].flatMap((end) => around(end, item.width / 2));
-      case "outline": {
-        const half = item.width / 2;
-        // Its outline straddles the ellipse.
-        if (item.shape === "ellipse") {
-          return oval(item.frame, item.rotation, half);
-        }
-        // Round about each corner, as far as half its width.
-        const parts = core.cornerPartsOf(item.shape, item.corners);
-        if (parts) {
-          return parts.flatMap((part) => around(partOf(item.frame, item.rotation, part), half));
-        }
-        // A rectangle's or a cross's outline straddles the frame's edge.
-        const { x, y, width, height } = item.frame;
-        const grown = {
-          x: x - half,
-          y: y - half,
-          width: width + 2 * half,
-          height: height + 2 * half,
-        };
-        return corners(grown, item.rotation);
-      }
-    }
-  });
-  if (points.length === 0) {
-    return undefined;
-  }
-  // Folded, as spreading a large selection's points could pass how many arguments a call takes.
-  const [left, top, right, bottom] = points.reduce(
-    ([l, t, r, b], { x, y }) => [Math.min(l, x), Math.min(t, y), Math.max(r, x), Math.max(b, y)],
-    [Infinity, Infinity, -Infinity, -Infinity],
-  );
-  return { x: left, y: top, width: right - left, height: bottom - top };
-}
-
-/** The ends of an arrow's heads, as the renderer draws them. */
-function barbs({ from, to, head, heads }: Extract<Placed, { kind: "arrow" }>): Point[] {
-  const span = Math.hypot(to.x - from.x, to.y - from.y);
-  const along = { x: (to.x - from.x) / span, y: (to.y - from.y) / span };
-  const ends = (tip: Point, back: number) =>
-    [1, -1].map((side) => ({
-      x: tip.x - back * along.x * BARB.back * head - side * along.y * BARB.across * head,
-      y: tip.y - back * along.y * BARB.back * head + side * along.x * BARB.across * head,
-    }));
-  return heads === "both" ? [...ends(to, 1), ...ends(from, -1)] : ends(to, 1);
-}
-
-function around({ x, y }: Point, radius: number): Point[] {
-  return [
-    { x: x - radius, y: y - radius },
-    { x: x + radius, y: y + radius },
-  ];
-}
-
-/** Turned by `degrees` around its centre, whichever way, as it bounds the same either way. */
-function corners(frame: Rect, degrees: number): Point[] {
-  return [
-    { x: 0, y: 0 },
-    { x: 1, y: 0 },
-    { x: 0, y: 1 },
-    { x: 1, y: 1 },
-  ].map((part) => partOf(frame, degrees, part));
-}
-
-/**
- * Where `part` of `frame`, from 0 to 1 across and down, lies once it turns by `degrees` around
- * its centre, whichever way its size goes.
- */
-function partOf({ x, y, width, height }: Rect, degrees: number, part: Point): Point {
-  const centre = { x: x + width / 2, y: y + height / 2 };
-  const radians = (degrees * Math.PI) / 180;
-  const [sin, cos] = [Math.sin(radians), Math.cos(radians)];
-  const [across, down] = [(part.x - 0.5) * Math.abs(width), (part.y - 0.5) * Math.abs(height)];
-  return { x: centre.x + across * cos - down * sin, y: centre.y + across * sin + down * cos };
-}
-
-/** The box around the ellipse that fills `frame`, turned by `degrees`. */
-function oval({ x, y, width, height }: Rect, degrees: number, grown: number): Point[] {
-  const centre = { x: x + width / 2, y: y + height / 2 };
-  const radians = (degrees * Math.PI) / 180;
-  const [sin, cos] = [Math.sin(radians), Math.cos(radians)];
-  const [across, down] = [width / 2, height / 2];
-  const half = {
-    x: Math.hypot(across * cos, down * sin) + grown,
-    y: Math.hypot(across * sin, down * cos) + grown,
-  };
-  return [
-    { x: centre.x - half.x, y: centre.y - half.y },
-    { x: centre.x + half.x, y: centre.y + half.y },
-  ];
 }
 
 /**
@@ -428,11 +304,10 @@ export function standInSide(
   side: number,
   held: boolean,
 ): number | undefined {
-  const longest = Math.max(natural.width, natural.height);
-  const within = Math.sqrt(MOST_AREA / (natural.width * natural.height));
-  const wanted = longest * Math.min(1, pixels, side / longest, within);
+  const wanted =
+    Math.max(natural.width, natural.height) * Math.min(1, pixels, scaleWithin(natural, side));
   // The window's texture holds it whole up to that side.
-  return held && wanted <= LONGEST_SIDE ? undefined : wanted;
+  return held && wanted <= TEXTURE_SIDE ? undefined : wanted;
 }
 
 /**
@@ -474,7 +349,7 @@ async function standIns(
   };
   const over = shrinking(wanted);
   // Left to the window's texture once shrunk to no more than it holds, which leaves more for the rest.
-  const kept = wanted.filter(({ held, longest }) => !held || longest * over > LONGEST_SIDE);
+  const kept = wanted.filter(({ held, longest }) => !held || longest * over > TEXTURE_SIDE);
   const shrink = shrinking(kept);
   const bitmaps = new Map<string, ImageBitmap>();
   const pending = kept.values();
@@ -566,8 +441,9 @@ function sharpest(board: Board, ids: string[], zoom: number, area: Rect): Map<st
   return most;
 }
 
-function framed(items: Item[], board: Board, chosen: string[]): Rect {
-  const covered = tight(items, board);
+function framed(opened: Opened, chosen: string[], crossedOut: ReadonlySet<string>): Rect {
+  const covered =
+    chosen.length === 0 ? undefined : core.drawnBounds(opened.editor, chosen, crossedOut, true);
   if (covered === undefined) {
     throw new Error(
       chosen.length === 0 ? "Give an area or some ids" : "Those elements draw nothing to show",

@@ -3,18 +3,19 @@
 // renderer and pictures of the board leave them out. A press on one reaches the board as a press
 // on its group, and a double-click writes it where it shows.
 
-import type { Camera, Viewport } from "./camera.js";
+import type { Opened } from "./board.js";
+import { toScreen, topLeft, type Camera, type Viewport } from "./camera.js";
 import { composing } from "./commands.js";
-import type { Board, Rect } from "./core.js";
+import type { Rect } from "./core.js";
 
 export interface Titles {
   /**
-   * The titles of `board`'s groups, each over the area `over` gives it, marked when its group is
-   * `selected`, and one to add over `offered`, a group selected alone with none. A group's area is
-   * asked for once, until `changed` says it may differ.
+   * The titles of the board's groups, each over the area `over` gives it, marked when its group is
+   * `selected`, or locked, and one to add over `offered`, a group selected alone with none. A
+   * group's area is asked for once, until `changed` says it may differ.
    */
   show(
-    board: Board,
+    opened: Pick<Opened, "board" | "editor">,
     over: (id: string) => Rect | undefined,
     selected: string[],
     offered?: string,
@@ -66,11 +67,7 @@ export function titles(host: HTMLElement, rename: (id: string, title: string) =>
     if (!camera || !over) {
       return;
     }
-    // Over the corner that shows on the left, which mirroring swaps.
-    const edge = mirrored ? over.x + over.width : over.x;
-    const left = (edge - camera.x) * camera.zoom;
-    const x = mirrored ? mirrored.width - left : left;
-    const y = (over.y - camera.y) * camera.zoom;
+    const { x, y } = toScreen(camera, topLeft(over, mirrored !== undefined), mirrored);
     label.style.setProperty("transform", `translate(${x}px, ${y}px)`);
     label.style.setProperty("max-width", `${Math.max(over.width * camera.zoom, NARROWEST)}px`);
   };
@@ -152,7 +149,7 @@ export function titles(host: HTMLElement, rename: (id: string, title: string) =>
     { capture: true },
   );
   return {
-    show(board, over, selected, offered) {
+    show({ board, editor }, over, selected, offered) {
       const chosen = new Set(selected);
       const groups = board.draw_order.flatMap((id) => {
         const { kind } = board.elements[id]!;
@@ -189,7 +186,7 @@ export function titles(host: HTMLElement, rename: (id: string, title: string) =>
         }
         entry.label.classList.toggle("offered", title === "");
         entry.label.classList.toggle("selected", chosen.has(id));
-        entry.label.classList.toggle("locked", lockedUp(board, id));
+        entry.label.classList.toggle("locked", editor.lockedBy(id) !== undefined);
         place(entry);
       }
     },
@@ -216,18 +213,4 @@ export function titles(host: HTMLElement, rename: (id: string, title: string) =>
       shown.clear();
     },
   };
-}
-
-/** Whether the group `id`, or one holding it, is locked. */
-function lockedUp(board: Board, id: string): boolean {
-  // Boards are repaired on read, but a cycle would loop forever.
-  const seen = new Set<string>();
-  for (let at: string | undefined = id; at !== undefined && !seen.has(at);) {
-    if (board.elements[at]?.locked === true) {
-      return true;
-    }
-    seen.add(at);
-    at = board.elements[at]?.group;
-  }
-  return false;
 }

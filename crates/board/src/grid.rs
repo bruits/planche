@@ -1,6 +1,9 @@
-//! The grid a board may show behind its elements, and the pull its lines have on what comes
-//! near them. Its finest lines are [`GRID_SPACING`] apart, and every [`GRID_STEP`]th is also a
-//! line of the next level up, which takes over as zooming out crowds the finer one.
+//! The grid a board may show behind its elements, the pull its lines have on what comes near
+//! them, and the sizes a click places, whose sides land on them. Its finest lines are
+//! [`GRID_SPACING`] apart, and every [`GRID_STEP`]th is also a line of the next level up, which
+//! takes over as zooming out crowds the finer one.
+
+use serde::Serialize;
 
 use crate::Point;
 
@@ -18,14 +21,18 @@ pub(crate) const PULL: f64 = 8.0;
 /// scaled onto it. Far below a pixel at any zoom.
 const HAIR: f64 = 1e-9;
 
-/// The finest lines that show at a zoom.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// The finest lines that show at a zoom, in board units apart.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GridLevel {
-    /// In board units.
     pub spacing: f64,
     /// How much they show, from 0 as they come in to 1. Those of the next level up, every
     /// [`GRID_STEP`]th, show in full.
     pub fade: f64,
+    /// Between the lines of the next level up.
+    pub coarse: f64,
+    /// Between those that show in full, the only ones that pull.
+    pub full: f64,
 }
 
 impl GridLevel {
@@ -36,10 +43,37 @@ impl GridLevel {
         while spacing * zoom < DENSEST && spacing.is_finite() {
             spacing *= GRID_STEP;
         }
-        let fade = (spacing * zoom - DENSEST) / DENSEST;
+        let fade = ((spacing * zoom - DENSEST) / DENSEST).clamp(0.0, 1.0);
+        let coarse = spacing * GRID_STEP;
         Self {
             spacing,
-            fade: fade.clamp(0.0, 1.0),
+            fade,
+            coarse,
+            full: if fade < 1.0 { coarse } else { spacing },
+        }
+    }
+}
+
+/// How large a click places what it adds, in board units: a shape and a sticky note as squares of
+/// their sides, a note as wide as `note` and as tall as its text. The text of all, and of those
+/// dragged out, is `font_size`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Placing {
+    pub shape: f64,
+    pub sticky: f64,
+    pub note: f64,
+    pub font_size: f64,
+}
+
+impl Placing {
+    /// At `zoom` screen pixels per board unit, which is positive.
+    pub fn at(zoom: f64) -> Self {
+        Self {
+            shape: 3.0 * GRID_SPACING / zoom,
+            sticky: 5.0 * GRID_SPACING / zoom,
+            note: 6.0 * GRID_SPACING / zoom,
+            font_size: 20.0 / zoom,
         }
     }
 }
@@ -129,13 +163,8 @@ fn sign(value: f64) -> f64 {
 
 /// How far apart the lines that pull at `zoom` are, and how far they reach, in board units.
 fn pull(zoom: f64) -> (f64, f64) {
-    let GridLevel { spacing, fade } = GridLevel::at(zoom);
     // Only lines that show in full pull, as a pull toward lines that barely show looks like none.
-    let spacing = if fade < 1.0 {
-        spacing * GRID_STEP
-    } else {
-        spacing
-    };
+    let spacing = GridLevel::at(zoom).full;
     // A pull reaching halfway to the next line would leave no place free of it.
     (spacing, PULL.min(spacing * zoom / 4.0) / zoom)
 }
@@ -159,9 +188,12 @@ mod tests {
             GridLevel::at(0.3),
             GridLevel {
                 spacing: 40.0,
-                fade: 0.5
+                fade: 0.5,
+                coarse: 200.0,
+                full: 200.0,
             }
         );
+        assert_eq!(GridLevel::at(0.4).full, 40.0);
         assert_eq!(GridLevel::at(0.4).fade, 1.0);
         assert_eq!(GridLevel::at(100.0).spacing, 40.0);
         assert_eq!(GridLevel::at(100.0).fade, 1.0);
@@ -169,11 +201,23 @@ mod tests {
         assert_eq!(GridLevel::at(0.19).spacing, 200.0);
         assert_eq!(GridLevel::at(0.005).spacing, 5000.0);
         for zoom in [0.005, 0.0065, 0.05, 0.19, 0.2, 1.0, 3.7, 100.0] {
-            let GridLevel { spacing, fade } = GridLevel::at(zoom);
+            let GridLevel { spacing, fade, .. } = GridLevel::at(zoom);
             assert!(spacing * zoom >= DENSEST, "{zoom}");
             assert_eq!(spacing % GRID_SPACING, 0.0, "{zoom}");
             assert!((0.0..=1.0).contains(&fade), "{zoom}");
         }
+    }
+
+    #[test]
+    fn what_a_click_places_lands_on_lines_and_keeps_its_size_on_screen() {
+        let placing = Placing::at(1.0);
+        for side in [placing.shape, placing.sticky, placing.note] {
+            assert!(side > 0.0);
+            assert_eq!(side % GRID_SPACING, 0.0, "{side}");
+        }
+        let zoomed = Placing::at(2.0);
+        assert_eq!(zoomed.shape * 2.0, placing.shape);
+        assert_eq!(zoomed.font_size * 2.0, placing.font_size);
     }
 
     #[test]

@@ -348,7 +348,8 @@ fn polygon(local: vec2f, half: vec2f, count: f32, star: bool, base: f32) -> vec2
         }
         away = length(vec2f(in.local.x - nearest, in.local.y));
         if in.shape > 5.5 {
-            // Folded across the shaft, each head's two strokes are one.
+            // Folded across the shaft, each head's two strokes are one. They turn back 30° from
+            // it, as the board's `BARB` says where they end.
             let point = vec2f(in.local.x, abs(in.local.y));
             let back = in.size.y * vec2f(0.8660254, 0.5);
             let tip = vec2f(in.size.x, 0.0);

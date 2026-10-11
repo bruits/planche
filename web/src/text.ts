@@ -7,7 +7,7 @@ import type { Camera, Viewport } from "./camera.js";
 import * as core from "./core.js";
 import type { Align, Board, Kind, Point, Rect, Size } from "./core.js";
 import type { Paint } from "./paint.js";
-import { LONGEST_SIDE, MOST_AREA, overlaps, rounded, settling } from "./raster.js";
+import { TEXTURE_SIDE, scaleWithin, overlaps, rounded, settling } from "./raster.js";
 import type { Lettering, Renderer } from "./renderer.js";
 
 export const FONT = "Inter";
@@ -318,7 +318,7 @@ function rasterise(
   canvas: HTMLCanvasElement,
   kind: Holder,
   density: number,
-  side = LONGEST_SIDE,
+  side = TEXTURE_SIDE,
 ): Rect | undefined {
   const laid = layout(kind);
   const covers = {
@@ -327,11 +327,7 @@ function rasterise(
     width: laid.area.width + 2 * MARGIN,
     height: laid.lines.length * LINE_HEIGHT + 2 * MARGIN,
   };
-  const capped = Math.min(
-    density,
-    side / Math.max(covers.width, covers.height),
-    Math.sqrt(MOST_AREA / (covers.width * covers.height)),
-  );
+  const capped = Math.min(density, scaleWithin(covers, side));
   if (!(capped > 0)) {
     return undefined;
   }

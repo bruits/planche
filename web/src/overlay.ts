@@ -7,6 +7,7 @@
 // keep their width at any zoom.
 
 import { onScreen, type Camera, type Viewport } from "./camera.js";
+import { direction, distance } from "./geometry.js";
 import type { Point, Rect } from "./core.js";
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -18,6 +19,8 @@ const DOT = 7;
 const GRABBED_DOT = 10;
 /** Of the arc outside a corner that turns the box, in CSS pixels. */
 const ARC = 15;
+/** What a cursor turns by as its box does, in degrees. */
+const CURSOR_STEP = 15;
 /** Half across the cross a box scales around, in CSS pixels. */
 const PIVOT = 6;
 /** Half across the tick on each end of a line between what lines up, in CSS pixels. */
@@ -98,7 +101,7 @@ export function dotted(box: Point[], zoom: number): boolean {
 
 /**
  * As a CSS `cursor`, arrows along which `grab` drags `box`, or curled around the corner it turns
- * from, turned with the box by steps of 15°, as it shows when `mirrored`.
+ * from, turned with the box by steps, as it shows when `mirrored`.
  */
 export function cursor(grab: Grab, box: Point[], mirrored = false): string {
   if (mirrored) {
@@ -456,16 +459,7 @@ function drawn(glyph: string, degrees: number, fallback: string): string {
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 12 12, ${fallback}`;
 }
 
-/** In degrees clockwise from across, as the board's y runs down. */
-function direction(from: Point, to: Point): number {
-  return (Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI;
-}
-
-/** To the nearest 15°, within a turn. */
+/** To the nearest step a cursor turns by, within a turn. */
 function stepped(degrees: number): number {
-  return (((Math.round(degrees / 15) * 15) % 360) + 360) % 360;
-}
-
-function distance(a: Point, b: Point): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
+  return (((Math.round(degrees / CURSOR_STEP) * CURSOR_STEP) % 360) + 360) % 360;
 }

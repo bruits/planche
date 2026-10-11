@@ -15,7 +15,7 @@ import {
 import * as core from "./core.js";
 import type { ImageEdits, Rect, Size } from "./core.js";
 import { encode, linear, luminance } from "./paint.js";
-import { MOST_AREA, MOST_SIDE } from "./raster.js";
+import { CANVAS_SIDE, scaleWithin } from "./raster.js";
 
 /** A vector's longest side at the least, as sharp as one pasted from a design tool. */
 export const SMALLEST_VECTOR = 2048;
@@ -38,7 +38,7 @@ export async function still(opened: Opened, image: Image): Promise<Blob> {
 export function scaleOf(shown: Size, vector: boolean): number {
   const longest = Math.max(shown.width, shown.height);
   const wanted = vector ? Math.max(1, SMALLEST_VECTOR / longest) : 1;
-  return Math.min(wanted, MOST_SIDE / longest, Math.sqrt(MOST_AREA / (shown.width * shown.height)));
+  return Math.min(wanted, scaleWithin(shown, CANVAS_SIDE));
 }
 
 /** Rounded down, as rounding up can pass what a canvas holds. */

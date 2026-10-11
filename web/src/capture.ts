@@ -2,13 +2,14 @@
 
 import type { Size } from "./core.js";
 import { scaled } from "./board.js";
+import { scaleWithin } from "./raster.js";
 
 /**
  * Small enough that no Claude model scales it down, so its pixels are the ones reported. Claude
  * takes 1568 pixels a side, and 1568 tokens of 28 by 28 pixels, which this area stays within.
  */
-export const MOST_SIDE = 1568;
-const MOST_AREA = 1_150_000;
+export const CAPTURE_SIDE = 1568;
+const CAPTURE_AREA = 1_150_000;
 
 export interface Capture {
   mime: string;
@@ -22,17 +23,12 @@ export interface Capture {
  * Pixels per unit that draw `area` within what agents read, its longest side at `side` pixels at
  * most. Rounded down to whole pixels, a picture of it needs no scaling by `capture`.
  */
-export function density(area: Size, side = MOST_SIDE): number {
-  const longest = Math.max(area.width, area.height);
-  return Math.min(
-    Math.min(side, MOST_SIDE) / longest,
-    Math.sqrt(MOST_AREA / (area.width * area.height)),
-  );
+export function density(area: Size, side = CAPTURE_SIDE): number {
+  return scaleWithin(area, Math.min(side, CAPTURE_SIDE), CAPTURE_AREA);
 }
 
 export function capture(source: CanvasImageSource, size: Size, background: string): Capture {
-  const longest = Math.max(size.width, size.height);
-  const scale = Math.min(1, MOST_SIDE / longest, Math.sqrt(MOST_AREA / (size.width * size.height)));
+  const scale = Math.min(1, scaleWithin(size, CAPTURE_SIDE, CAPTURE_AREA));
   const { width, height } = scaled(size, scale);
   const canvas = document.createElement("canvas");
   canvas.width = width;

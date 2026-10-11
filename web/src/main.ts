@@ -21,7 +21,6 @@ import { answer } from "./agent.js";
 import { animations } from "./animation.js";
 import { bugReport } from "./bugreport.js";
 import {
-  among,
   assetSizes,
   assetPlayback,
   assetsOf,
@@ -50,7 +49,7 @@ import {
   type Opened,
 } from "./board.js";
 import { pool } from "./pool.js";
-import { fit, onScreen, type Camera } from "./camera.js";
+import { fit, onScreen, toBoard, type Camera } from "./camera.js";
 import { card, type CardMedia } from "./card.js";
 import { clipboard, type Pasted } from "./clipboard.js";
 import { meanColours } from "./colour.js";
@@ -81,7 +80,7 @@ import { lockedPin, pinned, pins } from "./pins.js";
 import { titledGroup, titles } from "./titles.js";
 import { platform, type ErrorLog } from "./platform.js";
 import { recall, remember } from "./preferences.js";
-import { LONGEST_SIDE } from "./raster.js";
+import { TEXTURE_SIDE } from "./raster.js";
 import {
   backing,
   drawnOver,
@@ -190,8 +189,9 @@ const viewport = view(byId("viewport"), {
   frame(camera, size) {
     bar.zoomed();
     overlaid.frame(camera, size);
-    comments.frame(camera, viewport.mirrored() ? size : undefined);
-    groupTitles.frame(camera, viewport.mirrored() ? size : undefined);
+    const mirrored = viewport.mirrored() ? size : undefined;
+    comments.frame(camera, mirrored);
+    groupTitles.frame(camera, mirrored);
     editing.follow();
     styleCard.frame();
     pictureCard.frame();
@@ -366,7 +366,7 @@ const present = showing({
     refreshBar();
     return created;
   },
-  decode: (read) => decodeAsset(read, LONGEST_SIDE).catch(() => undefined),
+  decode: (read) => decodeAsset(read, TEXTURE_SIDE).catch(() => undefined),
   release,
   load(into, asset, decoded, read) {
     load(into, new Map([[asset, decoded]]));
@@ -478,10 +478,10 @@ const selectedKinds = (): Kind[] => {
     return [];
   }
   const { board, editor } = opened;
-  const chosen = new Set(editing.selection());
-  return Object.entries(board.elements).flatMap(([id, { kind }]) =>
-    among(board, id, chosen) && editor.lockedBy(id) === undefined ? [kind] : [],
-  );
+  return editor.withDescendants(editing.selection()).flatMap((id) => {
+    const kind = board.elements[id]?.kind;
+    return kind && editor.lockedBy(id) === undefined ? [kind] : [];
+  });
 };
 const selectedImages = () => selectedKinds().filter((kind) => kind.type === "image");
 /** What the lock command unlocks, as nothing is selected. */
@@ -492,17 +492,6 @@ const loneGroup = () => {
   const kind = id === undefined || more.length > 0 ? undefined : opened?.board.elements[id]?.kind;
   return kind?.type === "group" ? kind : undefined;
 };
-/** A hair aside, as the core takes it. */
-const near = (size: number, pixels: number) => Math.abs(size - pixels) <= 1e-6;
-const atActualSize = () =>
-  selectedImages().every((kind) => {
-    const shown = core.editsOf(kind).crop ?? kind.natural_size;
-    return (
-      core.rotationOf(kind) === 0 &&
-      near(kind.frame.width, shown.width) &&
-      near(kind.frame.height, shown.height)
-    );
-  });
 const greyed = () => {
   const images = selectedImages();
   return images.length > 0 && images.every((kind) => core.editsOf(kind).greyscale);
@@ -525,7 +514,7 @@ const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet"
 // Not before the board shows, which would select what nobody sees yet.
 const nothingToSelect = () =>
   noneShown() ?? (opened?.board.draw_order.length ? undefined : "The board is empty");
-const selectedAssets = () => (opened ? assetsOf(opened.board, editing.selection()) : []);
+const selectedAssets = () => (opened ? assetsOf(opened, editing.selection()) : []);
 const selectedMoving = () =>
   selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
 const moving = (asset: string) => animated.playing(asset) || films.playing(asset);
@@ -961,7 +950,7 @@ const commands = {
     unavailable: () =>
       noneSelected() ??
       (selectedImages().length > 0 ? undefined : "Only images have an actual size") ??
-      (atActualSize() ? "Already at actual size" : undefined),
+      (opened?.editor.atActualSize(editing.selection()) ? "Already at actual size" : undefined),
     run: () => editing.actualSize(),
   },
   flipHorizontally: flip("Flip horizontally", "h", true),
@@ -2131,11 +2120,11 @@ function selectsGroup(): boolean {
 
 function showComments(): void {
   if (opened) {
-    const { board, editor } = opened;
-    comments.show(board, editing.selection(), editing.writing());
+    comments.show(opened, editing.selection(), editing.writing());
     const lone = loneGroup();
     const offered = lone && lone.title === undefined ? editing.selection()[0] : undefined;
-    groupTitles.show(board, (id) => core.extent(editor, [id]), editing.selection(), offered);
+    const { editor } = opened;
+    groupTitles.show(opened, (id) => core.extent(editor, [id]), editing.selection(), offered);
   }
 }
 
@@ -2487,7 +2476,7 @@ async function pasteElements({ copied, assets }: Pasted, at: Point): Promise<voi
     () => pending.next().value,
     async (asset) => {
       const blob = bytes.get(asset);
-      const one = blob && (await prepare(blob, LONGEST_SIDE, heldSize).catch(() => undefined));
+      const one = blob && (await prepare(blob, TEXTURE_SIDE, heldSize).catch(() => undefined));
       if (one?.asset === asset) {
         loadAtOnce(one, target, into);
         prepared.push(one);
@@ -2600,7 +2589,7 @@ async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void
           return;
         }
         const one: Added = {
-          ...(await prepare(image.bytes, LONGEST_SIDE, heldSize)),
+          ...(await prepare(image.bytes, TEXTURE_SIDE, heldSize)),
           filename: image.filename,
           source: image.source,
         };
@@ -2699,8 +2688,9 @@ function room(): Rect | undefined {
   const { width, height } = viewport.size();
   // A press on the handle drags the window instead. It measures 0 while hidden.
   const top = byId("handle").getBoundingClientRect().bottom;
+  const under = toBoard(camera, { x: 0, y: top });
   const shown = onScreen(
-    { ...camera, y: camera.y + top / camera.zoom },
+    { ...camera, y: under.y },
     { width, height: Math.min(height, bar.top()) - top },
   );
   if (shown.width <= 0 || shown.height <= 0) {

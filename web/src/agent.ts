@@ -3,7 +3,7 @@
 
 import { write, type Writing } from "./author.js";
 import { anchors, decodeAsset, files, readAsset, release, type Opened } from "./board.js";
-import { MOST_SIDE, capture, type Capture } from "./capture.js";
+import { CAPTURE_SIDE, capture, type Capture } from "./capture.js";
 import * as core from "./core.js";
 import type { Element, Kind, Rect } from "./core.js";
 import { clipped, message } from "./errors.js";
@@ -199,7 +199,7 @@ async function picture(opened: Opened, id: unknown, background: string) {
   if (asset.video && document.hidden) {
     throw new Error("Planche shows a video's first frame only while its window shows");
   }
-  const decoded = await decodeAsset(asset, MOST_SIDE).catch((error: unknown) => {
+  const decoded = await decodeAsset(asset, CAPTURE_SIDE).catch((error: unknown) => {
     throw unreadable(error);
   });
   let image: Capture;
