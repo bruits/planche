@@ -41,6 +41,8 @@ export interface Writing {
   frame(ids: string[]): void;
   /** Whether the app stopped, after which no edit lands, as nobody would see it. */
   stopped(): boolean;
+  /** Whether a new version is going in place, after which no edit lands, as the app quits. */
+  installing(): boolean;
 }
 
 const IDLE_WAIT = 10_000;
@@ -170,6 +172,11 @@ async function ready(page: Writing, target: Opened, { started, deadline }: Clock
   }
   if (page.stopped()) {
     throw new Error("Planche stopped working, so nothing changed");
+  }
+  if (page.installing()) {
+    throw new Error(
+      "Planche is installing an update, so nothing changed: try again once it relaunches",
+    );
   }
   if (page.opened() !== target) {
     throw new Error("Another board opened in Planche meanwhile, so nothing changed");

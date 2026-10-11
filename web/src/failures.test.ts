@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { press } from "../test/events.js";
 import { deferred, tick } from "../test/waits.js";
 import { GpuLost, NoRenderer, Panic } from "./errors.js";
-import { failures, type FailureHooks } from "./failures.js";
+import { failures, isolate, type FailureHooks } from "./failures.js";
 import type { ErrorLog } from "./platform.js";
 
 function app({ ready = true } = {}) {
@@ -182,6 +182,13 @@ describe("a failure the app cannot go on from", () => {
     click("Reload");
     await tick();
     expect(hooks.reload).toHaveBeenCalledOnce();
+  });
+
+  it("keeps its Reload within reach when an update's hold of the page took it", () => {
+    const { host, failing } = app();
+    isolate(host.appendChild(document.createElement("div")));
+    failing.stop(new Panic("unreachable"));
+    expect(host.querySelector<HTMLElement>(".failure")!.inert).toBe(false);
   });
 
   it("lets the app go on once it starts", async () => {

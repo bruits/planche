@@ -21,7 +21,10 @@ const TEST_PHOTOS = [10, 50, 100];
 const NOT_FOR_TEST_PHOTOS = "Only on a board not saved in a folder or a ZIP file";
 
 export interface Host {
-  platform: Pick<Platform, "keepOnTop" | "titleBar" | "agent" | "errorLog" | "desktopApp">;
+  platform: Pick<
+    Platform,
+    "keepOnTop" | "titleBar" | "agent" | "errorLog" | "updater" | "desktopApp"
+  >;
   viewport: Pick<View, "zoom" | "centre" | "client">;
   editing: Pick<Edits, "centre" | "unlock">;
   groupTitles: Pick<Titles, "write">;
@@ -110,7 +113,13 @@ export function menus(
         ],
         [
           "Settings",
-          [commands.hoverPlay, commands.keepStyle, commands.agentAccess, commands.errorLog],
+          [
+            commands.hoverPlay,
+            commands.keepStyle,
+            commands.agentAccess,
+            commands.checkUpdates,
+            commands.errorLog,
+          ],
         ],
         ["Colour", colours],
       ] satisfies [string, Command[]][]
@@ -167,6 +176,7 @@ export function menus(
       stated(commands.hoverPlay),
       stated(commands.keepStyle),
       ...(platform.agent ? [stated(commands.agentAccess)] : []),
+      ...(platform.updater ? [stated(commands.checkUpdates)] : []),
       ...(platform.errorLog ? [commands.errorLog] : []),
     ]);
   }

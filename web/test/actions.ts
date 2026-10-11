@@ -99,6 +99,7 @@ export function around(
     groupTitles: { write: () => {} },
     measurements: { shown: () => false, toggle: () => {} },
     agents: { allowed: () => false, allow: async () => {} },
+    updates: { allowed: () => false, allow: async () => {} },
     exports: {
       busy: () => false,
       zip: async () => {},

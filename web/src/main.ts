@@ -57,6 +57,7 @@ import { styles } from "./style.js";
 import { loadFont, texts } from "./text.js";
 import { theme } from "./theme.js";
 import { toolbar, type Button } from "./toolbar.js";
+import { updating } from "./updates.js";
 import { vectors } from "./vector.js";
 import { videos } from "./video.js";
 import { view } from "./view.js";
@@ -110,6 +111,13 @@ const failing = failures(byId("toolbar"), {
 });
 failing.watch(window);
 const { fail, report } = failing;
+const updates = updating(byId("toolbar"), platform.updater, {
+  closing: () => life.closing(),
+  confirm: (question) => platform.confirm(question),
+  report,
+});
+updates.watch(window);
+const halted = () => failing.stopped() || updates.installing();
 
 /** The rows of the measurements that the next draw ends, with when each began. */
 const untilDrawn = new Map<string, number>();
@@ -185,7 +193,7 @@ const editing = edits(viewport, overlaid, () => opened, {
   changed,
   retitle: (id) => groupTitles.write(id),
   failed: fail,
-  stopped: () => failing.stopped(),
+  stopped: halted,
   selectionChanged() {
     films.select(loneImage(opened?.board, editing.selection())?.image.asset);
     refreshBar();
@@ -348,6 +356,7 @@ const agents = access(platform.agent, {
   },
   halfDrawn: () => halfDrawn || present.reloading(),
   stopped: () => failing.stopped(),
+  installing: () => updates.installing(),
   crossedOut: (asset) =>
     crossedOut.has(asset) ? (present.crossedOut(asset) ?? "it cannot show") : undefined,
   drawNow() {
@@ -412,7 +421,7 @@ const intake = adding({
   // A press on the handle drags the window instead. It measures 0 while hidden.
   between: () => ({ top: byId("handle").getBoundingClientRect().bottom, bottom: bar.top() }),
   savesToFiles: () => life.savesToFiles(),
-  stopped: () => failing.stopped(),
+  stopped: halted,
   say,
   drawn: (name, since) => untilDrawn.set(name, since),
 });
@@ -430,6 +439,7 @@ const app = actions({
   groupTitles,
   measurements: metrics,
   agents,
+  updates,
   exports: outgoing,
   greeting,
   styleCard: () => styleCard,
@@ -719,7 +729,7 @@ document.addEventListener("contextmenu", (event) => {
 await failing.started(Promise.all([core.start(failing.stop), loadFont()]));
 receive(viewport, (incoming, at) => {
   // The shell's own drops come with no event that a stopped page holds back.
-  if (!failing.stopped()) {
+  if (!halted()) {
     report(intake.images(incoming, at));
   }
 });
@@ -763,6 +773,7 @@ const clip = clipboard(viewport, {
 report(agents.serve());
 // Something to drop images on from the start.
 report(life.start());
+report(updates.serve());
 failing.ready();
 
 /** A board shows in one renderer at most, which goes once it fails to show. */
@@ -958,8 +969,9 @@ function addPicked(at: Point | undefined): void {
 }
 
 function lookAgain(): void {
-  // Not once the app stopped, which reads the disk again as it reloads.
-  if (failing.stopped()) {
+  // Not once the app stopped, which reads the disk again as it reloads, nor while a new version
+  // goes in place, after the board's last save.
+  if (halted()) {
     return;
   }
   // Images after the board, which reading it again shows afresh. Focus and visibility come

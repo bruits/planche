@@ -7,6 +7,7 @@
 
 #[cfg(target_os = "macos")]
 mod keyboard;
+mod updates;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, TryLockError};
@@ -48,11 +49,13 @@ fn main() {
     }
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Picked::default())
         .manage(Unsaved::default())
         .manage(Session::default())
         .manage(ErrorLog::default())
         .manage(Agent::default())
+        .manage(updates::Updates::default())
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Started {
                 // Tauri keeps sending on the channel of a page that reloaded, to nobody.
@@ -155,7 +158,10 @@ fn main() {
             discard_export,
             agent_attach,
             agent_reply,
-            agent_allow
+            agent_allow,
+            updates::update_allow,
+            updates::update_download,
+            updates::update_install
         ]);
     // The predefined Quit of macOS ends the app without closing its windows, so without asking.
     // Quitting from the Dock or logging out still does, as tao never lets the app refuse.

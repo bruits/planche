@@ -330,12 +330,15 @@ body {
   transition: none;
 }
 
-:root[data-stopped] [inert] {
+:root[data-stopped] [inert],
+:root[data-installing] [inert] {
   opacity: 0.4;
 }
 
 :root[data-stopped] #viewport > .welcome,
-:root[data-stopped] .hint {
+:root[data-stopped] .hint,
+:root[data-installing] #viewport > .welcome,
+:root[data-installing] .hint {
   visibility: hidden;
 }
 
@@ -695,6 +698,7 @@ body {
 .bar,
 #message,
 .failure,
+.notice,
 #measurements,
 .menu,
 .finder,
@@ -809,7 +813,8 @@ body {
 .bar button,
 .style-card button,
 .style-card .custom,
-.failure button {
+.failure button,
+.notice button {
   position: relative;
   display: grid;
   place-items: center;
@@ -826,7 +831,8 @@ body {
 .bar button:hover,
 .style-card button:hover,
 .style-card .custom:hover,
-.failure button:hover {
+.failure button:hover,
+.notice button:hover {
   background: var(--hover);
 }
 
@@ -844,7 +850,8 @@ body {
 .bar button:focus-visible,
 .style-card button:focus-visible,
 .style-card .custom:focus-within,
-.failure button:focus-visible {
+.failure button:focus-visible,
+.notice button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -1489,7 +1496,8 @@ body {
   pointer-events: auto;
 }
 
-.failure {
+.failure,
+.notice {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1501,18 +1509,21 @@ body {
   pointer-events: auto;
 }
 
-.failure p {
+.failure p,
+.notice p {
   margin: 0;
   overflow-wrap: anywhere;
 }
 
-.failure div {
+.failure div,
+.notice div {
   display: flex;
   gap: 4px;
 }
 
 /* Lower than the bar's, as they hold words. */
-.failure button {
+.failure button,
+.notice button {
   width: auto;
   height: 28px;
   padding: 0 9px;
@@ -1521,7 +1532,8 @@ body {
 
 /* Hidden from sight only, where screen readers keep listening to them. */
 #message:empty,
-.failure:not(.showing) {
+.failure:not(.showing),
+.notice:not(.showing) {
   position: absolute;
   width: 1px;
   height: 1px;

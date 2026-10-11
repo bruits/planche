@@ -43,6 +43,8 @@ export interface Failures {
   watch(target: EventTarget): void;
 }
 
+/** What a page that takes no edit holds back from the rest of the app. */
+export const HELD = ["keydown", "keyup", "cut", "copy", "paste"];
 /** How much of a failure the message shows. */
 const SHOWN = 300;
 /** How much of a failure the log keeps, a stack's worth. */
@@ -142,15 +144,9 @@ export function failures(host: HTMLElement, hooks: FailureHooks): Failures {
     // The rest of the page takes no pointer or focus, as edits made on a board that no longer
     // shows would still be saved.
     document.documentElement.toggleAttribute("data-stopped", true);
-    let kept: Element = panel;
-    while (kept.parentElement && kept !== document.body) {
-      for (const other of kept.parentElement.children) {
-        if (other !== kept && other instanceof HTMLElement) {
-          other.inert = true;
-        }
-      }
-      kept = kept.parentElement;
-    }
+    isolate(panel);
+    // An update's hold of the page may have taken it.
+    panel.inert = false;
     hooks.halt();
   };
   const fail = (error: unknown) => {
@@ -222,7 +218,7 @@ export function failures(host: HTMLElement, hooks: FailureHooks): Failures {
       target.addEventListener("unhandledrejection", (event) =>
         uncaught("reason" in event ? event.reason : event),
       );
-      for (const type of ["keydown", "keyup", "cut", "copy", "paste"]) {
+      for (const type of HELD) {
         target.addEventListener(type, held, { capture: true });
       }
     },
@@ -248,7 +244,30 @@ function trapped(error: unknown): boolean {
   return error instanceof Panic || error instanceof WebAssembly.RuntimeError;
 }
 
-function button(label: string, press: () => void): HTMLButtonElement {
+/**
+ * Leaves the page's pointer and focus to `kept` alone. Returns what gives them back to the rest,
+ * but to what took none before.
+ */
+export function isolate(kept: Element): () => void {
+  const isolated: HTMLElement[] = [];
+  let holder = kept;
+  while (holder.parentElement && holder !== document.body) {
+    for (const other of holder.parentElement.children) {
+      if (other !== holder && other instanceof HTMLElement && !other.inert) {
+        other.inert = true;
+        isolated.push(other);
+      }
+    }
+    holder = holder.parentElement;
+  }
+  return () => {
+    for (const other of isolated) {
+      other.inert = false;
+    }
+  };
+}
+
+export function button(label: string, press: () => void): HTMLButtonElement {
   const made = document.createElement("button");
   made.type = "button";
   made.textContent = label;

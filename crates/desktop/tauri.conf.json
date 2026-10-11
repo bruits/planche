@@ -26,6 +26,7 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg", "nsis", "deb", "appimage"],
+    "createUpdaterArtifacts": true,
     "publisher": "Bruits",
     "category": "GraphicsAndDesign",
     "shortDescription": "A board for your references and visual research",
@@ -34,6 +35,14 @@
     "linux": {
       "appimage": { "bundleMediaFramework": true },
       "deb": { "recommends": ["gstreamer1.0-libav"] }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGNzA5OUYyREI5MkJGOEEKUldTS3Y1TGI4cGx3ejhjVWJwU2oxeWl5TkhDVGluejVZaU1rbjA3TGd1bUVHUG9qMmxlVkhmVlcK",
+      "endpoints": ["https://github.com/bruits/planche/releases/latest/download/latest.json"],
+      "requireSignedVersion": true,
+      "windows": { "installMode": "passive" }
     }
   }
 }

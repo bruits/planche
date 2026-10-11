@@ -30,6 +30,7 @@ export function pageOf(
     shown: () => undefined,
     halfDrawn: () => false,
     stopped: () => false,
+    installing: () => false,
     crossedOut: () => undefined,
     drawNow: unread("drawNow"),
     render: unread("render"),

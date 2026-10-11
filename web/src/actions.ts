@@ -46,6 +46,7 @@ import type { Sampler } from "./sampler.js";
 import { PALETTE, PAPERS, highlight } from "./style.js";
 import type { Scheme, Theme } from "./theme.js";
 import type { Titles } from "./titles.js";
+import type { Updating } from "./updates.js";
 import type { Videos } from "./video.js";
 import type { View } from "./view.js";
 import type { Welcome } from "./welcome.js";
@@ -81,7 +82,14 @@ const FRAMED: ReadonlySet<string> = new Set([
 export interface Host {
   platform: Pick<
     Platform,
-    "titleBar" | "keepOnTop" | "agent" | "errorLog" | "cannotSave" | "desktopApp" | "openAddress"
+    | "titleBar"
+    | "keepOnTop"
+    | "agent"
+    | "errorLog"
+    | "updater"
+    | "cannotSave"
+    | "desktopApp"
+    | "openAddress"
   >;
   opened(): Opened | undefined;
   hold(): Hold | undefined;
@@ -101,6 +109,7 @@ export interface Host {
   groupTitles: Pick<Titles, "write">;
   measurements: Pick<Measurements, "shown" | "toggle">;
   agents: Pick<Access, "allowed" | "allow">;
+  updates: Pick<Updating, "allowed" | "allow">;
   exports: Pick<Exporting, "busy" | "zip" | "png" | "copyPng">;
   greeting: Pick<Welcome, "quietsHint">;
   // The cards, the picker, and the clipboard come once the commands they offer are made.
@@ -164,6 +173,7 @@ export function actions(host: Host) {
     appearance,
     measurements,
     agents,
+    updates,
     exports,
     report,
     say,
@@ -943,6 +953,11 @@ export function actions(host: Host) {
       unavailable: () => (platform.agent ? undefined : "Only the desktop app lets agents in"),
       run: () => report(agents.allow(!agents.allowed())),
     },
+    checkUpdates: {
+      label: "Check for updates automatically",
+      unavailable: () => (platform.updater ? undefined : "Only the desktop app updates itself"),
+      run: () => report(updates.allow(!updates.allowed())),
+    },
     errorLog: {
       label: "Open the error log",
       unavailable: () => (platform.errorLog ? undefined : "Only the desktop app keeps one"),
@@ -1106,6 +1121,7 @@ export function actions(host: Host) {
     [commands.hoverPlay, () => hoverPlay],
     [commands.keepStyle, () => styleKept],
     [commands.agentAccess, () => agents.allowed()],
+    [commands.checkUpdates, () => updates.allowed()],
   ]);
   /** Whether each is the one in use among those that exclude each other. */
   const ticks = new Map<Command, () => boolean>([

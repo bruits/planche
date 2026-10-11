@@ -120,6 +120,27 @@ export interface ErrorLog {
   show(): Promise<boolean>;
 }
 
+/** New versions of the app, which replace it in place. */
+export interface Updater {
+  /**
+   * Hears of each newer version found, for as long as the page lives, with why this copy cannot
+   * install it, if it cannot.
+   */
+  watch(found: (version: string, stuck: string | undefined) => void): Promise<void>;
+  /** Checks at once, then every day, while `on`. */
+  allow(on: boolean): Promise<void>;
+  /** Rejects when the newest version found is no longer `version`. */
+  download(
+    version: string,
+    progress: (done: number, total: number | undefined) => void,
+  ): Promise<void>;
+  /**
+   * Puts `version`, once downloaded, in place and relaunches. Resolves once the relaunch is asked
+   * for, never on Windows, where the app ends first.
+   */
+  install(version: string): Promise<void>;
+}
+
 export interface TitleBar {
   /** Throws why it cannot, such as in full screen. */
   show(shown: boolean): Promise<void>;
@@ -137,6 +158,8 @@ export interface Platform {
   titleBar?: TitleBar;
   /** Missing where nothing keeps failures, as in a browser. */
   errorLog?: ErrorLog;
+  /** Missing where the app updates as the page reloads, as in a browser. */
+  updater?: Updater;
   /** Why saving into a folder is impossible here, if it is. */
   cannotSave?: string | undefined;
   /** Where to download the desktop app. Missing within it. */

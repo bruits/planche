@@ -29,7 +29,10 @@ function page(
     idle = async () => {},
     loading = false,
     stopped = () => false,
-  }: Partial<Pick<Writing, "busy" | "idle" | "stopped">> & { loading?: boolean } = {},
+    installing = () => false,
+  }: Partial<Pick<Writing, "busy" | "idle" | "stopped" | "installing">> & {
+    loading?: boolean;
+  } = {},
 ) {
   let shown = opened;
   const writing: Writing = {
@@ -51,6 +54,7 @@ function page(
     entered: () => undefined,
     frame() {},
     stopped,
+    installing,
   };
   return { writing, show: (next: Opened) => void (shown = next) };
 }
@@ -219,6 +223,16 @@ describe("write", () => {
     await expect(write("add", { elements: [arrow] }, writing, later())).rejects.toThrow(
       "Planche stopped working, so nothing changed",
     );
+  });
+
+  it("changes nothing while a new version goes in place, as the app quits", async () => {
+    const opened = untitled();
+    const { writing } = page(opened, { installing: () => true });
+    const before = opened.editor.json();
+    await expect(write("add", { elements: [arrow] }, writing, later())).rejects.toThrow(
+      "Planche is installing an update, so nothing changed: try again once it relaunches",
+    );
+    expect(opened.editor.json()).toBe(before);
   });
 
   it("changes nothing while a board opens", async () => {

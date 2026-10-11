@@ -9,6 +9,7 @@ import { pack, tauri, unpack } from "./tauri.js";
  */
 function shell(answer: boolean, picked: string | null = null, more: Record<string, unknown> = {}) {
   let closing: (() => Promise<void>) | undefined;
+  const heard = new Map<string, (event: { payload: never }) => void>();
   const sent: string[] = [];
   const calls: unknown[][] = [];
   const api: TauriApi = {
@@ -38,12 +39,14 @@ function shell(answer: boolean, picked: string | null = null, more: Record<strin
           // The page's handler is async, though typed as returning nothing.
           closing = async () => handler({ payload: undefined as never });
         }
+        heard.set(name, handler);
         return () => {};
       },
     },
   };
   const close = () => closing!();
-  return { api, sent, calls, close };
+  const emit = (name: string, payload: unknown) => heard.get(name)!({ payload: payload as never });
+  return { api, sent, calls, close, emit };
 }
 
 describe("tauri", () => {
@@ -102,6 +105,35 @@ describe("tauri", () => {
     expect(calls).toEqual([
       ["log_error", { entry: "2026-10-10T12:00:00.000Z Failed: Error: the disk is full\n" }],
       ["show_error_log"],
+    ]);
+  });
+
+  it("hears of new versions, with why this copy cannot install them", async () => {
+    const { api, emit } = shell(true);
+    const found = vi.fn<(version: string, stuck: string | undefined) => void>();
+    await tauri(api).updater!.watch(found);
+    emit("update", ["0.3.0", null]);
+    emit("update", ["0.3.0", "Move it to Applications to update it"]);
+    expect(found.mock.calls).toEqual([
+      ["0.3.0", undefined],
+      ["0.3.0", "Move it to Applications to update it"],
+    ]);
+  });
+
+  it("passes a download's progress on, with no total when the server tells none", async () => {
+    const { api, calls } = shell(true);
+    const progress = vi.fn<(done: number, total: number | undefined) => void>();
+    await tauri(api).updater!.download("0.3.0", progress);
+    const [command, { version, progress: channel }] = calls[0] as [
+      string,
+      { version: string; progress: { onmessage(message: [number, number | null]): void } },
+    ];
+    expect([command, version]).toEqual(["update_download", "0.3.0"]);
+    channel.onmessage([1_000, 10_000]);
+    channel.onmessage([2_000, null]);
+    expect(progress.mock.calls).toEqual([
+      [1_000, 10_000],
+      [2_000, undefined],
     ]);
   });
 

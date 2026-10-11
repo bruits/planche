@@ -21,6 +21,16 @@ mcp.workspace = true
 percent-encoding = "2"
 tauri = "2"
 tauri-plugin-dialog = "2"
+# The context Tauri generates holds the plugins' configuration as JSON.
+serde_json.workspace = true
+# Held to a minor, as its `configure_client` hands out a reqwest client that a minor may change.
+# Without `zip`, which only reads the archives of Tauri 1's updater, never made here.
+tauri-plugin-updater = { version = "~2.13", default-features = false, features = [
+    "rustls-tls",
+    "system-proxy",
+] }
+# Waits a day between checks for a new version. Already in the tree, through Tauri and `mcp`.
+tokio = { version = "1", features = ["time"] }
 # Opens an image's source in the system's browser, which the webview cannot. Tauri's own opener
 # plugin wraps it, with D-Bus and an async runtime besides.
 open = "5"

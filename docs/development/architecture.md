@@ -12,7 +12,7 @@ The client and the file format are under MIT or Apache-2.0. A sync server, if th
 
 ## Shell
 
-Tauri 2 around the web app, with the system webview, in `crates/desktop`. WebKitGTK is slow on Linux, has no WebGPU, and may fall back to software WebGL without saying so. Tauri's Chromium runtime is still an alpha. Tauri's clipboard handles only text on mobile, and its transparent windows are buggy on every desktop platform.
+Tauri 2 around the web app, with the system webview, in `crates/desktop`. WebKitGTK is slow on Linux, has no WebGPU, and may fall back to software WebGL without saying so. Tauri's Chromium runtime is still an alpha. Tauri's clipboard handles only text on mobile, and its transparent windows are buggy on every desktop platform. The desktop app updates itself through Tauri's updater, from the latest GitHub release's `latest.json`, and checks each installer against the signature made with the project's updater key.
 
 ## Agents
 

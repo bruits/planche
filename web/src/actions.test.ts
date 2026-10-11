@@ -322,6 +322,7 @@ describe("what the commands offer", () => {
     expect(commands.compact.unavailable()).toBe("Only the desktop app has a window of its own");
     expect(commands.alwaysOnTop.unavailable()).toBe("Only the desktop app has a window of its own");
     expect(commands.agentAccess.unavailable()).toBe("Only the desktop app lets agents in");
+    expect(commands.checkUpdates.unavailable()).toBe("Only the desktop app updates itself");
     expect(commands.errorLog.unavailable()).toBe("Only the desktop app keeps one");
   });
 

@@ -14,7 +14,7 @@ The agent's client starts Planche's executable with the argument `mcp`, which co
 }
 ```
 
-Only one running Planche can let agents in, and it takes eight connections at most.
+Only one running Planche can let agents in, and it takes eight connections at most. Updating Planche ends agents' connections, as quitting does.
 
 ## What agents can do
 

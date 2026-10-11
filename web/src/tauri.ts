@@ -228,6 +228,23 @@ export function tauri({ core, event }: TauriApi): Platform {
       show: () => core.invoke<boolean>("show_error_log"),
     },
 
+    updater: {
+      async watch(found) {
+        await event.listen<[string, string | null]>("update", ({ payload: [version, stuck] }) =>
+          found(version, stuck ?? undefined),
+        );
+      },
+      allow: (on) => core.invoke("update_allow", { on }),
+      async download(version, progress) {
+        const channel = new core.Channel<[number, number | null]>();
+        // A channel of Tauri's, which takes no listeners.
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener
+        channel.onmessage = ([done, total]) => progress(done, total ?? undefined);
+        await core.invoke("update_download", { version, progress: channel });
+      },
+      install: (version) => core.invoke("update_install", { version }),
+    },
+
     // Only on Linux, where the shell takes drops itself.
     watchDrops(dropped) {
       type Dropped = [string[], string[], number, number];

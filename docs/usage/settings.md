@@ -28,9 +28,18 @@ Hints, Always on top, and the theme are remembered. Greyscale board, Mirror boar
 - Play videos on hover, see [media](./media.md#playback).
 - Keep style open keeps the style card up after a click on nothing, which otherwise closes it.
 - Agent access, in the desktop app, lets agents read and edit the open board, see [agents](./agents.md).
+- Check for updates automatically, in the desktop app, looks for a new version, see [updates](#updates).
 - Open the error log, in the desktop app, opens the errors it recorded, to attach to a bug report. It is `errors.log` in the app's data folder, which moves to `errors.log.1` past 1 MB, so the log never takes more than 2 MB.
 
-The first three are remembered.
+The first four are remembered.
+
+## Updates
+
+The desktop app looks for a new version at launch and once a day, unless Check for updates automatically is off. It reads the latest GitHub release's `latest.json`, so GitHub sees your IP address and the time, but not the app's version or anything of your boards.
+
+A new version shows above the toolbar. Update downloads it, saves the board, asking before losing anything it could not save, installs it, and relaunches the app on the same board. Later hides it until the next check. Updating the deb asks for an administrator's password, and so does the Mac app in a folder you cannot write. An AppImage replaces itself, so keep it in a folder you can write.
+
+On macOS, an app opened from its disk image or from Downloads cannot replace itself, so move it to Applications first. Planche 0.2.0 and earlier cannot update themselves, so install the next version by hand once.
 
 ## When something goes wrong
 

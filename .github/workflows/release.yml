@@ -133,17 +133,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Each installer the app updates from comes with the signature its updater checks.
         include:
           - os: macos-latest
             args: --target universal-apple-darwin
-            installers: target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            installers: >-
+              target/universal-apple-darwin/release/bundle/dmg/*.dmg
+              target/universal-apple-darwin/release/bundle/macos/Planche.app.tar.gz*
             app: target/universal-apple-darwin/release/bundle/macos/Planche.app
           - os: windows-latest
-            installers: target/release/bundle/nsis/*.exe
+            installers: target/release/bundle/nsis/*.exe*
           # The oldest runner, as the deb and the AppImage need at least the glibc they were built
           # against, so they reach Ubuntu 22.04 and Debian 12.
           - os: ubuntu-22.04
-            installers: target/release/bundle/deb/*.deb target/release/bundle/appimage/*.AppImage
+            installers: target/release/bundle/deb/*.deb* target/release/bundle/appimage/*.AppImage*
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -175,8 +178,11 @@ jobs:
       # Pinned, as the Mac build hands the Apple signing secrets to this CLI. Bump it with the tauri
       # crate.
       - run: npm install --global @tauri-apps/cli@2.12.2
-      # The Windows installer is not signed yet.
+      # The Windows installer has no Authenticode signature yet, only the updater's.
       - if: runner.os != 'macOS'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: tauri build ${{ matrix.args }}
       # Tauri signs the Mac app with the Developer ID, notarizes it, and staples the ticket.
       - if: runner.os == 'macOS'
@@ -187,6 +193,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: tauri build ${{ matrix.args }}
       # Tauri only warns when it cannot notarize and ignores a failed staple, so the Mac app proves
       # it is notarized and stapled before it ships. spctl alone accepts an unstapled app, whose
@@ -195,7 +203,65 @@ jobs:
         run: |
           xcrun stapler validate "${{ matrix.app }}"
           spctl --assess --type execute --verbose=2 "${{ matrix.app }}"
+      # Without the manifest first, which would pair the installers replaced here with their old
+      # signatures until the last job writes it again.
       - env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.web.outputs.tag }}
-        run: gh release upload "$TAG" ${{ matrix.installers }} --clobber
+        run: |
+          gh release delete-asset "$TAG" latest.json --yes || true
+          gh release upload "$TAG" ${{ matrix.installers }} --clobber
+
+  updater:
+    name: Point the desktop app to its update
+    # Once every installer is up, as the app looks for this release's as soon as it is the latest.
+    needs: [release, web, bundle]
+    if: needs.release.outputs.published == 'true' || inputs.bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.web.outputs.tag }}
+          sparse-checkout: crates/desktop/tauri.conf.json
+          sparse-checkout-cone-mode: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.web.outputs.tag }}
+        run: |
+          gh release download "$TAG" --pattern '*.sig' --dir signatures
+          # The CLI only warns when the signing key is not the one the app trusts, whose installers
+          # every installed app would then refuse.
+          key() { sed -n 2p | base64 -d | od -An -tx1 -j2 -N8 | tr -d ' \n'; }
+          trusted=$(jq -r .plugins.updater.pubkey crates/desktop/tauri.conf.json | base64 -d | key)
+          for signature in signatures/*.sig; do
+            if [ "$(base64 -d < "$signature" | key)" != "$trusted" ]; then
+              echo "::error::$signature was not signed with the key whose public half is in tauri.conf.json"
+              exit 1
+            fi
+          done
+          address="https://github.com/$GH_REPO/releases/download/$TAG"
+          # The universal Mac app answers for both processors.
+          for signature in signatures/*.sig; do
+            installer=$(basename "$signature" .sig)
+            case "$installer" in
+              *.app.tar.gz) keys="darwin-aarch64-app darwin-x86_64-app" ;;
+              *-setup.exe) keys="windows-x86_64-nsis" ;;
+              *.AppImage) keys="linux-x86_64-appimage" ;;
+              *.deb) keys="linux-x86_64-deb" ;;
+              *) continue ;;
+            esac
+            for key in $keys; do
+              jq -n --arg key "$key" --arg url "$address/$installer" --rawfile signature "$signature" \
+                '{($key): {$url, $signature}}'
+            done
+          done | jq -s add > platforms.json
+          gh release view "$TAG" --json body,publishedAt > release.json
+          # The version the installers were signed for, which the updater checks.
+          jq -n --arg version "${TAG#v}" --slurpfile release release.json \
+            --slurpfile platforms platforms.json \
+            '{$version, notes: $release[0].body, pub_date: $release[0].publishedAt, platforms: $platforms[0]}' \
+            > latest.json
+          gh release upload "$TAG" latest.json --clobber
