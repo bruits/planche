@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { press } from "../test/events.js";
 import { writer } from "./writer.js";
 
 function opened() {
@@ -9,24 +10,14 @@ function opened() {
   return { done, field };
 }
 
-function press(field: HTMLElement, init: KeyboardEventInit): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  field.dispatchEvent(event);
-  return event;
-}
-
 describe("the writer", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it.each([
     ["Esc", { key: "Escape" }],
     ["⌘ Enter", { key: "Enter", metaKey: true }],
     ["Ctrl Enter", { key: "Enter", ctrlKey: true }],
   ])("closes on %s", (_, init) => {
     const { done, field } = opened();
-    expect(press(field, init).defaultPrevented).toBe(true);
+    expect(press(init, field).defaultPrevented).toBe(true);
     expect(done).toHaveBeenCalledOnce();
     expect(field.hidden).toBe(true);
   });
@@ -37,7 +28,7 @@ describe("the writer", () => {
     ["⌘ Enter ending a composition", { key: "Enter", metaKey: true, keyCode: 229 }],
   ])("stays open on %s, leaving the key to the input method", (_, init) => {
     const { done, field } = opened();
-    expect(press(field, init).defaultPrevented).toBe(false);
+    expect(press(init, field).defaultPrevented).toBe(false);
     expect(done).not.toHaveBeenCalled();
     expect(field.hidden).toBe(false);
   });

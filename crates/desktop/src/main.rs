@@ -661,48 +661,16 @@ fn write_files(
         return Err(format!("`{path}` is not a file of a board"));
     }
     // An asset never changes once named, and so is never written over.
-    let assets = files
-        .iter()
-        .map(|(path, _)| *path)
-        .filter(|path| format::is_asset_file(path));
-    let there: BTreeSet<&str> = folder::stamps(&root, assets)
-        .map_err(|error| describe(&root, error))?
+    let landed = folder::write_keeping(&root, &files, format::is_asset_file)
+        .map_err(|error| describe(&root, error))?;
+    let stamps = landed
+        .stamps
         .into_iter()
-        .map(|(path, _)| path)
-        .collect();
-    let kept: Vec<(&str, &[u8])> = files
-        .iter()
-        .copied()
-        .filter(|(path, _)| !there.contains(path))
-        .collect();
-    let (placed, failure) = match folder::write_all(&root, &kept) {
-        Ok(()) => (kept.len(), None),
-        Err(folder::Interrupted { done, error }) => (done, Some(describe(&root, error))),
-    };
-    let landed: BTreeSet<&str> = kept[..placed]
-        .iter()
-        .map(|(path, _)| *path)
-        .chain(there.iter().copied())
-        .collect();
-    let done = files
-        .iter()
-        .take_while(|(path, _)| landed.contains(path))
-        .count();
-    let written = files[..done]
-        .iter()
-        .map(|(path, _)| *path)
-        .filter(|path| *path != attributes && !there.contains(path));
-    let stamps: BTreeMap<&str, folder::Stamp> = folder::stamps(&root, written)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    let stamps = files[..done].iter().map(|(path, _)| {
-        stamps
-            .get(path)
-            .map(|stamp| stamped(*stamp))
-            .unwrap_or_default()
-    });
-    Ok((stamps.collect(), failure))
+        .map(|stamp| stamp.map(stamped).unwrap_or_default());
+    Ok((
+        stamps.collect(),
+        landed.error.map(|error| describe(&root, error)),
+    ))
 }
 
 #[tauri::command(async)]

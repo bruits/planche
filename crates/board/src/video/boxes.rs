@@ -240,10 +240,10 @@ fn child<'a>(bytes: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn boxed(kind: &[u8; 4], contents: &[u8]) -> Vec<u8> {
+    pub(crate) fn boxed(kind: &[u8; 4], contents: &[u8]) -> Vec<u8> {
         let mut bytes = u32::try_from(contents.len() + 8)
             .unwrap()
             .to_be_bytes()

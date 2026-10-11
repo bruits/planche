@@ -1,23 +1,19 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { around } from "../test/actions.js";
+import { rectangleKind } from "../test/kinds.js";
 import { imageKind } from "./board.js";
 import { named } from "./commands.js";
-import type { Kind, Point } from "./core.js";
+import type { Point } from "./core.js";
 import { closeMenu, type Entry } from "./menu.js";
 import { menus, type Host } from "./menus.js";
-import { around } from "../test/actions.js";
 
 const IMAGE = "a".repeat(32);
 const SHAPE = "c".repeat(32);
 const ASSET = "f".repeat(64);
 const AT = { x: 0, y: 0 };
 const PLACE = { x: 10, y: 10 };
-const shape: Kind = {
-  type: "shape",
-  frame: { x: 0, y: 300, width: 100, height: 100 },
-  shape: "rectangle",
-  text: { content: "", font_size: 20 },
-};
+const shape = rectangleKind(300);
 const image = imageKind(
   ASSET,
   { width: 320, height: 240 },

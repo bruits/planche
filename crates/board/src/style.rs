@@ -370,101 +370,31 @@ fn set<T>(part: &mut T, to: Option<T>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{arrow, stroke as pen};
-    use crate::{AssetId, ImageEdits, Point, Rect, Size, Tip};
-
-    fn frame() -> Rect {
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 50.0,
-        }
-    }
+    use crate::tests::{
+        area, arrow, comment, filled, image, labelled, line, note, pen, sticky, stroke,
+    };
 
     fn shape(shape: Shape, fill: Fill) -> ElementKind {
-        ElementKind::Shape {
-            frame: frame(),
-            rotation: 0.0,
-            shape,
-            corners: Default::default(),
-            text: Text::new("Hello", 20.0),
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
+        filled(
+            labelled(shape, area(0.0, 0.0, 100.0, 50.0), 0.0, "Hello"),
             fill,
-            opacity: Default::default(),
-        }
+        )
     }
 
-    fn note(align: Option<Align>) -> ElementKind {
-        let mut text = Text::new("Hello", 20.0);
-        text.align = align;
-        ElementKind::Note {
-            frame: frame(),
-            rotation: 0.0,
-            text,
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
+    fn aligned(align: Option<Align>) -> ElementKind {
+        let mut kind = note(0.0, 0.0, 100.0, 50.0);
+        if let ElementKind::Note { text, .. } = &mut kind {
+            *text = Text::new("Hello", 20.0);
+            text.align = align;
         }
-    }
-
-    fn sticky() -> ElementKind {
-        ElementKind::Sticky {
-            frame: frame(),
-            rotation: 0.0,
-            text: Text::new("", 20.0),
-            target: None,
-            paper: Paper::Yellow,
-            opacity: Default::default(),
-        }
-    }
-
-    fn image() -> ElementKind {
-        ElementKind::Image {
-            asset: AssetId::of(b""),
-            natural_size: Size {
-                width: 1,
-                height: 1,
-            },
-            frame: frame(),
-            rotation: 0.0,
-            edits: ImageEdits::default(),
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        }
-    }
-
-    fn line() -> ElementKind {
-        ElementKind::Line {
-            from: Point { x: 0.0, y: 0.0 },
-            to: Point { x: 10.0, y: 0.0 },
-            from_target: None,
-            to_target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
-            opacity: Default::default(),
-        }
-    }
-
-    fn comment() -> ElementKind {
-        ElementKind::Comment {
-            at: Point { x: 0.0, y: 0.0 },
-            text: "Here".to_owned(),
-            target: None,
-        }
+        kind
     }
 
     /// Of every kind, each with every part of its style as it comes.
     fn plain_kinds() -> [ElementKind; 15] {
         [
-            note(None),
-            sticky(),
+            aligned(None),
+            sticky(0.0, 0.0, 100.0, 50.0),
             shape(Shape::Rectangle, Fill::Hollow),
             shape(Shape::Ellipse, Fill::Hollow),
             shape(Shape::Cross, Fill::Hollow),
@@ -473,10 +403,10 @@ mod tests {
             shape(Shape::Star, Fill::Hollow),
             shape(Shape::Polygon, Fill::Hollow),
             arrow(),
-            line(),
-            pen(),
-            image(),
-            comment(),
+            line((0.0, 0.0), (10.0, 0.0)),
+            stroke(),
+            image(0.0, 0.0, 100.0, 50.0),
+            comment(0.0, 0.0),
             ElementKind::group(),
         ]
     }
@@ -512,8 +442,8 @@ mod tests {
 
     #[test]
     fn each_element_takes_its_own_parts_of_a_style() {
-        assert_eq!(note(None).settings()[0], Setting::Colour);
-        assert_eq!(sticky().settings()[0], Setting::Paper);
+        assert_eq!(aligned(None).settings()[0], Setting::Colour);
+        assert_eq!(sticky(0.0, 0.0, 100.0, 50.0).settings()[0], Setting::Paper);
         assert!(
             shape(Shape::Rectangle, Fill::Hollow)
                 .settings()
@@ -536,8 +466,8 @@ mod tests {
             assert!(settings.contains(&Setting::Fill), "{counted:?}");
         }
         assert!(arrow().settings().contains(&Setting::Heads));
-        assert_eq!(image().settings(), [Setting::Opacity]);
-        assert!(comment().settings().is_empty());
+        assert_eq!(image(0.0, 0.0, 100.0, 50.0).settings(), [Setting::Opacity]);
+        assert!(comment(0.0, 0.0).settings().is_empty());
         assert_eq!(
             ElementKind::group().settings(),
             [Setting::Colour, Setting::Fill]
@@ -656,7 +586,9 @@ mod tests {
             bold: Some(true),
             ..Style::default()
         };
-        let ElementKind::Sticky { paper, text, .. } = sticky().with_style(&style) else {
+        let ElementKind::Sticky { paper, text, .. } =
+            sticky(0.0, 0.0, 100.0, 50.0).with_style(&style)
+        else {
             unreachable!()
         };
         assert_eq!((paper, text.bold), (Paper::Pink, true));
@@ -673,44 +605,28 @@ mod tests {
         assert_eq!(corners(shape(Shape::Star, Fill::Hollow)), 8);
         assert_eq!(corners(shape(Shape::Polygon, Fill::Hollow)), 8);
         assert_eq!(corners(shape(Shape::Triangle, Fill::Hollow)), 5);
-        assert_eq!(image().with_style(&style), image());
+        assert_eq!(
+            image(0.0, 0.0, 100.0, 50.0).with_style(&style),
+            image(0.0, 0.0, 100.0, 50.0)
+        );
         let faded = Style {
             opacity: Opacity::new(50),
             ..Style::default()
         };
-        let ElementKind::Image { opacity, .. } = image().with_style(&faded) else {
+        let ElementKind::Image { opacity, .. } = image(0.0, 0.0, 100.0, 50.0).with_style(&faded)
+        else {
             unreachable!()
         };
         assert_eq!(opacity.percent(), 50);
-        assert_eq!(comment().with_style(&faded), comment());
+        assert_eq!(comment(0.0, 0.0).with_style(&faded), comment(0.0, 0.0));
         // Unset parts stay as they were.
-        let right = note(Some(Align::Right));
+        let right = aligned(Some(Align::Right));
         assert_eq!(right.clone().with_style(&Style::default()), right);
     }
 
     #[test]
     fn a_pen_stroke_keeps_its_points_to_a_hundred_thousandth_of_its_frame_without_repeats() {
-        let ElementKind::Stroke {
-            frame,
-            rotation,
-            colour,
-            weight,
-            opacity,
-            ..
-        } = pen()
-        else {
-            unreachable!()
-        };
-        let drawn = |points: &[(f64, f64)]| ElementKind::Stroke {
-            tip: Tip::Pen,
-            frame,
-            rotation,
-            points: points.iter().map(|&(x, y)| Point { x, y }).collect(),
-            target: None,
-            colour,
-            weight,
-            opacity,
-        };
+        let drawn = |points: &[(f64, f64)]| pen(area(0.0, 0.0, 100.0, 50.0), 0.0, points);
         let kept = drawn(&[
             (0.123_456_789, 1.0),
             (0.123_457_1, 0.999_999_9),
@@ -763,7 +679,7 @@ mod tests {
             align: Some(Align::Left),
             ..Style::default()
         };
-        assert_eq!(note(Some(Align::Right)).with_style(&left), note(None));
+        assert_eq!(aligned(Some(Align::Right)).with_style(&left), aligned(None));
         let centred = Style {
             align: Some(Align::Centre),
             ..Style::default()

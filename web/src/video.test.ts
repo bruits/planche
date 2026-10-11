@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { imageKind, newId, refresh, untitled } from "./board.js";
+import { animated, type Played } from "../test/boards.js";
+import { fakeRenderer } from "../test/renderers.js";
+import { eventually } from "../test/waits.js";
+import { refresh } from "./board.js";
 import * as core from "./core.js";
 import type { Trim } from "./core.js";
-import type { Renderer } from "./renderer.js";
 import { frameTimes, videos } from "./video.js";
 
 const ASSET = "a".repeat(64);
@@ -168,35 +170,18 @@ class Telling extends Video {
  * A board showing an image of each asset, played as told, and a renderer that copies the frames
  * they show, by number, while it holds their textures.
  */
-function scene(...images: { asset: string; trim?: Trim; speed?: number }[]) {
-  const board = untitled();
-  const ids: string[] = [];
-  for (const { asset, trim, speed } of images) {
-    const id = newId();
-    ids.push(id);
-    refresh(
-      board,
-      board.editor.add(
-        id,
-        undefined,
-        JSON.stringify(imageKind(asset, NATURAL, { x: 0, y: 0, ...NATURAL })),
-      ),
-    );
-    if (trim) {
-      refresh(board, core.setTrim(board.editor, [id], trim));
-    }
-    if (speed) {
-      refresh(board, board.editor.setSpeed([id], speed));
-    }
-  }
+function scene(...images: Played[]) {
+  const { opened: board, ids } = animated(images, NATURAL);
   let held = true;
   const copied: number[] = [];
-  const renderer = {
+  const renderer = fakeRenderer({
     holds: () => held,
     // Only once it has a frame, as copying one without throws.
-    copyVideo: (_: string, video: Video) =>
-      video.readyState >= 2 && copied.push(Math.round(video.shows * 10)) > 0,
-  } as unknown as Renderer;
+    copyVideo: (_, video) =>
+      video instanceof Video &&
+      video.readyState >= 2 &&
+      copied.push(Math.round(video.shows * 10)) > 0,
+  });
   const trim = (to: Trim) => refresh(board, core.setTrim(board.editor, ids, to));
   return { board, renderer, copied, trim, hold: (holding: boolean) => void (held = holding) };
 }
@@ -249,7 +234,7 @@ describe("videos", () => {
     films.keep([{ asset, video }]);
     changed.mockClear();
     films.playback(asset);
-    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+    await eventually(() => expect(changed).toHaveBeenCalled());
   };
 
   const update = (shown: ReturnType<typeof scene>) =>
@@ -294,7 +279,7 @@ describe("videos", () => {
     const shown = scene({ asset: ASSET, trim: { start: 0.2, end: 0.4 } });
     changed.mockClear();
     update(shown);
-    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+    await eventually(() => expect(changed).toHaveBeenCalled());
     update(shown);
     expect(elements[0]!.currentTime).toBeCloseTo(0.225);
     expect(films.playback(ASSET)?.span).toEqual([2, 3]);
@@ -504,7 +489,7 @@ describe("videos", () => {
     films.keep([{ asset: ASSET, video: movie() }]);
     films.step([ASSET], 1);
     expect(films.playback(ASSET)?.playing).toBe(false);
-    await vi.waitFor(() => expect(films.playback(ASSET)?.count).toBe(5));
+    await eventually(() => expect(films.playback(ASSET)?.count).toBe(5));
     const shown = scene({ asset: ASSET });
     update(shown);
     expect(films.playback(ASSET)?.at).toBe(1);
@@ -568,7 +553,7 @@ describe("videos", () => {
     update(shown);
     const [video] = elements;
     expect(video!.muted).toBe(false);
-    await vi.waitFor(() => expect(films.sounding(ASSET)).toBe(false));
+    await eventually(() => expect(films.sounding(ASSET)).toBe(false));
     update(shown);
     expect(video).toMatchObject({ muted: true, paused: false });
     expect(elements).toHaveLength(1);

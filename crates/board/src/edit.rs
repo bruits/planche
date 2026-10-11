@@ -1785,35 +1785,18 @@ fn at_size(frame: &Rect, width: f64, height: f64) -> bool {
 mod tests {
     use super::*;
     use crate::stick::Surface;
-    use crate::tests::{arrow, board, element, id, locked, stroke};
-    use crate::{Colour, Dash, Fill, Heads, Rect, Text, Tip, Weight};
-
-    fn note(x: f64) -> ElementKind {
-        ElementKind::Note {
-            frame: Rect {
-                x,
-                y: 0.0,
-                width: 10.0,
-                height: 10.0,
-            },
-            rotation: 0.0,
-            text: Text::new(String::new(), 2.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        }
-    }
-
-    fn ids<const N: usize>(bits: [u128; N]) -> Vec<ElementId> {
-        bits.map(id).to_vec()
-    }
+    use crate::tests::{
+        area, arrow, assert_at, board, comment, counted, edits_of, element, filled, id, ids, image,
+        image_of, labelled, line, locked, note, on, point, position, sticky, stroke, stuck, turned,
+    };
+    use crate::{Colour, Fill, Rect, Text, Tip, Weight};
 
     fn editor() -> Editor {
         Editor::new(board([
             (1, element(None, "a0", ElementKind::group())),
-            (2, element(Some(1), "a0", note(0.0))),
-            (3, element(Some(1), "a1", note(10.0))),
-            (4, element(None, "a1", note(20.0))),
+            (2, element(Some(1), "a0", note(0.0, 0.0, 10.0, 10.0))),
+            (3, element(Some(1), "a1", note(10.0, 0.0, 10.0, 10.0))),
+            (4, element(None, "a1", note(20.0, 0.0, 10.0, 10.0))),
             (5, element(None, "a2", arrow())),
         ]))
     }
@@ -1831,7 +1814,7 @@ mod tests {
     #[test]
     fn an_element_is_added_on_top_of_its_group() {
         let mut editor = editor();
-        editor.add(id(6), None, note(0.0)).unwrap();
+        editor.add(id(6), None, note(0.0, 0.0, 10.0, 10.0)).unwrap();
         editor.add(id(7), Some(id(1)), arrow()).unwrap();
         assert_eq!(order(&editor), ids([1, 2, 3, 7, 4, 5, 6]));
     }
@@ -1890,9 +1873,9 @@ mod tests {
     #[test]
     fn a_paste_into_a_group_lands_on_top_of_its_elements() {
         let mut editor = editor();
-        let mut kind = note(20.0);
-        *kind.target_mut().unwrap() = Some(id(2));
-        editor.update(id(4), kind).unwrap();
+        editor
+            .update(id(4), on(note(20.0, 0.0, 10.0, 10.0), 2))
+            .unwrap();
         let copied = editor.board().copy(&ids([4]));
         editor
             .paste(&copied, &renamed(&copied, 6), Some(id(1)))
@@ -1906,15 +1889,13 @@ mod tests {
     fn a_paste_mends_what_a_copy_made_elsewhere_breaks() {
         let mut editor = editor();
         let arrow = stuck((0.0, 0.0), Some(3), (0.0, 0.0), Some(1));
-        let mut circular = note(0.0);
-        *circular.target_mut().unwrap() = Some(id(6));
-        let mut back = note(0.0);
-        *back.target_mut().unwrap() = Some(id(5));
+        let circular = on(note(0.0, 0.0, 10.0, 10.0), 6);
+        let back = on(note(0.0, 0.0, 10.0, 10.0), 5);
         let copied = Copied {
             elements: board([
                 (1, element(Some(2), "a0", ElementKind::group())),
                 (2, element(Some(1), "a0", ElementKind::group())),
-                (3, element(Some(9), "a1", note(0.0))),
+                (3, element(Some(9), "a1", note(0.0, 0.0, 10.0, 10.0))),
                 (4, element(None, "a2", arrow)),
                 (5, element(None, "a3", circular)),
                 (6, element(None, "a4", back)),
@@ -1943,7 +1924,7 @@ mod tests {
         let mut twice = renamed(&copied, 10);
         twice.insert(id(4), id(10));
         let mut broken = copied.clone();
-        broken.elements.get_mut(&id(4)).unwrap().kind = note(f64::NAN);
+        broken.elements.get_mut(&id(4)).unwrap().kind = note(f64::NAN, 0.0, 10.0, 10.0);
         let refused = [
             editor.paste(&copied, &renamed(&copied, 4), None),
             editor.paste(&copied, &twice, None),
@@ -1979,12 +1960,12 @@ mod tests {
             editor.add(id(4), None, arrow()),
             editor.add(id(6), Some(id(9)), arrow()),
             editor.add(id(6), Some(id(4)), arrow()),
-            editor.add(id(6), None, note(f64::NAN)),
+            editor.add(id(6), None, note(f64::NAN, 0.0, 10.0, 10.0)),
             editor.translate(&[id(4)], f64::INFINITY, 0.0),
             editor.update(id(4), arrow()),
             editor.remove(&[id(9)]),
             editor.restack(&[id(9)], Restack::Front),
-            editor.scale(&[id(4)], Point { x: 0.0, y: 0.0 }, 0.0),
+            editor.scale(&[id(4)], point(0.0, 0.0), 0.0),
             editor.group(id(6), &[id(4)]),
             editor.group(id(6), &[id(2), id(4)]),
             editor.group(id(1), &[id(4), id(5)]),
@@ -2164,15 +2145,15 @@ mod tests {
 
     #[test]
     fn scaling_keeps_the_origin_in_place_and_rotations_as_they_are_and_scales_text() {
-        let mut editor = Editor::new(board([(1, element(None, "a0", note(0.0)))]));
-        editor
-            .rotate(&ids([1]), Point { x: 0.0, y: 0.0 }, 30.0)
-            .unwrap();
+        let mut editor = Editor::new(board([(
+            1,
+            element(None, "a0", note(0.0, 0.0, 10.0, 10.0)),
+        )]));
+        editor.rotate(&ids([1]), point(0.0, 0.0), 30.0).unwrap();
         let corners = editor.board().outline(id(1)).unwrap();
         editor.scale(&ids([1]), corners[2], 3.0).unwrap();
         let scaled = editor.board().outline(id(1)).unwrap();
-        assert!((scaled[2].x - corners[2].x).abs() < 1e-9);
-        assert!((scaled[2].y - corners[2].y).abs() < 1e-9);
+        assert_at(scaled[2], corners[2].x, corners[2].y);
         let ElementKind::Note {
             frame,
             rotation,
@@ -2189,9 +2170,7 @@ mod tests {
     #[test]
     fn rotating_turns_positions_around_the_pivot_and_keeps_one_spelling() {
         let mut editor = editor();
-        editor
-            .rotate(&ids([4, 5]), Point { x: 20.0, y: 0.0 }, 90.0)
-            .unwrap();
+        editor.rotate(&ids([4, 5]), point(20.0, 0.0), 90.0).unwrap();
         let elements = &editor.board().elements;
         let ElementKind::Note {
             frame, rotation, ..
@@ -2200,17 +2179,15 @@ mod tests {
             unreachable!()
         };
         // Its centre, (25, 5), turns to (15, 5).
-        assert!((frame.x - 10.0).abs() < 1e-9 && frame.y.abs() < 1e-9);
+        assert_at(point(frame.x, frame.y), 10.0, 0.0);
         assert_eq!(*rotation, 90.0);
-        editor
-            .rotate(&ids([4]), Point { x: 0.0, y: 0.0 }, 300.0)
-            .unwrap();
+        editor.rotate(&ids([4]), point(0.0, 0.0), 300.0).unwrap();
         let ElementKind::Note { rotation, .. } = &editor.board().elements[&id(4)].kind else {
             unreachable!()
         };
         assert_eq!(*rotation, 30.0);
         editor
-            .rotate(&ids([4]), Point { x: 0.0, y: 0.0 }, -30.000_000_000_000_004)
+            .rotate(&ids([4]), point(0.0, 0.0), -30.000_000_000_000_004)
             .unwrap();
         let ElementKind::Note { rotation, .. } = &editor.board().elements[&id(4)].kind else {
             unreachable!()
@@ -2220,29 +2197,11 @@ mod tests {
 
     #[test]
     fn flipping_turns_over_only_the_images() {
-        let image = ElementKind::Image {
-            asset: crate::AssetId::of(b""),
-            natural_size: crate::Size {
-                width: 1,
-                height: 1,
-            },
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            rotation: 0.0,
-            edits: crate::ImageEdits::default(),
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        };
+        let image = image(0.0, 0.0, 1.0, 1.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", image)),
-            (3, element(Some(1), "a1", note(0.0))),
+            (3, element(Some(1), "a1", note(0.0, 0.0, 10.0, 10.0))),
         ]));
         assert_eq!(editor.flip(&ids([1]), false).unwrap(), ids([2]));
         let ElementKind::Image { edits, .. } = &editor.board().elements[&id(2)].kind else {
@@ -2255,27 +2214,14 @@ mod tests {
 
     #[test]
     fn greying_sets_each_image_alike_whatever_it_was() {
-        let image = |greyscale| ElementKind::Image {
-            asset: crate::AssetId::of(b""),
-            natural_size: crate::Size {
-                width: 1,
-                height: 1,
-            },
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            rotation: 0.0,
-            edits: crate::ImageEdits {
-                greyscale,
-                ..crate::ImageEdits::default()
-            },
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
+        let image = |greyscale| {
+            image_of(
+                b"",
+                crate::ImageEdits {
+                    greyscale,
+                    ..crate::ImageEdits::default()
+                },
+            )
         };
         let mut editor = Editor::new(board([
             (1, element(None, "a0", image(true))),
@@ -2287,43 +2233,14 @@ mod tests {
         assert_eq!(editor.set_greyscale(&ids([1, 2]), false), Ok(ids([1, 2])));
     }
 
-    fn played(bytes: &[u8], edits: crate::ImageEdits) -> ElementKind {
-        ElementKind::Image {
-            asset: AssetId::of(bytes),
-            natural_size: crate::Size {
-                width: 1,
-                height: 1,
-            },
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            rotation: 0.0,
-            edits,
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        }
-    }
-
-    fn edits_of(editor: &Editor, element: u128) -> crate::ImageEdits {
-        match &editor.board().elements[&id(element)].kind {
-            ElementKind::Image { edits, .. } => *edits,
-            other => panic!("{other:?}"),
-        }
-    }
-
     #[test]
     fn an_asset_plays_one_way_wherever_it_shows() {
         let still = crate::ImageEdits::default();
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", played(b"moving", still))),
+            (1, element(None, "a0", image_of(b"moving", still))),
             (2, element(None, "a1", ElementKind::group())),
-            (3, element(Some(2), "a0", played(b"moving", still))),
-            (4, element(None, "a2", played(b"other", still))),
+            (3, element(Some(2), "a0", image_of(b"moving", still))),
+            (4, element(None, "a2", image_of(b"other", still))),
         ]));
         let trim = Some(crate::Trim {
             start: 0.5,
@@ -2355,15 +2272,15 @@ mod tests {
         };
         let mut editor = Editor::new(board([(
             1,
-            element(None, "a0", played(b"moving", playing)),
+            element(None, "a0", image_of(b"moving", playing)),
         )]));
 
         let mut added = crate::ImageEdits {
             greyscale: true,
             ..crate::ImageEdits::default()
         };
-        editor.add(id(2), None, played(b"moving", added)).unwrap();
-        editor.add(id(3), None, played(b"other", added)).unwrap();
+        editor.add(id(2), None, image_of(b"moving", added)).unwrap();
+        editor.add(id(3), None, image_of(b"other", added)).unwrap();
         assert_eq!(
             edits_of(&editor, 2),
             crate::ImageEdits {
@@ -2375,7 +2292,7 @@ mod tests {
 
         added.speed = crate::Speed::new(4.0).unwrap();
         let copied = Copied {
-            elements: BTreeMap::from([(id(9), element(None, "a0", played(b"moving", added)))]),
+            elements: BTreeMap::from([(id(9), element(None, "a0", image_of(b"moving", added)))]),
         };
         editor.paste(&copied, &renamed(&copied, 4), None).unwrap();
         assert_eq!(edits_of(&editor, 4).speed, speed);
@@ -2384,22 +2301,28 @@ mod tests {
 
     #[test]
     fn straightening_turns_each_element_upright_in_its_place_and_leaves_ends_alone() {
-        let turned = |mut kind: ElementKind| {
-            if let ElementKind::Note { rotation, .. } = &mut kind {
-                *rotation = 30.0;
-            }
-            kind
-        };
         let mut editor = Editor::new(board([
             (1, element(None, "a0", ElementKind::group())),
-            (2, element(Some(1), "a0", turned(note(0.0)))),
-            (3, element(None, "a1", turned(note(20.0)))),
+            (
+                2,
+                element(Some(1), "a0", turned(note(0.0, 0.0, 10.0, 10.0), 30.0)),
+            ),
+            (
+                3,
+                element(None, "a1", turned(note(20.0, 0.0, 10.0, 10.0), 30.0)),
+            ),
             (4, element(None, "a2", arrow())),
         ]));
 
         assert_eq!(editor.straighten(&ids([1, 3, 4])), Ok(ids([2, 3])));
-        assert_eq!(editor.board().elements[&id(2)].kind, note(0.0));
-        assert_eq!(editor.board().elements[&id(3)].kind, note(20.0));
+        assert_eq!(
+            editor.board().elements[&id(2)].kind,
+            note(0.0, 0.0, 10.0, 10.0)
+        );
+        assert_eq!(
+            editor.board().elements[&id(3)].kind,
+            note(20.0, 0.0, 10.0, 10.0)
+        );
     }
 
     #[test]
@@ -2499,7 +2422,7 @@ mod tests {
         let start = editor.board().clone();
         editor.translate(&[id(4)], 1.0, 0.0).unwrap();
         let moved = editor.board().clone();
-        editor.update(id(4), note(99.0)).unwrap();
+        editor.update(id(4), note(99.0, 0.0, 10.0, 10.0)).unwrap();
         let updated = editor.board().clone();
 
         assert_eq!(editor.undo(), ids([4]));
@@ -2528,7 +2451,7 @@ mod tests {
         let [shown, added] = [b"shown", b"added"].map(|bytes| AssetId::of(bytes));
         let mut editor = Editor::new(board([
             (1, element(None, "a0", image(b"shown"))),
-            (2, element(None, "a1", note(0.0))),
+            (2, element(None, "a1", note(0.0, 0.0, 10.0, 10.0))),
         ]));
         assert!(editor.history_assets().is_empty());
 
@@ -2617,14 +2540,10 @@ mod tests {
         let start = editor.board().clone();
         assert!(editor.rewind_gesture().is_empty());
         editor.begin_gesture();
-        editor
-            .scale(&ids([4]), Point { x: 0.0, y: 0.0 }, 1.7)
-            .unwrap();
+        editor.scale(&ids([4]), point(0.0, 0.0), 1.7).unwrap();
         assert_eq!(editor.rewind_gesture(), ids([4]));
         assert_eq!(editor.board(), &start);
-        editor
-            .scale(&ids([4]), Point { x: 0.0, y: 0.0 }, 1.0)
-            .unwrap();
+        editor.scale(&ids([4]), point(0.0, 0.0), 1.0).unwrap();
         editor.end_gesture();
         assert!(editor.undo().is_empty());
         assert!(editor.is_saved());
@@ -2740,11 +2659,10 @@ mod tests {
             _ => unreachable!(),
         };
         let at = |x, width| {
-            let mut kind = note(x);
-            if let ElementKind::Note { frame, .. } = &mut kind {
-                (frame.y, frame.width) = (17.3, width);
-            }
-            Editor::new(board([(1, element(None, "a0", kind))]))
+            Editor::new(board([(
+                1,
+                element(None, "a0", note(x, 17.3, width, 10.0)),
+            )]))
         };
         // Moved onto the line at 1800, it lands a hair short of it.
         let x = -484.309_090_909_090_86;
@@ -2756,9 +2674,7 @@ mod tests {
 
         // Its right edge scaled from 120 onto the line at 360, it is a hair too wide.
         let mut editor = at(-80.0, 200.0);
-        editor
-            .scale(&ids([1]), Point { x: -80.0, y: 0.0 }, 2.2)
-            .unwrap();
+        editor.scale(&ids([1]), point(-80.0, 0.0), 2.2).unwrap();
         assert_ne!(frame(&editor).width, 440.0);
         editor.settle_on_grid(&ids([1])).unwrap();
         assert_eq!((frame(&editor).x, frame(&editor).width), (-80.0, 440.0));
@@ -2784,7 +2700,6 @@ mod tests {
 
     #[test]
     fn scaling_and_rotating_move_both_ends_of_an_arrow_or_a_line() {
-        let (from, to) = (Point { x: 10.0, y: 0.0 }, Point { x: 20.0, y: 0.0 });
         let ends = |editor: &Editor| match editor.board().elements[&id(1)].kind {
             ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
                 [from.x, from.y, to.x, to.y]
@@ -2792,36 +2707,13 @@ mod tests {
             _ => unreachable!(),
         };
         for kind in [
-            ElementKind::Arrow {
-                from,
-                to,
-                from_target: None,
-                to_target: None,
-                colour: Colour::Ink,
-                weight: Weight::Medium,
-                dash: Dash::Solid,
-                heads: Heads::End,
-                opacity: Default::default(),
-            },
-            ElementKind::Line {
-                from,
-                to,
-                from_target: None,
-                to_target: None,
-                colour: Colour::Ink,
-                weight: Weight::Medium,
-                dash: Dash::Solid,
-                opacity: Default::default(),
-            },
+            stuck((10.0, 0.0), None, (20.0, 0.0), None),
+            line((10.0, 0.0), (20.0, 0.0)),
         ] {
             let mut editor = Editor::new(board([(1, element(None, "a0", kind))]));
-            editor
-                .scale(&ids([1]), Point { x: 10.0, y: 0.0 }, 2.0)
-                .unwrap();
+            editor.scale(&ids([1]), point(10.0, 0.0), 2.0).unwrap();
             assert_eq!(ends(&editor), [10.0, 0.0, 30.0, 0.0]);
-            editor
-                .rotate(&ids([1]), Point { x: 0.0, y: 0.0 }, 90.0)
-                .unwrap();
+            editor.rotate(&ids([1]), point(0.0, 0.0), 90.0).unwrap();
             let expected = [0.0, 10.0, 0.0, 30.0];
             for (end, expected) in ends(&editor).into_iter().zip(expected) {
                 assert!((end - expected).abs() < 1e-9, "{end} {expected}");
@@ -2831,33 +2723,19 @@ mod tests {
 
     #[test]
     fn a_comment_moves_scales_and_turns_with_its_pin() {
-        let comment = ElementKind::Comment {
-            at: Point { x: 10.0, y: 0.0 },
-            text: "Too dark".to_owned(),
-            target: None,
-        };
-        let mut editor = Editor::new(board([(1, element(None, "a0", comment))]));
-        let at = |editor: &Editor| match &editor.board().elements[&id(1)].kind {
-            ElementKind::Comment { at, .. } => (at.x, at.y),
-            _ => unreachable!(),
-        };
+        let mut editor = Editor::new(board([(1, element(None, "a0", comment(10.0, 0.0)))]));
         editor.translate(&ids([1]), 5.0, 5.0).unwrap();
-        assert_eq!(at(&editor), (15.0, 5.0));
-        editor
-            .scale(&ids([1]), Point { x: 5.0, y: 5.0 }, 2.0)
-            .unwrap();
-        assert_eq!(at(&editor), (25.0, 5.0));
-        editor
-            .rotate(&ids([1]), Point { x: 5.0, y: 5.0 }, 90.0)
-            .unwrap();
-        let (x, y) = at(&editor);
-        assert!((x - 5.0).abs() < 1e-9 && (y - 25.0).abs() < 1e-9, "{x} {y}");
+        assert_eq!(position(&editor, 1), point(15.0, 5.0));
+        editor.scale(&ids([1]), point(5.0, 5.0), 2.0).unwrap();
+        assert_eq!(position(&editor, 1), point(25.0, 5.0));
+        editor.rotate(&ids([1]), point(5.0, 5.0), 90.0).unwrap();
+        assert_at(position(&editor, 1), 5.0, 25.0);
     }
 
     #[test]
     fn scaling_or_rotating_by_nothing_still_refuses_unknown_elements() {
         let mut editor = editor();
-        let origin = Point { x: 0.0, y: 0.0 };
+        let origin = point(0.0, 0.0);
         assert_eq!(
             editor.scale(&ids([9]), origin, 1.0),
             Err(Error::UnknownElement(id(9)))
@@ -2870,18 +2748,12 @@ mod tests {
 
     #[test]
     fn a_font_size_that_is_not_positive_is_refused() {
-        let sized = |font_size| ElementKind::Note {
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 10.0,
-                height: 10.0,
-            },
-            rotation: 0.0,
-            text: Text::new("a".to_owned(), font_size),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
+        let sized = |font_size| {
+            let mut kind = note(0.0, 0.0, 10.0, 10.0);
+            if let ElementKind::Note { text, .. } = &mut kind {
+                *text = Text::new("a", font_size);
+            }
+            kind
         };
         for font_size in [0.0, -0.0, -2.0] {
             let mut editor = editor();
@@ -2896,7 +2768,7 @@ mod tests {
         }
         // Scaling by tiny factors underflows to zero.
         let mut editor = editor();
-        let origin = Point { x: 0.0, y: 0.0 };
+        let origin = point(0.0, 0.0);
         let underflowed = editor
             .scale(&[id(4)], origin, f64::MIN_POSITIVE)
             .and_then(|_| editor.scale(&[id(4)], origin, f64::MIN_POSITIVE));
@@ -2907,55 +2779,15 @@ mod tests {
         );
     }
 
-    fn stuck(from: (f64, f64), on: Option<u128>, to: (f64, f64), at: Option<u128>) -> ElementKind {
-        ElementKind::Arrow {
-            from: Point {
-                x: from.0,
-                y: from.1,
-            },
-            to: Point { x: to.0, y: to.1 },
-            from_target: on.map(id),
-            to_target: at.map(id),
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
-            heads: Heads::End,
-            opacity: Default::default(),
-        }
-    }
-
-    fn framed(x: f64, y: f64, width: f64, height: f64) -> ElementKind {
-        ElementKind::Note {
-            frame: Rect {
-                x,
-                y,
-                width,
-                height,
-            },
-            rotation: 0.0,
-            text: Text::new(String::new(), 2.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        }
-    }
-
     fn ends(editor: &Editor, bits: u128) -> [(Point, Option<ElementId>); 2] {
         editor.board().elements[&id(bits)].kind.ends().unwrap()
-    }
-
-    fn assert_at(point: Point, x: f64, y: f64) {
-        assert!(
-            (point.x - x).abs() < 1e-9 && (point.y - y).abs() < 1e-9,
-            "{point:?} is not ({x}, {y})"
-        );
     }
 
     #[test]
     fn an_end_follows_what_it_sticks_to() {
         // `to` on the middle of the note's right side.
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", framed(0.0, 0.0, 100.0, 50.0))),
+            (1, element(None, "a0", note(0.0, 0.0, 100.0, 50.0))),
             (
                 2,
                 element(
@@ -2973,14 +2805,10 @@ mod tests {
         assert_at(to, 110.0, 30.0);
         assert_eq!(target, Some(id(1)));
 
-        editor
-            .scale(&ids([1]), Point { x: 10.0, y: 5.0 }, 2.0)
-            .unwrap();
+        editor.scale(&ids([1]), point(10.0, 5.0), 2.0).unwrap();
         assert_at(ends(&editor, 2)[1].0, 210.0, 55.0);
         // Around the note's centre, (110, 55), the right side's middle turns to the bottom.
-        editor
-            .rotate(&ids([1]), Point { x: 110.0, y: 55.0 }, 90.0)
-            .unwrap();
+        editor.rotate(&ids([1]), point(110.0, 55.0), 90.0).unwrap();
         assert_at(ends(&editor, 2)[1].0, 110.0, 155.0);
         assert_sound(&editor);
 
@@ -2992,35 +2820,25 @@ mod tests {
 
     #[test]
     fn an_end_stuck_to_an_image_keeps_to_the_same_pixel() {
-        let image = |frame: Rect, crop: Option<Rect>, flipped: bool| ElementKind::Image {
-            asset: crate::AssetId::of(b""),
-            natural_size: crate::Size {
-                width: 100,
-                height: 100,
-            },
-            frame,
-            rotation: 0.0,
-            edits: crate::ImageEdits {
-                crop,
-                flip_horizontal: flipped,
-                ..crate::ImageEdits::default()
-            },
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        };
-        let rect = |width, height| Rect {
-            x: 0.0,
-            y: 0.0,
-            width,
-            height,
+        let image = |frame: Rect, crop: Option<Rect>, flipped: bool| {
+            let mut kind = picture(frame.x, frame.y);
+            if let ElementKind::Image {
+                frame: shown,
+                edits,
+                ..
+            } = &mut kind
+            {
+                *shown = frame;
+                edits.crop = crop;
+                edits.flip_horizontal = flipped;
+            }
+            kind
         };
         // Twice the picture's size, so that `to` shows its pixel (20, 30).
         let mut editor = Editor::new(board([
             (
                 1,
-                element(None, "a0", image(rect(200.0, 200.0), None, false)),
+                element(None, "a0", image(area(0.0, 0.0, 200.0, 200.0), None, false)),
             ),
             (
                 2,
@@ -3034,13 +2852,15 @@ mod tests {
         editor
             .update(
                 id(1),
-                image(rect(100.0, 200.0), Some(rect(50.0, 100.0)), true),
+                image(
+                    area(0.0, 0.0, 100.0, 200.0),
+                    Some(area(0.0, 0.0, 50.0, 100.0)),
+                    true,
+                ),
             )
             .unwrap();
         assert_at(ends(&editor, 2)[1].0, 60.0, 60.0);
-        editor
-            .rotate(&ids([1]), Point { x: 50.0, y: 100.0 }, 90.0)
-            .unwrap();
+        editor.rotate(&ids([1]), point(50.0, 100.0), 90.0).unwrap();
         assert_at(ends(&editor, 2)[1].0, 90.0, 110.0);
         assert_at(ends(&editor, 2)[0].0, 300.0, 0.0);
     }
@@ -3048,7 +2868,7 @@ mod tests {
     #[test]
     fn an_arrow_moved_with_what_it_sticks_to_moves_once() {
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", framed(0.0, 0.0, 100.0, 50.0))),
+            (1, element(None, "a0", note(0.0, 0.0, 100.0, 50.0))),
             (
                 2,
                 element(
@@ -3068,25 +2888,7 @@ mod tests {
     #[test]
     fn an_arrow_flipped_with_the_image_it_sticks_to_still_follows_it() {
         // Twice the picture's size, so that `to` shows its pixel (20, 30).
-        let image = ElementKind::Image {
-            asset: crate::AssetId::of(b""),
-            natural_size: crate::Size {
-                width: 100,
-                height: 100,
-            },
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 200.0,
-                height: 200.0,
-            },
-            rotation: 0.0,
-            edits: crate::ImageEdits::default(),
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        };
+        let image = picture(0.0, 0.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", image)),
             (
@@ -3112,7 +2914,7 @@ mod tests {
         // its left side.
         let x = -484.309_090_909_090_86;
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", framed(x, 0.0, 100.0, 50.0))),
+            (1, element(None, "a0", note(x, 0.0, 100.0, 50.0))),
             (
                 2,
                 element(None, "a1", stuck((0.0, 300.0), None, (x, 25.0), Some(1))),
@@ -3136,7 +2938,7 @@ mod tests {
         assert_eq!(frame.x, 1800.0);
         let [(from, _), (to, target)] = ends(&editor, 2);
         assert_at(from, 0.0, 300.0);
-        assert_eq!(to, Point { x: 1800.0, y: 25.0 });
+        assert_eq!(to, point(1800.0, 25.0));
         assert_eq!(target, Some(id(1)));
         assert_sound(&editor);
 
@@ -3147,8 +2949,8 @@ mod tests {
     #[test]
     fn an_arrow_moved_alone_keeps_the_ends_that_still_land_on_what_they_stick_to() {
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", framed(0.0, 0.0, 100.0, 100.0))),
-            (2, element(None, "a1", framed(300.0, 0.0, 100.0, 100.0))),
+            (1, element(None, "a0", note(0.0, 0.0, 100.0, 100.0))),
+            (2, element(None, "a1", note(300.0, 0.0, 100.0, 100.0))),
             // From within the first note to the second's left side.
             (
                 3,
@@ -3174,7 +2976,7 @@ mod tests {
     fn an_end_follows_a_frame_that_text_grows_but_not_the_text_alone() {
         // `to` on the middle of the note's bottom side.
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", framed(0.0, 0.0, 100.0, 50.0))),
+            (1, element(None, "a0", note(0.0, 0.0, 100.0, 50.0))),
             (
                 2,
                 element(
@@ -3184,23 +2986,13 @@ mod tests {
                 ),
             ),
         ]));
-        let ElementKind::Note {
-            frame, rotation, ..
-        } = framed(0.0, 0.0, 100.0, 50.0)
-        else {
-            unreachable!()
-        };
-        let written = ElementKind::Note {
-            frame,
-            rotation,
-            text: Text::new("Warm".to_owned(), 2.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        };
+        let mut written = note(0.0, 0.0, 100.0, 50.0);
+        if let ElementKind::Note { text, .. } = &mut written {
+            *text = Text::new("Warm", 2.0);
+        }
         assert_eq!(editor.update(id(1), written).unwrap(), ids([1]));
         assert_eq!(
-            editor.update(id(1), framed(0.0, 0.0, 100.0, 80.0)).unwrap(),
+            editor.update(id(1), note(0.0, 0.0, 100.0, 80.0)).unwrap(),
             ids([1, 2])
         );
         assert_at(ends(&editor, 2)[1].0, 50.0, 80.0);
@@ -3210,7 +3002,7 @@ mod tests {
     fn an_end_follows_a_flat_frame_it_sticks_to() {
         // `to` on a note drawn flat, as a horizontal drag leaves it.
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", framed(0.0, 100.0, 100.0, 0.0))),
+            (1, element(None, "a0", note(0.0, 100.0, 100.0, 0.0))),
             (
                 2,
                 element(
@@ -3220,7 +3012,7 @@ mod tests {
                 ),
             ),
         ]));
-        let on = Point { x: 30.0, y: 100.0 };
+        let on = point(30.0, 100.0);
         assert_eq!(
             editor.board().land_end(on, None, Some(3.0), None),
             crate::End {
@@ -3237,12 +3029,10 @@ mod tests {
         assert_at(to, 70.0, 140.0);
         assert_eq!(target, Some(id(1)));
         // Around the note's centre, (90, 140), its line turns upright.
-        editor
-            .rotate(&ids([1]), Point { x: 90.0, y: 140.0 }, 90.0)
-            .unwrap();
+        editor.rotate(&ids([1]), point(90.0, 140.0), 90.0).unwrap();
         assert_at(ends(&editor, 2)[1].0, 90.0, 120.0);
         editor
-            .update(id(1), framed(40.0, 140.0, 100.0, 50.0))
+            .update(id(1), note(40.0, 140.0, 100.0, 50.0))
             .unwrap();
         let [_, (to, target)] = ends(&editor, 2);
         assert_eq!(target, Some(id(1)));
@@ -3294,51 +3084,15 @@ mod tests {
         );
     }
 
-    fn on(mut kind: ElementKind, bits: u128) -> ElementKind {
-        *kind.target_mut().unwrap() = Some(id(bits));
-        kind
-    }
-
     fn picture(x: f64, y: f64) -> ElementKind {
-        ElementKind::Image {
-            asset: crate::AssetId::of(b""),
-            natural_size: crate::Size {
+        let mut kind = image(x, y, 200.0, 200.0);
+        if let ElementKind::Image { natural_size, .. } = &mut kind {
+            *natural_size = crate::Size {
                 width: 100,
                 height: 100,
-            },
-            frame: Rect {
-                x,
-                y,
-                width: 200.0,
-                height: 200.0,
-            },
-            rotation: 0.0,
-            edits: crate::ImageEdits::default(),
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
+            };
         }
-    }
-
-    fn turned(kind: ElementKind, degrees: f64) -> ElementKind {
-        let ElementKind::Note {
-            frame,
-            text,
-            target,
-            ..
-        } = kind
-        else {
-            unreachable!()
-        };
-        ElementKind::Note {
-            frame,
-            rotation: degrees,
-            text,
-            target,
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        }
+        kind
     }
 
     fn placement(editor: &Editor, bits: u128) -> (Rect, f64, f64, Option<ElementId>) {
@@ -3376,14 +3130,10 @@ mod tests {
         assert_eq!(sticks_to, Some(id(target)));
     }
 
-    fn point(x: f64, y: f64) -> Point {
-        Point { x, y }
-    }
-
     #[test]
     fn an_edit_writes_a_style_chosen_as_it_comes_as_nothing() {
         let aligned = |align| {
-            let mut kind = framed(0.0, 0.0, 10.0, 10.0);
+            let mut kind = note(0.0, 0.0, 10.0, 10.0);
             if let ElementKind::Note { text, .. } = &mut kind {
                 text.align = align;
             }
@@ -3417,24 +3167,10 @@ mod tests {
 
     #[test]
     fn a_shape_turned_into_a_cross_fills_nothing() {
-        let filled = ElementKind::Shape {
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 10.0,
-                height: 10.0,
-            },
-            rotation: 0.0,
-            shape: crate::Shape::Rectangle,
-            corners: Default::default(),
-            text: Text::new(String::new(), 2.0),
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
-            fill: Fill::Solid,
-            opacity: Default::default(),
-        };
+        let filled = filled(
+            labelled(crate::Shape::Rectangle, area(0.0, 0.0, 10.0, 10.0), 0.0, ""),
+            Fill::Solid,
+        );
         let mut editor = Editor::new(board([(1, element(None, "a0", filled.clone()))]));
         let mut cross = filled;
         if let ElementKind::Shape { shape, .. } = &mut cross {
@@ -3451,11 +3187,8 @@ mod tests {
     fn a_transform_makes_its_edits_one_after_another_and_undoes_as_one() {
         let before = board([
             (1, element(None, "a0", picture(0.0, 0.0))),
-            (
-                2,
-                element(None, "a1", on(framed(40.0, 40.0, 20.0, 10.0), 1)),
-            ),
-            (3, element(None, "a2", framed(300.0, 0.0, 10.0, 10.0))),
+            (2, element(None, "a1", on(note(40.0, 40.0, 20.0, 10.0), 1))),
+            (3, element(None, "a2", note(300.0, 0.0, 10.0, 10.0))),
             (
                 4,
                 element(
@@ -3497,11 +3230,7 @@ mod tests {
 
     #[test]
     fn a_transform_measures_what_it_needs_from_the_extent_of_the_elements() {
-        let comment = ElementKind::Comment {
-            at: point(300.0, 100.0),
-            text: "Here".to_owned(),
-            target: None,
-        };
+        let comment = comment(300.0, 100.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
             (2, element(None, "a1", comment)),
@@ -3519,21 +3248,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             editor.board().extent(&ids([1, 2])),
-            Some(Rect {
-                x: 10.0,
-                y: 20.0,
-                width: 150.0,
-                height: 100.0
-            })
+            Some(area(10.0, 20.0, 150.0, 100.0))
         );
         assert_eq!(
             editor.board().bounds(&ids([1])),
-            Some(Rect {
-                x: 10.0,
-                y: 20.0,
-                width: 100.0,
-                height: 100.0
-            })
+            Some(area(10.0, 20.0, 100.0, 100.0))
         );
     }
 
@@ -3608,11 +3327,8 @@ mod tests {
     fn a_transform_sets_down_what_it_moves_unless_told_otherwise() {
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
-            (
-                2,
-                element(None, "a1", on(framed(40.0, 40.0, 20.0, 10.0), 1)),
-            ),
-            (3, element(None, "a2", framed(100.0, 100.0, 10.0, 10.0))),
+            (2, element(None, "a1", on(note(40.0, 40.0, 20.0, 10.0), 1))),
+            (3, element(None, "a2", note(100.0, 100.0, 10.0, 10.0))),
         ]));
         let target = |editor: &Editor, bits| editor.board().elements[&id(bits)].kind.target();
         // A flip moves nothing, so sets nothing down.
@@ -3659,10 +3375,7 @@ mod tests {
     fn a_note_stuck_whole_moves_scales_and_turns_with_what_it_sticks_to() {
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
-            (
-                2,
-                element(None, "a1", on(framed(40.0, 40.0, 20.0, 10.0), 1)),
-            ),
+            (2, element(None, "a1", on(note(40.0, 40.0, 20.0, 10.0), 1))),
         ]));
         let before = editor.board().clone();
 
@@ -3670,14 +3383,10 @@ mod tests {
         // A move alone moves it exactly as much.
         assert_eq!(placement(&editor, 2).0.x, 50.0);
         assert_placed(&editor, 2, 1, [50.0, 45.0, 20.0, 10.0], 0.0, 2.0);
-        editor
-            .scale(&ids([1]), Point { x: 10.0, y: 5.0 }, 2.0)
-            .unwrap();
+        editor.scale(&ids([1]), point(10.0, 5.0), 2.0).unwrap();
         assert_placed(&editor, 2, 1, [90.0, 85.0, 40.0, 20.0], 0.0, 4.0);
         // Around the image's centre, (210, 205), its centre goes from (110, 95) to (320, 105).
-        editor
-            .rotate(&ids([1]), Point { x: 210.0, y: 205.0 }, 90.0)
-            .unwrap();
+        editor.rotate(&ids([1]), point(210.0, 205.0), 90.0).unwrap();
         assert_placed(&editor, 2, 1, [300.0, 95.0, 40.0, 20.0], 90.0, 4.0);
         assert_sound(&editor);
 
@@ -3696,7 +3405,7 @@ mod tests {
                 element(
                     None,
                     "a1",
-                    on(turned(framed(40.0, 95.0, 20.0, 10.0), 30.0), 1),
+                    on(turned(note(40.0, 95.0, 20.0, 10.0), 30.0), 1),
                 ),
             ),
         ]));
@@ -3713,10 +3422,7 @@ mod tests {
     fn an_upright_note_stuck_to_an_image_stays_upright_through_every_flip() {
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
-            (
-                2,
-                element(None, "a1", on(framed(40.0, 20.0, 20.0, 10.0), 1)),
-            ),
+            (2, element(None, "a1", on(note(40.0, 20.0, 20.0, 10.0), 1))),
         ]));
         editor.flip(&ids([1]), true).unwrap();
         assert_placed(&editor, 2, 1, [140.0, 20.0, 20.0, 10.0], 0.0, 2.0);
@@ -3726,22 +3432,16 @@ mod tests {
 
     #[test]
     fn straightened_with_their_image_notes_keep_to_their_pixel_and_stand_upright() {
-        let mut image = picture(0.0, 0.0);
-        if let ElementKind::Image { rotation, .. } = &mut image {
-            *rotation = 30.0;
-        }
+        let image = turned(picture(0.0, 0.0), 30.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", image)),
-            (
-                2,
-                element(None, "a1", on(framed(40.0, 40.0, 20.0, 10.0), 1)),
-            ),
+            (2, element(None, "a1", on(note(40.0, 40.0, 20.0, 10.0), 1))),
             (
                 3,
                 element(
                     None,
                     "a2",
-                    on(turned(framed(120.0, 120.0, 20.0, 10.0), 30.0), 1),
+                    on(turned(note(120.0, 120.0, 20.0, 10.0), 30.0), 1),
                 ),
             ),
         ]));
@@ -3762,15 +3462,12 @@ mod tests {
 
     #[test]
     fn straightened_with_its_image_a_stroke_keeps_its_points_on_their_pixels() {
-        let mut image = picture(0.0, 0.0);
-        if let ElementKind::Image { rotation, .. } = &mut image {
-            *rotation = 30.0;
-        }
+        let image = turned(picture(0.0, 0.0), 30.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", image)),
             (
                 2,
-                element(None, "a1", on(line((60.0, 80.0), (140.0, 120.0)), 1)),
+                element(None, "a1", on(highlighter((60.0, 80.0), (140.0, 120.0)), 1)),
             ),
         ]));
         let pixels = |editor: &Editor| {
@@ -3800,33 +3497,26 @@ mod tests {
 
     #[test]
     fn a_stroke_straightens_upright_unless_what_it_sticks_to_turns_with_it() {
-        let turned = |bits, x| {
-            let mut stroke = on(line((x + 60.0, 80.0), (x + 140.0, 120.0)), bits);
-            if let ElementKind::Stroke { rotation, .. } = &mut stroke {
-                *rotation = 25.0;
-            }
-            stroke
+        let stroke_on = |bits, x| {
+            on(
+                turned(highlighter((x + 60.0, 80.0), (x + 140.0, 120.0)), 25.0),
+                bits,
+            )
         };
-        let tilted = |x| {
-            let mut image = picture(x, 0.0);
-            if let ElementKind::Image { rotation, .. } = &mut image {
-                *rotation = 30.0;
-            }
-            image
-        };
-        let upright = |x, bits| on(framed(x + 40.0, 40.0, 120.0, 120.0), bits);
+        let tilted = |x| turned(picture(x, 0.0), 30.0);
+        let upright = |x, bits| on(note(x + 40.0, 40.0, 120.0, 120.0), bits);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
-            (2, element(None, "a1", turned(1, 0.0))),
-            (3, element(None, "a2", turned(1, 0.0))),
+            (2, element(None, "a1", stroke_on(1, 0.0))),
+            (3, element(None, "a2", stroke_on(1, 0.0))),
             (4, element(None, "a3", tilted(300.0))),
             // Upright on the turned image, which it follows then stands back up.
             (5, element(None, "a4", upright(300.0, 4))),
-            (6, element(None, "a5", turned(5, 300.0))),
+            (6, element(None, "a5", stroke_on(5, 300.0))),
             (7, element(None, "a6", tilted(600.0))),
             // Upright on the turned image, which it follows, left turned.
             (8, element(None, "a7", upright(600.0, 7))),
-            (9, element(None, "a8", turned(8, 600.0))),
+            (9, element(None, "a8", stroke_on(8, 600.0))),
         ]));
         let rotation = |editor: &Editor, bits| {
             let ElementKind::Stroke { rotation, .. } = editor.board().elements[&id(bits)].kind
@@ -3849,10 +3539,10 @@ mod tests {
     #[test]
     fn a_stroke_stuck_to_a_note_scales_with_it() {
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", framed(0.0, 0.0, 200.0, 100.0))),
+            (1, element(None, "a0", note(0.0, 0.0, 200.0, 100.0))),
             (
                 2,
-                element(None, "a1", on(line((40.0, 40.0), (60.0, 50.0)), 1)),
+                element(None, "a1", on(highlighter((40.0, 40.0), (60.0, 50.0)), 1)),
             ),
         ]));
         editor.scale(&ids([1]), point(0.0, 0.0), 2.0).unwrap();
@@ -3861,10 +3551,7 @@ mod tests {
 
     #[test]
     fn straightened_down_a_chain_what_sticks_keeps_to_the_same_place_on_what_it_sticks_to() {
-        let mut image = picture(0.0, 0.0);
-        if let ElementKind::Image { rotation, .. } = &mut image {
-            *rotation = 30.0;
-        }
+        let image = turned(picture(0.0, 0.0), 30.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", image)),
             (
@@ -3872,7 +3559,7 @@ mod tests {
                 element(
                     None,
                     "a1",
-                    on(turned(framed(40.0, 40.0, 80.0, 60.0), 45.0), 1),
+                    on(turned(note(40.0, 40.0, 80.0, 60.0), 45.0), 1),
                 ),
             ),
             (
@@ -3880,7 +3567,7 @@ mod tests {
                 element(
                     None,
                     "a2",
-                    on(turned(framed(60.0, 60.0, 20.0, 10.0), 10.0), 2),
+                    on(turned(note(60.0, 60.0, 20.0, 10.0), 10.0), 2),
                 ),
             ),
             (
@@ -3924,10 +3611,7 @@ mod tests {
 
     #[test]
     fn straightened_as_a_group_a_note_keeps_to_its_pixel_on_the_image_beside_it() {
-        let mut image = picture(0.0, 0.0);
-        if let ElementKind::Image { rotation, .. } = &mut image {
-            *rotation = 30.0;
-        }
+        let image = turned(picture(0.0, 0.0), 30.0);
         let mut editor = Editor::new(board([
             (9, element(None, "a0", ElementKind::group())),
             (1, element(Some(9), "a0", image)),
@@ -3936,7 +3620,7 @@ mod tests {
                 element(
                     Some(9),
                     "a1",
-                    on(turned(framed(120.0, 120.0, 20.0, 10.0), 30.0), 1),
+                    on(turned(note(120.0, 120.0, 20.0, 10.0), 30.0), 1),
                 ),
             ),
         ]));
@@ -3956,12 +3640,6 @@ mod tests {
 
     #[test]
     fn at_actual_size_each_image_stands_upright_at_a_unit_to_the_pixel_it_shows() {
-        let rect = |x, y, width, height| Rect {
-            x,
-            y,
-            width,
-            height,
-        };
         let mut turned_over = picture(0.0, 0.0);
         if let ElementKind::Image {
             rotation, edits, ..
@@ -3973,8 +3651,8 @@ mod tests {
         // Its pixels (10, 20) to (50, 50), shown twice as large.
         let mut cropped = picture(300.0, 0.0);
         if let ElementKind::Image { frame, edits, .. } = &mut cropped {
-            *frame = rect(300.0, 0.0, 80.0, 60.0);
-            edits.crop = Some(rect(10.0, 20.0, 40.0, 30.0));
+            *frame = area(300.0, 0.0, 80.0, 60.0);
+            edits.crop = Some(area(10.0, 20.0, 40.0, 30.0));
         }
         let mut empty = picture(600.0, 0.0);
         if let ElementKind::Image { natural_size, .. } = &mut empty {
@@ -3987,7 +3665,7 @@ mod tests {
             (1, element(None, "a0", turned_over.clone())),
             (2, element(None, "a1", cropped.clone())),
             (3, element(None, "a2", empty)),
-            (4, element(None, "a3", framed(0.0, 300.0, 20.0, 10.0))),
+            (4, element(None, "a3", note(0.0, 300.0, 20.0, 10.0))),
         ]));
         let before = editor.board().clone();
         let upright = |mut kind: ElementKind, at: Rect| {
@@ -4005,9 +3683,9 @@ mod tests {
         let kind = |bits| &editor.board().elements[&id(bits)].kind;
         assert_eq!(
             kind(1),
-            &upright(turned_over, rect(50.0, 50.0, 100.0, 100.0))
+            &upright(turned_over, area(50.0, 50.0, 100.0, 100.0))
         );
-        assert_eq!(kind(2), &upright(cropped, rect(320.0, 15.0, 40.0, 30.0)));
+        assert_eq!(kind(2), &upright(cropped, area(320.0, 15.0, 40.0, 30.0)));
         assert_eq!(editor.undo(), ids([1, 2]));
         assert_eq!(editor.board(), &before);
     }
@@ -4022,10 +3700,7 @@ mod tests {
             }
             kind
         };
-        let mut tilted = at(0.0, 100.0, 100.0);
-        if let ElementKind::Image { rotation, .. } = &mut tilted {
-            *rotation = 30.0;
-        }
+        let tilted = turned(at(0.0, 100.0, 100.0), 30.0);
         let mut empty = picture(600.0, 0.0);
         if let ElementKind::Image { natural_size, .. } = &mut empty {
             *natural_size = crate::Size {
@@ -4037,7 +3712,7 @@ mod tests {
             (1, element(None, "a0", tilted)),
             (2, element(None, "a1", at(300.0, 100.0 + 1e-7, 100.0))),
             (3, element(None, "a2", empty)),
-            (4, element(None, "a3", note(0.0))),
+            (4, element(None, "a3", note(0.0, 0.0, 10.0, 10.0))),
             (5, element(None, "a4", ElementKind::group())),
             (6, element(Some(5), "a0", at(900.0, 50.0, 100.0))),
             (7, locked(None, "a5", ElementKind::group())),
@@ -4069,10 +3744,7 @@ mod tests {
 
     #[test]
     fn at_actual_size_what_sticks_to_an_image_keeps_to_its_pixel() {
-        let mut image = picture(0.0, 0.0);
-        if let ElementKind::Image { rotation, .. } = &mut image {
-            *rotation = 30.0;
-        }
+        let image = turned(picture(0.0, 0.0), 30.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", image)),
             (
@@ -4080,7 +3752,7 @@ mod tests {
                 element(
                     None,
                     "a1",
-                    on(turned(framed(120.0, 120.0, 20.0, 10.0), 30.0), 1),
+                    on(turned(note(120.0, 120.0, 20.0, 10.0), 30.0), 1),
                 ),
             ),
             (
@@ -4102,23 +3774,16 @@ mod tests {
         }
         assert_eq!(placement(&editor, 2).1, 0.0);
         assert_eq!(placement(&editor, 2).2, 1.0);
-        assert_eq!(ends(&editor, 3)[0].0, Point { x: 300.0, y: 0.0 });
+        assert_eq!(ends(&editor, 3)[0].0, point(300.0, 0.0));
         assert_sound(&editor);
     }
 
     #[test]
     fn what_sticks_to_what_follows_follows_too() {
-        let comment = ElementKind::Comment {
-            at: Point { x: 60.0, y: 60.0 },
-            text: "Here".to_owned(),
-            target: Some(id(2)),
-        };
+        let comment = on(comment(60.0, 60.0), 2);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
-            (
-                2,
-                element(None, "a1", on(framed(40.0, 40.0, 50.0, 50.0), 1)),
-            ),
+            (2, element(None, "a1", on(note(40.0, 40.0, 50.0, 50.0), 1))),
             (3, element(None, "a2", comment)),
             (
                 4,
@@ -4129,10 +3794,7 @@ mod tests {
             editor.translate(&ids([1]), 10.0, 5.0).unwrap(),
             ids([1, 2, 3, 4])
         );
-        let ElementKind::Comment { at, .. } = editor.board().elements[&id(3)].kind else {
-            unreachable!()
-        };
-        assert_eq!((at.x, at.y), (70.0, 65.0));
+        assert_eq!(position(&editor, 3), point(70.0, 65.0));
         assert_at(ends(&editor, 4)[1].0, 100.0, 70.0);
         assert_at(ends(&editor, 4)[0].0, 300.0, 0.0);
         assert_sound(&editor);
@@ -4140,89 +3802,55 @@ mod tests {
         editor.undo();
         editor.translate(&ids([1, 2]), 10.0, 5.0).unwrap();
         assert_placed(&editor, 2, 1, [50.0, 45.0, 50.0, 50.0], 0.0, 2.0);
-        let ElementKind::Comment { at, .. } = editor.board().elements[&id(3)].kind else {
-            unreachable!()
-        };
-        assert_eq!((at.x, at.y), (70.0, 65.0));
+        assert_eq!(position(&editor, 3), point(70.0, 65.0));
     }
 
     #[test]
     fn a_note_stuck_to_one_that_grows_to_fit_its_text_keeps_its_size_and_place() {
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", framed(0.0, 0.0, 100.0, 50.0))),
-            (
-                2,
-                element(None, "a1", on(framed(40.0, 20.0, 20.0, 10.0), 1)),
-            ),
+            (1, element(None, "a0", note(0.0, 0.0, 100.0, 50.0))),
+            (2, element(None, "a1", on(note(40.0, 20.0, 20.0, 10.0), 1))),
         ]));
-        editor
-            .update(id(1), framed(0.0, 0.0, 100.0, 100.0))
-            .unwrap();
+        editor.update(id(1), note(0.0, 0.0, 100.0, 100.0)).unwrap();
         assert_placed(&editor, 2, 1, [40.0, 20.0, 20.0, 10.0], 0.0, 2.0);
     }
 
     #[test]
     fn what_sticks_whole_to_a_note_stays_on_its_line_as_its_text_grows() {
         // Pinned on the first of its lines, and set down on it whole there too.
-        let comment = ElementKind::Comment {
-            at: Point { x: 50.0, y: 6.0 },
-            text: "Here".to_owned(),
-            target: Some(id(1)),
-        };
+        let comment = on(comment(50.0, 6.0), 1);
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", framed(0.0, 0.0, 100.0, 12.0))),
+            (1, element(None, "a0", note(0.0, 0.0, 100.0, 12.0))),
             (2, element(None, "a1", comment)),
-            (3, element(None, "a2", on(framed(10.0, 2.0, 20.0, 8.0), 1))),
+            (3, element(None, "a2", on(note(10.0, 2.0, 20.0, 8.0), 1))),
         ]));
         // Grown down from one line to ten, as fitting its text does.
-        editor
-            .update(id(1), framed(0.0, 0.0, 100.0, 120.0))
-            .unwrap();
-        let ElementKind::Comment { at, .. } = editor.board().elements[&id(2)].kind else {
-            unreachable!()
-        };
-        assert_at(at, 50.0, 6.0);
+        editor.update(id(1), note(0.0, 0.0, 100.0, 120.0)).unwrap();
+        assert_at(position(&editor, 2), 50.0, 6.0);
         assert_placed(&editor, 3, 1, [10.0, 2.0, 20.0, 8.0], 0.0, 2.0);
     }
 
     #[test]
     fn landing_sticks_to_the_topmost_surface_below_that_holds_it_whole() {
-        let hollow = ElementKind::Shape {
-            frame: Rect {
-                x: 10.0,
-                y: 10.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            rotation: 0.0,
-            shape: crate::Shape::Rectangle,
-            corners: Default::default(),
-            text: Text::new(String::new(), 2.0),
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            fill: Fill::Hollow,
-            dash: Dash::Solid,
-            opacity: Default::default(),
-        };
-        let comment = |x, y| ElementKind::Comment {
-            at: Point { x, y },
-            text: "Here".to_owned(),
-            target: None,
-        };
+        let hollow = labelled(
+            crate::Shape::Rectangle,
+            area(10.0, 10.0, 50.0, 50.0),
+            0.0,
+            "",
+        );
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
             (2, element(None, "a1", hollow)),
-            (3, element(None, "a2", framed(100.0, 100.0, 80.0, 80.0))),
+            (3, element(None, "a2", note(100.0, 100.0, 80.0, 80.0))),
             // Within what the hollow shape surrounds, on the note, and partly off both.
-            (4, element(None, "a3", framed(20.0, 20.0, 10.0, 10.0))),
-            (5, element(None, "a4", framed(110.0, 110.0, 20.0, 20.0))),
-            (6, element(None, "a5", framed(190.0, 190.0, 20.0, 20.0))),
+            (4, element(None, "a3", note(20.0, 20.0, 10.0, 10.0))),
+            (5, element(None, "a4", note(110.0, 110.0, 20.0, 20.0))),
+            (6, element(None, "a5", note(190.0, 190.0, 20.0, 20.0))),
             (7, element(None, "a6", comment(150.0, 150.0))),
             // Where 4 lies, but drawn below everything, as "Zz" comes before "a0".
-            (8, element(None, "Zz", framed(20.0, 20.0, 10.0, 10.0))),
+            (8, element(None, "Zz", note(20.0, 20.0, 10.0, 10.0))),
             (9, element(None, "a7", ElementKind::group())),
-            (10, element(Some(9), "a0", framed(30.0, 150.0, 10.0, 10.0))),
+            (10, element(Some(9), "a0", note(30.0, 150.0, 10.0, 10.0))),
             (11, element(None, "a8", comment(500.0, 500.0))),
         ]));
         assert_eq!(
@@ -4245,28 +3873,15 @@ mod tests {
 
     #[test]
     fn an_ellipse_lands_on_what_holds_its_curve_though_not_its_frame() {
-        let ellipse = |x, y, width, height, rotation| ElementKind::Shape {
-            frame: Rect {
-                x,
-                y,
-                width,
-                height,
-            },
-            rotation,
-            shape: crate::Shape::Ellipse,
-            corners: Default::default(),
-            text: Text::new(String::new(), 2.0),
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            fill: Fill::Hollow,
-            dash: Dash::Solid,
-            opacity: Default::default(),
+        let ellipse = |x, y, width, height, rotation| {
+            labelled(
+                crate::Shape::Ellipse,
+                area(x, y, width, height),
+                rotation,
+                "",
+            )
         };
-        let mut aslant = picture(400.0, 0.0);
-        if let ElementKind::Image { rotation, .. } = &mut aslant {
-            *rotation = 45.0;
-        }
+        let aslant = turned(picture(400.0, 0.0), 45.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
             // Its curve reaches down to 194.7, its turned frame to 206.6.
@@ -4300,29 +3915,14 @@ mod tests {
         if let ElementKind::Image { edits, .. } = &mut shown {
             edits.crop_shape = CropShape::Ellipse;
         }
-        let ellipse = |x, y, width, height| ElementKind::Shape {
-            frame: Rect {
-                x,
-                y,
-                width,
-                height,
-            },
-            rotation: 0.0,
-            shape: crate::Shape::Ellipse,
-            corners: Default::default(),
-            text: Text::new(String::new(), 2.0),
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            fill: Fill::Hollow,
-            dash: Dash::Solid,
-            opacity: Default::default(),
+        let ellipse = |x, y, width, height| {
+            labelled(crate::Shape::Ellipse, area(x, y, width, height), 0.0, "")
         };
         let mut editor = Editor::new(board([
             (1, element(None, "a0", shown)),
-            (2, element(None, "a1", framed(90.0, 90.0, 20.0, 20.0))),
+            (2, element(None, "a1", note(90.0, 90.0, 20.0, 20.0))),
             // In a corner of the picture's frame, out of its curve.
-            (3, element(None, "a2", framed(5.0, 5.0, 20.0, 20.0))),
+            (3, element(None, "a2", note(5.0, 5.0, 20.0, 20.0))),
             (4, element(None, "a3", ellipse(50.0, 50.0, 100.0, 100.0))),
             // Within the frame, its curve out of the picture's.
             (5, element(None, "a4", ellipse(0.0, 20.0, 200.0, 40.0))),
@@ -4337,29 +3937,10 @@ mod tests {
 
     #[test]
     fn landing_sticks_to_a_filled_shape_but_through_a_filled_cross() {
-        let shape = |shape, x, y, width, height, fill| ElementKind::Shape {
-            frame: Rect {
-                x,
-                y,
-                width,
-                height,
-            },
-            rotation: 0.0,
-            shape,
-            corners: Default::default(),
-            text: Text::new(String::new(), 2.0),
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            fill,
-            dash: Dash::Solid,
-            opacity: Default::default(),
+        let shape = |shape, x, y, width, height, fill| {
+            filled(labelled(shape, area(x, y, width, height), 0.0, ""), fill)
         };
-        let comment = ElementKind::Comment {
-            at: Point { x: 50.0, y: 50.0 },
-            text: "Here".to_owned(),
-            target: None,
-        };
+        let comment = comment(50.0, 50.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
             (
@@ -4386,9 +3967,9 @@ mod tests {
                     shape(crate::Shape::Ellipse, 300.0, 0.0, 200.0, 100.0, Fill::Solid),
                 ),
             ),
-            (5, element(None, "a4", framed(20.0, 20.0, 10.0, 10.0))),
+            (5, element(None, "a4", note(20.0, 20.0, 10.0, 10.0))),
             // Between the cross's strokes.
-            (6, element(None, "a5", framed(120.0, 140.0, 10.0, 10.0))),
+            (6, element(None, "a5", note(120.0, 140.0, 10.0, 10.0))),
             (
                 7,
                 element(
@@ -4411,27 +3992,23 @@ mod tests {
     fn nothing_sticks_to_what_sticks_to_it() {
         // As big as each other, each lies whole on the other.
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", framed(0.0, 0.0, 50.0, 50.0))),
-            (2, element(None, "a1", on(framed(0.0, 0.0, 50.0, 50.0), 1))),
+            (1, element(None, "a0", note(0.0, 0.0, 50.0, 50.0))),
+            (2, element(None, "a1", on(note(0.0, 0.0, 50.0, 50.0), 1))),
         ]));
         editor.restack(&ids([1]), Restack::Front).unwrap();
         assert!(editor.land(&ids([1])).unwrap().is_empty());
         assert_eq!(
-            editor.update(id(1), on(framed(0.0, 0.0, 50.0, 50.0), 2)),
+            editor.update(id(1), on(note(0.0, 0.0, 50.0, 50.0), 2)),
             Err(Error::StuckToItself(id(1)))
         );
         assert_eq!(
-            editor.update(id(1), on(framed(0.0, 0.0, 50.0, 50.0), 1)),
+            editor.update(id(1), on(note(0.0, 0.0, 50.0, 50.0), 1)),
             Err(Error::StuckToItself(id(1)))
         );
-        let comment = ElementKind::Comment {
-            at: Point { x: 0.0, y: 0.0 },
-            text: String::new(),
-            target: Some(id(2)),
-        };
+        let comment = on(comment(0.0, 0.0), 2);
         editor.add(id(3), None, comment).unwrap();
         assert_eq!(
-            editor.update(id(1), on(framed(0.0, 0.0, 50.0, 50.0), 3)),
+            editor.update(id(1), on(note(0.0, 0.0, 50.0, 50.0), 3)),
             Err(Error::NotATarget(id(3)))
         );
     }
@@ -4440,9 +4017,9 @@ mod tests {
     fn landing_several_at_once_sticks_none_to_itself() {
         // As big as each other, each lies whole on those below it. 2 sticks to 1, drawn above.
         let mut editor = Editor::new(board([
-            (2, element(None, "a0", on(framed(0.0, 0.0, 50.0, 50.0), 1))),
-            (3, element(None, "a1", framed(0.0, 0.0, 50.0, 50.0))),
-            (1, element(None, "a2", framed(0.0, 0.0, 50.0, 50.0))),
+            (2, element(None, "a0", on(note(0.0, 0.0, 50.0, 50.0), 1))),
+            (3, element(None, "a1", note(0.0, 0.0, 50.0, 50.0))),
+            (1, element(None, "a2", note(0.0, 0.0, 50.0, 50.0))),
         ]));
         editor.land(&ids([3, 1])).unwrap();
         assert_sound(&editor);
@@ -4456,10 +4033,7 @@ mod tests {
     fn landing_what_cannot_stick_whole_changes_nothing() {
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
-            (
-                2,
-                element(None, "a1", on(framed(10.0, 10.0, 20.0, 20.0), 1)),
-            ),
+            (2, element(None, "a1", on(note(10.0, 10.0, 20.0, 20.0), 1))),
             (3, element(None, "a2", arrow())),
             (4, element(None, "a3", ElementKind::group())),
             (5, element(Some(4), "a0", picture(500.0, 0.0))),
@@ -4477,7 +4051,7 @@ mod tests {
     fn landing_or_unsticking_an_unknown_element_is_refused() {
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
-            (2, element(None, "a1", framed(10.0, 10.0, 20.0, 20.0))),
+            (2, element(None, "a1", note(10.0, 10.0, 20.0, 20.0))),
         ]));
         let before = editor.board().clone();
         assert_eq!(editor.land(&ids([2, 9])), Err(Error::UnknownElement(id(9))));
@@ -4492,8 +4066,8 @@ mod tests {
     fn what_lets_go_as_it_lands_can_be_landed_on() {
         // 1 sticks to 2, drawn above it.
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", on(framed(0.0, 0.0, 50.0, 50.0), 2))),
-            (2, element(None, "a1", framed(0.0, 0.0, 50.0, 50.0))),
+            (1, element(None, "a0", on(note(0.0, 0.0, 50.0, 50.0), 2))),
+            (2, element(None, "a1", note(0.0, 0.0, 50.0, 50.0))),
         ]));
         assert_eq!(editor.land(&ids([1, 2])).unwrap(), ids([1, 2]));
         let target = |bits| editor.board().elements[&id(bits)].kind.target();
@@ -4503,17 +4077,10 @@ mod tests {
 
     #[test]
     fn removing_what_sticks_whole_frees_what_sticks_to_it() {
-        let comment = ElementKind::Comment {
-            at: Point { x: 60.0, y: 60.0 },
-            text: "Here".to_owned(),
-            target: Some(id(2)),
-        };
+        let comment = on(comment(60.0, 60.0), 2);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
-            (
-                2,
-                element(None, "a1", on(framed(40.0, 40.0, 50.0, 50.0), 1)),
-            ),
+            (2, element(None, "a1", on(note(40.0, 40.0, 50.0, 50.0), 1))),
             (3, element(None, "a2", comment)),
         ]));
         let before = editor.board().clone();
@@ -4526,29 +4093,13 @@ mod tests {
 
     #[test]
     fn stretching_a_sticky_note_sideways_leaves_what_sticks_whole_its_size_and_on_it() {
-        let sticky = |width| ElementKind::Sticky {
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width,
-                height: 200.0,
-            },
-            rotation: 0.0,
-            text: Text::new(String::new(), 20.0),
-            target: None,
-            paper: crate::Paper::default(),
-            opacity: Default::default(),
-        };
-        let comment = ElementKind::Comment {
-            at: Point { x: 150.0, y: 190.0 },
-            text: "Here".to_owned(),
-            target: Some(id(1)),
-        };
+        let wide = |width| sticky(0.0, 0.0, width, 200.0);
+        let comment = on(comment(150.0, 190.0), 1);
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", sticky(200.0))),
+            (1, element(None, "a0", wide(200.0))),
             (
                 2,
-                element(None, "a1", on(framed(50.0, 150.0, 100.0, 25.0), 1)),
+                element(None, "a1", on(note(50.0, 150.0, 100.0, 25.0), 1)),
             ),
             (3, element(None, "a2", comment)),
             (
@@ -4562,32 +4113,18 @@ mod tests {
         ]));
         let before = editor.board().clone();
         // Its right side dragged out, its left one staying.
-        editor.stretch(id(1), sticky(400.0)).unwrap();
+        editor.stretch(id(1), wide(400.0)).unwrap();
         // The end on the middle of its right side stays there.
         assert_at(ends(&editor, 4)[1].0, 400.0, 100.0);
         let (frame, _, font_size, target) = placement(&editor, 2);
         assert_eq!(target, Some(id(1)));
-        assert_eq!(
-            (frame, font_size),
-            (
-                Rect {
-                    x: 150.0,
-                    y: 150.0,
-                    width: 100.0,
-                    height: 25.0
-                },
-                2.0
-            )
-        );
-        let ElementKind::Comment { at, .. } = editor.board().elements[&id(3)].kind else {
-            unreachable!()
-        };
-        assert_at(at, 300.0, 190.0);
+        assert_eq!((frame, font_size), (area(150.0, 150.0, 100.0, 25.0), 2.0));
+        assert_at(position(&editor, 3), 300.0, 190.0);
         editor.undo();
         assert_eq!(editor.board(), &before);
     }
 
-    fn line(from: (f64, f64), to: (f64, f64)) -> ElementKind {
+    fn highlighter(from: (f64, f64), to: (f64, f64)) -> ElementKind {
         ElementKind::stroke(
             Tip::Highlighter,
             &[point(from.0, from.1), point(to.0, to.1)],
@@ -4634,20 +4171,16 @@ mod tests {
             (1, element(None, "a0", picture(0.0, 0.0))),
             (
                 2,
-                element(None, "a1", on(line((40.0, 40.0), (60.0, 50.0)), 1)),
+                element(None, "a1", on(highlighter((40.0, 40.0), (60.0, 50.0)), 1)),
             ),
         ]));
         let before = editor.board().clone();
 
         assert_eq!(editor.translate(&ids([1]), 10.0, 5.0).unwrap(), ids([1, 2]));
         assert_stroke_placed(&editor, 2, 1, [50.0, 45.0, 20.0, 10.0], 0.0, AS_DRAWN);
-        editor
-            .scale(&ids([1]), Point { x: 10.0, y: 5.0 }, 2.0)
-            .unwrap();
+        editor.scale(&ids([1]), point(10.0, 5.0), 2.0).unwrap();
         assert_stroke_placed(&editor, 2, 1, [90.0, 85.0, 40.0, 20.0], 0.0, AS_DRAWN);
-        editor
-            .rotate(&ids([1]), Point { x: 210.0, y: 205.0 }, 90.0)
-            .unwrap();
+        editor.rotate(&ids([1]), point(210.0, 205.0), 90.0).unwrap();
         assert_stroke_placed(&editor, 2, 1, [300.0, 95.0, 40.0, 20.0], 90.0, AS_DRAWN);
         assert_eq!(
             editor.board().elements[&id(2)].kind.stroke_width(),
@@ -4667,7 +4200,7 @@ mod tests {
             (1, element(None, "a0", picture(0.0, 0.0))),
             (
                 2,
-                element(None, "a1", on(line((40.0, 40.0), (60.0, 50.0)), 1)),
+                element(None, "a1", on(highlighter((40.0, 40.0), (60.0, 50.0)), 1)),
             ),
         ]));
         editor.flip(&ids([1]), true).unwrap();
@@ -4693,10 +4226,7 @@ mod tests {
             }
             image
         };
-        let mut turned = line((40.0, 40.0), (70.0, 30.0));
-        if let ElementKind::Stroke { rotation, .. } = &mut turned {
-            *rotation = 30.0;
-        }
+        let turned = turned(highlighter((40.0, 40.0), (70.0, 30.0)), 30.0);
         // Within the upper left quarter of the circle.
         let arc: Vec<Point> = (0..=9)
             .map(|step| {
@@ -4708,7 +4238,7 @@ mod tests {
             // Along an edge of the turned image.
             (
                 shown(45.0, CropShape::Rectangle),
-                line((110.0, -20.0), (220.0, 90.0)),
+                highlighter((110.0, -20.0), (220.0, 90.0)),
             ),
             (shown(0.0, CropShape::Rectangle), turned),
             (
@@ -4754,17 +4284,23 @@ mod tests {
     #[test]
     fn landing_sticks_a_stroke_whose_line_lies_whole_on_a_surface() {
         // A diamond around (100, 100), each corner about 141 away.
-        let mut turned = picture(0.0, 0.0);
-        if let ElementKind::Image { rotation, .. } = &mut turned {
-            *rotation = 45.0;
-        }
+        let turned = turned(picture(0.0, 0.0), 45.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", turned)),
             // Along an edge, the corner of its frame off the image.
-            (2, element(None, "a1", line((110.0, -20.0), (220.0, 90.0)))),
-            (3, element(None, "a2", line((150.0, 100.0), (260.0, 100.0)))),
+            (
+                2,
+                element(None, "a1", highlighter((110.0, -20.0), (220.0, 90.0))),
+            ),
+            (
+                3,
+                element(None, "a2", highlighter((150.0, 100.0), (260.0, 100.0))),
+            ),
             // Drawn below it.
-            (4, element(None, "Zz", line((90.0, 90.0), (110.0, 110.0)))),
+            (
+                4,
+                element(None, "Zz", highlighter((90.0, 90.0), (110.0, 110.0))),
+            ),
         ]));
         assert_eq!(editor.land(&ids([2, 3, 4])).unwrap(), ids([2]));
         let target = |bits| editor.board().elements[&id(bits)].kind.target();
@@ -4779,16 +4315,19 @@ mod tests {
             edits.crop_shape = CropShape::Ellipse;
         }
         // Upright, it reaches above the picture. Turned around (100, 40), it lies across it.
-        let mut across = line((95.0, -10.0), (105.0, 90.0));
-        if let ElementKind::Stroke { rotation, .. } = &mut across {
-            *rotation = 90.0;
-        }
+        let across = turned(highlighter((95.0, -10.0), (105.0, 90.0)), 90.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", shown)),
             // Within the curve, the corner of its frame out of it.
-            (2, element(None, "a1", line((20.0, 100.0), (100.0, 20.0)))),
+            (
+                2,
+                element(None, "a1", highlighter((20.0, 100.0), (100.0, 20.0))),
+            ),
             // Within the picture's frame, an end out of its curve.
-            (3, element(None, "a2", line((100.0, 100.0), (190.0, 190.0)))),
+            (
+                3,
+                element(None, "a2", highlighter((100.0, 100.0), (190.0, 190.0))),
+            ),
             (4, element(None, "a3", across)),
         ]));
         assert_eq!(editor.land(&ids([2, 3, 4])).unwrap(), ids([2, 4]));
@@ -4809,7 +4348,10 @@ mod tests {
                     ElementKind::stroke(Tip::Pen, &[point(50.0, 50.0)], 0.0),
                 ),
             ),
-            (3, element(None, "a2", line((40.0, 150.0), (80.0, 150.0)))),
+            (
+                3,
+                element(None, "a2", highlighter((40.0, 150.0), (80.0, 150.0))),
+            ),
         ]));
         let before = editor.board().clone();
         let drawn = |editor: &Editor, bits| {
@@ -4856,7 +4398,7 @@ mod tests {
     #[test]
     fn moving_scaling_and_turning_a_pen_stroke_leave_its_points_and_its_width_alone() {
         let mut editor = Editor::new(board([(1, element(None, "a0", stroke()))]));
-        let origin = Point { x: 0.0, y: 0.0 };
+        let origin = point(0.0, 0.0);
         editor.translate(&ids([1]), 10.0, 20.0).unwrap();
         editor.scale(&ids([1]), origin, 2.0).unwrap();
         editor.rotate(&ids([1]), origin, 90.0).unwrap();
@@ -4890,32 +4432,14 @@ mod tests {
 
     /// Filled as `fill`, of `corners` when it counts them, in the square from (0, 0) to (100, 100).
     fn drawn(shape: crate::Shape, corners: u8, fill: Fill) -> ElementKind {
-        ElementKind::Shape {
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 100.0,
-                height: 100.0,
-            },
-            rotation: 0.0,
-            shape,
-            corners: crate::Corners::new(corners).unwrap(),
-            text: Text::new(String::new(), 2.0),
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            fill,
-            dash: Dash::Solid,
-            opacity: Default::default(),
-        }
-        .canonical()
+        counted(shape, area(0.0, 0.0, 100.0, 100.0), corners, fill).canonical()
     }
 
     #[test]
     fn an_end_a_new_outline_leaves_off_goes_onto_it_in_the_same_step() {
         use crate::Shape::{Ellipse, Rectangle, Star};
         let star = drawn(Star, 5, Fill::Hollow);
-        let point = nearest_on_outline(&star, Point { x: 100.0, y: 38.0 }).unwrap();
+        let point = nearest_on_outline(&star, point(100.0, 38.0)).unwrap();
         let corner = 50.0 - 50.0 * std::f64::consts::FRAC_1_SQRT_2;
         let cases = [
             // At a corner, which an ellipse leaves out, onto the nearest point of its curve.
@@ -4968,15 +4492,10 @@ mod tests {
         editor
             .set_crop_shape(&ids([1]), CropShape::Ellipse)
             .unwrap();
-        let half = Rect {
-            x: 50.0,
-            y: 50.0,
-            width: 50.0,
-            height: 50.0,
-        };
+        let half = area(50.0, 50.0, 50.0, 50.0);
         editor.crop(id(1), half).unwrap();
         editor.reset_crop(&ids([1])).unwrap();
-        assert_eq!(ends(&editor, 2)[1], (Point { x: 0.0, y: 0.0 }, Some(id(1))));
+        assert_eq!(ends(&editor, 2)[1], (point(0.0, 0.0), Some(id(1))));
     }
 
     #[test]
@@ -4987,9 +4506,9 @@ mod tests {
                 1,
                 element(None, "a0", drawn(crate::Shape::Rectangle, 5, Fill::Solid)),
             ),
-            (2, element(None, "a1", on(framed(0.0, 0.0, 10.0, 10.0), 1))),
+            (2, element(None, "a1", on(note(0.0, 0.0, 10.0, 10.0), 1))),
         ]));
-        let pivot = Point { x: 37.0, y: 61.0 };
+        let pivot = point(37.0, 61.0);
         editor.rotate(&ids([1]), pivot, 0.173).unwrap();
         editor.scale(&ids([1]), pivot, 1.0246).unwrap();
         editor.translate(&ids([1]), 0.1, 0.3).unwrap();
@@ -5002,12 +4521,7 @@ mod tests {
         // An ellipse within a filled one, whose frame's corners stick out of it.
         let mut inner = drawn(Ellipse, 5, Fill::Hollow);
         if let ElementKind::Shape { frame, .. } = &mut inner {
-            *frame = Rect {
-                x: 10.0,
-                y: 10.0,
-                width: 80.0,
-                height: 80.0,
-            };
+            *frame = area(10.0, 10.0, 80.0, 80.0);
         }
         let mut editor = Editor::new(board([
             (1, element(None, "a0", drawn(Ellipse, 5, Fill::Solid))),
@@ -5030,7 +4544,7 @@ mod tests {
         let mut editor = Editor::new(board([
             (1, element(None, "a0", picture(0.0, 0.0))),
             (2, element(None, "a1", drawn(Rectangle, 5, Fill::Solid))),
-            (3, element(None, "a2", framed(40.0, 40.0, 10.0, 10.0))),
+            (3, element(None, "a2", note(40.0, 40.0, 10.0, 10.0))),
         ]));
         editor.land(&ids([3])).unwrap();
         assert_eq!(editor.board().elements[&id(3)].kind.target(), Some(id(2)));
@@ -5043,7 +4557,7 @@ mod tests {
 
         let mut editor = Editor::new(board([
             (1, element(None, "a0", drawn(Star, 5, Fill::Solid))),
-            (2, element(None, "a1", framed(80.0, 40.0, 4.0, 2.0))),
+            (2, element(None, "a1", note(80.0, 40.0, 4.0, 2.0))),
         ]));
         editor.land(&ids([2])).unwrap();
         assert_eq!(editor.board().elements[&id(2)].kind.target(), Some(id(1)));
@@ -5054,7 +4568,7 @@ mod tests {
     #[test]
     fn an_edit_leaves_alone_what_was_off_what_it_sticks_to_already() {
         // Within a hollow rectangle, which neither holds nor reaches them.
-        let note = on(framed(40.0, 40.0, 10.0, 10.0), 1);
+        let note = on(note(40.0, 40.0, 10.0, 10.0), 1);
         let mut editor = Editor::new(board([
             (
                 1,
@@ -5075,10 +4589,7 @@ mod tests {
             *colour = Colour::Red;
         }
         editor.update(id(1), red).unwrap();
-        assert_eq!(
-            ends(&editor, 2)[1],
-            (Point { x: 50.0, y: 50.0 }, Some(id(1)))
-        );
+        assert_eq!(ends(&editor, 2)[1], (point(50.0, 50.0), Some(id(1))));
         assert_eq!(editor.board().elements[&id(3)].kind, note);
     }
 
@@ -5092,13 +4603,8 @@ mod tests {
             (4, element(None, "a2", picture(600.0, 0.0))),
         ]));
         let before = editor.board().clone();
-        let origin = Point { x: 0.0, y: 0.0 };
-        let area = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 1.0,
-            height: 1.0,
-        };
+        let origin = point(0.0, 0.0);
+        let area = area(0.0, 0.0, 1.0, 1.0);
         for bits in [2, 3] {
             let refused = id(bits);
             let them = ids([4, bits]);
@@ -5136,7 +4642,7 @@ mod tests {
         let copied = editor.board().copy(&ids([4]));
         assert_eq!(editor.ungroup(id(1)), Err(Error::Locked(id(1))));
         assert_eq!(
-            editor.add(id(9), Some(id(1)), note(0.0)),
+            editor.add(id(9), Some(id(1)), note(0.0, 0.0, 10.0, 10.0)),
             Err(Error::Locked(id(1)))
         );
         assert_eq!(
@@ -5178,7 +4684,7 @@ mod tests {
             (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", picture(0.0, 0.0))),
             (3, locked(Some(1), "a1", picture(300.0, 0.0))),
-            (4, locked(None, "a1", on(framed(40.0, 40.0, 20.0, 10.0), 2))),
+            (4, locked(None, "a1", on(note(40.0, 40.0, 20.0, 10.0), 2))),
             (
                 5,
                 locked(
@@ -5193,7 +4699,7 @@ mod tests {
             editor.translate(&ids([1]), 10.0, 5.0),
             Ok(ids([2, 3, 4, 5]))
         );
-        assert_eq!(picture_at(&editor, 3), (310.0, 5.0));
+        assert_at(position(&editor, 3), 310.0, 5.0);
         assert_placed(&editor, 4, 2, [50.0, 45.0, 20.0, 10.0], 0.0, 2.0);
         assert_at(ends(&editor, 5)[1].0, 210.0, 105.0);
         assert_eq!(editor.remove(&ids([1])), Ok(ids([1, 2, 3, 4, 5])));
@@ -5209,24 +4715,18 @@ mod tests {
             (3, element(Some(2), "a0", picture(0.0, 300.0))),
             (
                 4,
-                locked(Some(2), "a1", on(framed(50.0, 50.0, 20.0, 10.0), 1)),
+                locked(Some(2), "a1", on(note(50.0, 50.0, 20.0, 10.0), 1)),
             ),
         ]));
 
         assert_eq!(editor.align(&ids([1, 2]), Alignment::Left), Ok(ids([1])));
-        assert_eq!(picture_at(&editor, 1), (0.0, 0.0));
+        assert_at(position(&editor, 1), 0.0, 0.0);
         assert_placed(&editor, 4, 1, [50.0, 50.0, 20.0, 10.0], 0.0, 2.0);
     }
 
     #[test]
     fn restyling_a_group_leaves_its_locked_elements_as_they_look() {
-        let tilted = |x| {
-            let mut kind = picture(x, 0.0);
-            if let ElementKind::Image { rotation, .. } = &mut kind {
-                *rotation = 30.0;
-            }
-            kind
-        };
+        let tilted = |x| turned(picture(x, 0.0), 30.0);
         let mut editor = Editor::new(board([
             (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", tilted(0.0))),
@@ -5250,8 +4750,8 @@ mod tests {
     fn a_locked_image_plays_as_the_others_of_its_asset() {
         let still = crate::ImageEdits::default();
         let mut editor = Editor::new(board([
-            (1, element(None, "a0", played(b"moving", still))),
-            (2, locked(None, "a1", played(b"moving", still))),
+            (1, element(None, "a0", image_of(b"moving", still))),
+            (2, locked(None, "a1", image_of(b"moving", still))),
         ]));
         let fast = Speed::new(2.0).unwrap();
 
@@ -5263,9 +4763,9 @@ mod tests {
     fn a_paste_comes_unlocked_and_its_elements_keep_their_lock() {
         let mut editor = Editor::new(board([
             (1, element(None, "a0", ElementKind::group())),
-            (2, locked(Some(1), "a0", note(0.0))),
-            (3, element(Some(1), "a1", note(10.0))),
-            (4, locked(None, "a1", note(20.0))),
+            (2, locked(Some(1), "a0", note(0.0, 0.0, 10.0, 10.0))),
+            (3, element(Some(1), "a1", note(10.0, 0.0, 10.0, 10.0))),
+            (4, locked(None, "a1", note(20.0, 0.0, 10.0, 10.0))),
         ]));
         let copied = editor.board().copy(&ids([1, 4]));
         let renamed = renamed(&copied, 10);
@@ -5273,12 +4773,5 @@ mod tests {
         editor.paste(&copied, &renamed, None).unwrap();
         let locked = |old| editor.board().elements[&renamed[&id(old)]].locked;
         assert_eq!([1, 2, 3, 4].map(locked), [false, true, false, false]);
-    }
-
-    fn picture_at(editor: &Editor, bits: u128) -> (f64, f64) {
-        match &editor.board().elements[&id(bits)].kind {
-            ElementKind::Image { frame, .. } => (frame.x, frame.y),
-            other => panic!("{other:?}"),
-        }
     }
 }

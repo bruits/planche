@@ -6,6 +6,8 @@ use wasm_bindgen::prelude::*;
 use web_sys::js_sys::{Function, Uint8ClampedArray};
 use web_sys::{HtmlCanvasElement, HtmlMediaElement, HtmlVideoElement, ImageBitmap};
 
+use crate::batches::{Batch, IMAGE, Item, ONCE, STROKE, TEXT, batches};
+
 /// Uniform buffers take multiples of 16 bytes on WebGL2, hence the padding.
 const CAMERA: &str = r#"
 struct Camera { origin: vec2f, zoom: f32, viewport: vec2f, padding: vec2f };
@@ -103,7 +105,7 @@ fn encoded(linear: vec3f) -> vec3f {
 
 /// Only the texture's alpha counts, as filtering its colour would darken the edges of the
 /// letters with the transparent black around them.
-const TEXT: &str = r#"
+const TEXTS: &str = r#"
 @group(1) @binding(0) var coverage: texture_2d<f32>;
 @group(1) @binding(1) var coverage_sampler: sampler;
 
@@ -507,11 +509,6 @@ const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// after the other, as lines from each of its points to the next, whose extra tells them from the
 /// stroke's next to them, and when see-through, they draw [`ONCE`].
 const STRIDE: usize = 15;
-const IMAGE: f32 = 0.0;
-const STROKE: f32 = 1.0;
-/// The lines of a see-through pen stroke, which together cover each pixel once, as the
-/// `fs_clear`, `fs_cover`, and `fs_once` of [`STROKES`] draw them.
-const ONCE: f32 = 3.0;
 /// For drawing pen strokes [`ONCE`], which every pipeline of a pass must declare.
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 /// Bytes per instance, which every kind shares, as WebGL2 finds instances by one stride.
@@ -582,15 +579,6 @@ struct Instances {
     /// Whether they hold a see-through pen stroke, which only a pass with the depth and the
     /// stencil draws.
     once: bool,
-}
-
-/// What drawing an item takes besides its instance, as [`STRIDE`] lays it out.
-#[derive(Clone, Copy)]
-struct Item {
-    kind: f32,
-    texture: f32,
-    /// Which stroke a line of a see-through pen stroke belongs to.
-    stroke: f32,
 }
 
 impl Instances {
@@ -771,7 +759,7 @@ pub async fn create(
     let quad_attributes = [rect, degrees, crop, grey, elliptical, opacity(5)];
     let [rect, degrees, colour] =
         wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x3];
-    let texts_module = module(&device, &[CAMERA, TEXT].concat());
+    let texts_module = module(&device, &[CAMERA, TEXTS].concat());
     let text_attributes = [rect, degrees, colour, opacity(3)];
     let [shape, geometry, degrees, width, colour, corners, extra] = wgpu::vertex_attr_array![0 => Float32, 1 => Float32x4, 2 => Float32, 3 => Float32, 4 => Float32x3, 7 => Float32, 6 => Float32];
     let strokes_module = module(&device, &[CAMERA, ELLIPSE, STROKES].concat());
@@ -1415,56 +1403,35 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         pass.set_vertex_buffer(0, instances.buffer.slice(..));
-        // Strokes one after the other draw at once, as each draw rebinds the instances on
-        // WebGL2.
-        let items = &instances.items;
+        let uploaded = |slot: usize| matches!(self.textures.get(slot), Some(Some(_)));
         let mut drawing = None;
-        let mut at = 0;
-        while at < items.len() {
-            let Item {
-                kind,
-                texture,
-                stroke,
-            } = items[at];
-            if kind == ONCE {
-                let run = items[at..]
-                    .iter()
-                    .take_while(|item| item.kind == ONCE && item.stroke == stroke)
-                    .count();
-                for pipeline in &self.once {
-                    pass.set_pipeline(pipeline);
-                    pass.draw(0..4, at as u32..(at + run) as u32);
+        for batch in batches(&instances.items, uploaded) {
+            let (kind, pipeline, drawn) = match batch {
+                Batch::Once(drawn) => {
+                    for pipeline in &self.once {
+                        pass.set_pipeline(pipeline);
+                        pass.draw(0..4, drawn.clone());
+                    }
+                    drawing = None;
+                    continue;
                 }
-                drawing = None;
-                at += run;
-                continue;
-            }
-            let (pipeline, run) = if kind == STROKE {
-                let run = items[at..]
-                    .iter()
-                    .take_while(|item| item.kind == STROKE)
-                    .count();
-                (&pipelines.strokes, run)
-            } else if let Some(Some(texture)) = self.textures.get(texture as usize) {
-                pass.set_bind_group(1, &texture.group, &[]);
-                (
-                    if kind == IMAGE {
-                        &pipelines.quads
-                    } else {
-                        &pipelines.texts
-                    },
-                    1,
-                )
-            } else {
-                at += 1;
-                continue;
+                Batch::Strokes(drawn) => (STROKE, &pipelines.strokes, drawn),
+                Batch::Image { at, texture } | Batch::Text { at, texture } => {
+                    let Some(Some(texture)) = self.textures.get(texture) else {
+                        unreachable!("batches() yields only uploaded textures")
+                    };
+                    pass.set_bind_group(1, &texture.group, &[]);
+                    match batch {
+                        Batch::Image { .. } => (IMAGE, &pipelines.quads, at..at + 1),
+                        _ => (TEXT, &pipelines.texts, at..at + 1),
+                    }
+                }
             };
             if drawing != Some(kind) {
                 pass.set_pipeline(pipeline);
                 drawing = Some(kind);
             }
-            pass.draw(0..4, at as u32..(at + run) as u32);
-            at += run;
+            pass.draw(0..4, drawn);
         }
     }
 

@@ -2,11 +2,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { arrowKind } from "../test/kinds.js";
+import { measuring } from "../test/canvases.js";
 import type { Kind } from "./core.js";
 import { restyled, settings, styleOf, styles, valueOf } from "./style.js";
 
 const frame = { x: 0, y: 0, width: 100, height: 50 };
-const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
+const arrow = arrowKind();
 const shape = (form: "rectangle" | "cross" | "star" | "triangle", content = ""): Kind => ({
   type: "shape",
   frame,
@@ -22,13 +24,6 @@ const bold: Kind = {
 const sticky: Kind = { type: "sticky", frame, text: { content: "", font_size: 20 } };
 const pen: Kind = { type: "stroke", frame, points: [0, 1, 1, 0] };
 const highlighter: Kind = { ...pen, tip: "highlighter" };
-/** Text fits what holds it as a font of fixed widths would. */
-const measure = (text: string) => ({
-  width: text.length * 50,
-  fontBoundingBoxAscent: 80,
-  fontBoundingBoxDescent: 20,
-  actualBoundingBoxAscent: 70,
-});
 
 describe("a style", () => {
   afterEach(() => {
@@ -117,10 +112,7 @@ describe("a style", () => {
   });
 
   it("copies a style that sets the element as it was", () => {
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      font: "",
-      measureText: measure,
-    } as unknown as CanvasRenderingContext2D);
+    measuring();
     const loud: Kind = { ...arrow, colour: "#12ab9f", weight: "thick", dash: "dashed" };
     expect(restyled(loud, styleOf(loud, 1), 1)).toEqual(loud);
     expect(restyled(loud, styleOf(arrow, 1), 1)).toEqual(arrow);

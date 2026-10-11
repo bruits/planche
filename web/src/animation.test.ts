@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { animated, type Played } from "../test/boards.js";
+import { gifOf } from "../test/media.js";
+import { fakeRenderer } from "../test/renderers.js";
 import { animations, type Moving } from "./animation.js";
-import { imageKind, newId, refresh, untitled } from "./board.js";
-import * as core from "./core.js";
-import type { Trim } from "./core.js";
 import type { Playing, Renderer } from "./renderer.js";
 
 const ASSET = "a".repeat(64);
@@ -10,24 +10,11 @@ const OTHER = "b".repeat(64);
 const NATURAL = { width: 10, height: 10 };
 const FRAMES = 5;
 
-/** Each frame shown for a tenth of a second. */
-function gif(frames: number): Uint8Array<ArrayBuffer> {
-  const frame =
-    "\x21\xF9\x04\x00\x0A\x00\x00\x00\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4C\x01\x00";
-  return Uint8Array.from(`GIF89a\x01\x00\x01\x00\x00\x00\x00${frame.repeat(frames)};`, (c) =>
-    c.charCodeAt(0),
-  );
-}
-
 function moving(frames = FRAMES, plays = Infinity): Moving {
-  return { bytes: gif(frames), plays };
+  return { bytes: gifOf(frames), plays };
 }
 
-interface Shown {
-  asset: string;
-  trim?: Trim;
-  speed?: number;
-  x?: number;
+interface Shown extends Played {
   /** Of its frames, those that decode, as many as its delays unless told. */
   decodes?: number;
 }
@@ -37,18 +24,7 @@ interface Shown {
  * textures, which records each frame it draws and how often it starts over.
  */
 function scene(...images: Shown[]) {
-  const board = untitled();
-  for (const { asset, trim, speed, x = 0 } of images) {
-    const id = newId();
-    const kind = imageKind(asset, NATURAL, { x, y: 0, ...NATURAL });
-    refresh(board, board.editor.add(id, undefined, JSON.stringify(kind)));
-    if (trim) {
-      refresh(board, core.setTrim(board.editor, [id], trim));
-    }
-    if (speed) {
-      refresh(board, board.editor.setSpeed([id], speed));
-    }
-  }
+  const board = animated(images, NATURAL).opened;
   let held = false;
   const drawn = new Map(images.map(({ asset }) => [asset, [] as number[]]));
   const restarts = vi.fn<() => void>();
@@ -84,11 +60,11 @@ function scene(...images: Shown[]) {
       free() {},
     };
   });
-  const renderer = {
+  const renderer = fakeRenderer({
     holds: () => held,
     animate,
-    show: (asset: string, pixels: Uint8Array) => drawn.get(asset)!.push(pixels[0]!),
-  } as unknown as Renderer;
+    show: (asset, pixels) => void drawn.get(asset)!.push(pixels[0]!),
+  });
   return {
     board,
     renderer,

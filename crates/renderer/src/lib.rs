@@ -8,5 +8,7 @@
 mod alpha;
 #[cfg(any(target_arch = "wasm32", test))]
 mod animation;
+#[cfg(any(target_arch = "wasm32", test))]
+mod batches;
 #[cfg(target_arch = "wasm32")]
 mod web;

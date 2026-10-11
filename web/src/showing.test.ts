@@ -1,10 +1,12 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { openDemo, openedFrom } from "../test/boards.js";
+import { demoHome, lfsPointer, memoryHome, sample } from "../test/folders.js";
+import { deferred, eventually, tick } from "../test/waits.js";
 import {
   digest,
   files as filesOf,
   imageKind,
   newId,
-  open,
   refresh,
   untitled,
   type Decoded,
@@ -16,7 +18,6 @@ import * as core from "./core.js";
 import type { Bytes } from "./core.js";
 import { folderStore, saving } from "./save.js";
 import { showing, type Host, type Showing } from "./showing.js";
-import { lfsPointer, memoryHome, sample } from "../test/folders.js";
 
 /** The demo's images, from the largest to the smallest on screen. */
 const LARGEST = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
@@ -24,12 +25,6 @@ const MIDDLE = "fabec7ea4f16a728b547c12f25158c75f6b48cf14db92745f92e5e9edcd36d93
 /** Turned, at x 600, y 0, 200 by 200. */
 const SMALLEST = "2f76b06fc4959ba89d116fb907f574e622ad2b9def9ec4ab9247e84ffeee6054.png";
 const STICKY = "b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74";
-
-async function demo(change?: (files: Map<string, Bytes>) => void): Promise<Opened> {
-  const files = sample("demo");
-  change?.(files);
-  return (await open(async () => memoryHome("demo", files).home, new Map()))!.opened;
-}
 
 function tamper(files: Map<string, Bytes>, asset: string): void {
   files.get(`assets/${asset}`)![100]! ^= 0xff;
@@ -79,8 +74,8 @@ function view({ undecodable = [] as string[] } = {}) {
 
 /** The files the demo board reads as it shows from `camera`, in the order it asks for them. */
 async function reads(camera?: Camera): Promise<string[]> {
-  const { home } = memoryHome("demo", sample("demo"));
-  const board = (await open(async () => home, new Map()))!.opened;
+  const { home } = demoHome();
+  const board = (await openedFrom(home)).opened;
   const asked: string[] = [];
   const { read } = home;
   home.read = (path) => {
@@ -94,7 +89,7 @@ async function reads(camera?: Camera): Promise<string[]> {
 describe("showing", () => {
   it("draws each image of a board, telling how many it drew, then how many elements it holds", async () => {
     const { host, said, loaded } = view();
-    await showing(host).show(await demo());
+    await showing(host).show(await openDemo());
     expect(loaded.toSorted()).toEqual([LARGEST, MIDDLE, SMALLEST].toSorted());
     expect(said).toEqual([
       ["demo: 13 elements", true],
@@ -112,7 +107,7 @@ describe("showing", () => {
 
   it("crosses out an image this machine cannot decode, and says so", async () => {
     const { host, said, crossed, loaded } = view({ undecodable: [MIDDLE] });
-    await showing(host).show(await demo());
+    await showing(host).show(await openDemo());
     expect(crossed).toEqual([MIDDLE]);
     expect(loaded).not.toContain(MIDDLE);
     expect(said.at(-1)).toEqual([
@@ -123,7 +118,7 @@ describe("showing", () => {
 
   it("crosses out the images whose files are missing or unlike their digests, saying why", async () => {
     const { host, said, crossed, loaded } = view();
-    const board = await demo((files) => {
+    const board = await openDemo((files) => {
       files.delete(`assets/${LARGEST}`);
       tamper(files, MIDDLE);
       const smallest = files.get(`assets/${SMALLEST}`)!;
@@ -143,7 +138,7 @@ describe("showing", () => {
 
   it("says which files it left out", async () => {
     const { host, said } = view();
-    const board = await demo((files) => files.set(`elements/${STICKY}.json`, new Uint8Array()));
+    const board = await openDemo((files) => files.set(`elements/${STICKY}.json`, new Uint8Array()));
     const wrong = await showing(host).show(board);
     expect(wrong).toMatch(/^a file left out, as `elements\/b7d4.*\.json` is not valid: EOF/);
     expect(said.at(-1)).toEqual([`demo: 12 elements, ${wrong}`, undefined]);
@@ -151,7 +146,7 @@ describe("showing", () => {
 
   it("ends where it began what the user started on a board that fails to show", async () => {
     const { host } = view();
-    const board = await demo();
+    const board = await openDemo();
     host.load = () => {
       throw new TypeError("the app's own fault");
     };
@@ -179,15 +174,15 @@ describe("showing", () => {
       replace(untitled());
       return decode(read);
     };
-    await showing(host).show(await demo());
+    await showing(host).show(await openDemo());
     expect(loaded).toEqual([]);
     expect(released).toHaveLength(3);
   });
 
   it("holds the board's saves while it reads each image", async () => {
     const { host } = view();
-    const { home } = memoryHome("demo", sample("demo"));
-    const board = (await open(async () => home, new Map()))!.opened;
+    const { home } = demoHome();
+    const board = (await openedFrom(home)).opened;
     // How many reads the saves wait for, and whether each file was read while they waited.
     let holding = 0;
     const held: boolean[] = [];
@@ -226,7 +221,7 @@ describe("showing, once an image fails to load", () => {
       }
       load(into, asset, decoded, read);
     };
-    await showing(host).show(await demo());
+    await showing(host).show(await openDemo());
     expect(crossed).toEqual([MIDDLE]);
     expect(loaded.toSorted()).toEqual([LARGEST, SMALLEST].toSorted());
     expect(host.abandon).not.toHaveBeenCalled();
@@ -241,14 +236,14 @@ describe("showing, once an image fails to load", () => {
     host.load = () => {
       throw new TypeError("load is not a function");
     };
-    await expect(showing(host).show(await demo())).rejects.toThrow(TypeError);
+    await expect(showing(host).show(await openDemo())).rejects.toThrow(TypeError);
     expect(crossed).toEqual([]);
     expect(host.abandon).toHaveBeenCalledOnce();
   });
 
   it("fails the opening when the core panics reading an image", async () => {
     const { host, crossed } = view();
-    const { home } = memoryHome("demo", sample("demo"));
+    const { home } = demoHome();
     const { read } = home;
     home.read = async (path) => {
       if (path === `assets/${MIDDLE}`) {
@@ -256,7 +251,7 @@ describe("showing, once an image fails to load", () => {
       }
       return read(path);
     };
-    const board = (await open(async () => home, new Map()))!.opened;
+    const board = (await openedFrom(home)).opened;
     await expect(showing(host).show(board)).rejects.toThrow(WebAssembly.RuntimeError);
     expect(crossed).toEqual([]);
     expect(host.abandon).toHaveBeenCalledOnce();
@@ -280,7 +275,7 @@ function edit(present: Showing, board: Opened, touched: string[]): void {
 async function freed() {
   const files = sample("demo");
   const { home } = memoryHome("demo", files);
-  const board = (await open(async () => home, new Map()))!.opened;
+  const board = (await openedFrom(home)).opened;
   const shown = view();
   const present = showing(shown.host);
   await present.show(board);
@@ -297,7 +292,7 @@ async function freed() {
 
 async function reloaded(present: Showing): Promise<void> {
   expect(present.reloading()).toBe(true);
-  await vi.waitFor(() => expect(present.reloading()).toBe(false));
+  await eventually(() => expect(present.reloading()).toBe(false));
 }
 
 describe("freeing images", () => {
@@ -309,7 +304,7 @@ describe("freeing images", () => {
 
   it("keeps an image another one still shows", async () => {
     const { host, loaded, unloaded } = view();
-    const board = await demo();
+    const board = await openDemo();
     const present = showing(host);
     await present.show(board);
     const [first] = imagesOf(board, LARGEST);
@@ -323,7 +318,7 @@ describe("freeing images", () => {
 
   it("frees nothing while a gesture may take its edits back, nor what an undo brought back", async () => {
     const { host, unloaded, gesture } = view();
-    const board = await demo();
+    const board = await openDemo();
     const present = showing(host);
     await present.show(board);
     gesture.on = true;
@@ -386,7 +381,7 @@ describe("showing images again", () => {
 
   it("reads an image deleted while the board opened once an undo brings it back", async () => {
     const { host, loaded } = view();
-    const board = await demo();
+    const board = await openDemo();
     const present = showing(host);
     const { decode } = host;
     let removed = false;
@@ -406,8 +401,8 @@ describe("showing images again", () => {
 
   it("reads an image an undo brought back once its turn had passed, as the board opens", async () => {
     const { host, loaded, released } = view();
-    const { home } = memoryHome("demo", sample("demo"));
-    const board = (await open(async () => home, new Map()))!.opened;
+    const { home } = demoHome();
+    const board = (await openedFrom(home)).opened;
     const asked: string[] = [];
     const reading = home.read;
     home.read = (path) => {
@@ -423,7 +418,7 @@ describe("showing images again", () => {
         edit(present, board, board.editor.remove(imagesOf(board, SMALLEST)));
       } else if (read.asset === MIDDLE) {
         // Once the image deleted let go of what it decoded, its turn over.
-        await vi.waitUntil(() => released.length === 1);
+        await eventually(() => released.length === 1);
         edit(present, board, board.editor.undo());
       }
       return decode(read);
@@ -459,9 +454,7 @@ describe("showing images again", () => {
     };
     edit(present, board, board.editor.undo());
     for (let ended = 0; ended < 6; ended++) {
-      await vi.waitFor(() => expect(waiting).toHaveLength(Math.min(4, 6 - ended)), {
-        interval: 1,
-      });
+      await eventually(() => expect(waiting).toHaveLength(Math.min(4, 6 - ended)));
       waiting.shift()!();
     }
     await reloaded(present);
@@ -481,7 +474,7 @@ async function shownWith(change: (files: Map<string, Bytes>) => void, readOnce =
     read: home.read,
     readAll: home.readAll,
   };
-  const board = (await open(async () => (readOnce ? once : home), new Map()))!.opened;
+  const board = (await openedFrom(readOnce ? once : home)).opened;
   const shown = view();
   const found: string[] = [];
   shown.host.saver = () => ({
@@ -556,7 +549,7 @@ describe("showing images whose files come back", () => {
     const contents = sample("demo");
     contents.delete(path);
     const { home, written, overwrite } = memoryHome("demo", contents);
-    const { opened: board, reading } = (await open(async () => home, new Map()))!;
+    const { opened: board, reading } = await openedFrom(home);
     const store = await folderStore(home, reading, false);
     const saver = saving(store, {
       snapshot: () => board.editor.snapshot(),
@@ -576,10 +569,8 @@ describe("showing images whose files come back", () => {
     const added = board.editor.add(newId(), undefined, JSON.stringify(kind));
     edit(present, board, added);
     // The save's check of the files it writes waits until the recheck looked at the folder.
-    let resume!: () => void;
-    const paused = new Promise<void>((done) => (resume = done));
-    let asked!: () => void;
-    const checking = new Promise<void>((done) => (asked = done));
+    const { promise: paused, resolve: resume } = deferred();
+    const { promise: checking, resolve: asked } = deferred();
     const { stamps } = home;
     home.stamps = async (paths) => {
       if (!paths.every((at) => at.startsWith("assets/"))) {
@@ -593,7 +584,7 @@ describe("showing images whose files come back", () => {
     await checking;
     overwrite(path, original.get(path)!);
     const rechecked = present.recheck();
-    await new Promise((done) => setTimeout(done, 0));
+    await tick();
     resume();
     expect(await flushed).toBe(true);
     await rechecked;

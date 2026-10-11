@@ -181,6 +181,7 @@ pub(crate) fn settled(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::point;
 
     #[test]
     fn a_level_gives_way_before_its_lines_crowd_together() {
@@ -273,21 +274,20 @@ mod tests {
 
     #[test]
     fn a_scaled_corner_lands_on_the_line_it_moves_the_least_to_reach() {
-        let at = |x, y| Point { x, y };
-        let snapped = snap_scale_to_grid(at(6.0, 14.0), at(206.0, 214.0), 1.0, 0.5).unwrap();
+        let snapped = snap_scale_to_grid(point(6.0, 14.0), point(206.0, 214.0), 1.0, 0.5).unwrap();
         assert!((snapped - 0.97).abs() < 1e-12, "{snapped}");
         // A line across is 1.2 off and one down 4, but reaching the one down changes the scale less.
-        let wide = (at(0.0, 10.0), at(200.0, 50.0));
+        let wide = (point(0.0, 10.0), point(200.0, 50.0));
         assert_eq!(snap_scale_to_grid(wide.0, wide.1, 0.78, 0.5), Some(0.8));
         // A line across is 3.6 off, but landing on it would move the corner 72 along.
-        let long = (at(0.0, 0.0), at(800.0, 40.0));
+        let long = (point(0.0, 0.0), point(800.0, 40.0));
         assert_eq!(snap_scale_to_grid(long.0, long.1, 1.91, 0.5), Some(1.9));
         // A line across within reach would move a thin selection's corner hundreds along.
-        let thin = (at(0.0, 26.0), at(1600.0, 32.0));
+        let thin = (point(0.0, 26.0), point(1600.0, 32.0));
         assert_eq!(snap_scale_to_grid(thin.0, thin.1, 0.6685, 0.5), None);
         assert_eq!(snap_scale_to_grid(thin.0, thin.1, 0.672, 0.5), Some(0.675));
         // So small on screen that its origin's own line is the nearest, it keeps to the other one.
-        let small = (at(-14.0, 3.4), at(186.0, 203.4));
+        let small = (point(-14.0, 3.4), point(186.0, 203.4));
         assert_eq!(
             snap_scale_to_grid(small.0, small.1, 0.01, 0.025),
             Some(0.07)
@@ -296,13 +296,12 @@ mod tests {
 
     #[test]
     fn a_snapped_corner_moves_no_further_than_a_line_pulls() {
-        let at = |x, y| Point { x, y };
         for (origin, corner) in [
-            (at(0.0, 13.0), at(800.0, 16.0)),
-            (at(0.0, 0.0), at(400.0, 20.0)),
-            (at(3.0, 7.0), at(-97.0, 107.0)),
-            (at(3.0, 7.0), at(3.0, 107.0)),
-            (at(3.0, 7.0), at(3.0, 7.0)),
+            (point(0.0, 13.0), point(800.0, 16.0)),
+            (point(0.0, 0.0), point(400.0, 20.0)),
+            (point(3.0, 7.0), point(-97.0, 107.0)),
+            (point(3.0, 7.0), point(3.0, 107.0)),
+            (point(3.0, 7.0), point(3.0, 7.0)),
         ] {
             for zoom in [0.05, 0.3, 1.0, 2.5, 7.0] {
                 let (_, reach) = pull(zoom);

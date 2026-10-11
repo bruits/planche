@@ -1,21 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { command } from "../test/commands.js";
+import { press, release } from "../test/events.js";
 import { learnLayout, listen, reloads, typed, type Command } from "./commands.js";
 
 const stops: (() => void)[] = [];
 
 function listening(commands: Command[], allowed = () => true): void {
   stops.push(listen(commands, allowed));
-}
-
-function press(init: KeyboardEventInit, on: EventTarget = window): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  on.dispatchEvent(event);
-  return event;
-}
-
-function command(label: string, more: Partial<Command>): Command {
-  return { label, run: vi.fn<() => void>(), ...more };
 }
 
 describe("listen", () => {
@@ -97,9 +89,7 @@ describe("listen", () => {
 
   it("keeps Alt, let go of alone, from handing the focus to the browser's menu", () => {
     listening([]);
-    const up = new KeyboardEvent("keyup", { key: "Alt", bubbles: true, cancelable: true });
-    window.dispatchEvent(up);
-    expect(up.defaultPrevented).toBe(true);
+    expect(release({ key: "Alt" }, window).defaultPrevented).toBe(true);
   });
 
   it("runs a command that turns something on and off once while its key is held", () => {

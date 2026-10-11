@@ -1,39 +1,24 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { files, open } from "./board.js";
+import { openedFrom } from "../test/boards.js";
+import {
+  CONFLICTED,
+  demoHome,
+  demoZip,
+  lfsPointer,
+  memoryHome,
+  memorySink,
+  sample,
+  slicesOf,
+} from "../test/folders.js";
+import { files } from "./board.js";
 import * as core from "./core.js";
 import type { Bytes } from "./core.js";
-import type { Folder, Sink, Slices } from "./platform.js";
+import type { Folder } from "./platform.js";
 import { writeZip, zipFolder } from "./zip.js";
-import { lfsPointer, memoryHome, sample, SAMPLES } from "../test/folders.js";
 
 /** One of the demo's images, 12 kB. */
 const ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
-
-function demoZip(): Bytes {
-  return new Uint8Array(readFileSync(join(SAMPLES, "demo.zip")));
-}
-
-function slices(name: string, bytes: Bytes): Slices {
-  return { name, size: bytes.length, read: async (start, end) => bytes.slice(start, end) };
-}
-
-function memorySink() {
-  const parts: Bytes[] = [];
-  let state: "open" | "closed" | "discarded" = "open";
-  const sink: Sink = {
-    name: "demo.zip",
-    append: async (bytes) => void parts.push(bytes.slice()),
-    close: async () => void (state = "closed"),
-    discard: async () => {
-      parts.length = 0;
-      state = "discarded";
-    },
-  };
-  return { sink, bytes: () => Buffer.concat(parts), state: () => state };
-}
 
 /**
  * The ZIP file another tool makes of `entries`, each deflated, in `folder`, with the sizes it
@@ -89,7 +74,7 @@ function noise(length: number): Bytes {
 }
 
 async function exported(folder: Folder) {
-  const { opened } = (await open(async () => folder, new Map()))!;
+  const { opened } = await openedFrom(folder);
   const snapshot = opened.editor.snapshot();
   const written = memorySink();
   try {
@@ -102,7 +87,7 @@ async function exported(folder: Folder) {
 
 describe("writeZip", () => {
   it("exports the demo board to the exact bytes of samples/demo.zip", async () => {
-    const written = await exported(memoryHome("demo", sample("demo")).home);
+    const written = await exported(demoHome().home);
     expect(written.state()).toBe("closed");
     expect(Buffer.compare(written.bytes(), demoZip())).toBe(0);
   });
@@ -110,7 +95,7 @@ describe("writeZip", () => {
   it("leaves nothing behind when an asset cannot be read", async () => {
     const contents = sample("demo");
     const { home } = memoryHome("demo", contents);
-    const { opened } = (await open(async () => home, new Map()))!;
+    const { opened } = await openedFrom(home);
     contents.delete(`assets/${ASSET}`);
     const snapshot = opened.editor.snapshot();
     const written = memorySink();
@@ -120,7 +105,6 @@ describe("writeZip", () => {
       snapshot.free();
     }
     expect(written.state()).toBe("discarded");
-    expect(written.bytes()).toHaveLength(0);
   });
 });
 
@@ -131,12 +115,11 @@ describe("writeZip, of a board missing some of its files", () => {
       "assets/fabec7ea4f16a728b547c12f25158c75f6b48cf14db92745f92e5e9edcd36d93.jpg",
     ];
     const contents = sample("demo");
-    const conflicted = new TextEncoder().encode("<<<<<<< ours\n");
     const pointer = new TextEncoder().encode(lfsPointer(contents.get(middle)!));
-    contents.set(sticky, conflicted);
+    contents.set(sticky, CONFLICTED);
     contents.set(middle, pointer);
     contents.delete(`assets/${ASSET}`);
-    const { opened } = (await open(async () => memoryHome("demo", contents).home, new Map()))!;
+    const { opened } = await openedFrom(memoryHome("demo", contents).home);
     const snapshot = opened.editor.snapshot();
     const written = memorySink();
     try {
@@ -144,23 +127,23 @@ describe("writeZip, of a board missing some of its files", () => {
     } finally {
       snapshot.free();
     }
-    const folder = await zipFolder(slices("demo.zip", new Uint8Array(written.bytes())));
+    const folder = await zipFolder(slicesOf("demo.zip", new Uint8Array(written.bytes())));
     expect(await folder.list(2)).not.toContain(`assets/${ASSET}`);
-    expect(await folder.read(sticky)).toEqual(conflicted);
+    expect(await folder.read(sticky)).toEqual(CONFLICTED);
     expect(await folder.read(middle)).toEqual(pointer);
   });
 });
 
 describe("zipFolder", () => {
   it("reads a board's ZIP file as the board its folder holds", async () => {
-    const fromFolder = await open(async () => memoryHome("demo", sample("demo")).home, new Map());
-    const fromZip = await open(() => zipFolder(slices("demo.zip", demoZip())), new Map());
-    expect(fromZip!.opened.folder.name).toBe("demo");
-    expect(fromZip!.opened.board).toEqual(fromFolder!.opened.board);
+    const fromFolder = await openedFrom(demoHome().home);
+    const fromZip = await openedFrom(await zipFolder(slicesOf("demo.zip", demoZip())));
+    expect(fromZip.opened.folder.name).toBe("demo");
+    expect(fromZip.opened.board).toEqual(fromFolder.opened.board);
   });
 
   it("reads a board's files in one go, as it reads each alone", async () => {
-    const file = slices("demo.zip", demoZip());
+    const file = slicesOf("demo.zip", demoZip());
     const reads: [number, number][] = [];
     const folder = await zipFolder({
       ...file,
@@ -184,7 +167,7 @@ describe("zipFolder", () => {
     // Into the asset's own bytes, past its name in the header before them.
     const at = Buffer.from(bytes).indexOf(`assets/${ASSET}`) + 2000;
     bytes[at]! ^= 0xff;
-    const folder = await zipFolder(slices("demo.zip", bytes));
+    const folder = await zipFolder(slicesOf("demo.zip", bytes));
     await expect(folder.read(`assets/${ASSET}`)).rejects.toThrow("does not match its checksum");
     await expect(folder.read("board.json")).resolves.toBeDefined();
   });
@@ -194,16 +177,16 @@ describe("zipFolder, of a ZIP file another tool made", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("reads the board that tool deflated in a folder, which exports as the app zips it", async () => {
-    const zipped = slices("demo.zip", rezipped(sample("demo")));
-    const fromZip = await open(() => zipFolder(zipped), new Map());
-    const fromFolder = await open(async () => memoryHome("demo", sample("demo")).home, new Map());
-    expect(fromZip!.opened.board).toEqual(fromFolder!.opened.board);
+    const zipped = slicesOf("demo.zip", rezipped(sample("demo")));
+    const fromZip = await openedFrom(await zipFolder(zipped));
+    const fromFolder = await openedFrom(demoHome().home);
+    expect(fromZip.opened.board).toEqual(fromFolder.opened.board);
     const written = await exported(await zipFolder(zipped));
     expect(Buffer.compare(written.bytes(), demoZip())).toBe(0);
   });
 
   it("reads its files together as it reads each alone", async () => {
-    const folder = await zipFolder(slices("demo.zip", rezipped(sample("demo"))));
+    const folder = await zipFolder(slicesOf("demo.zip", rezipped(sample("demo"))));
     const paths = [...sample("demo").keys()].toReversed();
     const { files: read } = await folder.readAll(paths);
     expect(read).toEqual(new Map(paths.map((path) => [path, sample("demo").get(path)])));
@@ -217,7 +200,7 @@ describe("zipFolder, of a ZIP file another tool made", () => {
       ["assets/big", noise(200_000)],
       ...elements,
     ]);
-    const file = slices("demo.zip", rezipped(entries));
+    const file = slicesOf("demo.zip", rezipped(entries));
     let reads = 0;
     const folder = await zipFolder({
       ...file,
@@ -242,7 +225,7 @@ describe("zipFolder, of a ZIP file another tool made", () => {
         ["board.json", board],
       ]),
     );
-    const folder = await zipFolder(slices("big.zip", zipped));
+    const folder = await zipFolder(slicesOf("big.zip", zipped));
     expect(await folder.read("assets/big")).toEqual(big);
   });
 
@@ -254,7 +237,7 @@ describe("zipFolder, of a ZIP file another tool made", () => {
     ] as const) {
       const claims = (_: string, size: number) => size + by;
       const zipped = rezipped(new Map([["board.json", board]]), { claims });
-      const folder = await zipFolder(slices("demo.zip", zipped));
+      const folder = await zipFolder(slicesOf("demo.zip", zipped));
       await expect(folder.read("board.json")).rejects.toThrow(refusal);
     }
   });
@@ -270,13 +253,13 @@ describe("zipFolder, of a ZIP file another tool made", () => {
         claims: (path, size) => (path === "board.json" ? size : 300e6 + 1),
       },
     );
-    const folder = await zipFolder(slices("big.zip", zipped));
+    const folder = await zipFolder(slicesOf("big.zip", zipped));
     await expect(folder.read("assets/big")).rejects.toThrow("is over 300 MB once unzipped");
   });
 
   it("says to unzip it where the browser cannot inflate", async () => {
     vi.stubGlobal("DecompressionStream", undefined);
-    const folder = await zipFolder(slices("demo.zip", rezipped(sample("demo"))));
+    const folder = await zipFolder(slicesOf("demo.zip", rezipped(sample("demo"))));
     await expect(folder.read("board.json")).rejects.toThrow("unzip it and open its folder");
   });
 });

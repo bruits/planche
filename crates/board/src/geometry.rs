@@ -1316,81 +1316,11 @@ fn edges(shape: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
 mod tests {
     use super::*;
     use crate::Annotations::{Hidden, Shown};
-    use crate::tests::{board, element, id, locked, stroke};
-    use crate::{
-        AssetId, Colour, Corners, Dash, Fill, Heads, ImageEdits, Paper, Size, Text, Weight,
+    use crate::tests::{
+        area, assert_at, board, comment, counted, element, filled, highlighted, id, image,
+        labelled, line, locked, note, pen, point, sticky, stuck, turned,
     };
-
-    fn image(x: f64, y: f64, width: f64, height: f64, rotation: f64) -> ElementKind {
-        ElementKind::Image {
-            asset: AssetId::of(b""),
-            natural_size: Size {
-                width: 1,
-                height: 1,
-            },
-            frame: Rect {
-                x,
-                y,
-                width,
-                height,
-            },
-            rotation,
-            edits: ImageEdits::default(),
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        }
-    }
-
-    fn arrow(from: (f64, f64), to: (f64, f64)) -> ElementKind {
-        ElementKind::Arrow {
-            from: point(from.0, from.1),
-            to: point(to.0, to.1),
-            from_target: None,
-            to_target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
-            heads: Heads::End,
-            opacity: Default::default(),
-        }
-    }
-
-    fn point(x: f64, y: f64) -> Point {
-        Point { x, y }
-    }
-
-    fn area(x: f64, y: f64, width: f64, height: f64) -> Rect {
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    fn pen(frame: Rect, rotation: f64, points: &[(f64, f64)]) -> ElementKind {
-        let ElementKind::Stroke {
-            colour,
-            weight,
-            opacity,
-            ..
-        } = stroke()
-        else {
-            unreachable!()
-        };
-        ElementKind::Stroke {
-            tip: Tip::Pen,
-            frame,
-            rotation,
-            points: points.iter().map(|&(x, y)| point(x, y)).collect(),
-            target: None,
-            colour,
-            weight,
-            opacity,
-        }
-    }
+    use crate::{Corners, Fill, Weight};
 
     const U: [(f64, f64); 4] = [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0)];
 
@@ -1484,7 +1414,10 @@ mod tests {
     #[test]
     fn an_image_is_hit_where_it_draws_once_rotated() {
         // Turned a quarter, 100 by 20 around (50, 10) spans x 40 to 60 and y -40 to 60.
-        let board = board([(1, element(None, "a0", image(0.0, 0.0, 100.0, 20.0, 90.0)))]);
+        let board = board([(
+            1,
+            element(None, "a0", turned(image(0.0, 0.0, 100.0, 20.0), 90.0)),
+        )]);
         assert_eq!(board.hit(point(50.0, 55.0), 0.0, Shown), Some(id(1)));
         assert_eq!(board.hit(point(50.0, -35.0), 0.0, Shown), Some(id(1)));
         assert_eq!(board.hit(point(90.0, 10.0), 0.0, Shown), None);
@@ -1494,7 +1427,7 @@ mod tests {
 
     #[test]
     fn an_image_shown_as_an_ellipse_is_hit_and_touched_within_it_only() {
-        let mut shown = image(0.0, 0.0, 200.0, 100.0, 90.0);
+        let mut shown = turned(image(0.0, 0.0, 200.0, 100.0), 90.0);
         if let ElementKind::Image { edits, .. } = &mut shown {
             edits.crop_shape = CropShape::Ellipse;
         }
@@ -1514,7 +1447,7 @@ mod tests {
     fn a_frame_turned_over_by_a_negative_size_is_hit_all_the_same() {
         let board = board([(
             1,
-            element(None, "a0", image(100.0, 0.0, -100.0, 20.0, 30.0)),
+            element(None, "a0", turned(image(100.0, 0.0, -100.0, 20.0), 30.0)),
         )]);
         assert_eq!(board.hit(point(50.0, 10.0), 0.0, Shown), Some(id(1)));
     }
@@ -1522,8 +1455,8 @@ mod tests {
     #[test]
     fn a_frame_with_no_area_is_hit_only_near_where_it_draws() {
         let board = board([
-            (1, element(None, "a0", image(10.0, 10.0, 0.0, 0.0, 0.0))),
-            (2, element(None, "a1", image(200.0, 0.0, 0.0, 20.0, 0.0))),
+            (1, element(None, "a0", image(10.0, 10.0, 0.0, 0.0))),
+            (2, element(None, "a1", image(200.0, 0.0, 0.0, 20.0))),
         ]);
         assert_eq!(board.hit(point(500.0, -300.0), 3.0, Shown), None);
         assert_eq!(board.hit(point(12.0, 10.0), 3.0, Shown), Some(id(1)));
@@ -1535,10 +1468,10 @@ mod tests {
     #[test]
     fn the_topmost_element_is_hit_and_never_a_group() {
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
+            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0))),
             (2, element(None, "a1", ElementKind::group())),
-            (3, element(Some(2), "a0", image(5.0, 0.0, 10.0, 10.0, 0.0))),
-            (4, element(None, "a2", image(20.0, 0.0, 10.0, 10.0, 0.0))),
+            (3, element(Some(2), "a0", image(5.0, 0.0, 10.0, 10.0))),
+            (4, element(None, "a2", image(20.0, 0.0, 10.0, 10.0))),
         ]);
         assert_eq!(board.hit(point(7.0, 5.0), 0.0, Shown), Some(id(3)));
         assert_eq!(board.hit(point(2.0, 5.0), 0.0, Shown), Some(id(1)));
@@ -1547,30 +1480,14 @@ mod tests {
 
     #[test]
     fn a_filled_group_draws_over_its_panel_which_bounds_it() {
-        let filled = |fill| ElementKind::Group {
-            colour: Colour::Blue,
-            fill,
-            title: None,
-        };
+        let filled_group = |fill| filled(ElementKind::group(), fill);
         let board = board([
-            (1, element(None, "a0", filled(Fill::Tint))),
-            (
-                2,
-                element(Some(1), "a0", image(0.0, 0.0, 100.0, 100.0, 0.0)),
-            ),
-            (
-                3,
-                element(Some(1), "a1", image(300.0, 100.0, 100.0, 100.0, 0.0)),
-            ),
-            (4, element(None, "a1", filled(Fill::Hollow))),
-            (
-                5,
-                element(Some(4), "a0", image(0.0, 500.0, 100.0, 100.0, 0.0)),
-            ),
-            (
-                6,
-                element(Some(4), "a1", image(300.0, 500.0, 100.0, 100.0, 0.0)),
-            ),
+            (1, element(None, "a0", filled_group(Fill::Tint))),
+            (2, element(Some(1), "a0", image(0.0, 0.0, 100.0, 100.0))),
+            (3, element(Some(1), "a1", image(300.0, 100.0, 100.0, 100.0))),
+            (4, element(None, "a1", filled_group(Fill::Hollow))),
+            (5, element(Some(4), "a0", image(0.0, 500.0, 100.0, 100.0))),
+            (6, element(Some(4), "a1", image(300.0, 500.0, 100.0, 100.0))),
         ]);
         // A twentieth of the mean side of (0, 0) to (400, 200) around it.
         let panel = area(-15.0, -15.0, 430.0, 230.0);
@@ -1601,26 +1518,13 @@ mod tests {
 
     #[test]
     fn a_group_s_panel_stands_clear_of_the_panels_within_it() {
-        let filled = || ElementKind::Group {
-            colour: Colour::Blue,
-            fill: Fill::Solid,
-            title: None,
-        };
+        let solid_group = || filled(ElementKind::group(), Fill::Solid);
         let board = board([
-            (1, element(None, "a0", filled())),
-            (2, element(Some(1), "a0", filled())),
-            (
-                3,
-                element(Some(2), "a0", image(0.0, 0.0, 100.0, 100.0, 0.0)),
-            ),
-            (
-                4,
-                element(Some(2), "a1", image(300.0, 100.0, 100.0, 100.0, 0.0)),
-            ),
-            (
-                5,
-                element(Some(1), "a1", image(500.0, 100.0, 100.0, 100.0, 0.0)),
-            ),
+            (1, element(None, "a0", solid_group())),
+            (2, element(Some(1), "a0", solid_group())),
+            (3, element(Some(2), "a0", image(0.0, 0.0, 100.0, 100.0))),
+            (4, element(Some(2), "a1", image(300.0, 100.0, 100.0, 100.0))),
+            (5, element(Some(1), "a1", image(500.0, 100.0, 100.0, 100.0))),
         ]);
         let inner = board.bounds(&[id(2)]).unwrap();
         let outer = board.bounds(&[id(1)]).unwrap();
@@ -1633,22 +1537,12 @@ mod tests {
 
     #[test]
     fn a_filled_group_within_a_hollow_one_keeps_its_panel() {
-        let filled = ElementKind::Group {
-            colour: Colour::Blue,
-            fill: Fill::Tint,
-            title: None,
-        };
+        let filled = filled(ElementKind::group(), Fill::Tint);
         let board = board([
             (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", filled)),
-            (
-                3,
-                element(Some(2), "a0", image(0.0, 0.0, 100.0, 100.0, 0.0)),
-            ),
-            (
-                4,
-                element(Some(2), "a1", image(300.0, 100.0, 100.0, 100.0, 0.0)),
-            ),
+            (3, element(Some(2), "a0", image(0.0, 0.0, 100.0, 100.0))),
+            (4, element(Some(2), "a1", image(300.0, 100.0, 100.0, 100.0))),
         ]);
         let panel = area(-15.0, -15.0, 430.0, 230.0);
         assert_eq!(board.hit(point(200.0, 50.0), 0.0, Shown), Some(id(2)));
@@ -1660,10 +1554,10 @@ mod tests {
     #[test]
     fn a_click_goes_through_what_is_locked_or_within_a_locked_group() {
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
-            (2, locked(None, "a1", image(0.0, 0.0, 10.0, 10.0, 0.0))),
+            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0))),
+            (2, locked(None, "a1", image(0.0, 0.0, 10.0, 10.0))),
             (3, locked(None, "a2", ElementKind::group())),
-            (4, element(Some(3), "a0", image(20.0, 0.0, 10.0, 10.0, 0.0))),
+            (4, element(Some(3), "a0", image(20.0, 0.0, 10.0, 10.0))),
         ]);
         assert_eq!(board.hit(point(5.0, 5.0), 0.0, Shown), Some(id(2)));
         assert_eq!(board.hit_unlocked(point(5.0, 5.0), 0.0, Shown), Some(id(1)));
@@ -1678,8 +1572,11 @@ mod tests {
     #[test]
     fn a_click_goes_through_the_annotations_hidden_as_does_a_way() {
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 100.0, 100.0, 0.0))),
-            (2, element(None, "a1", arrow((10.0, 50.0), (90.0, 50.0)))),
+            (1, element(None, "a0", image(0.0, 0.0, 100.0, 100.0))),
+            (
+                2,
+                element(None, "a1", stuck((10.0, 50.0), None, (90.0, 50.0), None)),
+            ),
             (
                 3,
                 element(
@@ -1709,10 +1606,10 @@ mod tests {
     #[test]
     fn a_way_hits_everything_it_passes_over_even_under_others() {
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
-            (2, element(None, "a1", image(5.0, 0.0, 10.0, 10.0, 0.0))),
-            (3, element(None, "a2", image(0.0, 50.0, 10.0, 10.0, 0.0))),
-            (4, element(None, "a3", image(40.0, 0.0, 10.0, 10.0, 0.0))),
+            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0))),
+            (2, element(None, "a1", image(5.0, 0.0, 10.0, 10.0))),
+            (3, element(None, "a2", image(0.0, 50.0, 10.0, 10.0))),
+            (4, element(None, "a3", image(40.0, 0.0, 10.0, 10.0))),
         ]);
         let way = board.hit_along(point(2.0, 5.0), point(45.0, 5.0), 2.0, Shown);
         assert_eq!(way, [id(1), id(2), id(4)]);
@@ -1722,7 +1619,7 @@ mod tests {
     fn a_way_misses_nothing_narrow_between_its_tries() {
         for tenth in 1..1000 {
             let x = f64::from(tenth) / 10.0;
-            let board = board([(1, element(None, "a0", image(x, -10.0, 0.1, 20.0, 0.0)))]);
+            let board = board([(1, element(None, "a0", image(x, -10.0, 0.1, 20.0)))]);
             assert_eq!(
                 board.hit_along(point(0.0, 0.0), point(100.0, 0.0), 1.0, Shown),
                 [id(1)],
@@ -1754,11 +1651,8 @@ mod tests {
     #[test]
     fn a_way_far_longer_than_its_tolerance_is_tried_a_bounded_number_of_times() {
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
-            (
-                2,
-                element(None, "a1", image(1e12 - 5.0, 0.0, 10.0, 10.0, 0.0)),
-            ),
+            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0))),
+            (2, element(None, "a1", image(1e12 - 5.0, 0.0, 10.0, 10.0))),
         ]);
         let way = board.hit_along(point(5.0, 5.0), point(1e12, 5.0), 1e-6, Shown);
         assert_eq!(way, [id(1), id(2)]);
@@ -1767,8 +1661,8 @@ mod tests {
     #[test]
     fn a_way_that_goes_nowhere_hits_what_is_under_it() {
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
-            (2, element(None, "a1", image(5.0, 0.0, 10.0, 10.0, 0.0))),
+            (1, element(None, "a0", image(0.0, 0.0, 10.0, 10.0))),
+            (2, element(None, "a1", image(5.0, 0.0, 10.0, 10.0))),
         ]);
         let under = point(7.0, 5.0);
         assert_eq!(board.hit_along(under, under, 0.0, Shown), [id(1), id(2)]);
@@ -1778,8 +1672,11 @@ mod tests {
     #[test]
     fn only_what_fills_an_area_covers_a_point() {
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 100.0, 100.0, 0.0))),
-            (2, element(None, "a1", arrow((10.0, 50.0), (90.0, 50.0)))),
+            (1, element(None, "a0", image(0.0, 0.0, 100.0, 100.0))),
+            (
+                2,
+                element(None, "a1", stuck((10.0, 50.0), None, (90.0, 50.0), None)),
+            ),
             (
                 3,
                 element(
@@ -1803,22 +1700,6 @@ mod tests {
 
     fn framed(shape: Shape, frame: Rect, rotation: f64) -> ElementKind {
         labelled(shape, frame, rotation, "")
-    }
-
-    fn labelled(shape: Shape, frame: Rect, rotation: f64, content: &str) -> ElementKind {
-        ElementKind::Shape {
-            frame,
-            rotation,
-            shape,
-            corners: Default::default(),
-            text: Text::new(content.to_owned(), 20.0),
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            fill: Fill::Hollow,
-            dash: Dash::Solid,
-            opacity: Default::default(),
-        }
     }
 
     #[test]
@@ -1864,7 +1745,7 @@ mod tests {
     #[test]
     fn what_a_shape_surrounds_stays_within_reach() {
         let board = board([
-            (1, element(None, "a0", image(40.0, 40.0, 20.0, 20.0, 0.0))),
+            (1, element(None, "a0", image(40.0, 40.0, 20.0, 20.0))),
             (
                 2,
                 element(
@@ -1900,7 +1781,7 @@ mod tests {
                     framed(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), 0.0),
                 ),
             ),
-            (2, element(None, "a1", image(40.0, 40.0, 10.0, 10.0, 0.0))),
+            (2, element(None, "a1", image(40.0, 40.0, 10.0, 10.0))),
             (
                 3,
                 element(
@@ -1964,15 +1845,7 @@ mod tests {
 
     #[test]
     fn a_sticky_note_is_hit_and_touched_over_its_area() {
-        let text = Text::new(String::new(), 20.0);
-        let sticky = ElementKind::Sticky {
-            frame: area(0.0, 0.0, 100.0, 100.0),
-            rotation: 45.0,
-            text,
-            target: None,
-            paper: Paper::Yellow,
-            opacity: Default::default(),
-        };
+        let sticky = turned(sticky(0.0, 0.0, 100.0, 100.0), 45.0);
         let board = board([(1, element(None, "a0", sticky))]);
         assert_eq!(board.hit(point(50.0, 50.0), 0.0, Shown), Some(id(1)));
         // Within its frame, before it turned.
@@ -2075,8 +1948,11 @@ mod tests {
                     framed(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), 0.0),
                 ),
             ),
-            (2, element(None, "a1", arrow((200.0, 0.0), (300.0, 0.0)))),
-            (3, element(None, "a2", image(400.0, 0.0, 100.0, 100.0, 0.0))),
+            (
+                2,
+                element(None, "a1", stuck((200.0, 0.0), None, (300.0, 0.0), None)),
+            ),
+            (3, element(None, "a2", image(400.0, 0.0, 100.0, 100.0))),
         ]);
         let half = Weight::Medium.width() / 2.0;
         assert_eq!(board.hit(point(-half + 0.1, 50.0), 0.0, Shown), Some(id(1)));
@@ -2087,7 +1963,7 @@ mod tests {
     #[test]
     fn a_thick_stroke_is_hit_further_than_a_thin_one() {
         let weighed = |weight| {
-            let mut kind = arrow((0.0, 0.0), (100.0, 0.0));
+            let mut kind = stuck((0.0, 0.0), None, (100.0, 0.0), None);
             if let ElementKind::Arrow { weight: drawn, .. } = &mut kind {
                 *drawn = weight;
             }
@@ -2101,21 +1977,15 @@ mod tests {
 
     #[test]
     fn a_filled_shape_covers_what_it_surrounds_but_a_filled_cross_does_not() {
-        let filled = |shape, frame, fill| {
-            let mut kind = framed(shape, frame, 0.0);
-            if let ElementKind::Shape { fill: drawn, .. } = &mut kind {
-                *drawn = fill;
-            }
-            kind
-        };
+        let shaped = |shape, frame, fill| filled(framed(shape, frame, 0.0), fill);
         let board = board([
-            (1, element(None, "a0", image(40.0, 40.0, 20.0, 20.0, 0.0))),
+            (1, element(None, "a0", image(40.0, 40.0, 20.0, 20.0))),
             (
                 2,
                 element(
                     None,
                     "a1",
-                    filled(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), Fill::Tint),
+                    shaped(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), Fill::Tint),
                 ),
             ),
             (
@@ -2123,7 +1993,7 @@ mod tests {
                 element(
                     None,
                     "a2",
-                    filled(Shape::Ellipse, area(200.0, 0.0, 100.0, 50.0), Fill::Solid),
+                    shaped(Shape::Ellipse, area(200.0, 0.0, 100.0, 50.0), Fill::Solid),
                 ),
             ),
             (
@@ -2131,7 +2001,7 @@ mod tests {
                 element(
                     None,
                     "a3",
-                    filled(Shape::Cross, area(400.0, 0.0, 100.0, 100.0), Fill::Solid),
+                    shaped(Shape::Cross, area(400.0, 0.0, 100.0, 100.0), Fill::Solid),
                 ),
             ),
         ]);
@@ -2142,20 +2012,6 @@ mod tests {
         assert_eq!(board.hit(point(450.0, 20.0), 3.0, Shown), None);
         assert_eq!(board.touching(area(20.0, 20.0, 10.0, 10.0)), [id(2)]);
         assert!(board.touching(area(440.0, 10.0, 8.0, 8.0)).is_empty());
-    }
-
-    fn counted(shape: Shape, frame: Rect, corners: u8, fill: Fill) -> ElementKind {
-        let mut kind = framed(shape, frame, 0.0);
-        if let ElementKind::Shape {
-            corners: drawn,
-            fill: filled,
-            ..
-        } = &mut kind
-        {
-            *drawn = Corners::new(corners).unwrap();
-            *filled = fill;
-        }
-        kind
     }
 
     #[test]
@@ -2173,7 +2029,7 @@ mod tests {
                 assert!(off.iter().all(|off| off.abs() < 1e-9), "{count} {star}");
                 // One corner pointing up, at the middle of the top side.
                 let top = polygon(&frame, 0.0, count, star)[0];
-                assert!((top.x - 160.0).abs() < 1e-9 && (top.y - 20.0).abs() < 1e-9);
+                assert_at(top, 160.0, 20.0);
             }
         }
         // Turned over by a negative size, it draws the same.
@@ -2233,7 +2089,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(arrow((0.0, 0.0), (1.0, 1.0)).text_area(), None);
+        assert_eq!(stuck((0.0, 0.0), None, (1.0, 1.0), None).text_area(), None);
     }
 
     #[test]
@@ -2321,17 +2177,10 @@ mod tests {
     #[test]
     fn what_lies_whole_on_a_triangle_lies_within_its_sides() {
         let triangle = counted(Shape::Triangle, area(0.0, 0.0, 100.0, 100.0), 5, Fill::Tint);
-        let note = |x, y| ElementKind::Note {
-            frame: area(x, y, 10.0, 10.0),
-            rotation: 0.0,
-            text: Text::new("A".to_owned(), 20.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        };
-        assert!(holds(&triangle, &note(45.0, 50.0)));
+        let small_note = |x, y| note(x, y, 10.0, 10.0);
+        assert!(holds(&triangle, &small_note(45.0, 50.0)));
         // Within its frame, in a corner the triangle leaves out.
-        assert!(!holds(&triangle, &note(2.0, 2.0)));
+        assert!(!holds(&triangle, &small_note(2.0, 2.0)));
         // A triangle whose frame juts out of a diamond, though its corners do not.
         let diamond = counted(Shape::Diamond, area(0.0, 0.0, 100.0, 100.0), 5, Fill::Tint);
         let inner = framed(Shape::Triangle, area(30.0, 10.0, 40.0, 40.0), 0.0);
@@ -2351,29 +2200,9 @@ mod tests {
 
     #[test]
     fn an_arrow_or_a_line_is_hit_near_its_line() {
-        let (from, to) = (point(0.0, 0.0), point(100.0, 100.0));
         for kind in [
-            ElementKind::Arrow {
-                from,
-                to,
-                from_target: None,
-                to_target: None,
-                colour: Colour::Ink,
-                weight: Weight::Medium,
-                dash: Dash::Solid,
-                heads: Heads::End,
-                opacity: Default::default(),
-            },
-            ElementKind::Line {
-                from,
-                to,
-                from_target: None,
-                to_target: None,
-                colour: Colour::Ink,
-                weight: Weight::Medium,
-                dash: Dash::Solid,
-                opacity: Default::default(),
-            },
+            stuck((0.0, 0.0), None, (100.0, 100.0), None),
+            line((0.0, 0.0), (100.0, 100.0)),
         ] {
             let board = board([(1, element(None, "a0", kind))]);
             assert_eq!(board.hit(point(52.0, 48.0), 3.0, Shown), Some(id(1)));
@@ -2429,12 +2258,19 @@ mod tests {
     fn a_selection_rectangle_touches_what_it_overlaps() {
         let board = board([
             // Its upright bounds reach the rectangle, but its corner does not.
-            (1, element(None, "a0", image(0.0, 0.0, 100.0, 100.0, 45.0))),
-            (2, element(None, "a1", image(200.0, 0.0, 10.0, 10.0, 0.0))),
+            (
+                1,
+                element(None, "a0", turned(image(0.0, 0.0, 100.0, 100.0), 45.0)),
+            ),
+            (2, element(None, "a1", image(200.0, 0.0, 10.0, 10.0))),
             // It crosses the rectangle without an end inside.
             (
                 3,
-                element(None, "a2", arrow((105.0, -50.0), (105.0, 150.0))),
+                element(
+                    None,
+                    "a2",
+                    stuck((105.0, -50.0), None, (105.0, 150.0), None),
+                ),
             ),
             (4, element(None, "a3", ElementKind::group())),
         ]);
@@ -2450,8 +2286,8 @@ mod tests {
         let board = board([
             (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", ElementKind::group())),
-            (3, element(Some(2), "a0", image(0.0, 0.0, 1.0, 1.0, 0.0))),
-            (4, element(None, "a1", image(0.0, 0.0, 1.0, 1.0, 0.0))),
+            (3, element(Some(2), "a0", image(0.0, 0.0, 1.0, 1.0))),
+            (4, element(None, "a1", image(0.0, 0.0, 1.0, 1.0))),
         ]);
         assert_eq!(board.top_level(id(3)), Some(id(1)));
         assert_eq!(board.top_level(id(4)), Some(id(4)));
@@ -2463,8 +2299,8 @@ mod tests {
         let board = board([
             (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", ElementKind::group())),
-            (3, element(Some(2), "a0", image(0.0, 0.0, 1.0, 1.0, 0.0))),
-            (4, element(None, "a1", image(0.0, 0.0, 1.0, 1.0, 0.0))),
+            (3, element(Some(2), "a0", image(0.0, 0.0, 1.0, 1.0))),
+            (4, element(None, "a1", image(0.0, 0.0, 1.0, 1.0))),
         ]);
         assert_eq!(board.member(id(1), id(3)), Some(id(2)));
         assert_eq!(board.member(id(2), id(3)), Some(id(3)));
@@ -2485,31 +2321,19 @@ mod tests {
 
     #[test]
     fn a_comment_covers_nothing_on_the_board() {
-        let comment = ElementKind::Comment {
-            at: point(10.0, 10.0),
-            text: "Too dark".to_owned(),
-            target: None,
-        };
+        let comment = comment(10.0, 10.0);
         let board = board([(1, element(None, "a0", comment))]);
         assert_eq!(board.hit(point(10.0, 10.0), 3.0, Shown), None);
         assert_eq!(board.outline(id(1)), Some(Vec::new()));
         assert_eq!(board.bounds(&[id(1)]), None);
     }
 
-    fn comment(x: f64, y: f64) -> ElementKind {
-        ElementKind::Comment {
-            at: point(x, y),
-            text: "Too dark".to_owned(),
-            target: None,
-        }
-    }
-
     #[test]
     fn an_area_touches_the_comments_pinned_in_it_edges_included() {
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 20.0, 20.0, 0.0))),
+            (1, element(None, "a0", image(0.0, 0.0, 20.0, 20.0))),
             (2, element(None, "a1", comment(30.0, 10.0))),
-            (3, element(None, "a2", image(25.0, 0.0, 20.0, 20.0, 0.0))),
+            (3, element(None, "a2", image(25.0, 0.0, 20.0, 20.0))),
         ]);
         assert_eq!(
             board.touching(area(10.0, 5.0, 20.0, 5.0)),
@@ -2524,10 +2348,10 @@ mod tests {
     fn an_area_touches_the_outermost_groups_of_what_it_touches_once_each() {
         let board = board([
             (1, element(None, "a0", ElementKind::group())),
-            (2, element(Some(1), "a0", image(0.0, 0.0, 20.0, 20.0, 0.0))),
+            (2, element(Some(1), "a0", image(0.0, 0.0, 20.0, 20.0))),
             (3, element(Some(1), "a1", ElementKind::group())),
             (4, element(Some(3), "a0", comment(10.0, 10.0))),
-            (5, element(None, "a1", image(0.0, 0.0, 20.0, 20.0, 0.0))),
+            (5, element(None, "a1", image(0.0, 0.0, 20.0, 20.0))),
         ]);
         assert_eq!(
             board.touching(area(5.0, 5.0, 10.0, 10.0)),
@@ -2548,8 +2372,8 @@ mod tests {
     fn a_selection_rectangle_goes_through_what_is_locked() {
         let board = board([
             (1, element(None, "a0", ElementKind::group())),
-            (2, locked(Some(1), "a0", image(0.0, 0.0, 20.0, 20.0, 0.0))),
-            (3, element(Some(1), "a1", image(50.0, 0.0, 20.0, 20.0, 0.0))),
+            (2, locked(Some(1), "a0", image(0.0, 0.0, 20.0, 20.0))),
+            (3, element(Some(1), "a1", image(50.0, 0.0, 20.0, 20.0))),
             (4, locked(None, "a1", comment(10.0, 10.0))),
         ]);
         let around_the_locked = area(5.0, 5.0, 10.0, 10.0);
@@ -2569,8 +2393,11 @@ mod tests {
     fn a_selection_rectangle_goes_through_the_annotations_hidden() {
         let board = board([
             (1, element(None, "a0", ElementKind::group())),
-            (2, element(Some(1), "a0", arrow((0.0, 0.0), (20.0, 20.0)))),
-            (3, element(Some(1), "a1", image(50.0, 0.0, 20.0, 20.0, 0.0))),
+            (
+                2,
+                element(Some(1), "a0", stuck((0.0, 0.0), None, (20.0, 20.0), None)),
+            ),
+            (3, element(Some(1), "a1", image(50.0, 0.0, 20.0, 20.0))),
             (4, element(None, "a1", comment(10.0, 10.0))),
         ]);
         let around_the_arrow = area(5.0, 5.0, 10.0, 10.0);
@@ -2592,11 +2419,14 @@ mod tests {
     #[test]
     fn the_extent_of_elements_holds_what_they_draw_and_where_their_comments_are_pinned() {
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 20.0, 10.0, 0.0))),
+            (1, element(None, "a0", image(0.0, 0.0, 20.0, 10.0))),
             (2, element(None, "a1", comment(50.0, -5.0))),
             (3, element(None, "a2", ElementKind::group())),
             (4, element(Some(3), "a0", comment(-10.0, 30.0))),
-            (5, element(Some(3), "a1", arrow((0.0, 0.0), (5.0, 5.0)))),
+            (
+                5,
+                element(Some(3), "a1", stuck((0.0, 0.0), None, (5.0, 5.0), None)),
+            ),
         ]);
         assert_eq!(board.extent(&[id(2)]), Some(area(50.0, -5.0, 0.0, 0.0)));
         assert_eq!(
@@ -2613,9 +2443,12 @@ mod tests {
     fn a_group_outlines_the_bounds_of_its_elements() {
         let board = board([
             (1, element(None, "a0", ElementKind::group())),
-            (2, element(Some(1), "a0", image(0.0, 0.0, 10.0, 10.0, 0.0))),
+            (2, element(Some(1), "a0", image(0.0, 0.0, 10.0, 10.0))),
             (3, element(Some(1), "a1", ElementKind::group())),
-            (4, element(Some(3), "a0", arrow((30.0, -5.0), (20.0, 5.0)))),
+            (
+                4,
+                element(Some(3), "a0", stuck((30.0, -5.0), None, (20.0, 5.0), None)),
+            ),
             (5, element(None, "a1", ElementKind::group())),
         ]);
         let corners = [(0.0, -5.0), (30.0, -5.0), (30.0, 10.0), (0.0, 10.0)];
@@ -2771,9 +2604,12 @@ mod tests {
 
     #[test]
     fn an_eraser_reaches_a_highlighter_across_its_whole_width() {
-        let mut thick = pen(area(0.0, 50.0, 100.0, 0.0), 0.0, &[(0.0, 0.0), (1.0, 0.0)]);
-        if let ElementKind::Stroke { tip, weight, .. } = &mut thick {
-            *tip = Tip::Highlighter;
+        let mut thick = highlighted(pen(
+            area(0.0, 50.0, 100.0, 0.0),
+            0.0,
+            &[(0.0, 0.0), (1.0, 0.0)],
+        ));
+        if let ElementKind::Stroke { weight, .. } = &mut thick {
             *weight = Weight::Thick;
         }
         let board = board([(1, element(None, "a0", thick))]);
@@ -2798,9 +2634,8 @@ mod tests {
             0.41477325621366834,
             0.7719154333905969,
         );
-        let mut thick = pen(frame, 0.0, &[(0.0, 0.0), (1.0, 0.0)]);
-        if let ElementKind::Stroke { tip, weight, .. } = &mut thick {
-            *tip = Tip::Highlighter;
+        let mut thick = highlighted(pen(frame, 0.0, &[(0.0, 0.0), (1.0, 0.0)]));
+        if let ElementKind::Stroke { weight, .. } = &mut thick {
             *weight = Weight::Thick;
         }
         let board = board([(1, element(None, "a0", thick))]);
@@ -2815,10 +2650,11 @@ mod tests {
 
     #[test]
     fn an_area_touches_a_highlighter_across_its_whole_width() {
-        let mut medium = pen(area(0.0, 50.0, 100.0, 0.0), 0.0, &[(0.0, 0.0), (1.0, 0.0)]);
-        if let ElementKind::Stroke { tip, .. } = &mut medium {
-            *tip = Tip::Highlighter;
-        }
+        let medium = highlighted(pen(
+            area(0.0, 50.0, 100.0, 0.0),
+            0.0,
+            &[(0.0, 0.0), (1.0, 0.0)],
+        ));
         let board = board([(1, element(None, "a0", medium))]);
         // 16 wide, so 8 either side of its line.
         assert_eq!(board.touching(area(40.0, 53.0, 20.0, 4.0)), [id(1)]);
@@ -2830,17 +2666,10 @@ mod tests {
         // The two bottom points at (19.1, 100) and (80.9, 100), the dent between them at
         // (50, 76.4). Each corner of the note across it lies in a point, its middle in the dent.
         let star = counted(Shape::Star, area(0.0, 0.0, 100.0, 100.0), 5, Fill::Solid);
-        let note = |frame| ElementKind::Note {
-            frame,
-            rotation: 0.0,
-            text: Text::new("A".to_owned(), 20.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        };
+        let note_in = |frame: Rect| note(frame.x, frame.y, frame.width, frame.height);
         let (within, across) = (
-            note(area(45.0, 45.0, 10.0, 10.0)),
-            note(area(25.0, 88.0, 50.0, 4.0)),
+            note_in(area(45.0, 45.0, 10.0, 10.0)),
+            note_in(area(25.0, 88.0, 50.0, 4.0)),
         );
         assert!(holds(&star, &within), "a note in its middle");
         assert!(!covers(&star, point(50.0, 90.0)));
@@ -2866,11 +2695,11 @@ mod tests {
 
     #[test]
     fn a_flat_polygon_or_star_is_hit_and_touched_along_its_line() {
-        let mut turned = counted(Shape::Star, area(600.0, 0.0, 100.0, 0.0), 5, Fill::Solid);
-        if let ElementKind::Shape { rotation, .. } = &mut turned {
-            // Upright, along x = 650 from y = -50 to 50.
-            *rotation = 90.0;
-        }
+        // Upright, along x = 650 from y = -50 to 50.
+        let turned = turned(
+            counted(Shape::Star, area(600.0, 0.0, 100.0, 0.0), 5, Fill::Solid),
+            90.0,
+        );
         let shapes = [
             counted(Shape::Triangle, area(0.0, 0.0, 100.0, 0.0), 5, Fill::Solid),
             counted(Shape::Star, area(200.0, 0.0, 0.0, 100.0), 7, Fill::Solid),
@@ -2918,7 +2747,7 @@ mod tests {
     fn an_element_draws_within_a_turned_area_by_what_it_draws() {
         let board = board([
             // Beside the top-right side of a diamond, within its upright bounds.
-            (1, element(None, "a0", image(62.0, -25.0, 18.0, 10.0, 0.0))),
+            (1, element(None, "a0", image(62.0, -25.0, 18.0, 10.0))),
             // Past the corner at (100, 0), its frame over the box.
             (
                 2,
@@ -2940,7 +2769,7 @@ mod tests {
                     framed(Shape::Rectangle, area(-10.0, -10.0, 120.0, 120.0), 0.0),
                 ),
             ),
-            (4, element(None, "a3", image(20.0, 20.0, 50.0, 50.0, 0.0))),
+            (4, element(None, "a3", image(20.0, 20.0, 50.0, 50.0))),
         ]);
         let diamond = corners(&area(0.0, 0.0, 100.0, 100.0), 45.0);
         let upright = corners(&area(0.0, 0.0, 100.0, 100.0), 0.0);

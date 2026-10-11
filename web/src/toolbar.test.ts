@@ -1,18 +1,12 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { press } from "../test/events.js";
 import { closeMenu, menuOpen } from "./menu.js";
 import { toolbar } from "./toolbar.js";
-
-function press(key: string): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-  document.activeElement!.dispatchEvent(event);
-  return event;
-}
 
 describe("toolbar", () => {
   afterEach(() => {
     closeMenu();
-    document.body.replaceChildren();
   });
 
   it("moves between its buttons with Left and Right, and keeps Up and Down from the board", () => {
@@ -30,10 +24,10 @@ describe("toolbar", () => {
     );
     const [select, hand] = host.querySelectorAll<HTMLButtonElement>(".bar button");
     select!.focus();
-    expect(press("ArrowRight").defaultPrevented).toBe(true);
+    expect(press({ key: "ArrowRight" }, document.activeElement!).defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(hand);
-    expect(press("ArrowDown").defaultPrevented).toBe(true);
-    expect(press("ArrowUp").defaultPrevented).toBe(true);
+    expect(press({ key: "ArrowDown" }, document.activeElement!).defaultPrevented).toBe(true);
+    expect(press({ key: "ArrowUp" }, document.activeElement!).defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(hand);
   });
 
@@ -45,7 +39,7 @@ describe("toolbar", () => {
       { label: "Open a board…", run },
     ]);
     host.querySelector<HTMLButtonElement>('button[aria-label="Menu"]')!.focus();
-    expect(press("ArrowUp").defaultPrevented).toBe(true);
+    expect(press({ key: "ArrowUp" }, document.activeElement!).defaultPrevented).toBe(true);
     expect(menuOpen()).toBe(true);
     expect(document.activeElement?.textContent).toBe("Open a board…");
   });

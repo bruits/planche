@@ -11,12 +11,13 @@ use board::{
 use format::save::{Known, Save};
 use format::{Error, Files, LeftOut, zip};
 
-const NOTE: ElementId = ElementId::from_random(3);
-const ELLIPSE: ElementId = ElementId::from_random(4);
-const ARROW: ElementId = ElementId::from_random(5);
-const STICKY: ElementId = ElementId::from_random(6);
-const STROKE: ElementId = ElementId::from_random(12);
+const NOTE: ElementId = id(3);
+const ELLIPSE: ElementId = id(4);
+const ARROW: ElementId = id(5);
+const STICKY: ElementId = id(6);
+const STROKE: ElementId = id(12);
 const IMAGE: &[u8] = b"not really a PNG";
+const CONFLICTED: &[u8] = b"<<<<<<< ours\n";
 
 fn frame(width: f64, height: f64) -> Rect {
     Rect {
@@ -27,45 +28,52 @@ fn frame(width: f64, height: f64) -> Rect {
     }
 }
 
+const fn id(bits: u128) -> ElementId {
+    ElementId::from_random(bits)
+}
+
+fn conflict_of(good: &str) -> String {
+    format!("<<<<<<< ours\n{good}=======\n{good}>>>>>>> theirs\n")
+}
+
 fn z(key: &str) -> ZIndex {
     key.parse().unwrap()
 }
 
-fn note(group: Option<ElementId>, text: &str) -> Element {
+fn element(group: Option<ElementId>, key: &str, kind: ElementKind) -> Element {
     Element {
         group,
         locked: false,
-        z: z("a0"),
-        kind: ElementKind::Note {
+        z: z(key),
+        kind,
+    }
+}
+
+fn note(group: Option<ElementId>, text: &str) -> Element {
+    element(
+        group,
+        "a0",
+        ElementKind::Note {
             frame: frame(200.0, 80.0),
             rotation: 0.0,
-            text: Text::new(text.to_owned(), 20.0),
+            text: Text::new(text, 20.0),
             target: None,
             colour: Colour::Ink,
             opacity: Default::default(),
         },
-    }
+    )
 }
 
 fn sample() -> Board {
-    let group = ElementId::from_random(1);
+    let group = id(1);
     let elements = [
+        (group, element(None, "a0", ElementKind::group())),
         (
-            group,
-            Element {
-                group: None,
-                locked: false,
-                z: z("a0"),
-                kind: ElementKind::group(),
-            },
-        ),
-        (
-            ElementId::from_random(2),
-            Element {
-                group: Some(group),
-                locked: false,
-                z: z("a1"),
-                kind: ElementKind::Image {
+            id(2),
+            element(
+                Some(group),
+                "a1",
+                ElementKind::Image {
                     asset: AssetId::of(IMAGE),
                     natural_size: Size {
                         width: 1280,
@@ -88,16 +96,15 @@ fn sample() -> Board {
                     caption: Some("The \"old\" harbour\nlumière rasante".to_owned()),
                     opacity: Default::default(),
                 },
-            },
+            ),
         ),
         (NOTE, note(Some(group), "Warm light from the left")),
         (
             ELLIPSE,
-            Element {
-                group: None,
-                locked: false,
-                z: z("a1"),
-                kind: ElementKind::Shape {
+            element(
+                None,
+                "a1",
+                ElementKind::Shape {
                     frame: frame(100.0, 100.0),
                     rotation: -12.5,
                     shape: Shape::Ellipse,
@@ -110,15 +117,14 @@ fn sample() -> Board {
                     dash: Dash::Solid,
                     opacity: Default::default(),
                 },
-            },
+            ),
         ),
         (
             ARROW,
-            Element {
-                group: None,
-                locked: false,
-                z: z("a2"),
-                kind: ElementKind::Arrow {
+            element(
+                None,
+                "a2",
+                ElementKind::Arrow {
                     from: Point { x: 0.0, y: 0.0 },
                     // Without serde_json's `float_roundtrip`, these read back one bit off.
                     to: Point {
@@ -133,15 +139,14 @@ fn sample() -> Board {
                     heads: Heads::End,
                     opacity: Default::default(),
                 },
-            },
+            ),
         ),
         (
             STICKY,
-            Element {
-                group: None,
-                locked: false,
-                z: z("a3"),
-                kind: ElementKind::Sticky {
+            element(
+                None,
+                "a3",
+                ElementKind::Sticky {
                     frame: frame(160.0, 160.0),
                     rotation: 5.0,
                     text: Text::new("Try a warmer grade\nfor the dusk shots".to_owned(), 20.0),
@@ -149,15 +154,14 @@ fn sample() -> Board {
                     paper: Paper::Yellow,
                     opacity: Default::default(),
                 },
-            },
+            ),
         ),
         (
-            ElementId::from_random(7),
-            Element {
-                group: None,
-                locked: false,
-                z: z("a4"),
-                kind: ElementKind::Line {
+            id(7),
+            element(
+                None,
+                "a4",
+                ElementKind::Line {
                     from: Point { x: -10.0, y: 5.0 },
                     to: Point { x: 30.0, y: 5.0 },
                     from_target: None,
@@ -167,28 +171,26 @@ fn sample() -> Board {
                     dash: Dash::Solid,
                     opacity: Default::default(),
                 },
-            },
+            ),
         ),
         (
-            ElementId::from_random(9),
-            Element {
-                group: None,
-                locked: false,
-                z: z("a6"),
-                kind: ElementKind::Comment {
+            id(9),
+            element(
+                None,
+                "a6",
+                ElementKind::Comment {
                     at: Point { x: 12.5, y: -3.0 },
                     text: "Too dark\nfor the mood".to_owned(),
                     target: Some(ELLIPSE),
                 },
-            },
+            ),
         ),
         (
-            ElementId::from_random(8),
-            Element {
-                group: None,
-                locked: false,
-                z: z("a5"),
-                kind: ElementKind::Shape {
+            id(8),
+            element(
+                None,
+                "a5",
+                ElementKind::Shape {
                     frame: frame(40.0, 40.0),
                     rotation: 0.0,
                     shape: Shape::Cross,
@@ -201,15 +203,14 @@ fn sample() -> Board {
                     dash: Dash::Solid,
                     opacity: Default::default(),
                 },
-            },
+            ),
         ),
         (
             STROKE,
-            Element {
-                group: None,
-                locked: false,
-                z: z("a7"),
-                kind: ElementKind::Stroke {
+            element(
+                None,
+                "a7",
+                ElementKind::Stroke {
                     tip: Tip::Pen,
                     frame: frame(60.0, 20.0),
                     rotation: 0.0,
@@ -223,7 +224,7 @@ fn sample() -> Board {
                     weight: Weight::Thin,
                     opacity: Default::default(),
                 },
-            },
+            ),
         ),
     ];
     Board {
@@ -273,18 +274,12 @@ fn restacking_rewrites_one_file() {
 
     assert_eq!(changed(&before, &after), [format!("elements/{NOTE}.json")]);
     let order = format::read(&after).unwrap().board.draw_order();
-    assert_eq!(
-        order,
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 12].map(ElementId::from_random)
-    );
+    assert_eq!(order, [1, 2, 3, 4, 5, 6, 7, 8, 9, 12].map(id));
 }
 
 #[test]
 fn every_edit_rewrites_its_own_files_and_undoes_to_the_same_bytes() {
     type Edit = fn(&mut Editor) -> board::Result<Vec<ElementId>>;
-    fn id(bits: u128) -> ElementId {
-        ElementId::from_random(bits)
-    }
     let cases: [(Edit, &[u128]); 28] = [
         (
             |editor| editor.add(id(10), None, note(None, "New").kind),
@@ -442,12 +437,7 @@ fn an_unknown_background_is_refused() {
 
 #[test]
 fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
-    let styled = |kind| Element {
-        group: None,
-        locked: false,
-        z: z("a0"),
-        kind,
-    };
+    let styled = |kind| element(None, "a0", kind);
     let mut text = Text::new("Key light", 20.0);
     text.bold = true;
     text.align = Some(Align::Right);
@@ -488,7 +478,7 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
         fill: Fill::Tint,
         title: Some("Moods".to_owned()),
     };
-    let framed = ElementId::from_random(9);
+    let framed = id(9);
     let board = Board {
         elements: [
             (NOTE, shape),
@@ -542,7 +532,7 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
 
 #[test]
 fn a_crop_shape_is_written_only_once_not_a_rectangle_and_reads_back() {
-    let image = ElementId::from_random(2);
+    let image = id(2);
     let mut editor = Editor::new(sample());
     let shape = |files: &Files| {
         let bytes = &files[&format!("elements/{image}.json")];
@@ -577,7 +567,7 @@ fn a_lock_is_written_only_once_set_and_reads_back() {
 
 #[test]
 fn a_trim_and_a_speed_are_written_only_once_set_and_read_back() {
-    let image = ElementId::from_random(2);
+    let image = id(2);
     let mut editor = Editor::new(sample());
     let edits = |files: &Files| {
         let bytes = &files[&format!("elements/{image}.json")];
@@ -631,7 +621,7 @@ fn concurrent_additions_merge_cleanly() {
     let base = sample();
     let mut ours = base.clone();
     let mut theirs = base.clone();
-    let (mine, yours) = (ElementId::from_random(10), ElementId::from_random(11));
+    let (mine, yours) = (id(10), id(11));
     ours.elements.insert(mine, note(None, "Mine"));
     theirs.elements.insert(yours, note(None, "Yours"));
     let before = format::write(&base).unwrap();
@@ -696,7 +686,7 @@ fn an_element_is_plain_json() {
 #[test]
 fn an_image_neither_turned_nor_edited_writes_neither() {
     let mut board = sample();
-    let image = ElementId::from_random(2);
+    let image = id(2);
     let ElementKind::Image {
         rotation, edits, ..
     } = &mut board.elements.get_mut(&image).unwrap().kind
@@ -816,7 +806,7 @@ fn an_arrow_names_what_its_ends_stick_to() {
 
 #[test]
 fn an_image_says_where_it_came_from_and_what_it_shows() {
-    let image = ElementId::from_random(2);
+    let image = id(2);
     let files = format::write(&sample()).unwrap();
     let written = String::from_utf8(files[&format!("elements/{image}.json")].clone()).unwrap();
     assert_eq!(
@@ -913,13 +903,8 @@ fn equal_boards_write_the_same_bytes() {
         opacity: Default::default(),
     };
     for (bits, kind) in [(20, image), (21, shape)] {
-        let element = Element {
-            group: None,
-            locked: false,
-            z: z("a0"),
-            kind,
-        };
-        board.elements.insert(ElementId::from_random(bits), element);
+        let element = element(None, "a0", kind);
+        board.elements.insert(id(bits), element);
     }
     let files = format::write(&board).unwrap();
     let negated: Files = files
@@ -1003,13 +988,8 @@ fn a_star_or_a_polygon_writes_its_corners_only_when_not_five_and_reads_back() {
                     dash: Dash::Solid,
                     opacity: Default::default(),
                 };
-                let element = Element {
-                    group: None,
-                    locked: false,
-                    z: z("a0"),
-                    kind,
-                };
-                (ElementId::from_random(bits), element)
+                let element = element(None, "a0", kind);
+                (id(bits), element)
             })
             .collect(),
         ..Board::default()
@@ -1017,7 +997,7 @@ fn a_star_or_a_polygon_writes_its_corners_only_when_not_five_and_reads_back() {
     let files = format::write(&board).unwrap();
     let written: Vec<serde_json::Value> = (1..=6)
         .map(|bits| {
-            let bytes = &files[&format!("elements/{}.json", ElementId::from_random(bits))];
+            let bytes = &files[&format!("elements/{}.json", id(bits))];
             serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["kind"].clone()
         })
         .collect();
@@ -1136,7 +1116,7 @@ fn a_save_writes_only_the_files_whose_bytes_changed() {
 
     let after = format::write(editor.board()).unwrap();
     let written: Vec<&str> = save.files.iter().map(|(path, _)| path.as_str()).collect();
-    let mut expected: Vec<String> = [ELLIPSE, ARROW, ElementId::from_random(9)]
+    let mut expected: Vec<String> = [ELLIPSE, ARROW, id(9)]
         .map(|id| format!("elements/{id}.json"))
         .into();
     expected.push("board.json".to_owned());
@@ -1180,7 +1160,7 @@ fn a_save_deletes_only_the_element_files_it_knew() {
     let files = format::write(&board).unwrap();
     let known = Known::new(files.keys().cloned().collect::<Vec<_>>(), files);
     // Added by another program since the board was read, and so not on this board.
-    let theirs = ElementId::from_random(42);
+    let theirs = id(42);
     assert!(known.save(&board, [theirs]).unwrap().deletions.is_empty());
 }
 
@@ -1190,7 +1170,7 @@ fn an_overwrite_leaves_the_folder_holding_this_board_alone() {
     // Read again once another program moved the note and added an element.
     let mut theirs = sample();
     theirs.elements.get_mut(&NOTE).unwrap().z = z("a9");
-    let added = ElementId::from_random(42);
+    let added = id(42);
     theirs.elements.insert(added, note(None, "Theirs"));
     let files = format::write(&theirs).unwrap();
     let known = Known::new(files.keys().cloned().collect::<Vec<_>>(), files);
@@ -1206,7 +1186,7 @@ fn a_damaged_element_file_is_left_out_and_named() {
     let path = format!("elements/{NOTE}.json");
     let files = format::write(&sample()).unwrap();
     let good = String::from_utf8(files[&path].clone()).unwrap();
-    let conflicted = format!("<<<<<<< ours\n{good}=======\n{good}>>>>>>> theirs\n");
+    let conflicted = conflict_of(&good);
     for (damaged, conflict) in [
         (conflicted.as_bytes(), true),
         (&good.as_bytes()[..good.len() / 2], false),
@@ -1229,7 +1209,7 @@ fn a_damaged_element_file_is_left_out_and_named() {
 fn a_board_file_that_cannot_be_read_refuses_the_board() {
     let files = format::write(&sample()).unwrap();
     let good = String::from_utf8(files["board.json"].clone()).unwrap();
-    let conflicted = format!("<<<<<<< ours\n{good}=======\n{good}>>>>>>> theirs\n");
+    let conflicted = conflict_of(&good);
     for (manifest, text) in [
         (
             conflicted.as_str(),
@@ -1260,7 +1240,7 @@ fn a_board_file_that_cannot_be_read_refuses_the_board() {
 
 #[test]
 fn an_unknown_key_leaves_the_file_out_and_names_the_key() {
-    let group = ElementId::from_random(1);
+    let group = id(1);
     // Deep in a note, and in a group.
     for (id, at) in [(NOTE, &["kind", "text"][..]), (group, &["kind"])] {
         let path = format!("elements/{id}.json");
@@ -1285,18 +1265,15 @@ fn an_unknown_key_leaves_the_file_out_and_names_the_key() {
 fn an_overwrite_never_deletes_a_file_that_is_left_out() {
     let ours = sample();
     let mut theirs = sample();
-    let added = ElementId::from_random(42);
+    let added = id(42);
     theirs.elements.insert(added, note(None, "Theirs"));
     // Left out when read, and fixed since.
-    let fixed = ElementId::from_random(44);
+    let fixed = id(44);
     theirs.elements.insert(fixed, note(None, "Resolved"));
     let mut files = format::write(&theirs).unwrap();
     // Left out if read now.
-    let conflicted = ElementId::from_random(43);
-    files.insert(
-        format!("elements/{conflicted}.json"),
-        b"<<<<<<< ours\n".to_vec(),
-    );
+    let conflicted = id(43);
+    files.insert(format!("elements/{conflicted}.json"), CONFLICTED.to_vec());
     let known = Known::new(files.keys().cloned().collect::<Vec<_>>(), files);
 
     let left_out = format!("elements/{fixed}.json");
@@ -1306,11 +1283,11 @@ fn an_overwrite_never_deletes_a_file_that_is_left_out() {
 
 #[test]
 fn what_repair_cut_from_files_left_out_keeps_its_links_until_an_edit_changes_them() {
-    let group = ElementId::from_random(1);
+    let group = id(1);
     let whole = format::write(&sample()).unwrap();
     let mut files = whole.clone();
     for id in [group, STICKY] {
-        files.insert(format!("elements/{id}.json"), b"<<<<<<< ours\n".to_vec());
+        files.insert(format!("elements/{id}.json"), CONFLICTED.to_vec());
     }
     let reading = format::read(&files).unwrap();
     // Out of the group and free of the sticky note in memory, though not in their files.
@@ -1330,7 +1307,7 @@ fn what_repair_cut_from_files_left_out_keeps_its_links_until_an_edit_changes_the
         let files = format::write(board).unwrap();
         serde_json::from_slice::<serde_json::Value>(&files[&format!("elements/{id}.json")]).unwrap()
     };
-    let id = |id: ElementId| serde_json::to_value(id).unwrap();
+    let json = |id: ElementId| serde_json::to_value(id).unwrap();
     let mut edited = reading.board.clone();
     edited.elements.get_mut(&NOTE).unwrap().z = z("a9");
     let ElementKind::Arrow { from, to, .. } = &mut edited.elements.get_mut(&ARROW).unwrap().kind
@@ -1339,8 +1316,8 @@ fn what_repair_cut_from_files_left_out_keeps_its_links_until_an_edit_changes_the
     };
     from.x += 5.0;
     let moved = *to;
-    assert_eq!(file(&edited, NOTE)["group"], id(group));
-    assert_eq!(file(&edited, ARROW)["kind"]["to_target"], id(STICKY));
+    assert_eq!(file(&edited, NOTE)["group"], json(group));
+    assert_eq!(file(&edited, ARROW)["kind"]["to_target"], json(STICKY));
     let mut fixed = format::write(&edited).unwrap();
     for id in [group, STICKY] {
         let path = format!("elements/{id}.json");
@@ -1350,7 +1327,7 @@ fn what_repair_cut_from_files_left_out_keeps_its_links_until_an_edit_changes_the
     assert_eq!(back.elements[&NOTE].group, Some(group));
     assert!(back.repaired.is_empty());
 
-    let regroup = ElementId::from_random(60);
+    let regroup = id(60);
     edited.elements.insert(
         regroup,
         Element {
@@ -1362,13 +1339,13 @@ fn what_repair_cut_from_files_left_out_keeps_its_links_until_an_edit_changes_the
     if let ElementKind::Arrow { to, .. } = &mut edited.elements.get_mut(&ARROW).unwrap().kind {
         to.x = moved.x + 5.0;
     }
-    assert_eq!(file(&edited, NOTE)["group"], id(regroup));
+    assert_eq!(file(&edited, NOTE)["group"], json(regroup));
     assert!(file(&edited, ARROW)["kind"].get("to_target").is_none());
 }
 
 #[test]
 fn a_cycle_broken_on_read_reads_back_as_edited() {
-    let [first, second, gone] = [50, 51, 52].map(ElementId::from_random);
+    let [first, second, gone] = [50, 51, 52].map(id);
     let mut board = Board::default();
     for (id, target) in [(first, second), (second, first)] {
         let mut stuck = note(Some(gone), "Stuck");
@@ -1383,7 +1360,7 @@ fn a_cycle_broken_on_read_reads_back_as_edited() {
     };
     // In a group whose file is left out, which they stay in once written.
     let mut files = format::write(&board).unwrap();
-    files.insert(format!("elements/{gone}.json"), b"<<<<<<< ours\n".to_vec());
+    files.insert(format!("elements/{gone}.json"), CONFLICTED.to_vec());
     let mut read = format::read(&files).unwrap().board;
     assert_eq!(target(&read, first), None);
     if let ElementKind::Note { target, .. } = &mut read.elements.get_mut(&second).unwrap().kind {
@@ -1400,7 +1377,7 @@ fn a_cycle_broken_on_read_reads_back_as_edited() {
 #[test]
 fn a_link_to_what_another_branch_deleted_goes_once_written() {
     let mut board = sample();
-    let gone = ElementId::from_random(53);
+    let gone = id(53);
     board.elements.get_mut(&NOTE).unwrap().group = Some(gone);
     if let ElementKind::Arrow { from_target, .. } =
         &mut board.elements.get_mut(&ARROW).unwrap().kind
@@ -1408,10 +1385,7 @@ fn a_link_to_what_another_branch_deleted_goes_once_written() {
         *from_target = Some(gone);
     }
     let mut files = format::write(&board).unwrap();
-    files.insert(
-        format!("elements/{STICKY}.json"),
-        b"<<<<<<< ours\n".to_vec(),
-    );
+    files.insert(format!("elements/{STICKY}.json"), CONFLICTED.to_vec());
     let read = format::read(&files).unwrap().board;
     let written = format::write(&read).unwrap();
     let file = |id: ElementId| {
@@ -1427,7 +1401,7 @@ fn a_link_to_what_another_branch_deleted_goes_once_written() {
 #[test]
 fn a_broken_structure_reads_back_repaired() {
     let mut board = sample();
-    board.elements.get_mut(&NOTE).unwrap().group = Some(ElementId::from_random(99));
+    board.elements.get_mut(&NOTE).unwrap().group = Some(id(99));
     // As another branch would delete it.
     board.elements.remove(&STICKY);
     let read = format::read(&format::write(&board).unwrap()).unwrap().board;
@@ -2273,8 +2247,8 @@ fn a_zip_carries_what_the_board_left_out_byte_for_byte() {
     let asset = format::asset_path(AssetId::of(IMAGE));
     let pointer = b"version https://git-lfs.github.com/spec/v1\n".to_vec();
     files.insert(asset.clone(), pointer.clone());
-    let conflicted = format!("elements/{}.json", ElementId::from_random(43));
-    files.insert(conflicted.clone(), b"<<<<<<< ours\n".to_vec());
+    let conflicted = format!("elements/{}.json", id(43));
+    files.insert(conflicted.clone(), CONFLICTED.to_vec());
 
     let carried = [asset.as_str(), conflicted.as_str()];
     let paths = zip::paths(&board, carried, []).unwrap();
@@ -2296,7 +2270,7 @@ fn a_zip_carries_what_the_board_left_out_byte_for_byte() {
     }
     out.extend(writer.finish().unwrap());
     let unzipped = unzip(&out).unwrap();
-    assert_eq!(unzipped[&conflicted], b"<<<<<<< ours\n");
+    assert_eq!(unzipped[&conflicted], CONFLICTED);
     assert_eq!(unzipped[&asset], pointer);
 
     let mut writer = zip::Writer::new();

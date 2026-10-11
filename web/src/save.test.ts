@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { files as filesOf, open, untitled, type Source } from "./board.js";
+import { openDemo, openedFrom } from "../test/boards.js";
+import { CONFLICTED, demoHome, memoryHome, sample } from "../test/folders.js";
+import { deferred } from "../test/waits.js";
+import { files as filesOf, untitled, type Source } from "./board.js";
 import * as core from "./core.js";
 import type { Home } from "./platform.js";
 import { folderStore, saving, type Reloaded, type SavingHooks, type Store } from "./save.js";
-import { memoryHome, sample } from "../test/folders.js";
 
 /**
  * Each save ends as `outcomes` say in turn, writing unless another program changed the board
@@ -231,8 +233,7 @@ describe("saving", () => {
     const { store, written } = memoryStore();
     const saver = saving(store, hooks().around);
     saver.touched(["a"]);
-    let read!: () => void;
-    const image = new Promise<void>((resolve) => (read = resolve));
+    const { promise: image, resolve: read } = deferred();
     const reading = saver.during(() => image);
     const draining = saver.drain();
     await vi.advanceTimersByTimeAsync(5000);
@@ -247,8 +248,7 @@ describe("saving", () => {
     const { store, written, finish } = memoryStore({ gated: true });
     const saver = saving(store, hooks().around);
     saver.touched(["a"]);
-    let read!: () => void;
-    const image = new Promise<void>((resolve) => (read = resolve));
+    const { promise: image, resolve: read } = deferred();
     const first = saver.during(() => image);
     const draining = saver.drain();
     const seen: number[] = [];
@@ -307,8 +307,8 @@ describe("saving", () => {
 
   it("drains once a check of the disk under way ends", async () => {
     const { store, written, finish } = memoryStore({ gated: true });
-    let checked!: (changed: boolean) => void;
-    store.changed = () => new Promise<boolean>((resolve) => (checked = resolve));
+    const { promise: change, resolve: checked } = deferred<boolean>();
+    store.changed = () => change;
     const saver = saving(store, hooks().around);
     saver.touched(["a"]);
     // As the window comes back to the front.
@@ -327,10 +327,9 @@ describe("saving", () => {
 const STICKY = "b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74";
 const NOTE = "47b0c6e291d84f138a5c3e7fd06b2491";
 const ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
-const CONFLICTED = new TextEncoder().encode("<<<<<<< ours\n");
 
 async function demo(home: Home, session = false) {
-  const { opened, reading } = (await open(async () => home, new Map()))!;
+  const { opened, reading } = await openedFrom(home);
   const store = await folderStore(home, reading, session);
   const save = async (touched: string[]) => {
     const snapshot = opened.editor.snapshot();
@@ -345,7 +344,7 @@ async function demo(home: Home, session = false) {
 
 describe("folderStore", () => {
   it("rewrites only the files of the elements an edit changed", async () => {
-    const { home, files, written } = memoryHome("demo", sample("demo"));
+    const { home, files, written } = demoHome();
     const before = new Map(files);
     const { editor, save } = await demo(home);
     expect(await save(editor.translate([STICKY], 10, 0))).toBe(true);
@@ -402,7 +401,7 @@ describe("folderStore", () => {
     const contents = sample("demo");
     contents.set(`elements/${NOTE}.json`, CONFLICTED);
     contents.delete(`assets/${ASSET}`);
-    const { opened } = (await open(async () => memoryHome("demo", contents).home, new Map()))!;
+    const { opened } = await openedFrom(memoryHome("demo", contents).home);
     const target = memoryHome("copy");
     const store = await folderStore(target.home, undefined, false);
     const snapshot = opened.editor.snapshot();
@@ -417,10 +416,7 @@ describe("folderStore", () => {
   });
 
   it("writes a save in steps, its images, then its board, then all its elements together", async () => {
-    const { opened } = (await open(
-      async () => memoryHome("demo", sample("demo")).home,
-      new Map(),
-    ))!;
+    const opened = await openDemo();
     const target = memoryHome("copy");
     const steps: string[][] = [];
     let writing = false;
@@ -450,10 +446,7 @@ describe("folderStore", () => {
   });
 
   it("writes a large image before it reads the next", async () => {
-    const { opened } = (await open(
-      async () => memoryHome("demo", sample("demo")).home,
-      new Map(),
-    ))!;
+    const opened = await openDemo();
     const events: string[] = [];
     const source: Source = {
       ...filesOf(opened),
@@ -490,7 +483,7 @@ describe("folderStore", () => {
 
   it("gives a folder lacking a board's .gitattributes one, and leaves its user's alone", async () => {
     const [[path, bytes]] = [...core.newFiles()] as [[string, core.Bytes]];
-    const lacking = memoryHome("demo", sample("demo"));
+    const lacking = demoHome();
     const first = await demo(lacking.home);
     expect(await first.save(first.editor.translate([STICKY], 10, 0))).toBe(true);
     expect(lacking.files.get(path)).toEqual(bytes);
@@ -509,7 +502,7 @@ describe("folderStore", () => {
   });
 
   it("writes nothing over a file another program changed since, and says so", async () => {
-    const { home, files, written, overwrite } = memoryHome("demo", sample("demo"));
+    const { home, files, written, overwrite } = demoHome();
     const { editor, store, save } = await demo(home);
     overwrite(`elements/${STICKY}.json`, "theirs");
     expect(await save(editor.translate([STICKY], 10, 0))).toBe(false);
@@ -519,7 +512,7 @@ describe("folderStore", () => {
   });
 
   it("leaves alone a file another program changed when the edit is elsewhere", async () => {
-    const { home, files, written, overwrite } = memoryHome("demo", sample("demo"));
+    const { home, files, written, overwrite } = demoHome();
     const { editor, save } = await demo(home);
     overwrite(`elements/${NOTE}.json`, "theirs");
     expect(await save(editor.translate([STICKY], 10, 0))).toBe(true);
@@ -528,7 +521,7 @@ describe("folderStore", () => {
   });
 
   it("removes only the file of an element deleted", async () => {
-    const { home, files, written, removed } = memoryHome("demo", sample("demo"));
+    const { home, files, written, removed } = demoHome();
     const { editor, save } = await demo(home);
     expect(await save(editor.remove([STICKY]))).toBe(true);
     expect(removed).toEqual([`elements/${STICKY}.json`]);
@@ -537,17 +530,17 @@ describe("folderStore", () => {
   });
 
   it("writes a board that reads back as it was saved", async () => {
-    const { home } = memoryHome("demo", sample("demo"));
+    const { home } = demoHome();
     const { editor, save } = await demo(home);
     await save(editor.translate([STICKY], 10, 0));
-    const again = await open(async () => home, new Map());
-    expect(again!.opened.board).toEqual(core.board(editor));
+    const again = await openedFrom(home);
+    expect(again.opened.board).toEqual(core.board(editor));
   });
 
   it("keeps what landed of a save that fails partway, and writes only the rest next", async () => {
     const ELLIPSE = "2e95d0b468a74c1fb6e39d027f18a5c4";
     const STAR = "d06f4b2a91c84e7c8b3f5a2e6c1d0947";
-    const inner = memoryHome("demo", sample("demo"));
+    const inner = demoHome();
     const before = new Map(inner.files);
     let failing: string | undefined = `elements/${STICKY}.json`;
     // `memoryHome`'s `writeAll` goes through this `write`, one file after another.
@@ -583,8 +576,8 @@ describe("folderStore", () => {
     expect(inner.written).toEqual([`elements/${STICKY}.json`, "board.json"]);
     expect(inner.removed).toEqual([`elements/${STAR}.json`]);
     expect(await store.changed()).toBe(false);
-    const again = await open(async () => home, new Map());
-    expect(again!.opened.board).toEqual(core.board(editor));
+    const again = await openedFrom(home);
+    expect(again.opened.board).toEqual(core.board(editor));
   });
 
   it("writes no image whose file came back to the folder once found", async () => {
@@ -594,7 +587,7 @@ describe("folderStore", () => {
     const bytes = contents.get(path)!;
     contents.delete(path);
     const { home, written, overwrite } = memoryHome("demo", contents);
-    const { opened, reading } = (await open(async () => home, new Map()))!;
+    const { opened, reading } = await openedFrom(home);
     const store = await folderStore(home, reading, false);
     // Put back by another program, then found as the app's showing does.
     overwrite(path, bytes);

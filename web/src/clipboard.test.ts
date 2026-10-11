@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deferred, eventually, tick } from "../test/waits.js";
 import { clipboard, type Host } from "./clipboard.js";
 import type { Copied } from "./core.js";
 import type { View } from "./view.js";
@@ -51,7 +52,6 @@ describe("the clipboard", () => {
     host.copy.mockReturnValue(copied);
     host.copyable.mockReturnValue(true);
     host.bytes.mockReturnValue(async () => bytes);
-    document.body.replaceChildren();
   });
 
   afterEach(() => {
@@ -150,7 +150,7 @@ describe("the clipboard", () => {
     const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     const write = vi.spyOn(navigator.clipboard, "write").mockResolvedValue();
     expect(fire("copy")).toEqual({ prevented: true, text: "" });
-    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    await eventually(() => expect(write).toHaveBeenCalledOnce());
     expect(writeText.mock.invocationCallOrder[0]).toBeLessThan(write.mock.invocationCallOrder[0]!);
     const [written] = writeText.mock.calls[0]!;
     expect(written).toMatch(/^\{"planche":"elements"/);
@@ -167,16 +167,14 @@ describe("the clipboard", () => {
     "writes the PNG only once its text is %s, as Firefox cancels a pending write",
     async (_, end) => {
       host.png.mockReturnValue(Promise.resolve(new Blob()));
-      let settle: (() => void) | undefined;
-      vi.spyOn(navigator.clipboard, "writeText").mockReturnValue(
-        new Promise((done) => (settle = () => done(end()))),
-      );
+      const written = deferred();
+      vi.spyOn(navigator.clipboard, "writeText").mockReturnValue(written.promise.then(end));
       const write = vi.spyOn(navigator.clipboard, "write").mockResolvedValue();
       fire("copy");
       await Promise.resolve();
       expect(write).not.toHaveBeenCalled();
-      settle?.();
-      await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+      written.resolve();
+      await eventually(() => expect(write).toHaveBeenCalledOnce());
     },
   );
 
@@ -192,7 +190,7 @@ describe("the clipboard", () => {
         .catch((error: unknown) => Promise.reject(failing(error)));
     });
     fire("copy");
-    await vi.waitFor(() => expect(host.failed).toHaveBeenCalledOnce());
+    await eventually(() => expect(host.failed).toHaveBeenCalledOnce());
     expect(host.failed).toHaveBeenCalledWith(new Error("Planche could not encode the image"), true);
     expect(writeText).toHaveBeenCalledOnce();
   });
@@ -204,7 +202,7 @@ describe("the clipboard", () => {
       new DOMException("Document is not focused", "NotAllowedError"),
     );
     fire("copy");
-    await vi.waitFor(() => expect(host.failed).toHaveBeenCalledOnce());
+    await eventually(() => expect(host.failed).toHaveBeenCalledOnce());
     expect(host.failed).toHaveBeenCalledWith(
       new Error("The browser did not let Planche copy the image"),
       true,
@@ -217,7 +215,7 @@ describe("the clipboard", () => {
     vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(denied);
     vi.spyOn(navigator.clipboard, "write").mockRejectedValue(denied);
     fire("copy");
-    await vi.waitFor(() => expect(host.failed).toHaveBeenCalledOnce());
+    await eventually(() => expect(host.failed).toHaveBeenCalledOnce());
     expect(host.failed).toHaveBeenCalledWith(
       new Error("The browser did not let Planche write to the clipboard"),
       false,
@@ -239,7 +237,7 @@ describe("the clipboard", () => {
       vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(denied);
       vi.spyOn(navigator.clipboard, "write").mockRejectedValue(denied);
       expect(fire("copy").text).toMatch(/^\{"planche":"elements"/);
-      await vi.waitFor(() => expect(host.failed).toHaveBeenCalledOnce());
+      await eventually(() => expect(host.failed).toHaveBeenCalledOnce());
       expect(host.failed).toHaveBeenCalledWith(
         new Error("The browser did not let Planche copy the image"),
         true,
@@ -252,32 +250,32 @@ describe("the clipboard", () => {
     ["a field's", () => document.body.appendChild(document.createElement("textarea"))],
   ])("writes no PNG for a copy %s came after", async (_, placed) => {
     const target = placed();
-    let made: ((png: Blob) => void) | undefined;
-    host.png.mockReturnValueOnce(new Promise((done) => (made = done)));
+    const made = deferred<Blob>();
+    host.png.mockReturnValueOnce(made.promise);
     vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     const write = vi.spyOn(navigator.clipboard, "write").mockImplementation(async (items) => {
       await items[0]!.getType("image/png");
     });
     fire("copy");
-    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    await eventually(() => expect(write).toHaveBeenCalledOnce());
     fire("copy", new DataTransfer(), target);
-    made?.(new Blob());
+    made.resolve(new Blob());
     await expect(write.mock.results[0]!.value).rejects.toThrow("Another copy came since");
     expect(host.failed).not.toHaveBeenCalled();
   });
 
   it("tells nothing of a refused copy another one came after", async () => {
-    let made: ((png: Blob) => void) | undefined;
-    host.png.mockReturnValueOnce(new Promise((done) => (made = done)));
+    const made = deferred<Blob>();
+    host.png.mockReturnValueOnce(made.promise);
     vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     const write = vi
       .spyOn(navigator.clipboard, "write")
       .mockRejectedValue(new DOMException("", "NotAllowedError"));
     fire("copy");
-    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    await eventually(() => expect(write).toHaveBeenCalledOnce());
     fire("copy");
-    made?.(new Blob());
-    await new Promise((done) => setTimeout(done));
+    made.resolve(new Blob());
+    await tick();
     expect(host.failed).not.toHaveBeenCalled();
   });
 
@@ -308,12 +306,12 @@ describe("the clipboard", () => {
       const write = vi.spyOn(navigator.clipboard, "write").mockImplementation(async (items) => {
         await items[0]!.getType("image/png");
       });
-      let made: ((png: Blob) => void) | undefined;
-      const copying = clip.copyImage(new Promise((done) => (made = done)));
+      const made = deferred<Blob>();
+      const copying = clip.copyImage(made.promise);
       expect(write).toHaveBeenCalledOnce();
       const [items] = write.mock.calls[0]!;
       expect(items.map((each) => each.types)).toEqual([["image/png"]]);
-      made?.(new Blob(["picture"]));
+      made.resolve(new Blob(["picture"]));
       expect(await (await items[0]!.getType("image/png")).text()).toBe("picture");
       await expect(copying).resolves.toBe(true);
     });
@@ -337,13 +335,11 @@ describe("the clipboard", () => {
     });
 
     it("tells nothing once a copy after it cancelled it, as Firefox and WebKit do", async () => {
-      let cancel: (() => void) | undefined;
-      vi.spyOn(navigator.clipboard, "write").mockReturnValueOnce(
-        new Promise((_, reject) => (cancel = () => reject(new DOMException("", "AbortError")))),
-      );
+      const writing = deferred();
+      vi.spyOn(navigator.clipboard, "write").mockReturnValueOnce(writing.promise);
       const copying = clip.copyImage(Promise.resolve(new Blob()));
       fire("copy");
-      cancel?.();
+      writing.reject(new DOMException("", "AbortError"));
       await expect(copying).resolves.toBe(false);
     });
 
@@ -352,10 +348,10 @@ describe("the clipboard", () => {
       const write = vi.spyOn(navigator.clipboard, "write").mockImplementation(async (items) => {
         await items[0]!.getType("image/png");
       });
-      let made: ((png: Blob) => void) | undefined;
-      const copying = clip.copyImage(new Promise((done) => (made = done)));
+      const made = deferred<Blob>();
+      const copying = clip.copyImage(made.promise);
       expect(fire("copy").text).toMatch(/^\{"planche":"elements"/);
-      made?.(new Blob(["picture"]));
+      made.resolve(new Blob(["picture"]));
       await expect(write.mock.results[0]!.value).rejects.toThrow("Another copy came since");
       await expect(copying).resolves.toBe(false);
     });
@@ -366,7 +362,7 @@ describe("the clipboard", () => {
       const write = vi.spyOn(navigator.clipboard, "write").mockResolvedValue();
       fire("copy");
       await clip.copyImage(Promise.resolve(new Blob()));
-      await new Promise((done) => setTimeout(done));
+      await tick();
       expect(write.mock.calls.map(([items]) => items[0]!.types)).toEqual([["image/png"]]);
     });
 
@@ -384,7 +380,7 @@ describe("the clipboard", () => {
       .spyOn(navigator.clipboard, "read")
       .mockResolvedValue([item("text/plain", new Blob([text]))]);
     expect(fire("paste").prevented).toBe(true);
-    await vi.waitFor(() => expect(host.pasted).toHaveBeenCalledOnce());
+    await eventually(() => expect(host.pasted).toHaveBeenCalledOnce());
     expect(read).toHaveBeenCalledOnce();
   });
 });

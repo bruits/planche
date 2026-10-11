@@ -27,19 +27,31 @@ pub enum Error {
     Io(#[from] io::Error),
 }
 
+/// How long the app has to answer the token before the gateway takes it for another process.
+const ANSWER_TIME: Duration = Duration::from_secs(2);
+
 /// What an agent's client spawns. It runs before Tauri, so it needs no runtime.
 pub fn gateway(
     directory: &Path,
     input: impl Read + Send + 'static,
-    mut output: impl Write,
+    output: impl Write,
 ) -> Result<(), Error> {
     let discovery = Discovery::read(directory).map_err(|_| Error::NotRunning)?;
+    relay(&discovery, ANSWER_TIME, input, output)
+}
+
+fn relay(
+    discovery: &Discovery,
+    answer_time: Duration,
+    input: impl Read + Send + 'static,
+    mut output: impl Write,
+) -> Result<(), Error> {
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, discovery.port));
     let mut socket = TcpStream::connect_timeout(&address, Duration::from_secs(2))
         .map_err(|_| Error::Unreachable(discovery.port))?;
     let sent = socket.write_all(format!("{}\n", discovery.token).as_bytes());
     // A process that took the port of an app that died does not know the answer.
-    match sent.and_then(|()| answer(&mut socket)) {
+    match sent.and_then(|()| answer(&mut socket, answer_time)) {
         Ok(Some(answer)) if answer == discovery.answer => {}
         Ok(None) => return Err(Error::Refused),
         Err(error) if turned_away(&error) => return Err(Error::Refused),
@@ -82,8 +94,8 @@ pub fn gateway(
 
 /// The app's first line, a byte at a time so that nothing past it is read. `None` when the app
 /// closes first.
-fn answer(socket: &mut TcpStream) -> io::Result<Option<String>> {
-    socket.set_read_timeout(Some(Duration::from_secs(2)))?;
+fn answer(socket: &mut TcpStream, within: Duration) -> io::Result<Option<String>> {
+    socket.set_read_timeout(Some(within))?;
     let mut line = Vec::new();
     let mut byte = [0u8];
     while line.len() < MOST_LINE {
@@ -105,4 +117,40 @@ fn turned_away(error: &io::Error) -> bool {
         error.kind(),
         ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted | ErrorKind::BrokenPipe
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+
+    use super::*;
+    use crate::token;
+
+    #[test]
+    fn a_process_on_the_port_of_an_app_that_died_and_says_nothing_is_not_planche() {
+        let impostor = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = impostor.local_addr().unwrap().port();
+        // It takes the connection and says nothing until the test ends.
+        let (_holding, held) = mpsc::channel::<()>();
+        thread::spawn(move || {
+            let _connection = impostor.incoming().next();
+            let _ = held.recv();
+        });
+        let discovery = Discovery {
+            port,
+            token: token().unwrap(),
+            answer: token().unwrap(),
+            pid: std::process::id() + 1,
+        };
+
+        let error = relay(
+            &discovery,
+            Duration::from_millis(1),
+            io::empty(),
+            io::sink(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::Unreachable(found) if found == port));
+    }
 }

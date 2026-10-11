@@ -1,12 +1,19 @@
 // @vitest-environment happy-dom
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { beforeEach, describe, it, expect, vi } from "vitest";
+import {
+  CONFLICTED,
+  demoHome,
+  demoZip,
+  memoryHome,
+  memorySession,
+  sample,
+  slicesOf,
+} from "../test/folders.js";
+import { deferred, eventually } from "../test/waits.js";
 import { refresh, type Opened } from "./board.js";
 import type { Camera } from "./camera.js";
 import { lifecycle, type Host } from "./lifecycle.js";
 import type { Folder, Home, Reopening, Session, Slices, ZipHome } from "./platform.js";
-import { memoryHome, memorySession, sample, SAMPLES } from "../test/folders.js";
 
 /** One of the demo's sticky notes. */
 const STICKY = "b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74";
@@ -14,6 +21,7 @@ const STICKY_FILE = `elements/${STICKY}.json`;
 /** One of the demo's notes, and one of its images. */
 const NOTE = "47b0c6e291d84f138a5c3e7fd06b2491";
 const IMAGE = "1a4e83c05f294b76a3d107e89c526b0f";
+const BROKEN = new TextEncoder().encode("{");
 /** What it shows, which no other element of the demo does. */
 const IMAGE_ASSET = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
 
@@ -34,20 +42,14 @@ function remembered(kept: { name: string; unsaved: boolean }): void {
 }
 
 function zipped(): Slices {
-  const bytes = new Uint8Array(readFileSync(join(SAMPLES, "demo.zip")));
-  const slices = (): Slices => ({
-    name: "demo.zip",
-    size: bytes.length,
-    read: async (start, end) => bytes.slice(start, end),
-  });
   const home: ZipHome = {
     rewrite: async () => null,
     changed: async () => false,
-    reread: async () => slices(),
+    reread: async () => slicesOf("demo.zip", demoZip()),
     adopt: async () => {},
     remember: async () => {},
   };
-  return { ...slices(), home };
+  return { ...slicesOf("demo.zip", demoZip()), home };
 }
 
 function sticky(opened: Opened | undefined, id: string): string | undefined {
@@ -143,7 +145,7 @@ describe("lifecycle", () => {
     remembered({ name: "Untitled", unsaved: false });
     const { session, files: kept } = memorySession(sample("demo"));
     const before = new Map(kept);
-    const { home } = memoryHome("demo", sample("demo"));
+    const { home } = demoHome();
     const { life, opened } = app({ session, reopen: { folder: home } });
     await life.start();
     expect(opened()?.folder).toBe(home);
@@ -165,7 +167,7 @@ describe("lifecycle", () => {
   it("leaves a session board it cannot read as it is, and says why, until a new board starts", async () => {
     remembered({ name: "demo", unsaved: true });
     const files = sample("demo");
-    files.set("board.json", new TextEncoder().encode("{"));
+    files.set("board.json", BROKEN);
     const { session, files: kept } = memorySession(files);
     const before = new Map(kept);
     const { life, opened, said } = app({ session });
@@ -213,7 +215,7 @@ describe("lifecycle", () => {
   });
 
   it("leaves a board saved into its own folder without asking", async () => {
-    const { home } = memoryHome("demo", sample("demo"));
+    const { home } = demoHome();
     const { life, opened, confirm, move } = app({ session: memorySession().session, picked: home });
     await life.start();
     await life.openFolder();
@@ -225,7 +227,7 @@ describe("lifecycle", () => {
   });
 
   it("saves a folder's board at once into its folder, and says so", async () => {
-    const { home, written } = memoryHome("demo", sample("demo"));
+    const { home, written } = demoHome();
     const { life, said, move } = app({ session: memorySession().session, picked: home });
     await life.start();
     await life.openFolder();
@@ -245,7 +247,7 @@ describe("lifecycle", () => {
   });
 
   it("writes the open board's edits into its folder before another board takes its place", async () => {
-    const { home, written } = memoryHome("demo", sample("demo"));
+    const { home, written } = demoHome();
     const { life, move } = app({ session: memorySession().session, picked: home });
     await life.start();
     await life.openFolder();
@@ -260,14 +262,13 @@ describe("saveAs", () => {
   it("copies into the folder picked the files a session board left out", async () => {
     remembered({ name: "demo", unsaved: true });
     const files = sample("demo");
-    const conflicted = new TextEncoder().encode("<<<<<<< ours\n");
-    files.set(`elements/${NOTE}.json`, conflicted);
+    files.set(`elements/${NOTE}.json`, CONFLICTED);
     const { session, files: kept } = memorySession(files);
     const { home, files: saved } = memoryHome("target");
     const { life } = app({ session, target: home });
     await life.start();
     await life.saveAs();
-    expect(saved.get(`elements/${NOTE}.json`)).toEqual(conflicted);
+    expect(saved.get(`elements/${NOTE}.json`)).toEqual(CONFLICTED);
     expect(kept.size).toBe(0);
   });
 
@@ -303,7 +304,7 @@ describe("saveAs", () => {
   });
 
   it("saves a folder's board into an empty folder, leaving the first one as it was from then on", async () => {
-    const first = memoryHome("demo", sample("demo"));
+    const first = demoHome();
     const second = memoryHome("target");
     const { life, opened, move } = app({
       session: memorySession().session,
@@ -365,10 +366,8 @@ describe("saveAs", () => {
 
   it("leaves its saver to a board started while it writes", async () => {
     const second = memoryHome("target");
-    let resume!: () => void;
-    const paused = new Promise<void>((done) => (resume = done));
-    let asked!: () => void;
-    const writing = new Promise<void>((done) => (asked = done));
+    const { promise: paused, resolve: resume } = deferred();
+    const { promise: writing, resolve: asked } = deferred();
     const { writeAll } = second.home;
     let once = true;
     second.home.writeAll = async function (files, wrote) {
@@ -381,7 +380,7 @@ describe("saveAs", () => {
     };
     const { life, opened } = app({
       session: memorySession().session,
-      picked: memoryHome("demo", sample("demo")).home,
+      picked: demoHome().home,
       target: second.home,
     });
     await life.start();
@@ -403,7 +402,7 @@ describe("closing", () => {
   });
 
   it("lets the app close once the board's last edits are written into its folder", async () => {
-    const { home, written } = memoryHome("demo", sample("demo"));
+    const { home, written } = demoHome();
     const { life, move } = app({ session: memorySession().session, picked: home });
     await life.start();
     await life.openFolder();
@@ -413,7 +412,7 @@ describe("closing", () => {
   });
 
   it("holds the app open while the board's last edits fail to be written", async () => {
-    const { home } = memoryHome("demo", sample("demo"));
+    const { home } = demoHome();
     const { life, said, move } = app({
       session: memorySession().session,
       picked: {
@@ -431,7 +430,7 @@ describe("closing", () => {
   });
 
   it("holds the app open while a board saved nowhere holds edits", async () => {
-    const { home } = memoryHome("demo", sample("demo"));
+    const { home } = demoHome();
     const { list, read, readAll, name } = home;
     const { life, move } = app({ picked: { name, list, read, readAll } });
     await life.start();
@@ -448,7 +447,7 @@ describe("reload", () => {
   });
 
   it("reads a clean folder board again once another program changed it, at the same camera, and says so", async () => {
-    const { home, overwrite, written } = memoryHome("demo", sample("demo"));
+    const { home, overwrite, written } = demoHome();
     const camera = { x: 12, y: 34, zoom: 2 };
     const { life, opened, said, confirm, shownAt } = app({
       session: memorySession().session,
@@ -471,7 +470,7 @@ describe("reload", () => {
   });
 
   it("asks before reading a board with edits again, and shows the other program's version when the user agrees", async () => {
-    const { home, overwrite, files } = memoryHome("demo", sample("demo"));
+    const { home, overwrite, files } = demoHome();
     const { life, opened, said, confirm, move } = app({
       session: memorySession().session,
       picked: home,
@@ -491,7 +490,7 @@ describe("reload", () => {
   });
 
   it("asks before reading a board with edits again, and writes the user's edits over when they keep theirs", async () => {
-    const { home, overwrite, files } = memoryHome("demo", sample("demo"));
+    const { home, overwrite, files } = demoHome();
     const { life, opened, confirm, move } = app({
       session: memorySession().session,
       picked: home,
@@ -515,7 +514,7 @@ describe("reload", () => {
   });
 
   it("keeps the board shown, and asks, when the user edits it while it is read again", async () => {
-    const { home, overwrite } = memoryHome("demo", sample("demo"));
+    const { home, overwrite } = demoHome();
     let editing: (() => void) | undefined;
     const reading: Home = {
       ...home,
@@ -555,7 +554,7 @@ describe("resume", () => {
 
   it("forgets a remembered folder it cannot open at launch, says why, and starts a blank board", async () => {
     const files = sample("demo");
-    files.set("board.json", new TextEncoder().encode("{"));
+    files.set("board.json", BROKEN);
     const { home } = memoryHome("demo", files);
     const { life, opened, said, forget } = app({
       session: memorySession().session,
@@ -571,7 +570,7 @@ describe("resume", () => {
   it("forgets a remembered folder it cannot open at launch, and reopens the session's board instead", async () => {
     remembered({ name: "demo", unsaved: false });
     const files = sample("demo");
-    files.set("board.json", new TextEncoder().encode("{"));
+    files.set("board.json", BROKEN);
     const { home } = memoryHome("elsewhere", files);
     const { life, opened, said, forget } = app({
       session: memorySession(sample("demo")).session,
@@ -590,7 +589,7 @@ describe("offer", () => {
   });
 
   it("offers to open the remembered folder again, and opens it once the user clicks", async () => {
-    const { home } = memoryHome("demo", sample("demo"));
+    const { home } = demoHome();
     const remember = vi.fn<() => Promise<void>>(async () => {});
     const ask = vi.fn<() => Promise<Home | null>>(async () => ({ ...home, remember }));
     const { life, opened, said, forget } = app({
@@ -603,8 +602,8 @@ describe("offer", () => {
     expect(forget).not.toHaveBeenCalled();
     expect(ask).not.toHaveBeenCalled();
     dispatchEvent(new Event("pointerdown"));
-    await vi.waitFor(() => expect(opened()?.folder.name).toBe("demo"));
-    await vi.waitFor(() => expect(life.loading()).toBe(false));
+    await eventually(() => expect(opened()?.folder.name).toBe("demo"));
+    await eventually(() => expect(life.loading()).toBe(false));
     expect(ask).toHaveBeenCalledOnce();
     expect(remember).toHaveBeenCalledOnce();
     expect(forget).not.toHaveBeenCalled();
@@ -620,7 +619,7 @@ describe("leaving", () => {
   });
 
   it("writes edits that land while the open board's last saves run, then leaves it without asking", async () => {
-    const { home, written } = memoryHome("demo", sample("demo"));
+    const { home, written } = demoHome();
     const landing = [NOTE, IMAGE];
     let edit: ((id: string) => void) | undefined;
     const busy: Home = {
@@ -651,12 +650,11 @@ describe("leaving", () => {
   });
 
   it("lets the app close once the images being read are read and the last edits written", async () => {
-    const { home, written } = memoryHome("demo", sample("demo"));
+    const { home, written } = demoHome();
     const { life, move } = app({ session: memorySession().session, picked: home });
     await life.start();
     await life.openFolder();
-    let read!: () => void;
-    const image = new Promise<void>((resolve) => (read = resolve));
+    const { promise: image, resolve: read } = deferred();
     const reading = life.saver()!.during(() => image);
     move(STICKY);
     const closing = life.closing();
@@ -698,9 +696,9 @@ describe("a board that fails to show", () => {
   });
 
   it("keeps the open board when the board picked cannot be read", async () => {
-    const first = memoryHome("demo", sample("demo"));
+    const first = demoHome();
     const broken = sample("demo");
-    broken.set("board.json", new TextEncoder().encode("{"));
+    broken.set("board.json", BROKEN);
     const { life, opened, choose, move } = app({
       session: memorySession().session,
       picked: first.home,
@@ -728,18 +726,18 @@ describe("a board that fails to show", () => {
   });
 
   it("says what it left out of a board read again after another program changed it", async () => {
-    const { home, overwrite } = memoryHome("demo", sample("demo"));
+    const { home, overwrite } = demoHome();
     const { life, opened, said } = app({ session: memorySession().session, picked: home });
     await life.start();
     await life.openFolder();
-    overwrite(STICKY_FILE, "<<<<<<< ours\n");
+    overwrite(STICKY_FILE, CONFLICTED);
     await life.saver()?.check();
     expect(said).toContain(`demo changed on disk, so it was read again, with ${STICKY_FILE}`);
     expect(opened()?.board.elements[STICKY]).toBeUndefined();
   });
 
   it("says why a board read again after another program changed it does not show, and leaves a blank board", async () => {
-    const { home, overwrite } = memoryHome("demo", sample("demo"));
+    const { home, overwrite } = demoHome();
     let changedOnDisk = false;
     const { life, opened, said } = app({
       session: memorySession().session,
@@ -766,10 +764,8 @@ describe("saveAs, as an image's file comes back", () => {
     contents.delete(path);
     const first = memoryHome("demo", contents);
     const second = memoryHome("target");
-    let resume!: () => void;
-    const paused = new Promise<void>((done) => (resume = done));
-    let asked!: () => void;
-    const writing = new Promise<void>((done) => (asked = done));
+    const { promise: paused, resolve: resume } = deferred();
+    const { promise: writing, resolve: asked } = deferred();
     const { writeAll } = second.home;
     let once = true;
     second.home.writeAll = async function (files, wrote) {
@@ -838,7 +834,7 @@ describe("where the board saves", () => {
   });
 
   it("saves into a folder opened, whose images stay where they are for a paste", async () => {
-    const { home } = memoryHome("demo", sample("demo"));
+    const { home } = demoHome();
     const { life } = app({ session: memorySession().session, picked: home });
     await life.start();
     await life.openFolder();

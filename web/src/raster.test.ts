@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { measuring } from "../test/canvases.js";
 import { CANVAS_AREA } from "./raster.js";
 import { lettered, type Holder } from "./text.js";
 import { vectors } from "./vector.js";
@@ -8,19 +9,15 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("a texture drawn for a picture", () => {
   it("stays within what a canvas holds, however many pixels it is asked for", () => {
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      font: "",
-      fillStyle: "",
-      drawImage() {},
-      fillText() {},
-      fillRect() {},
-      measureText: (text: string) => ({
+    measuring(
+      (text) => ({
         width: 60 * text.length,
         fontBoundingBoxAscent: 90,
         fontBoundingBoxDescent: 20,
         actualBoundingBoxAscent: 50,
       }),
-    } as unknown as CanvasRenderingContext2D);
+      { fillStyle: "", drawImage() {}, fillText() {}, fillRect() {} },
+    );
     const asset = "a".repeat(64);
     const drawings = vectors(() => {});
     drawings.keep(asset, { image: new Image(), natural: { width: 1000, height: 1000 } });

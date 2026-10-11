@@ -2,10 +2,10 @@
 // when they cannot run.
 
 import { vi } from "vitest";
+import { boardOf } from "./boards.js";
+import { messages } from "./messages.js";
 import { actions, type Host } from "../src/actions.js";
-import { untitled, type Opened } from "../src/board.js";
 import type { Card } from "../src/card.js";
-import * as core from "../src/core.js";
 import type { Kind } from "../src/core.js";
 import type { Edits } from "../src/edit.js";
 
@@ -23,15 +23,10 @@ export function around(
   elements: [string, Kind][] = [],
   { selected = [], edits = {}, styled = {}, ...given }: Given = {},
 ) {
-  const opened: Opened = untitled();
-  for (const [id, kind] of elements) {
-    opened.editor.add(id, undefined, JSON.stringify(kind));
-  }
-  opened.board = core.board(opened.editor);
+  const opened = boardOf(elements);
   let selection = selected;
   let showing = true;
-  const said: string[] = [];
-  const reported: Promise<unknown>[] = [];
+  const told = messages();
   const editing = {
     selection: () => selection,
     lockedUnder: () => undefined,
@@ -135,8 +130,8 @@ export function around(
     listed: () => [],
     openBugReport: async () => {},
     refreshBar: () => {},
-    say: (text) => void said.push(text),
-    report: (work) => void reported.push(work),
+    say: told.say,
+    report: told.report,
     ...given,
   };
   return {
@@ -144,8 +139,8 @@ export function around(
     host,
     opened,
     editing,
-    said,
-    settled: () => Promise.all(reported),
+    said: told.said,
+    settled: told.settled,
     select: (ids: string[]) => void (selection = ids),
     /** Shows another board in place of this one, as work begun on it still runs. */
     leave: () => void (showing = false),

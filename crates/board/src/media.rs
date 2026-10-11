@@ -123,15 +123,7 @@ fn is_markup(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn gif(frames: usize) -> Vec<u8> {
-        let mut bytes = b"GIF89a\x01\x00\x01\x00\x00\x00\x00".to_vec();
-        for _ in 0..frames {
-            bytes.extend(b"\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4C\x01\x00");
-        }
-        bytes.push(0x3B);
-        bytes
-    }
+    use crate::animation::tests::gif;
 
     #[test]
     fn a_file_is_told_by_its_start_but_for_what_takes_more_of_it() {
@@ -153,14 +145,14 @@ mod tests {
             media(b"\xEF\xBB\xBF <html></html>", true),
             Some(Media::Markup)
         );
-        assert_eq!(media(&gif(2)[..20], false), None);
+        assert_eq!(media(&gif(None, 2)[..20], false), None);
         assert_eq!(
-            media(&gif(2), true),
+            media(&gif(None, 2), true),
             Some(Media::Animated {
                 plays: NonZeroU32::new(1)
             })
         );
-        assert_eq!(media(&gif(1), true), Some(Media::Still));
+        assert_eq!(media(&gif(None, 1), true), Some(Media::Still));
         let jpeg = b"\xFF\xD8\xFF\xE0\x00\x10JFIF";
         assert_eq!(media(jpeg, false), Some(Media::Still));
         assert_eq!(media(jpeg, true), Some(Media::Still));
@@ -175,7 +167,7 @@ mod tests {
             (b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".as_slice(), Some("png")),
             (b"\xFF\xD8\xFF\xE0\x00\x10JFIF", Some("jpg")),
             (b"GIF87a\x01\x00", Some("gif")),
-            (&gif(2), Some("gif")),
+            (&gif(None, 2), Some("gif")),
             (b"RIFF\x04\x00\x00\x00WEBPVP8 ", Some("webp")),
             (b"BM\x3a\x00", Some("bmp")),
             (

@@ -286,30 +286,8 @@ fn shuffle<T>(items: &mut [T], seed: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{board, element, id};
-    use crate::{AssetId, Colour, Editor, Error, ImageEdits, Size, Text};
-
-    fn image(x: f64, y: f64, width: f64, height: f64) -> ElementKind {
-        ElementKind::Image {
-            asset: AssetId::of(b""),
-            natural_size: Size {
-                width: 1,
-                height: 1,
-            },
-            frame: Rect {
-                x,
-                y,
-                width,
-                height,
-            },
-            rotation: 0.0,
-            edits: ImageEdits::default(),
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        }
-    }
+    use crate::tests::{editor_of, id, image, note, on, point, position, turned};
+    use crate::{Editor, Error};
 
     fn named(name: Option<&str>, x: f64) -> ElementKind {
         let mut kind = image(x, 0.0, 100.0, 100.0);
@@ -319,37 +297,12 @@ mod tests {
         kind
     }
 
-    fn note(x: f64, y: f64, target: Option<u128>) -> ElementKind {
-        ElementKind::Note {
-            frame: Rect {
-                x,
-                y,
-                width: 40.0,
-                height: 20.0,
-            },
-            rotation: 0.0,
-            text: Text::new("Note".to_owned(), 20.0),
-            target: target.map(id),
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        }
-    }
-
-    /// The first element is 1, the next 2, and so on.
-    fn editor(kinds: impl IntoIterator<Item = ElementKind>) -> Editor {
-        let elements = kinds
-            .into_iter()
-            .zip(1..)
-            .map(|(kind, bits)| (bits, element(None, &format!("a{bits}"), kind)));
-        Editor::new(board(elements))
-    }
-
     fn all(editor: &Editor) -> Vec<ElementId> {
         editor.board().elements.keys().copied().collect()
     }
 
     fn arranged(kinds: impl IntoIterator<Item = ElementKind>, order: Order) -> Editor {
-        let mut editor = editor(kinds);
+        let mut editor = editor_of(kinds);
         editor.arrange(&all(&editor), &order).unwrap();
         editor
     }
@@ -359,11 +312,6 @@ mod tests {
             ElementKind::Image { frame, .. } | ElementKind::Note { frame, .. } => *frame,
             _ => unreachable!(),
         }
-    }
-
-    fn at(editor: &Editor, bits: u128) -> (f64, f64) {
-        let Rect { x, y, .. } = frame(editor, bits);
-        (x, y)
     }
 
     fn reading(editor: &Editor) -> Vec<u128> {
@@ -389,10 +337,10 @@ mod tests {
             Order::Size,
         );
 
-        assert_eq!(at(&editor, 2), (10.0, 20.0));
-        assert_eq!(at(&editor, 3), (130.0, 20.0));
-        assert_eq!(at(&editor, 1), (10.0, 140.0));
-        assert_eq!(at(&editor, 4), (130.0, 140.0));
+        assert_eq!(position(&editor, 2), point(10.0, 20.0));
+        assert_eq!(position(&editor, 3), point(130.0, 20.0));
+        assert_eq!(position(&editor, 1), point(10.0, 140.0));
+        assert_eq!(position(&editor, 4), point(130.0, 140.0));
     }
 
     #[test]
@@ -413,10 +361,7 @@ mod tests {
 
     #[test]
     fn sizes_go_largest_first_however_they_turn() {
-        let mut turned = image(0.0, 0.0, 100.0, 200.0);
-        if let ElementKind::Image { rotation, .. } = &mut turned {
-            *rotation = 45.0;
-        }
+        let turned = turned(image(0.0, 0.0, 100.0, 200.0), 45.0);
         let editor = arranged(
             [
                 image(0.0, 0.0, 50.0, 50.0),
@@ -472,17 +417,14 @@ mod tests {
 
     #[test]
     fn a_turned_image_takes_the_room_it_covers_and_keeps_its_size_and_turn() {
-        let mut turned = image(0.0, 0.0, 200.0, 100.0);
-        if let ElementKind::Image { rotation, .. } = &mut turned {
-            *rotation = 90.0;
-        }
+        let turned = turned(image(0.0, 0.0, 200.0, 100.0), 90.0);
         let editor = arranged(
             [turned.clone(), image(300.0, -50.0, 20.0, 20.0)],
             Order::Name,
         );
 
         assert_eq!(editor.board().elements[&id(1)].kind, turned);
-        let (x, y) = at(&editor, 2);
+        let Point { x, y } = position(&editor, 2);
         assert!(
             (x - 170.0).abs() < HAIR && (y + 50.0).abs() < HAIR,
             "{x}, {y}"
@@ -491,19 +433,19 @@ mod tests {
 
     #[test]
     fn other_elements_stay_but_what_sticks_to_an_image_follows_it() {
-        let mut editor = editor([
+        let mut editor = editor_of([
             image(0.0, 0.0, 100.0, 100.0),
             image(500.0, 0.0, 100.0, 100.0),
-            note(530.0, 40.0, Some(2)),
-            note(900.0, 900.0, None),
+            on(note(530.0, 40.0, 40.0, 20.0), 2),
+            note(900.0, 900.0, 40.0, 20.0),
         ]);
 
         let touched = editor.arrange(&all(&editor), &Order::Name).unwrap();
 
         assert_eq!(touched, [id(2), id(3)]);
-        assert_eq!(at(&editor, 2), (0.0, 120.0));
-        assert_eq!(at(&editor, 3), (30.0, 160.0));
-        assert_eq!(at(&editor, 4), (900.0, 900.0));
+        assert_eq!(position(&editor, 2), point(0.0, 120.0));
+        assert_eq!(position(&editor, 3), point(30.0, 160.0));
+        assert_eq!(position(&editor, 4), point(900.0, 900.0));
     }
 
     #[test]
@@ -513,7 +455,7 @@ mod tests {
             image(333.3, 77.7, 80.0, 120.0),
             image(-41.9, 500.1, 33.3, 33.3),
         ];
-        let mut editor = editor(images);
+        let mut editor = editor_of(images);
         let before = editor.board().clone();
         let order = Order::Size;
 
@@ -529,13 +471,7 @@ mod tests {
     #[test]
     fn images_alike_keep_the_order_they_read_in_and_arranging_again_changes_nothing() {
         let order = Order::Name;
-        let turned = |x| {
-            let mut kind = image(x, 0.1, 100.1, 70.3);
-            if let ElementKind::Image { rotation, .. } = &mut kind {
-                *rotation = 30.0;
-            }
-            kind
-        };
+        let tilted = |x| turned(image(x, 0.1, 100.1, 70.3), 30.0);
         let stair = (0..5).map(|at| {
             image(
                 0.7 + f64::from(at) * 150.0,
@@ -545,9 +481,9 @@ mod tests {
             )
         });
 
-        let mut row = editor((0..4).map(|at| turned(0.1 + f64::from(at) * 150.0)));
+        let mut row = editor_of((0..4).map(|at| tilted(0.1 + f64::from(at) * 150.0)));
         row.arrange(&all(&row), &order).unwrap();
-        let mut stair = editor(stair);
+        let mut stair = editor_of(stair);
         stair.arrange(&all(&stair), &order).unwrap();
 
         assert_eq!(stair.arrange(&all(&stair), &order), Ok(Vec::new()));
@@ -560,11 +496,8 @@ mod tests {
         // The turned image packs an ulp off the other's top, across a multiple of HAIR, so that
         // rounding each top to one would set them a row apart.
         let top = 15762.511666499999;
-        let mut turned = image(700.0, 16063.0, 60.0, 1033.3);
-        if let ElementKind::Image { rotation, .. } = &mut turned {
-            *rotation = 180.0;
-        }
-        let mut editor = editor([image(0.0, top, 100.0, 1500.0), turned]);
+        let turned = turned(image(700.0, 16063.0, 60.0, 1033.3), 180.0);
+        let mut editor = editor_of([image(0.0, top, 100.0, 1500.0), turned]);
         let order = Order::Name;
 
         editor.arrange(&all(&editor), &order).unwrap();
@@ -599,10 +532,10 @@ mod tests {
 
     #[test]
     fn images_sized_alike_cover_their_mean_height_around_their_own_centres() {
-        let mut editor = editor([
+        let mut editor = editor_of([
             image(0.0, 0.0, 100.0, 50.0),
             image(200.0, 0.0, 40.0, 150.0),
-            note(500.0, 500.0, None),
+            note(500.0, 500.0, 40.0, 20.0),
         ]);
 
         editor.normalize(&all(&editor), Side::Height).unwrap();
@@ -637,11 +570,8 @@ mod tests {
 
     #[test]
     fn images_sized_alike_by_width_measure_what_they_cover_turned() {
-        let mut turned = image(0.0, 0.0, 100.0, 50.0);
-        if let ElementKind::Image { rotation, .. } = &mut turned {
-            *rotation = 90.0;
-        }
-        let mut editor = editor([turned, image(300.0, 0.0, 150.0, 30.0)]);
+        let turned = turned(image(0.0, 0.0, 100.0, 50.0), 90.0);
+        let mut editor = editor_of([turned, image(300.0, 0.0, 150.0, 30.0)]);
 
         assert_eq!(
             editor
@@ -658,7 +588,7 @@ mod tests {
 
     #[test]
     fn an_unknown_element_is_refused_and_nothing_moves() {
-        let mut editor = editor([image(0.0, 0.0, 10.0, 10.0), image(90.0, 90.0, 10.0, 10.0)]);
+        let mut editor = editor_of([image(0.0, 0.0, 10.0, 10.0), image(90.0, 90.0, 10.0, 10.0)]);
         let before = editor.board().clone();
 
         assert_eq!(

@@ -40,7 +40,6 @@ describe("paints", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    document.body.replaceChildren();
   });
 
   it("draws an own colour as the ink under forced colours", () => {
@@ -63,7 +62,6 @@ describe("css", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    document.body.replaceChildren();
   });
 
   it("writes an own colour as it is, or as its grey", () => {

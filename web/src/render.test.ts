@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { newId, refresh, stacked, untitled, type Opened } from "./board.js";
+import { arrowKind } from "../test/kinds.js";
+import { holding } from "../test/boards.js";
+import { fakeRenderer } from "../test/renderers.js";
+import { tick } from "../test/waits.js";
+import { newId, refresh, stacked, type Opened } from "./board.js";
 import * as core from "./core.js";
-import type { Board, Kind, Rect } from "./core.js";
+import type { Kind, Rect } from "./core.js";
 import {
   MARGIN,
   backing,
@@ -39,7 +43,7 @@ const fakes = vi.hoisted(() => {
 vi.mock("./board.js", async (original) => ({
   ...(await original<typeof import("./board.js")>()),
   readAsset: async (_folder: unknown, asset: string, natural: unknown) => {
-    await new Promise((done) => setTimeout(done));
+    await tick();
     fakes.meanwhile();
     return { asset, blob: new Blob([]), natural, vector: false };
   },
@@ -54,24 +58,13 @@ const ASSET = "a".repeat(64);
 const text = { content: "Dusk", font_size: 20 };
 const AS_SHOWN: Options = { longest: undefined, background: "board", margin: false };
 
-function boardOf(kinds: Record<string, Kind>): Board {
-  const ids = Object.keys(kinds);
-  return {
-    elements: Object.fromEntries(ids.map((id, at) => [id, { z: `a${at}`, kind: kinds[id]! }])),
-    draw_order: ids,
-    background: "plain",
-  };
-}
-
 /** A board holding `kinds`, back to front, each under an id of its own, by its key. */
 function openedOf(kinds: Record<string, Kind>): { opened: Opened; ids: Record<string, string> } {
-  const opened = untitled();
-  const ids: Record<string, string> = {};
-  for (const [name, kind] of Object.entries(kinds)) {
-    ids[name] = newId();
-    refresh(opened, opened.editor.add(ids[name], undefined, JSON.stringify(kind)));
-  }
-  return { opened, ids };
+  const { opened, ids } = holding(Object.values(kinds));
+  return {
+    opened,
+    ids: Object.fromEntries(Object.keys(kinds).map((name, at) => [name, ids[at]!])),
+  };
 }
 
 function image(frame: Rect, more: Partial<Extract<Kind, { type: "image" }>> = {}): Kind {
@@ -380,18 +373,27 @@ describe("the name of a picture of the selection", () => {
   const frame = { x: 0, y: 0, width: 10, height: 10 };
 
   it("is a lone image's file's, else the board's", () => {
-    const board = boardOf({
+    const {
+      opened: { board },
+      ids,
+    } = openedOf({
       a: image(frame, { filename: "Dusk light.jpeg" }),
       b: image(frame, { filename: "archive.tar.gz" }),
       c: image(frame),
       d: image(frame, { filename: ".jpg" }),
       e: image(frame, { filename: "boards/refs\\x.webp" }),
     });
-    expect(pictureName(board, ["a"], "Moodboard")).toBe("Dusk light.png");
-    expect(pictureName(board, ["b"], "Moodboard")).toBe("archive.tar.png");
-    expect(pictureName(board, ["e"], "Moodboard")).toBe("x.png");
-    for (const ids of [["a", "b"], ["c"], ["d"]]) {
-      expect(pictureName(board, ids, "Moodboard")).toBe("Moodboard.png");
+    expect(pictureName(board, [ids.a!], "Moodboard")).toBe("Dusk light.png");
+    expect(pictureName(board, [ids.b!], "Moodboard")).toBe("archive.tar.png");
+    expect(pictureName(board, [ids.e!], "Moodboard")).toBe("x.png");
+    for (const names of [["a", "b"], ["c"], ["d"]]) {
+      expect(
+        pictureName(
+          board,
+          names.map((name) => ids[name]!),
+          "Moodboard",
+        ),
+      ).toBe("Moodboard.png");
     }
   });
 });
@@ -423,10 +425,17 @@ describe("what a picture of the selection decodes again", () => {
   });
 });
 
+/** A document whose canvases take pixels, as Node has none. */
+function stubCanvases(): void {
+  vi.stubGlobal("document", {
+    createElement: () => ({ getContext: () => ({ putImageData() {} }) }),
+  });
+}
+
 function sceneOf(opened: Opened, render: Renderer["render"]): Scene {
   return {
     opened,
-    renderer: { maxTextureSide: 16_384, render } as unknown as Renderer,
+    renderer: fakeRenderer({ render }),
     drawings: { holds: () => false, drawn: () => undefined } as unknown as Vectors,
     crossedOut: new Set(),
     background: "rgb(0, 0, 0)",
@@ -472,9 +481,7 @@ describe("a picture of the selection", () => {
   });
 
   it("shares a budget between the images it decodes, leaving one to the window's texture once it would hold more", async () => {
-    vi.stubGlobal("document", {
-      createElement: () => ({ getContext: () => ({ putImageData() {} }) }),
-    });
+    stubCanvases();
     // Five 4096 px images stacked, and a 2100 px one, all at their own pixels in a picture that a
     // canvas holds whole, though not their stand-ins, past the 2048 px textures the window holds.
     const kinds: Record<string, Kind> = {
@@ -560,13 +567,9 @@ describe("how a picture of the selection is framed", () => {
 });
 
 describe("the background of a picture of the selection", () => {
-  const kinds = { a: { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } } as Kind };
+  const kinds = { a: arrowKind() };
 
-  beforeEach(() =>
-    vi.stubGlobal("document", {
-      createElement: () => ({ getContext: () => ({ putImageData() {} }) }),
-    }),
-  );
+  beforeEach(() => stubCanvases());
 
   afterEach(() => vi.unstubAllGlobals());
 
@@ -623,16 +626,12 @@ async function framing(kinds: Record<string, Kind>, crossedOut = new Set<string>
 }
 
 describe("a picture for an agent", () => {
-  beforeEach(() =>
-    vi.stubGlobal("document", {
-      createElement: () => ({ getContext: () => ({ putImageData() {} }) }),
-    }),
-  );
+  beforeEach(() => stubCanvases());
 
   afterEach(() => vi.unstubAllGlobals());
 
   it("frames an arrow by its stroke and its head, nothing past its tail, the thick stroke around", async () => {
-    const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
+    const arrow = arrowKind();
     const { head, width } = drawnArrow(arrow);
     const across = head / 2 + width / 2;
     const margin = core.strokeWidth("thick");
@@ -691,7 +690,7 @@ describe("a picture for an agent", () => {
 
   it("refuses a request of neither area nor ids, even on a board that draws", async () => {
     const draw = vi.fn<Renderer["render"]>();
-    const arrow: Kind = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
+    const arrow = arrowKind();
     const { opened } = openedOf({ a: arrow });
     await expect(forAgent(sceneOf(opened, draw), {})).rejects.toThrow("Give an area or some ids");
     expect(draw).not.toHaveBeenCalled();

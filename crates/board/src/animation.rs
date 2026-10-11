@@ -259,7 +259,7 @@ fn riff_chunk(bytes: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn times(times: u32) -> Option<Animation> {
@@ -300,7 +300,7 @@ mod tests {
         bytes
     }
 
-    fn gif(repeats: Option<u16>, frames: usize) -> Vec<u8> {
+    pub(crate) fn gif(repeats: Option<u16>, frames: usize) -> Vec<u8> {
         let mut bytes = gif_header();
         if let Some(repeats) = repeats {
             bytes.extend(gif_loop(repeats));

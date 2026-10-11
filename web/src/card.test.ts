@@ -1,9 +1,12 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { boardOf } from "../test/boards.js";
+import { command } from "../test/commands.js";
+import { captureLost, pointer, press, release } from "../test/events.js";
+import { arrowKind } from "../test/kinds.js";
 import { startsOf, trimOf, type Media, type Playback } from "./playback.js";
 import { imageKind, untitled } from "./board.js";
 import { card, type CardCommands } from "./card.js";
-import type { Command } from "./commands.js";
 import * as core from "./core.js";
 import type { Kind, Tip } from "./core.js";
 import { styles } from "./style.js";
@@ -15,11 +18,29 @@ const GROUP = "f".repeat(32);
 const ASSET = "b".repeat(64);
 const frame = { x: 0, y: 0, width: 160, height: 120 };
 const ORIGIN = { x: 0, y: 0 };
-const command = (keys?: Command["keys"]): Command => ({
-  label: "",
-  keys,
-  run: vi.fn<() => void>(),
-});
+
+/** What the card's buttons run, with the keys of those whose titles tell them. */
+function cardCommands(): CardCommands {
+  return {
+    colours: [],
+    bold: command(""),
+    italic: command(""),
+    strike: command(""),
+    greyscale: command("", { keys: [{ key: "g", alt: true }] }),
+    flipHorizontally: command(""),
+    flipVertically: command(""),
+    crop: command(""),
+    rectangularCrop: command(""),
+    ellipticalCrop: command("", { keys: [{ key: "c", alt: true }] }),
+    play: command("", { keys: [{ key: "p" }] }),
+    previousFrame: command("", { keys: [{ key: "," }] }),
+    nextFrame: command("", { keys: [{ key: "." }] }),
+    slower: command("", { keys: [{ key: "<" }] }),
+    faster: command("", { keys: [{ key: ">" }] }),
+    sound: command("", { keys: [{ key: "m" }] }),
+    open: command(""),
+  };
+}
 
 function titled(name: string): string | null | undefined {
   return document.querySelector(`.style-card button[aria-label="${name}"]`)?.getAttribute("title");
@@ -37,50 +58,22 @@ function slider(): HTMLInputElement {
   return document.querySelector<HTMLInputElement>('.style-card input[type="range"]')!;
 }
 
-function press(type: "pointerdown" | "pointerup", init: PointerEventInit = {}) {
-  slider().dispatchEvent(new PointerEvent(type, init));
-}
-
-function key(type: "keydown" | "keyup") {
-  slider().dispatchEvent(new KeyboardEvent(type, { key: "ArrowLeft" }));
-}
-
-function slide(percent: number, { release = false } = {}) {
+function slide(percent: number, { committed = false } = {}) {
   slider().value = String(percent);
   slider().dispatchEvent(new Event("input"));
-  if (release) {
+  if (committed) {
     slider().dispatchEvent(new Event("change"));
   }
 }
 
 /** The card over a board holding one image, selected, which plays as `moving` says when given. */
 function opened(moving?: Playback, showsAnnotations = () => true) {
-  const board = untitled();
   const kind = imageKind(ASSET, { width: 320, height: 240 }, frame, { filename: "cat.png" });
-  board.editor.add(IMAGE, undefined, JSON.stringify(kind));
-  board.board = core.board(board.editor);
+  const board = boardOf([[IMAGE, kind]]);
   let selected = [IMAGE];
   let held = false;
   let pressed = false;
-  const commands: CardCommands = {
-    colours: [],
-    bold: command(),
-    italic: command(),
-    strike: command(),
-    greyscale: command([{ key: "g", alt: true }]),
-    flipHorizontally: command(),
-    flipVertically: command(),
-    crop: command(),
-    rectangularCrop: command(),
-    ellipticalCrop: command([{ key: "c", alt: true }]),
-    play: command([{ key: "p" }]),
-    previousFrame: command([{ key: "," }]),
-    nextFrame: command([{ key: "." }]),
-    slower: command([{ key: "<" }]),
-    faster: command([{ key: ">" }]),
-    sound: command([{ key: "m" }]),
-    open: command(),
-  };
+  const commands = cardCommands();
   const media = {
     playback: (asset: string) => (asset === ASSET ? moving : undefined),
     play: vi.fn<Media<never>["play"]>((_, playing) => {
@@ -174,10 +167,6 @@ function opened(moving?: Playback, showsAnnotations = () => true) {
 }
 
 describe("the card of a lone image", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("turns its images grey as the greyscale command does", () => {
     const { commands } = opened();
     (document.querySelector('button[aria-label="Greyscale"]') as HTMLButtonElement).click();
@@ -193,14 +182,14 @@ describe("the card of a lone image", () => {
   it("fades it as its opacity slides, and as one edit once let go", () => {
     const { board, image } = opened();
     const sliding = slider();
-    press("pointerdown");
+    pointer(slider(), "pointerdown");
     slide(40);
     slide(60);
     expect(image()?.opacity).toBe(60);
     expect(slider()).toBe(sliding);
     expect(document.querySelector<HTMLElement>(".style-card")?.hidden).toBe(false);
     expect(board.editor.canUndo()).toBe(false);
-    press("pointerup");
+    pointer(slider(), "pointerup");
     board.editor.undo();
     expect(image()).not.toHaveProperty("opacity");
   });
@@ -208,9 +197,9 @@ describe("the card of a lone image", () => {
   it("lets go of its opacity once released, though no change comes, nor counts after", () => {
     const { board, image } = opened();
     const sliding = slider();
-    press("pointerdown");
+    pointer(slider(), "pointerdown");
     slide(52);
-    press("pointerup");
+    pointer(slider(), "pointerup");
     expect(image()?.opacity).toBe(50);
     expect(board.editor.canUndo()).toBe(true);
     // As a browser sends it after the release, to the slider the card has since built again.
@@ -221,21 +210,21 @@ describe("the card of a lone image", () => {
 
   it("writes nothing of its opacity once whole again", () => {
     const { image } = opened();
-    slide(50, { release: true });
+    slide(50, { committed: true });
     expect(image()?.opacity).toBe(50);
-    slide(100, { release: true });
+    slide(100, { committed: true });
     expect(image()).not.toHaveProperty("opacity");
   });
 
   it("snaps its opacity to a step under a pointer, but not under the keys", () => {
     const { image } = opened();
-    press("pointerdown");
+    pointer(slider(), "pointerdown");
     slide(52);
-    press("pointerup");
+    pointer(slider(), "pointerup");
     expect(image()?.opacity).toBe(50);
-    key("keydown");
-    slide(51, { release: true });
-    key("keyup");
+    press({ key: "ArrowLeft" }, slider());
+    slide(51, { committed: true });
+    release({ key: "ArrowLeft" }, slider());
     expect(image()?.opacity).toBe(51);
   });
 
@@ -243,11 +232,11 @@ describe("the card of a lone image", () => {
     const { board, image } = opened();
     const sliding = slider();
     for (const percent of [99, 98, 97]) {
-      key("keydown");
-      slide(percent, { release: true });
+      press({ key: "ArrowLeft" }, slider());
+      slide(percent, { committed: true });
     }
     expect(slider()).toBe(sliding);
-    key("keyup");
+    release({ key: "ArrowLeft" }, slider());
     expect(image()?.opacity).toBe(97);
     board.editor.undo();
     expect(image()).not.toHaveProperty("opacity");
@@ -256,9 +245,9 @@ describe("the card of a lone image", () => {
   it("keeps the focus on its opacity as the keys change it", () => {
     opened();
     slider().focus();
-    key("keydown");
-    slide(99, { release: true });
-    key("keyup");
+    press({ key: "ArrowLeft" }, slider());
+    slide(99, { committed: true });
+    release({ key: "ArrowLeft" }, slider());
     expect(document.activeElement).toBe(slider());
     expect(slider().getAttribute("aria-valuetext")).toBe("99%");
   });
@@ -286,17 +275,7 @@ function groups(): (string | null)[] {
   );
 }
 
-function typed(target: EventTarget, name: string) {
-  target.dispatchEvent(
-    new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }),
-  );
-}
-
 describe("the card of a lone animated image", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("shows the frame it plays as it goes, over how it plays", () => {
     const playback = gif();
     const { shown } = opened(playback);
@@ -314,12 +293,12 @@ describe("the card of a lone animated image", () => {
     const playback = gif();
     const { media } = opened(playback);
     const track = document.querySelector<HTMLInputElement>(".style-card .scrub input")!;
-    track.dispatchEvent(new PointerEvent("pointerdown", { button: 0 }));
+    pointer(track, "pointerdown", { button: 0 });
     track.value = "10";
     track.dispatchEvent(new Event("input"));
     expect(media.seek).toHaveBeenLastCalledWith(ASSET, 10);
     expect(media.play).toHaveBeenLastCalledWith([ASSET], false);
-    track.dispatchEvent(new PointerEvent("pointerup"));
+    pointer(track, "pointerup");
     expect(media.play).toHaveBeenLastCalledWith([ASSET], true);
   });
 
@@ -369,13 +348,13 @@ describe("the card of a lone animated image", () => {
     named("Trim").click();
     expect(groups()).toEqual(["Timeline", "Trim", "Image", "Opacity"]);
     expect(media.play).toHaveBeenLastCalledWith([ASSET], false);
-    typed(named("Trim start"), "ArrowRight");
-    typed(named("Trim start"), "ArrowRight");
-    typed(named("Trim end"), "ArrowLeft");
+    press({ key: "ArrowRight" }, named("Trim start"));
+    press({ key: "ArrowRight" }, named("Trim start"));
+    press({ key: "ArrowLeft" }, named("Trim end"));
     expect(media.preview).toHaveBeenLastCalledWith(ASSET, [2, 22]);
     expect(media.seek).toHaveBeenLastCalledWith(ASSET, 22);
     expect(document.querySelector(".style-card .note")?.textContent).toBe("Loops 3–23 of 24");
-    typed(document.body, "Enter");
+    press({ key: "Enter" }, document.body);
     expect(image()?.edits?.trim).toEqual(trimOf(playback.starts, [2, 22]));
     expect(media.preview).toHaveBeenLastCalledWith(ASSET, undefined);
     expect(media.play).toHaveBeenLastCalledWith([ASSET], true);
@@ -392,11 +371,11 @@ describe("the card of a lone animated image", () => {
       end.hasPointerCapture = () => true;
       // A frame every 10 pixels, from the thumb's centre.
       end.parentElement!.getBoundingClientRect = () => new DOMRect(0, 0, 23 * 10 + 14, 14);
-      end.dispatchEvent(new PointerEvent("pointerdown", { button: 0, pointerId: 1 }));
-      end.dispatchEvent(new PointerEvent("pointermove", { clientX: 7 + to * 10, pointerId: 1 }));
+      pointer(end, "pointerdown", { button: 0 });
+      pointer(end, "pointermove", { clientX: 7 + to * 10 });
       expect(media.seek).toHaveBeenLastCalledWith(ASSET, to);
-      end.dispatchEvent(new PointerEvent("lostpointercapture", { pointerId: 1 }));
-      end.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1 }));
+      captureLost(end);
+      pointer(end, "pointerup");
     };
     drag("Trim end", 10);
     expect(media.seek).toHaveBeenLastCalledWith(ASSET, 2);
@@ -404,7 +383,7 @@ describe("the card of a lone animated image", () => {
     expect(media.seek).toHaveBeenLastCalledWith(ASSET, 5);
     expect(media.preview).toHaveBeenLastCalledWith(ASSET, [5, 10]);
     const sought = media.seek.mock.calls.length;
-    typed(document.body, "Enter");
+    press({ key: "Enter" }, document.body);
     expect(image()?.edits?.trim).toEqual(trimOf(playback.starts, [5, 10]));
     expect(media.seek).toHaveBeenCalledTimes(sought);
     expect(media.play).toHaveBeenLastCalledWith([ASSET], true);
@@ -414,33 +393,33 @@ describe("the card of a lone animated image", () => {
     const { trimmed } = opened(gif());
     named("Trim").click();
     expect(trimmed).toHaveBeenCalledOnce();
-    typed(document.body, "Escape");
+    press({ key: "Escape" }, document.body);
     expect(trimmed).toHaveBeenCalledTimes(2);
   });
 
   it("leaves ↩ to a button the keys press while trimming", () => {
     const { image } = opened(gif());
     named("Trim").click();
-    typed(named("Trim start"), "ArrowRight");
+    press({ key: "ArrowRight" }, named("Trim start"));
     const reset = named("Play every frame");
     reset.focus();
-    typed(reset, "Enter");
+    press({ key: "Enter" }, reset);
     expect(image()?.edits?.trim).toBeUndefined();
     expect(groups()).toContain("Trim");
     // Out of trim, as the window keeps listening to each card's keys.
     reset.blur();
-    typed(document.body, "Escape");
+    press({ key: "Escape" }, document.body);
   });
 
   it("leaves the trim as it was on Esc, or once another element is selected", () => {
     const { shown, image, select } = opened(gif());
     named("Trim").click();
-    typed(named("Trim start"), "ArrowRight");
-    typed(document.body, "Escape");
+    press({ key: "ArrowRight" }, named("Trim start"));
+    press({ key: "Escape" }, document.body);
     expect(image()?.edits?.trim).toBeUndefined();
     expect(groups()).toEqual(["Timeline", "Playback", "Image", "Opacity"]);
     named("Trim").click();
-    typed(named("Trim start"), "ArrowRight");
+    press({ key: "ArrowRight" }, named("Trim start"));
     select([]);
     select([IMAGE]);
     shown.open(false);
@@ -455,19 +434,15 @@ describe("the card of a lone animated image", () => {
 });
 
 describe("the card of a lone video", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("tells the time it shows, with its frame, and loops its trim by time", () => {
     opened({ ...gif(), sound: false });
     expect(document.querySelector(".style-card .count")?.textContent).toBe("0:00.20");
     expect(slider().getAttribute("aria-valuetext")).toBe("0:00.20, frame 3 of 24");
     named("Trim").click();
-    typed(named("Trim end"), "ArrowLeft");
+    press({ key: "ArrowLeft" }, named("Trim end"));
     expect(document.querySelector(".style-card .note")?.textContent).toBe("Loops 0:00.00–0:02.30");
     // Out of trim, as the window keeps listening to each card's keys.
-    typed(document.body, "Escape");
+    press({ key: "Escape" }, document.body);
   });
 
   it("turns its sound on and off as its key does, by its frames", () => {
@@ -501,7 +476,7 @@ function drawn() {
 
 function both() {
   const made = opened();
-  const arrow = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } } as const;
+  const arrow = arrowKind();
   made.board.editor.add(ARROW, undefined, JSON.stringify({ ...arrow, colour: "red" }));
   made.board.editor.add(OTHER, undefined, JSON.stringify(arrow));
   made.board.board = core.board(made.board.editor);
@@ -512,7 +487,6 @@ function both() {
 
 describe("the card of an image and an arrow", () => {
   afterEach(() => {
-    document.body.replaceChildren();
     localStorage.clear();
   });
 
@@ -558,7 +532,7 @@ describe("the card of an image and an arrow", () => {
     board.editor.setLocked([ARROW], true);
     board.board = core.board(board.editor);
     select([GROUP]);
-    slide(50, { release: true });
+    slide(50, { committed: true });
     expect(kind(IMAGE)).toMatchObject({ opacity: 50 });
     expect(kind(ARROW)).not.toHaveProperty("opacity");
     expect(kind(GROUP)).not.toHaveProperty("opacity");
@@ -601,30 +575,30 @@ describe("the card of an image and an arrow", () => {
     board.board = core.board(board.editor);
     shown.refresh();
     expect(document.querySelector(".style-card .slider.mixed .value")?.textContent).toBe("Mixed");
-    press("pointerdown", { button: 2 });
-    press("pointerup", { button: 2 });
+    pointer(slider(), "pointerdown", { button: 2 });
+    pointer(slider(), "pointerup", { button: 2 });
     expect(kind(IMAGE)).toMatchObject({ opacity: 40 });
-    press("pointerdown");
-    press("pointerup");
+    pointer(slider(), "pointerdown");
+    pointer(slider(), "pointerup");
     expect(kind(IMAGE)).not.toHaveProperty("opacity");
     expect(kind(ARROW)).not.toHaveProperty("opacity");
   });
 
   it("leaves the arrow tool's opacity alone while ⌥ is held", () => {
     both();
-    press("pointerdown", { altKey: true });
+    pointer(slider(), "pointerdown", { altKey: true });
     slide(40);
-    press("pointerup");
+    pointer(slider(), "pointerup");
     expect(drawn()).not.toHaveProperty("opacity");
-    press("pointerdown");
+    pointer(slider(), "pointerdown");
     slide(25);
-    press("pointerup");
+    pointer(slider(), "pointerup");
     expect(drawn()).toMatchObject({ opacity: 25 });
   });
 
   it("builds again once the edit its opacity holds ends elsewhere, as the board goes", () => {
     const { select, drop } = both();
-    press("pointerdown");
+    pointer(slider(), "pointerdown");
     slide(40);
     drop();
     select([IMAGE]);
@@ -665,7 +639,6 @@ function counted(corners: number) {
 
 describe("the card of a star and a polygon", () => {
   afterEach(() => {
-    document.body.replaceChildren();
     localStorage.clear();
   });
 
@@ -719,10 +692,6 @@ describe("the card of a star and a polygon", () => {
 });
 
 describe("the card as the selection goes", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("hides while a press on the board holds, and shows as it was once it ends", () => {
     const { pressing } = opened();
     pressing(true);
@@ -823,25 +792,7 @@ function inking(tip: Tip = "pen") {
       trimmed() {},
     },
     store,
-    {
-      colours: [],
-      bold: command(),
-      italic: command(),
-      strike: command(),
-      greyscale: command(),
-      flipHorizontally: command(),
-      flipVertically: command(),
-      crop: command(),
-      rectangularCrop: command(),
-      ellipticalCrop: command(),
-      play: command(),
-      previousFrame: command(),
-      nextFrame: command(),
-      slower: command(),
-      faster: command(),
-      sound: command(),
-      open: command(),
-    },
+    cardCommands(),
   ).open(false);
   return { board, pen };
 }
@@ -852,7 +803,6 @@ function button(name: string): HTMLButtonElement {
 
 describe("the card of the pen", () => {
   afterEach(() => {
-    document.body.replaceChildren();
     localStorage.clear();
   });
 
@@ -860,7 +810,7 @@ describe("the card of the pen", () => {
     const { board, pen } = inking();
     button("Orange").click();
     button("Thick stroke").click();
-    slide(40, { release: true });
+    slide(40, { committed: true });
     expect(pen()).toMatchObject({ colour: "orange", weight: "thick", opacity: 40 });
     expect(button("Orange").getAttribute("aria-pressed")).toBe("true");
     expect(board.editor.canUndo()).toBe(false);

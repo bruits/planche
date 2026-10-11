@@ -156,17 +156,15 @@ fn vint(bytes: &[u8], id: bool) -> Option<(u64, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::video::boxes::tests::boxed;
+    use crate::video::ebml::tests::sized;
 
     fn ftyp(major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
-        let size = u32::try_from(16 + 4 * compatible.len()).unwrap();
-        let mut bytes = size.to_be_bytes().to_vec();
-        bytes.extend(b"ftyp");
-        bytes.extend(major);
-        bytes.extend([0; 4]);
-        for brand in compatible {
-            bytes.extend(*brand);
-        }
-        bytes.extend(b"\0\0\0\x08free");
+        let mut brands = major.to_vec();
+        brands.extend([0; 4]);
+        brands.extend(compatible.iter().copied().flatten());
+        let mut bytes = boxed(b"ftyp", &brands);
+        bytes.extend(boxed(b"free", &[]));
         bytes
     }
 
@@ -217,12 +215,9 @@ mod tests {
 
     fn ebml(doc_type: &[u8]) -> Vec<u8> {
         // Its version, then its document type.
-        let mut header = vec![0x42, 0x86, 0x81, 0x01, 0x42, 0x82];
-        header.push(0x80 | u8::try_from(doc_type.len()).unwrap());
-        header.extend(doc_type);
-        let mut bytes = EBML.to_vec();
-        bytes.push(0x80 | u8::try_from(header.len()).unwrap());
-        bytes.extend(header);
+        let mut header = sized(0x4286, &[1], 1);
+        header.extend(sized(0x4282, doc_type, 1));
+        let mut bytes = sized(u64::from(u32::from_be_bytes(EBML)), &header, 1);
         // A segment follows.
         bytes.extend([0x18, 0x53, 0x80, 0x67, 0x01, 0xFF]);
         bytes

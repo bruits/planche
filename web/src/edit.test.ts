@@ -1,5 +1,10 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { boardOf } from "../test/boards.js";
+import { measuring, unsized } from "../test/canvases.js";
+import { captureLost, pointer as pointerOn, press, release } from "../test/events.js";
+import { mounted, sized } from "../test/views.js";
+import { nextFrame } from "../test/waits.js";
 import { refresh, untitled } from "./board.js";
 import * as core from "./core.js";
 import type { Kind, Point } from "./core.js";
@@ -7,9 +12,7 @@ import { fit } from "./camera.js";
 import { edits, type Edits, type Hooks } from "./edit.js";
 import { closeMenu, openMenu } from "./menu.js";
 import { overlay } from "./overlay.js";
-import type { Renderer } from "./renderer.js";
 import { titles } from "./titles.js";
-import { view } from "./view.js";
 
 const STICKY = "a".repeat(32);
 const sticky: Extract<Kind, { type: "sticky" }> = {
@@ -44,30 +47,9 @@ function page(
     zoom?: number;
   } = {},
 ) {
-  const opened = untitled();
-  for (const [id, kind] of [[STICKY, sticky] as const, ...more]) {
-    opened.editor.add(id, undefined, JSON.stringify(kind));
-  }
-  opened.board = core.board(opened.editor);
-  const host = document.body.appendChild(document.createElement("div"));
+  const opened = boardOf([[STICKY, sticky], ...more]);
   let editing: Edits | undefined;
-  const viewport = view(host, {
-    advance: () => editing?.catchUp(),
-    frame() {},
-    painted() {},
-    failed(error) {
-      throw error;
-    },
-    panned() {},
-  });
-  // Draws nothing, as only where things are matters here.
-  const renderer = {
-    canvas: document.createElement("canvas"),
-    resize() {},
-    draw() {},
-    destroy() {},
-  };
-  viewport.show(renderer as unknown as Renderer, { x: 0, y: 0, zoom });
+  const { host, viewport } = mounted({ zoom, drawing: { advance: () => editing?.catchUp() } });
   const hooks: Hooks = {
     changed: vi.fn<Hooks["changed"]>((touched) => refresh(opened, touched)),
     selectionChanged() {},
@@ -104,39 +86,29 @@ function page(
       finger,
     }: { shiftKey?: boolean; altKey?: boolean; free?: boolean; finger?: number } = {},
   ) =>
-    host.dispatchEvent(
-      new PointerEvent(type, {
-        clientX,
-        clientY,
-        shiftKey,
-        altKey,
-        // ⌘ on macOS, Ctrl elsewhere.
-        metaKey: free,
-        ctrlKey: free,
-        button: 0,
-        pointerId: finger ?? 1,
-        pointerType: finger === undefined ? "mouse" : "touch",
-        bubbles: true,
-      }),
-    );
+    pointerOn(host, type, {
+      clientX,
+      clientY,
+      shiftKey,
+      altKey,
+      // ⌘ on macOS, Ctrl elsewhere.
+      metaKey: free,
+      ctrlKey: free,
+      button: 0,
+      pointerId: finger ?? 1,
+      pointerType: finger === undefined ? "mouse" : "touch",
+    });
   const at = () => {
     const kind = core.element(opened.editor, STICKY)?.kind;
     return kind?.type === "sticky" ? { x: kind.frame.x, y: kind.frame.y } : undefined;
   };
-  return { opened, editing, hooks, host, viewport, pointer, at };
-}
-
-/** As the page shows a board mirrored across a viewport 400 CSS pixels wide. */
-function mirrored(host: HTMLElement, viewport: ReturnType<typeof view>) {
-  host.getBoundingClientRect = () => new DOMRect(0, 0, 400, 300);
-  viewport.mirror(true);
-}
-
-/** Pressed on the page, `type` "keydown" or "keyup", and whether something took it. */
-function key(type: string, init: KeyboardEventInit, target: EventTarget = document.body): boolean {
-  const event = new KeyboardEvent(type, { bubbles: true, cancelable: true, ...init });
-  target.dispatchEvent(event);
-  return event.defaultPrevented;
+  const twice = (clientX: number, clientY: number) => {
+    for (const type of ["pointerdown", "pointerup", "pointerdown", "pointerup"]) {
+      pointer(type, clientX, clientY);
+    }
+    host.dispatchEvent(new MouseEvent("dblclick", { clientX, clientY, button: 0, bubbles: true }));
+  };
+  return { opened, editing, hooks, host, viewport, pointer, twice, at };
 }
 
 const IMAGE = "c".repeat(32);
@@ -166,10 +138,6 @@ function lower(editing: Edits, y: number) {
   );
 }
 
-function nextFrame(): Promise<number> {
-  return new Promise((resolve) => requestAnimationFrame(resolve));
-}
-
 /**
  * `beneath`, and above it a sticky note at (300, 0), 100 wide and tall, turned by `rotation` degrees,
  * selected and pressed at `x` and `y`.
@@ -193,7 +161,6 @@ function turning(beneath: Kind, x: number, y: number, zoom = 1, rotation = 0) {
 describe("edits", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    document.body.replaceChildren();
   });
 
   it("moves the selection once per frame, to where the pointer last went", async () => {
@@ -224,8 +191,8 @@ describe("edits", () => {
   });
 
   it("moves the selection as the pointer goes over a mirrored board", () => {
-    const { host, viewport, pointer, at } = page();
-    mirrored(host, viewport);
+    const { viewport, pointer, at } = page();
+    viewport.mirror(true);
     pointer("pointerdown", 350, 50);
     pointer("pointermove", 330, 60);
     pointer("pointerup", 330, 60);
@@ -233,13 +200,9 @@ describe("edits", () => {
   });
 
   it("writes in a mirrored board's note where it shows, mirrored as it draws", () => {
-    // As happy-dom measures no text.
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      font: "",
-      measureText: () => ({ width: 0, fontBoundingBoxAscent: 0, fontBoundingBoxDescent: 0 }),
-    } as unknown as CanvasRenderingContext2D);
-    const { editing, host, viewport } = page();
-    mirrored(host, viewport);
+    measuring(unsized);
+    const { editing, viewport } = page();
+    viewport.mirror(true);
     editing.write(STICKY);
     const field = document.querySelector<HTMLTextAreaElement>("textarea.writer")!;
     // From 0 to 100 on the board, so from 300 to 400 on the page.
@@ -653,19 +616,8 @@ describe("edits", () => {
 /** The sticky note and `more`, in a viewport 600 by 400 CSS pixels. */
 function viewed(more: [string, Kind][]) {
   const shown = page(more);
-  Object.defineProperties(shown.host, {
-    clientWidth: { value: 600 },
-    clientHeight: { value: 400 },
-  });
-  const twice = (clientX: number, clientY: number) => {
-    for (const type of ["pointerdown", "pointerup", "pointerdown", "pointerup"]) {
-      shown.pointer(type, clientX, clientY);
-    }
-    shown.host.dispatchEvent(
-      new MouseEvent("dblclick", { clientX, clientY, button: 0, bubbles: true }),
-    );
-  };
-  return { ...shown, twice };
+  sized(shown.host, 600, 400);
+  return shown;
 }
 
 describe("a double-click", () => {
@@ -781,20 +733,14 @@ function beside(
   corners: (Point & { width?: number; height?: number })[],
   options: Partial<Pick<Hooks, "snapping" | "aligning" | "drawing">> = {},
 ) {
-  // As happy-dom measures no text, which a sticky note fits as it stretches.
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-    font: "",
-    measureText: () => ({ width: 0, fontBoundingBoxAscent: 0, fontBoundingBoxDescent: 0 }),
-  } as unknown as CanvasRenderingContext2D);
+  // Text a sticky note fits as it stretches.
+  measuring(unsized);
   const others = corners.map((corner, at): [string, Kind] => [
     String(at).repeat(32),
     { ...sticky, frame: { width: 100, height: 100, ...corner } },
   ]);
   const shown = page(others, { aligning: () => true, ...options });
-  Object.defineProperties(shown.host, {
-    clientWidth: { value: 800 },
-    clientHeight: { value: 600 },
-  });
+  sized(shown.host, 800, 600);
   const frame = () => {
     const kind = core.element(shown.opened.editor, STICKY)?.kind;
     return kind?.type === "sticky" ? kind.frame : undefined;
@@ -810,15 +756,7 @@ const NOTE = "f".repeat(32);
 
 /** In a face no other test measures, as measures stay with each face. */
 function written(opened: ReturnType<typeof page>["opened"]) {
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-    font: "",
-    measureText: (text: string) => ({
-      width: text.length * 50,
-      fontBoundingBoxAscent: 80,
-      fontBoundingBoxDescent: 20,
-      actualBoundingBoxAscent: 70,
-    }),
-  } as unknown as CanvasRenderingContext2D);
+  measuring();
   const note = {
     type: "note",
     frame: { x: 0, y: 150, width: 40, height: 150 },
@@ -833,7 +771,6 @@ function written(opened: ReturnType<typeof page>["opened"]) {
 describe("lining up", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    document.body.replaceChildren();
   });
 
   it("lines a move up with a side of what is beside it, showing how until let go", async () => {
@@ -895,10 +832,10 @@ describe("lining up", () => {
     pointer("pointerdown", 100, 100);
     pointer("pointermove", 247, 247);
     await nextFrame();
-    key("keydown", { key: "Meta", metaKey: true, ctrlKey: true });
+    press({ key: "Meta", metaKey: true, ctrlKey: true });
     expect(frame()?.width).toBeCloseTo(247);
     expect(linedUp(host, "bridges")).toBe("");
-    key("keyup", { key: "Meta" });
+    release({ key: "Meta" });
     expect(frame()?.width).toBe(250);
     pointer("pointerup", 247, 247);
   });
@@ -1011,7 +948,7 @@ describe("lining up", () => {
     pointer("pointerdown", 297, 20);
     pointer("pointermove", 397, 120);
     await nextFrame();
-    key("keydown", { key: "Meta", metaKey: true, ctrlKey: true });
+    press({ key: "Meta", metaKey: true, ctrlKey: true });
     expect(linedUp(host, "bridges")).toBe("");
     pointer("pointerup", 397, 120, { free: true });
     const shapes = Object.values(opened.board.elements).filter(({ kind }) => kind.type === "shape");
@@ -1064,10 +1001,10 @@ describe("lining up", () => {
     pointer("pointerdown", 50, 50);
     pointer("pointermove", 246, 50);
     await nextFrame();
-    key("keydown", { key: "Meta", metaKey: true, ctrlKey: true });
+    press({ key: "Meta", metaKey: true, ctrlKey: true });
     expect(at()).toEqual({ x: 196, y: 0 });
     expect(linedUp(host, "bridges")).toBe("");
-    key("keyup", { key: "Meta" });
+    release({ key: "Meta" });
     expect(at()).toEqual({ x: 200, y: 0 });
     expect(linedUp(host, "bridges")).toBe("M300 200L300 100");
     pointer("pointerup", 246, 50);
@@ -1079,7 +1016,7 @@ describe("lining up", () => {
     pointer("pointermove", 53, 50);
     await nextFrame();
     expect(at()).toEqual({ x: 0, y: 0 });
-    key("keydown", { key: "Meta", metaKey: true, ctrlKey: true });
+    press({ key: "Meta", metaKey: true, ctrlKey: true });
     expect(at()).toEqual({ x: 3, y: 0 });
     pointer("pointerup", 53, 50, { free: true });
   });
@@ -1115,10 +1052,6 @@ describe("lining up", () => {
 });
 
 describe("cropping", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("crops at a click outside it", () => {
     const { opened, editing, pointer } = cropping();
     dragCorner(pointer);
@@ -1155,7 +1088,7 @@ describe("cropping", () => {
     pointer("pointerdown", 500, 200);
     pointer("pointermove", 400, 180, { shiftKey: true });
     pointer("pointerup", 400, 180, { shiftKey: true });
-    key("keydown", { key: "Enter" });
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 222, height: 148 });
   });
 
@@ -1170,7 +1103,7 @@ describe("cropping", () => {
     pointer("pointerdown", corner.x, corner.y);
     pointer("pointermove", corner.x + 400, corner.y + 400, { shiftKey: true });
     pointer("pointerup", corner.x + 400, corner.y + 400, { shiftKey: true });
-    key("keydown", { key: "Enter" });
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 100, y: 0, width: 200, height: 133 });
   });
 
@@ -1179,7 +1112,7 @@ describe("cropping", () => {
     pointer("pointerdown", 500, 200);
     pointer("pointermove", 400, 180);
     pointer("pointerup", 400, 180);
-    key("keydown", { key: "Enter" });
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
   });
 
@@ -1188,7 +1121,7 @@ describe("cropping", () => {
     pointer("pointerdown", 500, 100);
     pointer("pointermove", 350, 100, { shiftKey: true });
     pointer("pointerup", 350, 100, { shiftKey: true });
-    key("keydown", { key: "Enter" });
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 50, width: 150, height: 100 });
   });
 
@@ -1197,8 +1130,8 @@ describe("cropping", () => {
     pointer("pointerdown", 500, 200);
     pointer("pointermove", 400, 180);
     await nextFrame();
-    key("keydown", { key: "Shift", shiftKey: true });
-    key("keydown", { key: "Enter" });
+    press({ key: "Shift", shiftKey: true });
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 222, height: 148 });
     pointer("pointerup", 400, 180);
   });
@@ -1208,16 +1141,16 @@ describe("cropping", () => {
     pointer("pointerdown", 500, 200);
     pointer("pointermove", 400, 180, { shiftKey: true });
     await nextFrame();
-    key("keyup", { key: "Shift" });
-    key("keydown", { key: "Enter" });
+    release({ key: "Shift" });
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
     pointer("pointerup", 400, 180);
   });
 
   it("turns the crop between portrait and landscape with X, as large as the image lets it", () => {
     const { opened, editing } = cropping();
-    expect(key("keydown", { key: "x" })).toBe(true);
-    key("keydown", { key: "Enter" });
+    expect(press({ key: "x" }).defaultPrevented).toBe(true);
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 84, y: 0, width: 133, height: 200 });
     editing.undo();
     expect(cropOf(opened)?.crop).toBeFalsy();
@@ -1229,7 +1162,7 @@ describe("cropping", () => {
       (host.querySelector(".crop-guides.line")?.getAttribute("d") ?? "").split("M").length - 1;
     expect(segments()).toBe(0);
     const shown = [1, 2, 3, 4].map(() => {
-      expect(key("keydown", { key: "o" })).toBe(true);
+      expect(press({ key: "o" }).defaultPrevented).toBe(true);
       return segments();
     });
     expect(shown).toEqual([4, 4, 2, 0]);
@@ -1237,34 +1170,30 @@ describe("cropping", () => {
 
   it("leaves X and O to the tools when nothing is being cropped, or with a modifier", () => {
     cropping();
-    expect(key("keydown", { key: "x", metaKey: true })).toBe(false);
-    key("keydown", { key: "Escape" });
-    expect(key("keydown", { key: "x" })).toBe(false);
-    expect(key("keydown", { key: "o" })).toBe(false);
+    expect(press({ key: "x", metaKey: true }).defaultPrevented).toBe(false);
+    press({ key: "Escape" });
+    expect(press({ key: "x" }).defaultPrevented).toBe(false);
+    expect(press({ key: "o" }).defaultPrevented).toBe(false);
   });
 
   it("changes the shape of the crop under way", () => {
     const { opened, editing } = cropping();
     editing.cropShape("ellipse");
     expect(editing.croppedAs()).toBe("ellipse");
-    key("keydown", { key: "Enter" });
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop_shape).toBe("ellipse");
   });
 });
 
 describe("nudging", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("moves the selection a CSS pixel with an arrow key, or ten with Shift", () => {
     const { editing, at } = page([], { zoom: 2 });
     editing.select([STICKY]);
-    expect(key("keydown", { key: "ArrowRight" })).toBe(true);
-    key("keyup", { key: "ArrowRight" });
+    expect(press({ key: "ArrowRight" }).defaultPrevented).toBe(true);
+    release({ key: "ArrowRight" });
     expect(at()).toEqual({ x: 0.5, y: 0 });
-    key("keydown", { key: "ArrowUp", shiftKey: true });
-    key("keyup", { key: "ArrowUp" });
+    press({ key: "ArrowUp", shiftKey: true });
+    release({ key: "ArrowUp" });
     expect(at()).toEqual({ x: 0.5, y: -5 });
   });
 
@@ -1273,18 +1202,18 @@ describe("nudging", () => {
     editing.select([STICKY]);
     // Locked from elsewhere, as an agent would, while still selected here.
     opened.editor.setLocked([STICKY], true);
-    key("keydown", { key: "ArrowRight" });
-    key("keyup", { key: "ArrowRight" });
+    press({ key: "ArrowRight" });
+    release({ key: "ArrowRight" });
     expect(hooks.failed).toHaveBeenCalledOnce();
     expect(at()).toEqual({ x: 0, y: 0 });
   });
 
   it("moves the selection along the arrow as a mirrored board shows", () => {
-    const { editing, host, viewport, at } = page();
-    mirrored(host, viewport);
+    const { editing, viewport, at } = page();
+    viewport.mirror(true);
     editing.select([STICKY]);
-    key("keydown", { key: "ArrowRight" });
-    key("keyup", { key: "ArrowRight" });
+    press({ key: "ArrowRight" });
+    release({ key: "ArrowRight" });
     expect(at()).toEqual({ x: -1, y: 0 });
   });
 
@@ -1293,20 +1222,20 @@ describe("nudging", () => {
     core.setBackground(opened.editor, "grid");
     opened.board = core.board(opened.editor);
     editing.select([STICKY]);
-    key("keydown", { key: "ArrowDown" });
-    key("keyup", { key: "ArrowDown" });
+    press({ key: "ArrowDown" });
+    release({ key: "ArrowDown" });
     expect(at()).toEqual({ x: 0, y: 40 });
   });
 
   it("holds a held key's moves as one edit, keeping others out until it comes up", async () => {
     const { editing, at } = page();
     editing.select([STICKY]);
-    key("keydown", { key: "ArrowLeft" });
-    key("keydown", { key: "ArrowLeft", repeat: true });
-    key("keydown", { key: "ArrowLeft", repeat: true });
+    press({ key: "ArrowLeft" });
+    press({ key: "ArrowLeft", repeat: true });
+    press({ key: "ArrowLeft", repeat: true });
     expect(at()).toEqual({ x: -3, y: 0 });
     expect(() => editing.apply(() => {})).toThrow("Someone is editing in Planche");
-    key("keyup", { key: "ArrowLeft" });
+    release({ key: "ArrowLeft" });
     await editing.idle();
     editing.undo();
     expect(at()).toEqual({ x: 0, y: 0 });
@@ -1315,8 +1244,8 @@ describe("nudging", () => {
   it("ends a move once ⌘ goes down, as macOS then sends no keyup", async () => {
     const { editing, at } = page();
     editing.select([STICKY]);
-    key("keydown", { key: "ArrowRight" });
-    key("keydown", { key: "Meta", metaKey: true });
+    press({ key: "ArrowRight" });
+    press({ key: "Meta", metaKey: true });
     await editing.idle();
     editing.undo();
     expect(at()).toEqual({ x: 0, y: 0 });
@@ -1324,14 +1253,14 @@ describe("nudging", () => {
 
   it("leaves the keys alone with nothing selected, a modifier held, or a field focused", () => {
     const { editing, at } = page();
-    expect(key("keydown", { key: "ArrowRight" })).toBe(false);
+    expect(press({ key: "ArrowRight" }).defaultPrevented).toBe(false);
     editing.select([STICKY]);
-    expect(key("keydown", { key: "ArrowRight", altKey: true })).toBe(false);
+    expect(press({ key: "ArrowRight", altKey: true }).defaultPrevented).toBe(false);
     const field = document.body.appendChild(document.createElement("textarea"));
-    expect(key("keydown", { key: "ArrowRight" }, field)).toBe(false);
+    expect(press({ key: "ArrowRight" }, field).defaultPrevented).toBe(false);
     const slider = document.body.appendChild(document.createElement("input"));
     slider.type = "range";
-    expect(key("keydown", { key: "ArrowRight" }, slider)).toBe(false);
+    expect(press({ key: "ArrowRight" }, slider).defaultPrevented).toBe(false);
     expect(at()).toEqual({ x: 0, y: 0 });
   });
 
@@ -1340,8 +1269,8 @@ describe("nudging", () => {
     editing.select([STICKY]);
     openMenu([{ label: "Copy", run() {} }], { label: "Selection", place: { x: 10, y: 10 } });
     const item = document.activeElement!;
-    key("keydown", { key: "ArrowRight" }, item);
-    key("keydown", { key: "ArrowLeft" }, item);
+    press({ key: "ArrowRight" }, item);
+    press({ key: "ArrowLeft" }, item);
     closeMenu();
     expect(at()).toEqual({ x: 0, y: 0 });
   });
@@ -1356,8 +1285,8 @@ describe("nudging", () => {
     );
     opened.board = core.board(opened.editor);
     editing.select([note]);
-    key("keydown", { key: "ArrowRight" });
-    key("keyup", { key: "ArrowRight" });
+    press({ key: "ArrowRight" });
+    release({ key: "ArrowRight" });
     expect(core.element(opened.editor, note)?.kind).toMatchObject({ target: IMAGE });
   });
 });
@@ -1369,10 +1298,6 @@ function strokes(opened: ReturnType<typeof page>["opened"]) {
 }
 
 describe("the pen", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("draws each position the pointer passed, smoothed, as one edit that leaves it to draw again", async () => {
     const { opened, editing, hooks, host, pointer } = page([], { drawing: () => "pen" });
     pointer("pointerdown", 200, 200);
@@ -1381,15 +1306,11 @@ describe("the pen", () => {
       new PointerEvent("pointermove", { clientX: 100, clientY: 300, pointerId: 1 }),
       new PointerEvent("pointermove", { clientX: 300, clientY: 300, pointerId: 1 }),
     ];
-    host.dispatchEvent(
-      new PointerEvent("pointermove", {
-        clientX: 300,
-        clientY: 300,
-        pointerId: 1,
-        bubbles: true,
-        coalescedEvents: passed,
-      }),
-    );
+    pointerOn(host, "pointermove", {
+      clientX: 300,
+      clientY: 300,
+      coalescedEvents: passed,
+    });
     await nextFrame();
     expect(hooks.inked).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "stroke" }));
     pointer("pointerup", 300, 300);
@@ -1469,11 +1390,11 @@ describe("the pen", () => {
     pointer("pointermove", 300, 300);
     await nextFrame();
     expect(shown()).toBeGreaterThan(2);
-    key("keydown", { key: "Shift", shiftKey: true });
+    press({ key: "Shift", shiftKey: true });
     expect(shown()).toBe(2);
-    key("keyup", { key: "Shift" });
+    release({ key: "Shift" });
     expect(shown()).toBeGreaterThan(2);
-    key("keydown", { key: "Shift", shiftKey: true });
+    press({ key: "Shift", shiftKey: true });
     pointer("pointerup", 300, 300);
     const [stroke] = strokes(opened);
     expect(stroke?.points).toHaveLength(4);
@@ -1540,24 +1461,13 @@ describe("the pen", () => {
   });
 });
 
-/** As some engines let the capture go, a moment before the release, or while still pressed. */
-function captureLost(host: HTMLElement, x: number, y: number, buttons: number) {
-  host.dispatchEvent(
-    new PointerEvent("lostpointercapture", { clientX: x, clientY: y, buttons, pointerId: 1 }),
-  );
-}
-
 describe("the end of a press", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("keeps what the pen drew when the capture goes just before the button is released", async () => {
     const { opened, host, pointer } = page([], { drawing: () => "pen" });
     pointer("pointerdown", 200, 200);
     pointer("pointermove", 300, 250);
     await nextFrame();
-    captureLost(host, 300, 250, 0);
+    captureLost(host, { clientX: 300, clientY: 250, buttons: 0 });
     pointer("pointerup", 300, 250);
     expect(strokes(opened)).toHaveLength(1);
   });
@@ -1567,7 +1477,7 @@ describe("the end of a press", () => {
     pointer("pointerdown", 150, 50);
     pointer("pointermove", 50, 50);
     await nextFrame();
-    captureLost(host, 50, 50, 0);
+    captureLost(host, { clientX: 50, clientY: 50, buttons: 0 });
     pointer("pointerup", 50, 50);
     expect(opened.board.elements).toEqual({});
   });
@@ -1578,7 +1488,7 @@ describe("the end of a press", () => {
     pointer("pointerdown", 150, 50);
     pointer("pointermove", 50, 50);
     await nextFrame();
-    captureLost(host, 50, 50, 1);
+    captureLost(host, { clientX: 50, clientY: 50, buttons: 1 });
     pointer("pointerup", 50, 50);
     expect(Object.keys(opened.board.elements)).toEqual([STICKY]);
     expect(editing.selection()).toEqual([STICKY]);
@@ -1589,7 +1499,7 @@ describe("the end of a press", () => {
     pointer("pointerdown", 200, 200);
     pointer("pointermove", 300, 250);
     await nextFrame();
-    captureLost(host, 300, 250, 1);
+    captureLost(host, { clientX: 300, clientY: 250, buttons: 1 });
     pointer("pointerup", 300, 250);
     expect(strokes(opened)).toEqual([]);
   });
@@ -1614,8 +1524,6 @@ describe("the end of a press", () => {
 });
 
 describe("a second finger", () => {
-  afterEach(() => document.body.replaceChildren());
-
   it("takes back what the first one moved", async () => {
     const { editing, pointer, at } = page();
     pointer("pointerdown", 50, 50, { finger: 1 });
@@ -1651,16 +1559,13 @@ describe("a second finger", () => {
     pointer("pointerdown", 50, 50, { finger: 1 });
     pointer("pointermove", 90, 70, { finger: 1 });
     await nextFrame();
-    host.querySelector(".group-title.offered")!.dispatchEvent(
-      new PointerEvent("pointerdown", {
-        clientX: 310,
-        clientY: 290,
-        button: 0,
-        pointerId: 2,
-        pointerType: "touch",
-        bubbles: true,
-      }),
-    );
+    pointerOn(host.querySelector(".group-title.offered")!, "pointerdown", {
+      clientX: 310,
+      clientY: 290,
+      button: 0,
+      pointerId: 2,
+      pointerType: "touch",
+    });
     expect(at()).toEqual({ x: 0, y: 0 });
   });
 
@@ -1713,16 +1618,13 @@ describe("a second finger", () => {
   it("leaves a stylus its stroke when two fingers land beside it", async () => {
     const { opened, host, pointer } = page([], { drawing: () => "pen" });
     const stylus = (type: string, clientX: number, clientY: number) =>
-      host.dispatchEvent(
-        new PointerEvent(type, {
-          clientX,
-          clientY,
-          button: 0,
-          pointerId: 9,
-          pointerType: "pen",
-          bubbles: true,
-        }),
-      );
+      pointerOn(host, type, {
+        clientX,
+        clientY,
+        button: 0,
+        pointerId: 9,
+        pointerType: "pen",
+      });
     stylus("pointerdown", 200, 200);
     pointer("pointerdown", 400, 300, { finger: 1 });
     pointer("pointerdown", 420, 320, { finger: 2 });
@@ -1743,7 +1645,7 @@ describe("a second finger", () => {
     expect(editing.busy()).toBe(true);
     pointer("pointerup", 350, 150, { finger: 1 });
     pointer("pointerup", 100, 300, { finger: 2 });
-    key("keydown", { key: "Enter" });
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
   });
 
@@ -1755,7 +1657,7 @@ describe("a second finger", () => {
     pointer("pointerup", 100, 300, { finger: 1 });
     pointer("pointerup", 150, 300, { finger: 2 });
     expect(editing.cropping()).toBe(IMAGE);
-    key("keydown", { key: "Enter" });
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 0, y: 0, width: 200, height: 180 });
     editing.undo();
     expect(cropOf(opened)?.crop).toBeFalsy();
@@ -1781,7 +1683,7 @@ describe("a second finger", () => {
     pointer("pointerdown", corner.x, corner.y);
     pointer("pointermove", corner.x - 40, corner.y - 40);
     pointer("pointerup", corner.x - 40, corner.y - 40);
-    key("keydown", { key: "Enter" });
+    press({ key: "Enter" });
     expect(cropOf(opened)?.crop).toEqual({ x: 100, y: 0, width: 130, height: 80 });
     editing.undo();
     expect(cropOf(opened)?.crop).toEqual(kept);
@@ -1833,8 +1735,6 @@ describe("a second finger", () => {
 });
 
 describe("a group's panel", () => {
-  afterEach(() => document.body.replaceChildren());
-
   const OTHER = "b".repeat(32);
   const GROUP = "e".repeat(32);
 
@@ -1874,30 +1774,22 @@ describe("a group's panel", () => {
     const title = host.appendChild(document.createElement("div"));
     title.className = "group-title";
     title.dataset.group = GROUP;
-    const at = { clientX: 50, clientY: -30, button: 0, pointerId: 1, bubbles: true };
+    const at = { clientX: 50, clientY: -30, button: 0 };
     for (const type of ["pointerdown", "pointerup"]) {
-      title.dispatchEvent(new PointerEvent(type, at));
+      pointerOn(title, type, at);
     }
     expect(editing.selection()).toEqual([GROUP]);
-    title.dispatchEvent(new PointerEvent("pointerdown", at));
-    host.dispatchEvent(new PointerEvent("pointerup", at));
+    pointerOn(title, "pointerdown", at);
+    pointerOn(host, "pointerup", at);
     host.dispatchEvent(new MouseEvent("dblclick", at));
     expect(hooks.retitle).toHaveBeenCalledExactlyOnceWith(GROUP);
     expect(editing.entered()).toBeUndefined();
   });
 
   it("goes inside on a double-click on one of its elements, rather than zoom to it", () => {
-    const { editing, host, viewport, pointer } = framed();
-    Object.defineProperties(host, {
-      clientWidth: { value: 600 },
-      clientHeight: { value: 400 },
-    });
-    for (const type of ["pointerdown", "pointerup", "pointerdown", "pointerup"]) {
-      pointer(type, 50, 50);
-    }
-    host.dispatchEvent(
-      new MouseEvent("dblclick", { clientX: 50, clientY: 50, button: 0, bubbles: true }),
-    );
+    const { editing, host, viewport, twice } = framed();
+    sized(host, 600, 400);
+    twice(50, 50);
     expect(editing.entered()).toBe(GROUP);
     expect(editing.selection()).toEqual([STICKY]);
     expect(viewport.camera()).toEqual({ x: 0, y: 0, zoom: 1 });
@@ -1910,12 +1802,12 @@ describe("a group's panel", () => {
     title.className = "group-title";
     title.dataset.group = GROUP;
     // Within the turn grip's reach of the panel's top-left corner, at (-10, -10).
-    const press = { clientX: -5, clientY: -16, button: 0, pointerId: 1, bubbles: true };
-    const to = { ...press, clientX: 15, clientY: 4 };
-    title.dispatchEvent(new PointerEvent("pointerdown", press));
-    host.dispatchEvent(new PointerEvent("pointermove", to));
+    const from = { clientX: -5, clientY: -16, button: 0 };
+    const to = { ...from, clientX: 15, clientY: 4 };
+    pointerOn(title, "pointerdown", from);
+    pointerOn(host, "pointermove", to);
     await nextFrame();
-    host.dispatchEvent(new PointerEvent("pointerup", to));
+    pointerOn(host, "pointerup", to);
     expect(at()).toEqual({ x: 20, y: 20 });
   });
 
@@ -1937,8 +1829,6 @@ function locked(opened: ReturnType<typeof page>["opened"], id: string) {
 }
 
 describe("locking", () => {
-  afterEach(() => document.body.replaceChildren());
-
   const OTHER = "b".repeat(32);
   const GROUP = "e".repeat(32);
   const BACKDROP = "f".repeat(32);
@@ -2045,8 +1935,6 @@ describe("locking", () => {
 });
 
 describe("hiding annotations", () => {
-  afterEach(() => document.body.replaceChildren());
-
   const OTHER = "b".repeat(32);
   const GROUP = "e".repeat(32);
   /** Under the sticky notes, which cover its top-left corner. */
@@ -2201,8 +2089,6 @@ function shaped(shape: "rectangle" | "ellipse", y: number): Kind {
 }
 
 describe("inverting and matching the selection", () => {
-  afterEach(() => document.body.replaceChildren());
-
   const OTHER = "b".repeat(32);
   const GROUP = "e".repeat(32);
   const apart: Kind = { ...sticky, frame: { x: 0, y: 300, width: 100, height: 100 } };

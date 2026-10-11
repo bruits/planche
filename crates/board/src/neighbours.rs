@@ -761,21 +761,8 @@ fn swap_point(point: Point) -> Point {
 mod tests {
     use super::*;
     use crate::Annotations::{Hidden, Shown};
-    use crate::tests::{arrow, board, element, id, stroke};
-    use crate::{AssetId, ElementKind, ImageEdits, Size};
-
-    fn area(x: f64, y: f64, width: f64, height: f64) -> Rect {
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    fn at(x: f64, y: f64) -> Point {
-        Point { x, y }
-    }
+    use crate::ElementKind;
+    use crate::tests::{area, board, element, id, image, near, on, point, stroke, stuck, turned};
 
     fn scaling(area: Rect, origin: Point, factor: f64, along: Option<Axis>) -> Scale {
         Scale {
@@ -788,29 +775,7 @@ mod tests {
     }
 
     /// As much of the board as any test reaches.
-    const WINDOW: Rect = Rect {
-        x: -1000.0,
-        y: -1000.0,
-        width: 3000.0,
-        height: 3000.0,
-    };
-
-    fn image(x: f64, y: f64, width: f64, height: f64, rotation: f64) -> ElementKind {
-        ElementKind::Image {
-            asset: AssetId::of(b""),
-            natural_size: Size {
-                width: 1,
-                height: 1,
-            },
-            frame: area(x, y, width, height),
-            rotation,
-            edits: ImageEdits::default(),
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        }
-    }
+    const WINDOW: Rect = area(-1000.0, -1000.0, 3000.0, 3000.0);
 
     #[test]
     fn each_side_and_middle_lands_on_each_of_a_neighbour_within_reach() {
@@ -901,7 +866,7 @@ mod tests {
         let pull = snap_to_neighbours(moving, &neighbour, WINDOW, 1.0, true);
         assert_eq!((pull.x, pull.y), (Some(7.0), Some(-3.0)));
         // From where it lands, the grid's pull included.
-        assert_eq!(pull.bridges, [(at(303.0, 200.0), at(303.0, 100.0))]);
+        assert_eq!(pull.bridges, [(point(303.0, 200.0), point(303.0, 100.0))]);
         let unpulled = snap_to_neighbours(moving, &neighbour, WINDOW, 1.0, false);
         assert_eq!((unpulled.x, unpulled.y), (Some(7.0), None));
     }
@@ -973,8 +938,8 @@ mod tests {
         assert_eq!(
             pull.gaps,
             [
-                (at(100.0, 50.0), at(135.0, 50.0)),
-                (at(165.0, 50.0), at(200.0, 50.0))
+                (point(100.0, 50.0), point(135.0, 50.0)),
+                (point(165.0, 50.0), point(200.0, 50.0))
             ]
         );
     }
@@ -1006,13 +971,13 @@ mod tests {
         // 40 after the second is also the third's left, and nothing pulls down from 2 away.
         let pull = snap_to_neighbours(area(241.0, 25.0, 30.0, 30.0), &row, WINDOW, 4.0, false);
         assert_eq!((pull.x, pull.y), (Some(-1.0), None));
-        assert_eq!(pull.bridges, [(at(240.0, 500.0), at(240.0, 55.0))]);
+        assert_eq!(pull.bridges, [(point(240.0, 500.0), point(240.0, 55.0))]);
         // Which also leaves it a gap away, as it shows.
         assert_eq!(
             pull.gaps,
             [
-                (at(100.0, 50.0), at(140.0, 50.0)),
-                (at(200.0, 40.0), at(240.0, 40.0))
+                (point(100.0, 50.0), point(140.0, 50.0)),
+                (point(200.0, 40.0), point(240.0, 40.0))
             ]
         );
     }
@@ -1024,8 +989,8 @@ mod tests {
         assert_eq!(
             pull.gaps,
             [
-                (at(100.0, 60.0), at(140.0, 60.0)),
-                (at(200.0, 65.0), at(240.0, 65.0))
+                (point(100.0, 60.0), point(140.0, 60.0)),
+                (point(200.0, 65.0), point(240.0, 65.0))
             ]
         );
     }
@@ -1044,12 +1009,12 @@ mod tests {
         assert_eq!(
             pull.bridges,
             [
-                (at(100.0, 50.0), at(100.0, 120.0)),
-                (at(100.0, 300.0), at(100.0, 170.0)),
-                (at(125.0, 50.0), at(125.0, 120.0)),
-                (at(125.0, 300.0), at(125.0, 170.0)),
-                (at(150.0, 50.0), at(150.0, 120.0)),
-                (at(150.0, 300.0), at(150.0, 170.0)),
+                (point(100.0, 50.0), point(100.0, 120.0)),
+                (point(100.0, 300.0), point(100.0, 170.0)),
+                (point(125.0, 50.0), point(125.0, 120.0)),
+                (point(125.0, 300.0), point(125.0, 170.0)),
+                (point(150.0, 50.0), point(150.0, 120.0)),
+                (point(150.0, 300.0), point(150.0, 170.0)),
             ]
         );
     }
@@ -1073,15 +1038,15 @@ mod tests {
         let neighbours = [area(300.0, 100.0, 50.0, 50.0)];
         let pull = snap_to_neighbours(area(0.0, 96.0, 20.0, 20.0), &neighbours, WINDOW, 1.0, false);
         assert_eq!((pull.x, pull.y), (None, Some(4.0)));
-        assert_eq!(pull.bridges, [(at(300.0, 100.0), at(20.0, 100.0))]);
+        assert_eq!(pull.bridges, [(point(300.0, 100.0), point(20.0, 100.0))]);
         let column = [area(0.0, 0.0, 100.0, 100.0), area(20.0, 140.0, 100.0, 60.0)];
         let pull = snap_to_neighbours(area(50.0, 243.0, 30.0, 30.0), &column, WINDOW, 1.0, false);
         assert_eq!(pull.y, Some(-3.0));
         assert_eq!(
             pull.gaps,
             [
-                (at(60.0, 100.0), at(60.0, 140.0)),
-                (at(65.0, 200.0), at(65.0, 240.0))
+                (point(60.0, 100.0), point(60.0, 140.0)),
+                (point(65.0, 200.0), point(65.0, 240.0))
             ]
         );
     }
@@ -1091,12 +1056,12 @@ mod tests {
         let square = area(0.0, 0.0, 100.0, 100.0);
         let neighbour = [area(250.0, 300.0, 50.0, 50.0)];
         let scaled = |factor| {
-            let scale = scaling(square, at(0.0, 0.0), factor, None);
+            let scale = scaling(square, point(0.0, 0.0), factor, None);
             snap_scale_to_neighbours(scale, &neighbour, WINDOW, 1.0)
         };
         let near = scaled(2.47);
         assert_eq!(near.factor, Some(2.5));
-        assert_eq!(near.bridges, [(at(250.0, 300.0), at(250.0, 250.0))]);
+        assert_eq!(near.bridges, [(point(250.0, 300.0), point(250.0, 250.0))]);
         assert!(near.gaps.is_empty());
         // The corner would move 12 to get there.
         assert_eq!(scaled(2.62), Scaled::default());
@@ -1105,7 +1070,7 @@ mod tests {
     #[test]
     fn scaling_around_its_middle_lands_the_far_side_too() {
         let neighbour = [area(-100.0, 300.0, 40.0, 40.0)];
-        let scale = scaling(area(0.0, 0.0, 100.0, 100.0), at(50.0, 50.0), 2.18, None);
+        let scale = scaling(area(0.0, 0.0, 100.0, 100.0), point(50.0, 50.0), 2.18, None);
         let scaled = snap_scale_to_neighbours(scale, &neighbour, WINDOW, 1.0);
         assert_eq!(scaled.factor, Some(2.2));
     }
@@ -1117,7 +1082,7 @@ mod tests {
         // under 20.
         let scale = Scale {
             least: 0.2,
-            ..scaling(area(0.0, 0.0, 100.0, 100.0), at(0.0, 0.0), 0.19, None)
+            ..scaling(area(0.0, 0.0, 100.0, 100.0), point(0.0, 0.0), 0.19, None)
         };
         let scaled = snap_scale_to_neighbours(scale, &neighbours, WINDOW, 1.0);
         assert_eq!(scaled.factor, Some(0.24));
@@ -1131,17 +1096,17 @@ mod tests {
             area(400.0, 74.0, 10.0, 10.0),
         ];
         let scaled = |along| {
-            let scale = scaling(stretching, at(0.0, 0.0), 1.47, along);
+            let scale = scaling(stretching, point(0.0, 0.0), 1.47, along);
             snap_scale_to_neighbours(scale, &neighbours, WINDOW, 1.0)
         };
         // Down, its bottom reaches the second's top sooner.
         assert_eq!(scaled(None).factor, Some(1.48));
         let across = scaled(Some(Axis::Horizontal));
         assert_eq!(across.factor, Some(1.5));
-        assert_eq!(across.bridges, [(at(150.0, 200.0), at(150.0, 50.0))]);
+        assert_eq!(across.bridges, [(point(150.0, 200.0), point(150.0, 50.0))]);
         let down = scaled(Some(Axis::Vertical));
         assert_eq!(down.factor, Some(1.48));
-        assert_eq!(down.bridges, [(at(400.0, 74.0), at(100.0, 74.0))]);
+        assert_eq!(down.bridges, [(point(400.0, 74.0), point(100.0, 74.0))]);
     }
 
     #[test]
@@ -1152,15 +1117,15 @@ mod tests {
             area(250.0, 0.0, 100.0, 100.0),
         ];
         let along = Some(Axis::Horizontal);
-        let scale = scaling(area(0.0, 0.0, 100.0, 100.0), at(0.0, 0.0), 2.07, along);
+        let scale = scaling(area(0.0, 0.0, 100.0, 100.0), point(0.0, 0.0), 2.07, along);
         let scaled = snap_scale_to_neighbours(scale, &row, WINDOW, 1.0);
         assert_eq!(scaled.factor, Some(2.1));
         assert_eq!(
             scaled.gaps,
             [
-                (at(-140.0, 50.0), at(-100.0, 50.0)),
-                (at(-40.0, 50.0), at(0.0, 50.0)),
-                (at(210.0, 50.0), at(250.0, 50.0)),
+                (point(-140.0, 50.0), point(-100.0, 50.0)),
+                (point(-40.0, 50.0), point(0.0, 50.0)),
+                (point(210.0, 50.0), point(250.0, 50.0)),
             ]
         );
     }
@@ -1174,14 +1139,14 @@ mod tests {
         ];
         // Around its right side, its left side moving.
         let along = Some(Axis::Horizontal);
-        let scale = scaling(area(0.0, 0.0, 100.0, 100.0), at(100.0, 0.0), 2.63, along);
+        let scale = scaling(area(0.0, 0.0, 100.0, 100.0), point(100.0, 0.0), 2.63, along);
         let scaled = snap_scale_to_neighbours(scale, &row, WINDOW, 1.0);
         assert_eq!(scaled.factor, Some(2.6));
         assert_eq!(
             scaled.gaps,
             [
-                (at(-200.0, 50.0), at(-160.0, 50.0)),
-                (at(260.0, 50.0), at(300.0, 50.0))
+                (point(-200.0, 50.0), point(-160.0, 50.0)),
+                (point(260.0, 50.0), point(300.0, 50.0))
             ]
         );
     }
@@ -1196,7 +1161,7 @@ mod tests {
         ];
         // 3 short of 40 before the third, and 3 short of the fourth's left side.
         let along = Some(Axis::Horizontal);
-        let scale = scaling(area(0.0, 0.0, 100.0, 100.0), at(0.0, 0.0), 2.1, along);
+        let scale = scaling(area(0.0, 0.0, 100.0, 100.0), point(0.0, 0.0), 2.1, along);
         let scaled = snap_scale_to_neighbours(scale, &neighbours, WINDOW, 1.0);
         assert_eq!(scaled.factor, Some(2.13));
     }
@@ -1211,7 +1176,7 @@ mod tests {
         // Around its middle, its right side would land 40 before the second, but its left side
         // would cover the first.
         let along = Some(Axis::Horizontal);
-        let scale = scaling(area(40.0, 0.0, 20.0, 100.0), at(50.0, 50.0), 20.8, along);
+        let scale = scaling(area(40.0, 0.0, 20.0, 100.0), point(50.0, 50.0), 20.8, along);
         let scaled = snap_scale_to_neighbours(scale, &row, WINDOW, 1.0);
         assert_eq!(scaled, Scaled::default());
     }
@@ -1226,10 +1191,10 @@ mod tests {
             area(250.0, 300.0, 50.0, 50.0),
         ];
         let along = Some(Axis::Horizontal);
-        let scale = scaling(area(0.0, 0.0, 100.0, 100.0), at(0.0, 0.0), 2.47, along);
+        let scale = scaling(area(0.0, 0.0, 100.0, 100.0), point(0.0, 0.0), 2.47, along);
         let scaled = snap_scale_to_neighbours(scale, &neighbours, WINDOW, 1.0);
         assert_eq!(scaled.factor, Some(2.5));
-        assert_eq!(scaled.bridges, [(at(250.0, 300.0), at(250.0, 100.0))]);
+        assert_eq!(scaled.bridges, [(point(250.0, 300.0), point(250.0, 100.0))]);
         assert!(scaled.gaps.is_empty());
     }
 
@@ -1237,15 +1202,21 @@ mod tests {
     fn both_corners_of_what_is_drawn_land_on_a_neighbours_lines() {
         let neighbour = [area(100.0, 300.0, 50.0, 50.0)];
         let drawn = |from, to| snap_drawn_to_neighbours(from, to, &neighbour, WINDOW, 1.0, false);
-        let right = drawn(at(97.0, 0.0), at(147.0, 40.0));
-        assert_eq!((right.from, right.to), (at(100.0, 0.0), at(150.0, 40.0)));
+        let right = drawn(point(97.0, 0.0), point(147.0, 40.0));
+        assert_eq!(
+            (right.from, right.to),
+            (point(100.0, 0.0), point(150.0, 40.0))
+        );
         let both = [
-            (at(100.0, 300.0), at(100.0, 40.0)),
-            (at(150.0, 300.0), at(150.0, 40.0)),
+            (point(100.0, 300.0), point(100.0, 40.0)),
+            (point(150.0, 300.0), point(150.0, 40.0)),
         ];
         assert_eq!(right.bridges, both);
-        let left = drawn(at(150.0, 0.0), at(103.0, 40.0));
-        assert_eq!((left.from, left.to), (at(150.0, 0.0), at(100.0, 40.0)));
+        let left = drawn(point(150.0, 0.0), point(103.0, 40.0));
+        assert_eq!(
+            (left.from, left.to),
+            (point(150.0, 0.0), point(100.0, 40.0))
+        );
         assert_eq!(left.bridges, both);
     }
 
@@ -1256,15 +1227,21 @@ mod tests {
             area(-100.0, 0.0, 60.0, 100.0),
             area(250.0, 0.0, 100.0, 100.0),
         ];
-        let drawn =
-            snap_drawn_to_neighbours(at(0.0, 0.0), at(207.0, 100.0), &row, WINDOW, 1.0, false);
-        assert_eq!(drawn.to, at(210.0, 100.0));
+        let drawn = snap_drawn_to_neighbours(
+            point(0.0, 0.0),
+            point(207.0, 100.0),
+            &row,
+            WINDOW,
+            1.0,
+            false,
+        );
+        assert_eq!(drawn.to, point(210.0, 100.0));
         assert_eq!(
             drawn.gaps,
             [
-                (at(-140.0, 50.0), at(-100.0, 50.0)),
-                (at(-40.0, 50.0), at(0.0, 50.0)),
-                (at(210.0, 50.0), at(250.0, 50.0)),
+                (point(-140.0, 50.0), point(-100.0, 50.0)),
+                (point(-40.0, 50.0), point(0.0, 50.0)),
+                (point(210.0, 50.0), point(250.0, 50.0)),
             ]
         );
     }
@@ -1272,8 +1249,11 @@ mod tests {
     #[test]
     fn what_is_drawn_lands_on_the_grid_where_no_neighbour_pulls() {
         let drawn =
-            snap_drawn_to_neighbours(at(3.0, 4.0), at(117.0, 121.0), &[], WINDOW, 1.0, true);
-        assert_eq!((drawn.from, drawn.to), (at(0.0, 0.0), at(120.0, 120.0)));
+            snap_drawn_to_neighbours(point(3.0, 4.0), point(117.0, 121.0), &[], WINDOW, 1.0, true);
+        assert_eq!(
+            (drawn.from, drawn.to),
+            (point(0.0, 0.0), point(120.0, 120.0))
+        );
         assert!(drawn.bridges.is_empty() && drawn.gaps.is_empty());
     }
 
@@ -1282,16 +1262,27 @@ mod tests {
         // Below, the first pulls it across, and beside it, the second down.
         let neighbours = [area(100.0, 300.0, 50.0, 50.0), area(300.0, 0.0, 50.0, 80.0)];
         let drawn = snap_drawn_to_neighbours(
-            at(97.0, 3.0),
-            at(147.0, 77.0),
+            point(97.0, 3.0),
+            point(147.0, 77.0),
             &neighbours,
             WINDOW,
             1.0,
             false,
         );
-        assert_eq!((drawn.from, drawn.to), (at(100.0, 0.0), at(150.0, 80.0)));
-        assert!(drawn.bridges.contains(&(at(300.0, 0.0), at(150.0, 0.0))));
-        assert!(drawn.bridges.contains(&(at(300.0, 80.0), at(150.0, 80.0))));
+        assert_eq!(
+            (drawn.from, drawn.to),
+            (point(100.0, 0.0), point(150.0, 80.0))
+        );
+        assert!(
+            drawn
+                .bridges
+                .contains(&(point(300.0, 0.0), point(150.0, 0.0)))
+        );
+        assert!(
+            drawn
+                .bridges
+                .contains(&(point(300.0, 80.0), point(150.0, 80.0)))
+        );
     }
 
     #[test]
@@ -1302,8 +1293,8 @@ mod tests {
             area(300.0, 0.0, 100.0, 100.0),
         ];
         let drawn = snap_drawn_to_neighbours(
-            at(296.0, 50.0),
-            at(296.0, 50.0),
+            point(296.0, 50.0),
+            point(296.0, 50.0),
             &neighbours,
             WINDOW,
             1.0,
@@ -1318,8 +1309,8 @@ mod tests {
         // the line it started on is nearer.
         let neighbour = [area(606.0, 400.0, 100.0, 100.0)];
         let drawn = snap_drawn_to_neighbours(
-            at(570.0, 0.0),
-            at(612.0, 0.0),
+            point(570.0, 0.0),
+            point(612.0, 0.0),
             &neighbour,
             WINDOW,
             0.2,
@@ -1330,30 +1321,31 @@ mod tests {
 
     #[test]
     fn what_is_drawn_thin_keeps_its_size_with_nothing_beside_it() {
-        let alone = snap_drawn_to_neighbours(at(0.0, 0.0), at(300.0, 6.0), &[], WINDOW, 1.0, false);
-        assert_eq!(alone.to, at(300.0, 6.0));
+        let alone =
+            snap_drawn_to_neighbours(point(0.0, 0.0), point(300.0, 6.0), &[], WINDOW, 1.0, false);
+        assert_eq!(alone.to, point(300.0, 6.0));
         // Out of the reach of the grid's lines, which pull from 8 away at a zoom of 1.
         let gridded =
-            snap_drawn_to_neighbours(at(3.0, 4.0), at(117.0, 11.0), &[], WINDOW, 1.0, true);
-        assert_eq!((gridded.from, gridded.to), (at(0.0, 0.0), at(120.0, 11.0)));
+            snap_drawn_to_neighbours(point(3.0, 4.0), point(117.0, 11.0), &[], WINDOW, 1.0, true);
+        assert_eq!(
+            (gridded.from, gridded.to),
+            (point(0.0, 0.0), point(120.0, 11.0))
+        );
     }
 
     #[test]
     fn neighbours_are_what_stays_put_at_the_level_of_the_selection() {
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 100.0, 50.0, 0.0))),
-            (2, element(None, "a1", image(200.0, 0.0, 100.0, 50.0, 0.0))),
+            (1, element(None, "a0", image(0.0, 0.0, 100.0, 50.0))),
+            (2, element(None, "a1", image(200.0, 0.0, 100.0, 50.0))),
             // Turned a quarter, its upright box is as tall as it is wide.
-            (3, element(None, "a2", image(400.0, 0.0, 100.0, 50.0, 90.0))),
+            (
+                3,
+                element(None, "a2", turned(image(400.0, 0.0, 100.0, 50.0), 90.0)),
+            ),
             (4, element(None, "a3", ElementKind::group())),
-            (
-                5,
-                element(Some(4), "a0", image(0.0, 300.0, 10.0, 10.0, 0.0)),
-            ),
-            (
-                6,
-                element(Some(4), "a1", image(90.0, 390.0, 10.0, 10.0, 0.0)),
-            ),
+            (5, element(Some(4), "a0", image(0.0, 300.0, 10.0, 10.0))),
+            (6, element(Some(4), "a1", image(90.0, 390.0, 10.0, 10.0))),
             (7, element(None, "a4", ElementKind::group())),
         ]);
         assert_areas(
@@ -1373,24 +1365,16 @@ mod tests {
 
     #[test]
     fn what_follows_a_moved_element_is_no_neighbour() {
-        let mut stuck = stroke();
-        if let ElementKind::Stroke { target, .. } = &mut stuck {
-            *target = Some(id(1));
-        }
-        let mut tied = arrow();
-        if let ElementKind::Arrow { from_target, .. } = &mut tied {
-            *from_target = Some(id(2));
-        }
         let board = board([
-            (1, element(None, "a0", image(0.0, 0.0, 100.0, 50.0, 0.0))),
-            (2, element(None, "a1", stuck)),
-            (3, element(None, "a2", tied)),
-            (4, element(None, "a3", ElementKind::group())),
+            (1, element(None, "a0", image(0.0, 0.0, 100.0, 50.0))),
+            (2, element(None, "a1", on(stroke(), 1))),
             (
-                5,
-                element(Some(4), "a0", image(500.0, 0.0, 10.0, 10.0, 0.0)),
+                3,
+                element(None, "a2", stuck((0.0, 0.0), Some(2), (0.0, 0.0), None)),
             ),
-            (6, element(None, "a4", image(900.0, 0.0, 10.0, 10.0, 0.0))),
+            (4, element(None, "a3", ElementKind::group())),
+            (5, element(Some(4), "a0", image(500.0, 0.0, 10.0, 10.0))),
+            (6, element(None, "a4", image(900.0, 0.0, 10.0, 10.0))),
         ]);
         assert_eq!(board.neighbours(&[id(1)], None, Shown).len(), 2);
         assert_eq!(
@@ -1402,8 +1386,8 @@ mod tests {
     #[test]
     fn the_annotations_hidden_are_no_neighbours() {
         let board = board([
-            (1, element(None, "a0", image(200.0, 0.0, 100.0, 50.0, 0.0))),
-            (2, element(None, "a1", image(400.0, 0.0, 100.0, 50.0, 0.0))),
+            (1, element(None, "a0", image(200.0, 0.0, 100.0, 50.0))),
+            (2, element(None, "a1", image(400.0, 0.0, 100.0, 50.0))),
             (3, element(None, "a2", stroke())),
         ]);
         assert_eq!(board.neighbours(&[id(1)], None, Shown).len(), 2);
@@ -1416,11 +1400,6 @@ mod tests {
     /// In any order, and as near as turning leaves them.
     fn assert_areas(mut found: Vec<Rect>, expected: &[Rect]) {
         found.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
-        let near = |a: &Rect, b: &Rect| {
-            [a.x - b.x, a.y - b.y, a.width - b.width, a.height - b.height]
-                .iter()
-                .all(|off| off.abs() < 1e-9)
-        };
         assert!(
             found.len() == expected.len() && found.iter().zip(expected).all(|(a, b)| near(a, b)),
             "{found:?} is not {expected:?}"

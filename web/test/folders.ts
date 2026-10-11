@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import type { Bytes } from "../src/core.js";
-import type { Home, Session } from "../src/platform.js";
+import type { Home, Session, Sink, Slices } from "../src/platform.js";
 
 export const SAMPLES = join(import.meta.dirname, "../../samples");
 
@@ -24,6 +24,8 @@ export function sample(name: string): Map<string, Bytes> {
   }
   return files;
 }
+
+export const CONFLICTED = new TextEncoder().encode("<<<<<<< ours\n");
 
 /** What a clone made without Git LFS holds in place of `bytes`. */
 export function lfsPointer(bytes: Bytes): string {
@@ -99,6 +101,42 @@ export function memoryHome(name: string, files = new Map<string, Bytes>()) {
     stamp(path);
   };
   return { home, files, written, removed, overwrite };
+}
+
+export function demoHome() {
+  return memoryHome("demo", sample("demo"));
+}
+
+export function demoZip(): Bytes {
+  return new Uint8Array(readFileSync(join(SAMPLES, "demo.zip")));
+}
+
+export function slicesOf(name: string, bytes: Bytes): Slices {
+  return { name, size: bytes.length, read: async (start, end) => bytes.slice(start, end) };
+}
+
+export function memorySink(name = "demo.zip") {
+  const parts: Bytes[] = [];
+  let appended = 0;
+  let state: "open" | "closed" | "discarded" = "open";
+  const sink: Sink = {
+    name,
+    append: async (bytes) => {
+      appended += 1;
+      parts.push(bytes.slice());
+    },
+    close: async () => void (state = "closed"),
+    discard: async () => {
+      parts.length = 0;
+      state = "discarded";
+    },
+  };
+  return {
+    sink,
+    bytes: (): Bytes => new Uint8Array(Buffer.concat(parts)),
+    appended: () => appended,
+    state: () => state,
+  };
 }
 
 /** The app's own folder for a board, holding `files`. */

@@ -128,34 +128,10 @@ fn moved(id: ElementId, by: Point) -> (ElementId, Point) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{arrow, board, element, id};
-    use crate::{AssetId, Colour, Editor, ElementKind, Error, ImageEdits, Size, Text};
-
-    fn image(x: f64, y: f64, width: f64, height: f64) -> ElementKind {
-        turned(x, y, width, height, 0.0)
-    }
-
-    fn turned(x: f64, y: f64, width: f64, height: f64, rotation: f64) -> ElementKind {
-        ElementKind::Image {
-            asset: AssetId::of(b""),
-            natural_size: Size {
-                width: 1,
-                height: 1,
-            },
-            frame: Rect {
-                x,
-                y,
-                width,
-                height,
-            },
-            rotation,
-            edits: ImageEdits::default(),
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        }
-    }
+    use crate::tests::{
+        assert_at, board, comment, element, id, ids, image, note, on, position, stuck, turned,
+    };
+    use crate::{Editor, ElementKind, Error};
 
     fn editor(kinds: impl IntoIterator<Item = (u128, Option<u128>, ElementKind)>) -> Editor {
         let elements = kinds
@@ -165,29 +141,8 @@ mod tests {
         Editor::new(board(elements))
     }
 
-    fn ids(bits: &[u128]) -> Vec<ElementId> {
-        bits.iter().copied().map(id).collect()
-    }
-
     fn kind(editor: &Editor, bits: u128) -> &ElementKind {
         &editor.board().elements[&id(bits)].kind
-    }
-
-    fn at(editor: &Editor, bits: u128) -> (f64, f64) {
-        match kind(editor, bits) {
-            ElementKind::Image { frame, .. } | ElementKind::Note { frame, .. } => {
-                (frame.x, frame.y)
-            }
-            ElementKind::Comment { at, .. } => (at.x, at.y),
-            other => panic!("no frame: {other:?}"),
-        }
-    }
-
-    fn assert_near(found: (f64, f64), expected: (f64, f64)) {
-        assert!(
-            (found.0 - expected.0).abs() < 1e-9 && (found.1 - expected.1).abs() < 1e-9,
-            "{found:?} is not {expected:?}"
-        );
     }
 
     #[test]
@@ -209,9 +164,9 @@ mod tests {
         ];
         for (to, corners) in expected {
             let mut editor = three();
-            editor.align(&ids(&[1, 2, 3]), to).unwrap();
+            editor.align(&ids([1, 2, 3]), to).unwrap();
             for (bits, corner) in [1, 2, 3].into_iter().zip(corners) {
-                assert_near(at(&editor, bits), corner);
+                assert_at(position(&editor, bits), corner.0, corner.1);
             }
         }
     }
@@ -220,61 +175,33 @@ mod tests {
     fn a_turned_image_lines_up_by_its_upright_box_a_group_whole_and_a_comment_by_its_pin() {
         let mut editor = editor([
             // Upright, it covers 10 to 30 across.
-            (1, None, turned(0.0, 0.0, 40.0, 20.0, 90.0)),
+            (1, None, turned(image(0.0, 0.0, 40.0, 20.0), 90.0)),
             (2, None, ElementKind::group()),
             (3, Some(2), image(100.0, 0.0, 10.0, 10.0)),
             (4, Some(2), image(120.0, 0.0, 10.0, 10.0)),
-            (
-                5,
-                None,
-                ElementKind::Comment {
-                    at: Point { x: 60.0, y: 0.0 },
-                    text: String::new(),
-                    target: None,
-                },
-            ),
+            (5, None, comment(60.0, 0.0)),
         ]);
-        let touched = editor.align(&ids(&[1, 2, 5]), Alignment::Left).unwrap();
-        assert_eq!(touched, ids(&[3, 4, 5]));
-        assert_near(at(&editor, 3), (10.0, 0.0));
-        assert_near(at(&editor, 4), (30.0, 0.0));
-        assert_near(at(&editor, 5), (10.0, 0.0));
+        let touched = editor.align(&ids([1, 2, 5]), Alignment::Left).unwrap();
+        assert_eq!(touched, ids([3, 4, 5]));
+        assert_at(position(&editor, 3), 10.0, 0.0);
+        assert_at(position(&editor, 4), 30.0, 0.0);
+        assert_at(position(&editor, 5), 10.0, 0.0);
     }
 
     #[test]
     fn what_sticks_to_another_of_them_follows_it_and_counts_for_nothing() {
-        let note = ElementKind::Note {
-            frame: Rect {
-                x: 10.0,
-                y: 10.0,
-                width: 20.0,
-                height: 20.0,
-            },
-            rotation: 0.0,
-            text: Text::new("On it".to_owned(), 10.0),
-            target: Some(id(1)),
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        };
-        let mut pointing = arrow();
-        let [(from, from_target), (to, _)] = pointing.ends_mut().unwrap();
-        (*from, *from_target, *to) = (
-            Point { x: 50.0, y: 50.0 },
-            Some(id(1)),
-            Point { x: 300.0, y: 300.0 },
-        );
+        let note = on(note(10.0, 10.0, 20.0, 20.0), 1);
+        let pointing = stuck((50.0, 50.0), Some(1), (300.0, 300.0), None);
         let mut editor = editor([
             (1, None, image(0.0, 0.0, 100.0, 100.0)),
             (2, None, note),
             (3, None, image(200.0, 150.0, 50.0, 50.0)),
             (4, None, pointing),
         ]);
-        editor
-            .align(&ids(&[1, 2, 3, 4]), Alignment::Bottom)
-            .unwrap();
-        assert_near(at(&editor, 1), (0.0, 100.0));
-        assert_near(at(&editor, 2), (10.0, 110.0));
-        assert_near(at(&editor, 3), (200.0, 150.0));
+        editor.align(&ids([1, 2, 3, 4]), Alignment::Bottom).unwrap();
+        assert_at(position(&editor, 1), 0.0, 100.0);
+        assert_at(position(&editor, 2), 10.0, 110.0);
+        assert_at(position(&editor, 3), 200.0, 150.0);
         assert_eq!(kind(&editor, 2).target(), Some(id(1)));
         let ends = kind(&editor, 4).ends().unwrap();
         assert_eq!(
@@ -286,37 +213,31 @@ mod tests {
 
     #[test]
     fn an_end_moved_off_what_it_sticks_to_comes_free() {
-        let mut pointing = arrow();
-        let [(from, from_target), (to, _)] = pointing.ends_mut().unwrap();
-        (*from, *from_target, *to) = (
-            Point { x: 50.0, y: 50.0 },
-            Some(id(1)),
-            Point { x: 150.0, y: 50.0 },
-        );
+        let pointing = stuck((50.0, 50.0), Some(1), (150.0, 50.0), None);
         let mut editor = editor([
             (1, None, image(0.0, 0.0, 100.0, 100.0)),
             (2, None, pointing),
             (3, None, image(300.0, 0.0, 50.0, 50.0)),
         ]);
-        editor.align(&ids(&[2, 3]), Alignment::Right).unwrap();
+        editor.align(&ids([2, 3]), Alignment::Right).unwrap();
         let ends = kind(&editor, 2).ends().unwrap();
         assert_eq!(
             ends.map(|(point, target)| (point.x, target)),
             [(250.0, None), (350.0, None)]
         );
-        assert_near(at(&editor, 1), (0.0, 0.0));
+        assert_at(position(&editor, 1), 0.0, 0.0);
     }
 
     #[test]
     fn doing_it_again_changes_nothing_and_undoing_takes_it_all_back() {
         let mut editor = editor([
-            (1, None, turned(3.0, 7.0, 40.0, 20.0, 30.0)),
+            (1, None, turned(image(3.0, 7.0, 40.0, 20.0), 30.0)),
             (2, None, image(100.0, 0.0, 10.0, 10.0)),
             (3, None, image(51.0, 33.0, 10.0, 10.0)),
             (4, None, image(17.0, 90.0, 30.0, 10.0)),
         ]);
         let before = editor.board().clone();
-        let all = ids(&[1, 2, 3, 4]);
+        let all = ids([1, 2, 3, 4]);
         assert!(!editor.align(&all, Alignment::Centre).unwrap().is_empty());
         assert!(!editor.distribute(&all, Axis::Vertical).unwrap().is_empty());
         assert!(editor.align(&all, Alignment::Centre).unwrap().is_empty());
@@ -335,21 +256,21 @@ mod tests {
             (4, None, image(50.0, 9.0, 10.0, 10.0)),
         ]);
         across
-            .distribute(&ids(&[1, 2, 3, 4]), Axis::Horizontal)
+            .distribute(&ids([1, 2, 3, 4]), Axis::Horizontal)
             .unwrap();
         let gap = 50.0 / 3.0;
-        assert_near(at(&across, 1), (0.0, 0.0));
-        assert_near(at(&across, 2), (10.0 + gap, 3.0));
-        assert_near(at(&across, 4), (40.0 + 2.0 * gap, 9.0));
-        assert_near(at(&across, 3), (100.0, 0.0));
+        assert_at(position(&across, 1), 0.0, 0.0);
+        assert_at(position(&across, 2), 10.0 + gap, 3.0);
+        assert_at(position(&across, 4), 40.0 + 2.0 * gap, 9.0);
+        assert_at(position(&across, 3), 100.0, 0.0);
 
         let mut down = editor([
             (1, None, image(0.0, 0.0, 10.0, 10.0)),
             (2, None, image(5.0, 10.0, 10.0, 10.0)),
             (3, None, image(0.0, 100.0, 10.0, 10.0)),
         ]);
-        down.distribute(&ids(&[1, 2, 3]), Axis::Vertical).unwrap();
-        assert_near(at(&down, 2), (5.0, 50.0));
+        down.distribute(&ids([1, 2, 3]), Axis::Vertical).unwrap();
+        assert_at(position(&down, 2), 5.0, 50.0);
     }
 
     #[test]
@@ -360,11 +281,11 @@ mod tests {
             (3, None, image(100.0, 0.0, 20.0, 10.0)),
         ]);
         editor
-            .distribute(&ids(&[1, 2, 3]), Axis::Horizontal)
+            .distribute(&ids([1, 2, 3]), Axis::Horizontal)
             .unwrap();
-        assert_near(at(&editor, 1), (0.0, 0.0));
-        assert_near(at(&editor, 2), (30.0, 0.0));
-        assert_near(at(&editor, 3), (100.0, 0.0));
+        assert_at(position(&editor, 1), 0.0, 0.0);
+        assert_at(position(&editor, 2), 30.0, 0.0);
+        assert_at(position(&editor, 3), 100.0, 0.0);
     }
 
     #[test]
@@ -373,20 +294,15 @@ mod tests {
             (1, None, image(0.0, 0.0, 10.0, 10.0)),
             (2, None, image(30.0, 5.0, 20.0, 10.0)),
         ]);
+        assert!(editor.align(&ids([1]), Alignment::Left).unwrap().is_empty());
         assert!(
             editor
-                .align(&ids(&[1]), Alignment::Left)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            editor
-                .distribute(&ids(&[1, 2]), Axis::Horizontal)
+                .distribute(&ids([1, 2]), Axis::Horizontal)
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
-            editor.align(&ids(&[1, 9]), Alignment::Left),
+            editor.align(&ids([1, 9]), Alignment::Left),
             Err(Error::UnknownElement(id(9)))
         );
         assert!(!editor.can_undo());
@@ -404,50 +320,23 @@ mod tests {
         );
     }
 
-    fn note(x: f64, target: u128) -> ElementKind {
-        ElementKind::Note {
-            frame: Rect {
-                x,
-                y: 40.0,
-                width: 20.0,
-                height: 20.0,
-            },
-            rotation: 0.0,
-            text: Text::new("On it".to_owned(), 10.0),
-            target: Some(id(target)),
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        }
-    }
-
-    /// From `from`, free, to `to`, stuck to `on`.
-    fn pointing(from: (f64, f64), to: (f64, f64), on: u128) -> ElementKind {
-        let mut kind = arrow();
-        let [(start, _), (end, target)] = kind.ends_mut().unwrap();
-        (*start, *end, *target) = (
-            Point {
-                x: from.0,
-                y: from.1,
-            },
-            Point { x: to.0, y: to.1 },
-            Some(id(on)),
-        );
-        kind
-    }
-
     #[test]
     fn an_end_left_off_another_of_them_by_a_move_of_its_own_comes_free() {
         // Stuck to the image, then to the note that rides on it.
-        for on in [1, 2] {
+        for target in [1, 2] {
             let mut editor = editor([
                 (1, None, image(0.0, 0.0, 100.0, 100.0)),
-                (2, None, note(40.0, 1)),
+                (2, None, on(note(40.0, 40.0, 20.0, 20.0), 1)),
                 (3, None, ElementKind::group()),
                 (4, Some(3), image(200.0, 0.0, 50.0, 50.0)),
-                (5, Some(3), pointing((225.0, 25.0), (50.0, 50.0), on)),
+                (
+                    5,
+                    Some(3),
+                    stuck((225.0, 25.0), None, (50.0, 50.0), Some(target)),
+                ),
             ]);
-            editor.align(&ids(&[1, 3]), Alignment::Centre).unwrap();
-            assert_near(at(&editor, 1), (75.0, 0.0));
+            editor.align(&ids([1, 3]), Alignment::Centre).unwrap();
+            assert_at(position(&editor, 1), 75.0, 0.0);
             let [_, (end, target)] = kind(&editor, 5).ends().unwrap();
             assert_eq!((end.x, target), (25.0, None));
         }
@@ -459,13 +348,13 @@ mod tests {
             (1, None, image(0.0, 0.0, 100.0, 100.0)),
             (2, None, image(300.0, 0.0, 50.0, 50.0)),
             (3, None, ElementKind::group()),
-            (4, Some(3), note(10.0, 1)),
-            (5, Some(3), note(40.0, 1)),
-            (6, None, note(70.0, 1)),
+            (4, Some(3), on(note(10.0, 40.0, 20.0, 20.0), 1)),
+            (5, Some(3), on(note(40.0, 40.0, 20.0, 20.0), 1)),
+            (6, None, on(note(70.0, 40.0, 20.0, 20.0), 1)),
         ]);
-        editor.align(&ids(&[1, 2, 3, 6]), Alignment::Right).unwrap();
+        editor.align(&ids([1, 2, 3, 6]), Alignment::Right).unwrap();
         for (bits, x) in [(4, 260.0), (5, 290.0), (6, 320.0)] {
-            assert_near(at(&editor, bits), (x, 40.0));
+            assert_at(position(&editor, bits), x, 40.0);
             assert_eq!(kind(&editor, bits).target(), Some(id(1)));
         }
     }
@@ -485,7 +374,7 @@ mod tests {
         let mut editor = touching(17.9, [133.37, 133.37, 3.3]);
         assert!(
             editor
-                .distribute(&ids(&[1, 2, 3]), Axis::Horizontal)
+                .distribute(&ids([1, 2, 3]), Axis::Horizontal)
                 .unwrap()
                 .is_empty()
         );
@@ -495,16 +384,16 @@ mod tests {
                     let widths = [f64::from(a) * 3.37, f64::from(b) * 1.1, 3.3];
                     let mut editor = touching(x, widths);
                     let moved = editor
-                        .distribute(&ids(&[1, 2, 3]), Axis::Horizontal)
+                        .distribute(&ids([1, 2, 3]), Axis::Horizontal)
                         .unwrap();
                     assert!(moved.is_empty(), "{x} {widths:?}");
                     // Made up for by the gap after, so that the gaps come to none in all.
-                    editor.translate(&ids(&[2]), 0.7, 0.0).unwrap();
+                    editor.translate(&ids([2]), 0.7, 0.0).unwrap();
                     editor
-                        .distribute(&ids(&[1, 2, 3]), Axis::Horizontal)
+                        .distribute(&ids([1, 2, 3]), Axis::Horizontal)
                         .unwrap();
                     let again = editor
-                        .distribute(&ids(&[1, 2, 3]), Axis::Horizontal)
+                        .distribute(&ids([1, 2, 3]), Axis::Horizontal)
                         .unwrap();
                     assert!(again.is_empty(), "again {x} {widths:?}");
                 }
@@ -514,18 +403,14 @@ mod tests {
 
     #[test]
     fn elements_too_wide_for_gaps_keep_their_middles_apart_the_second_time() {
-        let pin = |x| ElementKind::Comment {
-            at: Point { x, y: 0.0 },
-            text: String::new(),
-            target: None,
-        };
+        let pin = |x| comment(x, 0.0);
         let mut editor = editor([
             (1, None, image(71.67, 200.0, 13.27, 10.0)),
             (2, None, image(-63.45, 200.0, 149.63, 10.0)),
             (3, None, pin(-46.58)),
             (4, None, pin(46.30)),
         ]);
-        let all = ids(&[1, 2, 3, 4]);
+        let all = ids([1, 2, 3, 4]);
         assert!(
             !editor
                 .distribute(&all, Axis::Horizontal)
@@ -548,11 +433,11 @@ mod tests {
             (3, None, image(90.0, 0.0, 10.0, 10.0)),
         ]);
         editor
-            .distribute(&ids(&[1, 2, 3]), Axis::Horizontal)
+            .distribute(&ids([1, 2, 3]), Axis::Horizontal)
             .unwrap();
-        assert_near(at(&editor, 1), (0.0, 0.0));
-        assert_near(at(&editor, 2), (0.0, 0.0));
-        assert_near(at(&editor, 3), (90.0, 0.0));
+        assert_at(position(&editor, 1), 0.0, 0.0);
+        assert_at(position(&editor, 2), 0.0, 0.0);
+        assert_at(position(&editor, 3), 90.0, 0.0);
     }
 
     /// Across, with what each end sticks to.
@@ -566,9 +451,12 @@ mod tests {
     /// Group 10 holds image 11 and an arrow from it to image 1, whose corner is `one`. Image 2
     /// lies below, at `two` across and as wide as it says.
     fn linked(one: (f64, f64), two: (f64, f64)) -> Editor {
-        let mut arrow = pointing((25.0, 25.0), (one.0 + 25.0, one.1 + 25.0), 1);
-        let [(_, from), _] = arrow.ends_mut().unwrap();
-        *from = Some(id(11));
+        let arrow = stuck(
+            (25.0, 25.0),
+            Some(11),
+            (one.0 + 25.0, one.1 + 25.0),
+            Some(1),
+        );
         editor([
             (10, None, ElementKind::group()),
             (11, Some(10), image(0.0, 0.0, 50.0, 50.0)),
@@ -580,7 +468,7 @@ mod tests {
 
     #[test]
     fn a_group_that_stays_keeps_what_it_holds_as_one_that_moves_does() {
-        let all = ids(&[10, 1, 2]);
+        let all = ids([10, 1, 2]);
         // Centred already, the group stays, and image 1 leaves the arrow's end.
         let mut editor = linked((400.0, 0.0), (-100.0, 625.0));
         editor.align(&all, Alignment::Centre).unwrap();
@@ -604,26 +492,25 @@ mod tests {
 
     #[test]
     fn what_stays_keeps_what_it_sticks_to_or_not() {
-        let mut free = note(10.0, 1);
-        *free.target_mut().unwrap() = None;
+        let free = note(10.0, 40.0, 20.0, 20.0);
         let mut lone = editor([
             (1, None, image(0.0, 0.0, 100.0, 100.0)),
             (2, None, free.clone()),
             (3, None, image(50.0, 200.0, 50.0, 50.0)),
         ]);
-        let touched = lone.align(&ids(&[2, 3]), Alignment::Left).unwrap();
-        assert_eq!(touched, ids(&[3]));
+        let touched = lone.align(&ids([2, 3]), Alignment::Left).unwrap();
+        assert_eq!(touched, ids([3]));
         assert_eq!(kind(&lone, 2), &free);
         // The group stays, and its note comes free of the image going from under it.
         let mut grouped = editor([
             (1, None, image(0.0, 0.0, 100.0, 100.0)),
             (2, None, ElementKind::group()),
             (3, Some(2), image(0.0, 200.0, 50.0, 50.0)),
-            (4, Some(2), note(10.0, 1)),
+            (4, Some(2), on(note(10.0, 40.0, 20.0, 20.0), 1)),
         ]);
-        grouped.align(&ids(&[1, 2]), Alignment::Bottom).unwrap();
-        assert_near(at(&grouped, 1), (0.0, 150.0));
-        assert_near(at(&grouped, 4), (10.0, 40.0));
+        grouped.align(&ids([1, 2]), Alignment::Bottom).unwrap();
+        assert_at(position(&grouped, 1), 0.0, 150.0);
+        assert_at(position(&grouped, 4), 10.0, 40.0);
         assert_eq!(kind(&grouped, 4).target(), None);
     }
 }

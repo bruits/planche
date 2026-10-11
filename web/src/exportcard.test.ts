@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { press } from "../test/events.js";
 import {
   exportCard,
   recalled,
@@ -55,22 +56,11 @@ function shown(): { facts: string | null | undefined; readout: string | null | u
 }
 
 function copyKey(target: EventTarget = document.body, more: KeyboardEventInit = {}): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", {
-    key: "c",
-    code: "KeyC",
-    metaKey: true,
-    ctrlKey: true,
-    bubbles: true,
-    cancelable: true,
-    ...more,
-  });
-  target.dispatchEvent(event);
-  return event;
+  return press({ key: "c", code: "KeyC", metaKey: true, ctrlKey: true, ...more }, target);
 }
 
 afterEach(() => {
   opened.splice(0).forEach((card) => card.close());
-  document.body.replaceChildren();
 });
 
 describe("the export card", () => {
@@ -149,17 +139,7 @@ describe("the export card", () => {
     const { card, host } = made();
     card.open(false);
     copyKey();
-    const held = new KeyboardEvent("keydown", {
-      key: "c",
-      code: "KeyC",
-      metaKey: true,
-      ctrlKey: true,
-      repeat: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    document.body.dispatchEvent(held);
-    expect(held.defaultPrevented).toBe(true);
+    expect(copyKey(document.body, { repeat: true }).defaultPrevented).toBe(true);
     expect(host.copy).toHaveBeenCalledOnce();
   });
 

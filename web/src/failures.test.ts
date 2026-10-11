@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { press } from "../test/events.js";
+import { deferred, tick } from "../test/waits.js";
 import { GpuLost, NoRenderer, Panic } from "./errors.js";
 import { failures, type FailureHooks } from "./failures.js";
 import type { ErrorLog } from "./platform.js";
@@ -28,19 +30,14 @@ function app({ ready = true } = {}) {
     const panel = host.querySelector(".failure")!;
     return panel.classList.contains("showing") ? panel.querySelector("p")!.textContent : undefined;
   };
-  const press = (label: string) =>
+  const click = (label: string) =>
     [...host.querySelectorAll("button")].find((button) => button.textContent === label)!.click();
   const logged = () => log.append.mock.calls.map(([entry]) => entry);
-  return { host, hooks, failing, shown, press, logged };
-}
-
-function settled(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+  return { host, hooks, failing, shown, click, logged };
 }
 
 describe("an action's failure", () => {
   afterEach(() => {
-    document.body.replaceChildren();
     document.documentElement.removeAttribute("data-stopped");
   });
 
@@ -57,7 +54,7 @@ describe("an action's failure", () => {
   it("is said once the work reported fails", async () => {
     const { hooks, failing } = app();
     failing.report(Promise.reject(new Error("The folder is not empty")));
-    await settled();
+    await tick();
     expect(hooks.say).toHaveBeenCalledExactlyOnceWith("The folder is not empty");
   });
 
@@ -93,24 +90,23 @@ describe("an action's failure", () => {
 
 describe("a fault nothing caught", () => {
   afterEach(() => {
-    document.body.replaceChildren();
     document.documentElement.removeAttribute("data-stopped");
   });
 
   it("stays until dismissed, with its details to copy", async () => {
-    const { host, hooks, failing, shown, press } = app();
+    const { host, hooks, failing, shown, click } = app();
     const target = new EventTarget();
     failing.watch(target);
     const fault = new TypeError("the board is undefined");
     target.dispatchEvent(new ErrorEvent("error", { error: fault, message: fault.message }));
     expect(shown()).toBe("Something went wrong: the board is undefined");
-    press("Copy details");
-    await settled();
+    click("Copy details");
+    await tick();
     const [details] = hooks.copy.mock.calls[0]!;
     expect(details).toContain("Uncaught: TypeError: the board is undefined");
     expect(details).toMatch(/\nSafari 26\nwgpu WebGPU, Apple M5$/);
     expect(host.textContent).toContain("Copied");
-    press("Dismiss");
+    click("Dismiss");
     expect(shown()).toBeUndefined();
     expect(hooks.say).not.toHaveBeenCalled();
     expect(hooks.halt).not.toHaveBeenCalled();
@@ -158,34 +154,33 @@ describe("a fault nothing caught", () => {
   });
 
   it("says when the details could not be copied", async () => {
-    const { host, hooks, failing, press } = app();
+    const { host, hooks, failing, click } = app();
     hooks.copy.mockRejectedValue(new Error("denied"));
     failing.uncaught(new Error("lost"));
-    press("Copy details");
-    await settled();
+    click("Copy details");
+    await tick();
     expect(host.textContent).toContain("Not copied");
   });
 });
 
 describe("a failure the app cannot go on from", () => {
   afterEach(() => {
-    document.body.replaceChildren();
     document.documentElement.removeAttribute("data-stopped");
   });
 
   it("stops the app when it fails to start, offers to reload, and never goes on", async () => {
-    const { hooks, failing, shown, press, logged } = app({ ready: false });
+    const { hooks, failing, shown, click, logged } = app({ ready: false });
     let started = false;
     void failing
       .started(Promise.reject(new TypeError("Failed to fetch bindings_bg.wasm")))
       .then(() => (started = true));
-    await settled();
+    await tick();
     expect(started).toBe(false);
     expect(shown()).toBe("Planche stopped working: Failed to fetch bindings_bg.wasm");
     expect(hooks.halt).toHaveBeenCalledOnce();
     expect(logged()).toEqual([expect.stringContaining("Stopped: TypeError: Failed to fetch")]);
-    press("Reload");
-    await settled();
+    click("Reload");
+    await tick();
     expect(hooks.reload).toHaveBeenCalledOnce();
   });
 
@@ -244,7 +239,7 @@ describe("a failure the app cannot go on from", () => {
   });
 
   it("leaves nothing to edit on a board that no longer shows, but the way to reload", async () => {
-    const { host, hooks, failing, press } = app();
+    const { host, hooks, failing, click } = app();
     const board = document.body.appendChild(document.createElement("div"));
     const bar = host.appendChild(document.createElement("div"));
     const target = new EventTarget();
@@ -252,16 +247,16 @@ describe("a failure the app cannot go on from", () => {
     const keyed = vi.fn<(event: Event) => void>();
     target.addEventListener("keydown", keyed);
     target.addEventListener("paste", keyed);
-    target.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    press({ key: "Delete" }, target);
     expect(keyed).toHaveBeenCalledOnce();
     failing.stop("the GPU is lost");
-    target.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    press({ key: "Delete" }, target);
     target.dispatchEvent(new Event("paste"));
     expect(keyed).toHaveBeenCalledOnce();
     expect([board.inert, bar.inert, host.inert]).toEqual([true, true, false]);
     expect(document.documentElement.hasAttribute("data-stopped")).toBe(true);
-    press("Reload");
-    await settled();
+    click("Reload");
+    await tick();
     expect(hooks.reload).toHaveBeenCalledOnce();
   });
 
@@ -274,12 +269,10 @@ describe("a failure the app cannot go on from", () => {
     const reload = [...host.querySelectorAll("button")].find(
       (button) => button.textContent === "Reload",
     )!;
-    reload.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }));
+    press({ key: "z", metaKey: true }, reload);
     expect(keyed).not.toHaveBeenCalled();
-    const pressed = new KeyboardEvent("keydown", { key: "F5", bubbles: true, cancelable: true });
-    reload.dispatchEvent(pressed);
-    expect(pressed.defaultPrevented).toBe(true);
-    await settled();
+    expect(press({ key: "F5" }, reload).defaultPrevented).toBe(true);
+    await tick();
     expect(hooks.reload).toHaveBeenCalledOnce();
     expect(keyed).not.toHaveBeenCalled();
   });
@@ -291,16 +284,15 @@ describe("a failure the app cannot go on from", () => {
     const reload = [...host.querySelectorAll("button")].find(
       (button) => button.textContent === "Reload",
     )!;
+    const copy = new Event("copy", { bubbles: true, cancelable: true });
     const others = [
-      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
-      new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true }),
-      new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true, cancelable: true }),
-      new Event("copy", { bubbles: true, cancelable: true }),
+      press({ key: "Tab" }, reload),
+      press({ key: "z", metaKey: true }, reload),
+      press({ key: "c", metaKey: true }, reload),
+      copy,
     ];
-    for (const event of others) {
-      reload.dispatchEvent(event);
-    }
-    await settled();
+    reload.dispatchEvent(copy);
+    await tick();
     expect(others.map((event) => event.defaultPrevented)).toEqual([false, false, false, false]);
     expect(hooks.closing).not.toHaveBeenCalled();
     expect(hooks.reload).not.toHaveBeenCalled();
@@ -317,56 +309,55 @@ describe("a failure the app cannot go on from", () => {
 describe("a reload once the app stopped", () => {
   afterEach(() => {
     vi.useRealTimers();
-    document.body.replaceChildren();
     document.documentElement.removeAttribute("data-stopped");
   });
 
   it("goes at once when all is saved", async () => {
-    const { hooks, failing, press } = app();
+    const { hooks, failing, click } = app();
     failing.stop("the GPU is lost");
-    press("Reload");
-    await settled();
+    click("Reload");
+    await tick();
     expect(hooks.closing).toHaveBeenCalledOnce();
     expect(hooks.confirm).not.toHaveBeenCalled();
     expect(hooks.reload).toHaveBeenCalledOnce();
   });
 
   it("asks before losing what could not be saved, and stays when the user declines", async () => {
-    const { host, hooks, failing, press } = app();
+    const { host, hooks, failing, click } = app();
     hooks.closing.mockResolvedValue(false);
     hooks.confirm.mockResolvedValue(false);
     failing.stop("the GPU is lost");
-    press("Reload");
+    click("Reload");
     expect(host.textContent).toContain("Saving…");
-    await settled();
+    await tick();
     expect(hooks.confirm).toHaveBeenCalledExactlyOnceWith(
       "Reload, and lose the changes to this board?",
     );
     expect(hooks.reload).not.toHaveBeenCalled();
     expect(host.textContent).toContain("Reload");
-    press("Reload");
-    await settled();
+    click("Reload");
+    await tick();
     expect(hooks.confirm).toHaveBeenCalledTimes(2);
   });
 
   it("asks when saving throws at once, as what failed before it was set up does", async () => {
-    const { hooks, failing, press } = app({ ready: false });
+    const { hooks, failing, click } = app({ ready: false });
     hooks.closing.mockImplementation(() => {
       throw new ReferenceError("Cannot access 'life' before initialization");
     });
     failing.uncaught(new TypeError("the toolbar is null"));
-    press("Reload");
-    await settled();
+    click("Reload");
+    await tick();
     expect(hooks.confirm).toHaveBeenCalledOnce();
     expect(hooks.reload).toHaveBeenCalledOnce();
   });
 
   it("asks once saving takes longer than a stopped app may", async () => {
     vi.useFakeTimers();
-    const { hooks, failing, press } = app();
+    const { hooks, failing, click } = app();
     hooks.closing.mockReturnValue(new Promise(() => {}));
     failing.stop("the GPU is lost");
-    press("Reload");
+    click("Reload");
     await vi.advanceTimersByTimeAsync(4999);
     expect(hooks.confirm).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -375,27 +366,27 @@ describe("a reload once the app stopped", () => {
   });
 
   it("reloads all the same when it cannot ask", async () => {
-    const { hooks, failing, press } = app();
+    const { hooks, failing, click } = app();
     hooks.closing.mockResolvedValue(false);
     hooks.confirm.mockRejectedValue(new Error("the dialog is gone"));
     failing.stop("the GPU is lost");
-    press("Reload");
-    await settled();
+    click("Reload");
+    await tick();
     expect(hooks.reload).toHaveBeenCalledOnce();
   });
 
   it("saves once, however often pressed meanwhile", async () => {
-    const { host, hooks, failing, press } = app();
-    let save: ((safe: boolean) => void) | undefined;
-    hooks.closing.mockReturnValue(new Promise((resolve) => (save = resolve)));
+    const { host, hooks, failing, click } = app();
+    const { promise: saving, resolve: save } = deferred<boolean>();
+    hooks.closing.mockReturnValue(saving);
     failing.watch(host);
     failing.stop("the GPU is lost");
-    press("Reload");
+    click("Reload");
     // The same button, relabelled.
-    press("Saving…");
-    host.dispatchEvent(new KeyboardEvent("keydown", { key: "F5", repeat: true }));
-    save?.(true);
-    await settled();
+    click("Saving…");
+    press({ key: "F5", repeat: true }, host);
+    save(true);
+    await tick();
     expect(hooks.closing).toHaveBeenCalledOnce();
     expect(hooks.reload).toHaveBeenCalledOnce();
   });

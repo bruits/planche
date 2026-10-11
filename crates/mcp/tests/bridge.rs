@@ -5,8 +5,11 @@ use mcp::{Bridge, Call, Relay, Reply};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-fn bridge() -> Arc<Bridge> {
-    Arc::new(Bridge::new(Duration::from_millis(200)))
+/// Longer than any test takes, so that only a test of the wait sees it end.
+const PATIENT: Duration = Duration::from_secs(60);
+
+fn bridge(waiting: Duration) -> Arc<Bridge> {
+    Arc::new(Bridge::new(waiting))
 }
 
 fn attached(bridge: &Bridge) -> mpsc::UnboundedReceiver<Call> {
@@ -25,13 +28,13 @@ fn asking(
 
 #[tokio::test]
 async fn a_call_fails_at_once_before_a_page_attaches() {
-    let error = bridge().ask("board", json!({})).await.unwrap_err();
+    let error = bridge(PATIENT).ask("board", json!({})).await.unwrap_err();
     assert_eq!(error, "Planche is not ready");
 }
 
 #[tokio::test]
 async fn a_call_gets_the_reply_of_its_id() {
-    let bridge = bridge();
+    let bridge = bridge(PATIENT);
     let mut calls = attached(&bridge);
     let asked = asking(&bridge, "elements");
     let call = calls.recv().await.unwrap();
@@ -48,7 +51,7 @@ async fn a_call_gets_the_reply_of_its_id() {
 
 #[tokio::test]
 async fn the_page_tells_why_it_cannot_answer() {
-    let bridge = bridge();
+    let bridge = bridge(PATIENT);
     let mut calls = attached(&bridge);
     let asked = asking(&bridge, "elements");
     let id = calls.recv().await.unwrap().id;
@@ -62,7 +65,7 @@ async fn the_page_tells_why_it_cannot_answer() {
 
 #[tokio::test]
 async fn calls_waiting_on_a_page_that_goes_fail() {
-    let bridge = bridge();
+    let bridge = bridge(PATIENT);
     let mut calls = attached(&bridge);
     let asked = asking(&bridge, "selection");
     calls.recv().await.unwrap();
@@ -79,7 +82,7 @@ async fn calls_waiting_on_a_page_that_goes_fail() {
 
 #[tokio::test]
 async fn a_page_that_never_answers_is_given_up_on() {
-    let bridge = bridge();
+    let bridge = bridge(Duration::from_millis(1));
     let mut calls = attached(&bridge);
     let error = bridge.ask("board", json!({})).await.unwrap_err();
     assert_eq!(error, "Planche did not answer in time");

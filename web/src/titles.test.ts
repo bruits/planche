@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { untitled, type Opened } from "./board.js";
-import * as core from "./core.js";
+import { describe, expect, it, vi } from "vitest";
+import { boardOf } from "../test/boards.js";
+import { press, pressAway } from "../test/events.js";
+import { refresh, type Opened } from "./board.js";
 import type { Kind, Rect } from "./core.js";
 import { titledGroup, titles } from "./titles.js";
 
@@ -17,17 +18,21 @@ const NOTE: Kind = {
 };
 
 function opened(kinds: Record<string, Kind>, locked: string[] = []): Opened {
-  const made = untitled();
-  Object.entries(kinds).forEach(([group, kind], at) => {
-    const members = [2 * at, 2 * at + 1].map((digit) => digit.toString(16).repeat(32));
-    for (const id of members) {
-      made.editor.add(id, undefined, JSON.stringify(NOTE));
-    }
-    made.editor.group(group, members);
-    made.editor.update(group, JSON.stringify(kind));
-  });
-  made.editor.setLocked(locked, true);
-  made.board = core.board(made.editor);
+  const groups = Object.fromEntries(
+    Object.keys(kinds).map((group, at) => [
+      group,
+      [2 * at, 2 * at + 1].map((digit) => digit.toString(16).repeat(32)),
+    ]),
+  );
+  const made = boardOf(
+    Object.values(groups).flatMap((members) => members.map((id): [string, Kind] => [id, NOTE])),
+    { groups },
+  );
+  for (const [group, kind] of Object.entries(kinds)) {
+    refresh(made, made.editor.update(group, JSON.stringify(kind)));
+  }
+  // Once titled, as the core refuses to title a locked group.
+  refresh(made, made.editor.setLocked(locked, true));
   return made;
 }
 
@@ -43,17 +48,7 @@ function label(id: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(`.group-title[data-group="${id}"]`);
 }
 
-function key(target: EventTarget, name: string) {
-  target.dispatchEvent(
-    new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }),
-  );
-}
-
 describe("titles", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("names each titled group over the top-left of what it draws, at one size on screen", () => {
     const { made } = shown();
     made.show(
@@ -96,7 +91,7 @@ describe("titles", () => {
     const field = offer.querySelector("input")!;
     expect(document.activeElement).toBe(field);
     field.value = "Moods";
-    key(field, "Enter");
+    press({ key: "Enter" }, field);
     expect(rename).toHaveBeenCalledExactlyOnceWith(GROUP, "Moods");
   });
 
@@ -109,7 +104,7 @@ describe("titles", () => {
     const field = named.querySelector("input")!;
     expect(field.value).toBe("Moods");
     field.value = "Light";
-    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    pressAway();
     expect(rename).toHaveBeenCalledExactlyOnceWith(GROUP, "Light");
     expect(named.querySelector("input")).toBeNull();
   });
@@ -118,7 +113,7 @@ describe("titles", () => {
     const { made, rename } = shown();
     made.show(opened({ [GROUP]: { type: "group", title: "Moods" } }), () => AREA, []);
     made.write(GROUP);
-    key(label(GROUP)!.querySelector("input")!, "Escape");
+    press({ key: "Escape" }, label(GROUP)!.querySelector("input")!);
     expect(rename).not.toHaveBeenCalled();
     expect(label(GROUP)?.textContent).toBe("Moods");
   });

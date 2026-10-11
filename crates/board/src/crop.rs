@@ -75,63 +75,31 @@ pub(crate) fn cropped(kind: &ElementKind, area: Option<Rect>) -> Option<ElementK
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{board, element, id};
-    use crate::{AssetId, Colour, CropShape, Editor, Error, ImageEdits, Size, Text};
+    use crate::tests::{
+        area, assert_at, board, editor_of, edits_of, element, id, image, note, on, point, turned,
+    };
+    use crate::{CropShape, Editor, Error, Size};
 
-    fn area(x: f64, y: f64, width: f64, height: f64) -> Rect {
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    fn image(rotation: f64, flip_horizontal: bool, flip_vertical: bool) -> ElementKind {
-        ElementKind::Image {
-            asset: AssetId::of(b""),
-            natural_size: Size {
+    fn flipped(rotation: f64, flip_horizontal: bool, flip_vertical: bool) -> ElementKind {
+        let mut kind = turned(image(10.0, 20.0, 400.0, 200.0), rotation);
+        if let ElementKind::Image {
+            natural_size,
+            edits,
+            ..
+        } = &mut kind
+        {
+            *natural_size = Size {
                 width: 200,
                 height: 100,
-            },
-            frame: area(10.0, 20.0, 400.0, 200.0),
-            rotation,
-            edits: ImageEdits {
-                flip_horizontal,
-                flip_vertical,
-                ..ImageEdits::default()
-            },
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
+            };
+            edits.flip_horizontal = flip_horizontal;
+            edits.flip_vertical = flip_vertical;
         }
-    }
-
-    fn editor(kinds: impl IntoIterator<Item = ElementKind>) -> Editor {
-        let elements = kinds
-            .into_iter()
-            .zip(1..)
-            .map(|(kind, bits)| (bits, element(None, &format!("a{bits}"), kind)));
-        Editor::new(board(elements))
-    }
-
-    fn edits_of(editor: &Editor) -> ImageEdits {
-        match &editor.board().elements[&id(1)].kind {
-            ElementKind::Image { edits, .. } => *edits,
-            _ => unreachable!(),
-        }
+        kind
     }
 
     fn crop_of(editor: &Editor) -> Option<Rect> {
-        edits_of(editor).crop
-    }
-
-    fn assert_near(a: Point, b: Point) {
-        assert!(
-            (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9,
-            "{a:?} != {b:?}"
-        );
+        edits_of(editor, 1).crop
     }
 
     #[test]
@@ -142,7 +110,7 @@ mod tests {
             for (horizontally, vertically) in
                 [(false, false), (true, false), (false, true), (true, true)]
             {
-                let mut editor = editor([image(rotation, horizontally, vertically)]);
+                let mut editor = editor_of([flipped(rotation, horizontally, vertically)]);
                 let at = |editor: &Editor| {
                     pixels.map(|pixel| editor.board().point_of_pixel(id(1), pixel).unwrap())
                 };
@@ -158,7 +126,7 @@ mod tests {
                     points
                         .into_iter()
                         .zip(before)
-                        .for_each(|(after, before)| assert_near(after, before));
+                        .for_each(|(after, before)| assert_at(after, before.x, before.y));
                 }
                 assert_eq!(crop_of(&editor), None);
             }
@@ -167,13 +135,13 @@ mod tests {
 
     #[test]
     fn cropping_keeps_each_pixel_where_it_was_on_a_turned_stretched_image() {
-        let mut stretched = image(30.0, true, false);
+        let mut stretched = flipped(30.0, true, false);
         if let ElementKind::Image { frame, .. } = &mut stretched {
             *frame = area(10.0, 20.0, 400.0, 300.0);
         }
         let pixels =
             [(60.0, 30.0), (149.0, 79.0), (100.0, 50.0), (60.0, 79.0)].map(|(x, y)| Point { x, y });
-        let mut editor = editor([stretched]);
+        let mut editor = editor_of([stretched]);
         let at = |editor: &Editor| {
             pixels.map(|pixel| editor.board().point_of_pixel(id(1), pixel).unwrap())
         };
@@ -189,13 +157,13 @@ mod tests {
             points
                 .into_iter()
                 .zip(before)
-                .for_each(|(after, before)| assert_near(after, before));
+                .for_each(|(after, before)| assert_at(after, before.x, before.y));
         }
     }
 
     #[test]
     fn a_crop_keeps_the_size_each_pixel_shows_at() {
-        let mut editor = editor([image(0.0, false, false)]);
+        let mut editor = editor_of([flipped(0.0, false, false)]);
 
         editor.crop(id(1), area(50.0, 20.0, 100.0, 60.0)).unwrap();
 
@@ -207,26 +175,23 @@ mod tests {
 
     #[test]
     fn a_point_and_its_pixel_lead_back_to_each_other() {
-        let editor = editor([image(30.0, true, false)]);
-        let point = Point { x: 150.0, y: 90.0 };
+        let editor = editor_of([flipped(30.0, true, false)]);
+        let point = point(150.0, 90.0);
 
         let pixel = editor.board().pixel_at(id(1), point).unwrap();
 
-        assert_near(editor.board().point_of_pixel(id(1), pixel).unwrap(), point);
+        assert_at(
+            editor.board().point_of_pixel(id(1), pixel).unwrap(),
+            point.x,
+            point.y,
+        );
     }
 
     #[test]
     fn what_is_no_image_has_no_pixels() {
-        let note = ElementKind::Note {
-            frame: area(0.0, 0.0, 10.0, 10.0),
-            rotation: 0.0,
-            text: Text::new("Note".to_owned(), 20.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        };
-        let editor = editor([note]);
-        let point = Point { x: 5.0, y: 5.0 };
+        let note = note(0.0, 0.0, 10.0, 10.0);
+        let editor = editor_of([note]);
+        let point = point(5.0, 5.0);
 
         assert_eq!(editor.board().pixel_at(id(1), point), None);
         assert_eq!(editor.board().point_of_pixel(id(1), point), None);
@@ -237,12 +202,10 @@ mod tests {
     fn resetting_the_crop_of_a_group_shows_the_whole_of_its_images() {
         let mut editor = Editor::new(board([
             (1, element(None, "a0", ElementKind::group())),
-            (2, element(Some(1), "a0", image(30.0, true, false))),
+            (2, element(Some(1), "a0", flipped(30.0, true, false))),
         ]));
         editor.crop(id(2), area(50.0, 20.0, 100.0, 60.0)).unwrap();
-        let before = editor
-            .board()
-            .point_of_pixel(id(2), Point { x: 60.0, y: 30.0 });
+        let before = editor.board().point_of_pixel(id(2), point(60.0, 30.0));
 
         editor.reset_crop(&[id(1)]).unwrap();
 
@@ -250,36 +213,37 @@ mod tests {
             unreachable!()
         };
         assert_eq!(edits.crop, None);
-        assert_near(
-            editor
-                .board()
-                .point_of_pixel(id(2), Point { x: 60.0, y: 30.0 })
-                .unwrap(),
+        let (after, before) = (
+            editor.board().point_of_pixel(id(2), point(60.0, 30.0)),
             before.unwrap(),
         );
+        assert_at(after.unwrap(), before.x, before.y);
     }
 
     #[test]
     fn resetting_the_crop_shows_the_whole_image_as_a_rectangle() {
-        let mut editor = editor([image(0.0, false, false)]);
+        let mut editor = editor_of([flipped(0.0, false, false)]);
         editor.crop(id(1), area(50.0, 20.0, 100.0, 60.0)).unwrap();
         editor.set_crop_shape(&[id(1)], CropShape::Ellipse).unwrap();
 
         editor.reset_crop(&[id(1)]).unwrap();
 
-        assert_eq!(edits_of(&editor).crop, None);
-        assert_eq!(edits_of(&editor).crop_shape, CropShape::Rectangle);
+        assert_eq!(edits_of(&editor, 1).crop, None);
+        assert_eq!(edits_of(&editor, 1).crop_shape, CropShape::Rectangle);
         editor.undo();
-        assert_eq!(edits_of(&editor).crop, Some(area(50.0, 20.0, 100.0, 60.0)));
-        assert_eq!(edits_of(&editor).crop_shape, CropShape::Ellipse);
+        assert_eq!(
+            edits_of(&editor, 1).crop,
+            Some(area(50.0, 20.0, 100.0, 60.0))
+        );
+        assert_eq!(edits_of(&editor, 1).crop_shape, CropShape::Ellipse);
     }
 
     #[test]
     fn the_crop_shape_applies_to_the_images_of_a_group_in_one_step() {
         let mut editor = Editor::new(board([
             (1, element(None, "a0", ElementKind::group())),
-            (2, element(Some(1), "a0", image(30.0, true, false))),
-            (3, element(Some(1), "a1", image(0.0, false, false))),
+            (2, element(Some(1), "a0", flipped(30.0, true, false))),
+            (3, element(Some(1), "a1", flipped(0.0, false, false))),
         ]));
         let shapes = |editor: &Editor| {
             [2, 3].map(|bits| match &editor.board().elements[&id(bits)].kind {
@@ -300,7 +264,7 @@ mod tests {
 
     #[test]
     fn cropping_to_the_whole_image_keeps_no_crop() {
-        let mut editor = editor([image(0.0, false, false)]);
+        let mut editor = editor_of([flipped(0.0, false, false)]);
         editor.crop(id(1), area(50.0, 20.0, 100.0, 60.0)).unwrap();
 
         editor.crop(id(1), area(0.0, 0.0, 200.0, 100.0)).unwrap();
@@ -310,15 +274,8 @@ mod tests {
 
     #[test]
     fn a_crop_beyond_the_image_or_of_what_is_no_image_is_refused() {
-        let note = ElementKind::Note {
-            frame: area(0.0, 0.0, 10.0, 10.0),
-            rotation: 0.0,
-            text: Text::new("Note".to_owned(), 20.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        };
-        let mut editor = editor([image(0.0, false, false), note]);
+        let note = note(0.0, 0.0, 10.0, 10.0);
+        let mut editor = editor_of([flipped(0.0, false, false), note]);
         let before = editor.board().clone();
 
         for refused in [
@@ -345,15 +302,8 @@ mod tests {
 
     #[test]
     fn what_sticks_to_an_image_keeps_its_pixel_as_it_is_cropped() {
-        let note = ElementKind::Note {
-            frame: area(150.0, 80.0, 40.0, 20.0),
-            rotation: 0.0,
-            text: Text::new("Note".to_owned(), 20.0),
-            target: Some(id(1)),
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        };
-        let mut editor = editor([image(30.0, true, false), note]);
+        let note = on(note(150.0, 80.0, 40.0, 20.0), 1);
+        let mut editor = editor_of([flipped(30.0, true, false), note]);
         let centre = |editor: &Editor| match &editor.board().elements[&id(2)].kind {
             ElementKind::Note { frame, .. } => frame.centre(),
             _ => unreachable!(),
@@ -362,9 +312,7 @@ mod tests {
 
         editor.crop(id(1), area(40.0, 10.0, 150.0, 80.0)).unwrap();
 
-        assert_near(
-            editor.board().pixel_at(id(1), centre(&editor)).unwrap(),
-            pixel,
-        );
+        let after = editor.board().pixel_at(id(1), centre(&editor)).unwrap();
+        assert_at(after, pixel.x, pixel.y);
     }
 }

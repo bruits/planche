@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { answer as reply, type Reading } from "./agent.js";
+import { call, later, pageOf } from "../test/agents.js";
+import { measuring } from "../test/canvases.js";
+import { arrowKind, commentKind, lineKind } from "../test/kinds.js";
+import { answer as reply } from "./agent.js";
 import { write, type Writing } from "./author.js";
 import { imageKind, newId, untitled, type Opened } from "./board.js";
 import * as core from "./core.js";
@@ -15,17 +18,8 @@ vi.mock("./board.js", async (original) => ({
   }),
 }));
 
-const arrow = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } };
-const comment = { type: "comment", at: { x: 40, y: 60 }, text: "Why here?" };
-/** Text fits what holds it as a font of fixed widths would. */
-const measure = (text: string) => ({
-  width: text.length * 50,
-  fontBoundingBoxAscent: 80,
-  fontBoundingBoxDescent: 20,
-  actualBoundingBoxAscent: 70,
-});
-/** As far as the shell's deadline usually is. */
-const later = () => Date.now() + 60_000;
+const arrow = arrowKind();
+const comment = commentKind();
 
 /** The page as agents see it, showing `opened` until `show` shows another board. */
 function page(
@@ -100,15 +94,8 @@ describe("write", () => {
       points: [0, 0, 1, 1, 1, 0],
       colour: "red",
     });
-    const reading = {
-      ...writing,
-      unsaved: () => false,
-      stopped: () => false,
-    } as unknown as Reading & Writing;
-    const read = (await reply(
-      { id: 1, tool: "elements", args: { ids: [id] }, deadline: later() },
-      reading,
-    )) as {
+    const reading = pageOf(writing.opened, writing);
+    const read = (await reply(call("elements", { ids: [id] }), reading)) as {
       elements: Record<string, { kind: Record<string, unknown> }>;
     };
     expect(read.elements[id]?.kind).toMatchObject({ type: "stroke", point_count: 3 });
@@ -126,10 +113,7 @@ describe("write", () => {
   });
 
   it("sticks a stroke drawn whole on a filled shape to it, unless the agent says not to", async () => {
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      font: "",
-      measureText: measure,
-    } as unknown as CanvasRenderingContext2D);
+    measuring();
     const opened = untitled();
     const { writing } = page(opened);
     const shape = { type: "shape", x: 0, y: 0, width: 100, height: 100, fill: "solid" };
@@ -307,14 +291,8 @@ describe("write", () => {
     };
     const ids = added.map(({ id }) => id);
     await write("lock", { ids, locked: true }, writing, later());
-    const reading = {
-      ...writing,
-      unsaved: () => false,
-      shown: () => undefined,
-      halfDrawn: () => false,
-      stopped: () => false,
-    } as unknown as Reading & Writing;
-    const read = (await reply({ id: 1, tool: "board", args: {}, deadline: later() }, reading)) as {
+    const reading = pageOf(writing.opened, writing);
+    const read = (await reply(call("board"), reading)) as {
       elements: { locked_by?: string }[];
     };
     expect(read.elements[0]?.locked_by).toBe(ids[0]);
@@ -336,14 +314,8 @@ describe("write", () => {
     const ids = added.map(({ id }) => id);
     const { group } = (await write("group", { ids }, writing, later())) as { group: string };
     await write("lock", { ids: [group], locked: true }, writing, later());
-    const reading = {
-      ...writing,
-      unsaved: () => false,
-      shown: () => undefined,
-      halfDrawn: () => false,
-      stopped: () => false,
-    } as unknown as Reading & Writing;
-    const read = (await reply({ id: 1, tool: "board", args: {}, deadline: later() }, reading)) as {
+    const reading = pageOf(writing.opened, writing);
+    const read = (await reply(call("board"), reading)) as {
       elements: { id: string; locked_by?: string }[];
     };
     expect(read.elements.find(({ id }) => id === ids[0])?.locked_by).toBe(group);
@@ -412,7 +384,7 @@ describe("write", () => {
   it("titles and fills a group as an agent asks, and takes its title away once empty", async () => {
     const opened = untitled();
     const { writing } = page(opened);
-    const lines = [0, 100].map((y) => ({ type: "line", from: { x: 0, y }, to: { x: 100, y } }));
+    const lines = [0, 100].map((y) => lineKind(y));
     const { added } = (await write("add", { elements: lines }, writing, later())) as {
       added: { id: string }[];
     };
@@ -467,10 +439,7 @@ describe("write", () => {
   });
 
   it("writes a style an agent chooses as it comes as nothing", async () => {
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      font: "",
-      measureText: measure,
-    } as unknown as CanvasRenderingContext2D);
+    measuring();
     const opened = untitled();
     const { writing } = page(opened);
     const filled = { type: "shape", x: 0, y: 0, shape: "rectangle", fill: "solid", text: "Hi" };

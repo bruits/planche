@@ -1618,6 +1618,279 @@ impl<'de, const N: usize> Deserialize<'de> for Hex<N> {
 mod tests {
     use super::*;
 
+    pub(crate) fn id(bits: u128) -> ElementId {
+        ElementId::from_random(bits)
+    }
+
+    pub(crate) fn ids<const N: usize>(bits: [u128; N]) -> Vec<ElementId> {
+        bits.map(id).to_vec()
+    }
+
+    pub(crate) fn z(key: &str) -> ZIndex {
+        key.parse().unwrap()
+    }
+
+    pub(crate) const fn point(x: f64, y: f64) -> Point {
+        Point { x, y }
+    }
+
+    pub(crate) const fn area(x: f64, y: f64, width: f64, height: f64) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    pub(crate) fn element(group: Option<u128>, key: &str, kind: ElementKind) -> Element {
+        Element {
+            group: group.map(id),
+            locked: false,
+            z: z(key),
+            kind,
+        }
+    }
+
+    pub(crate) fn locked(group: Option<u128>, key: &str, kind: ElementKind) -> Element {
+        Element {
+            locked: true,
+            ..element(group, key, kind)
+        }
+    }
+
+    pub(crate) fn board(elements: impl IntoIterator<Item = (u128, Element)>) -> Board {
+        Board {
+            elements: elements
+                .into_iter()
+                .map(|(bits, element)| (id(bits), element))
+                .collect(),
+            ..Board::default()
+        }
+    }
+
+    pub(crate) fn editor_of(kinds: impl IntoIterator<Item = ElementKind>) -> Editor {
+        let mut top = None;
+        let elements = kinds.into_iter().zip(1..).map(|(kind, bits)| {
+            let z = ZIndex::between(top.as_ref(), None).unwrap();
+            top = Some(z.clone());
+            let element = Element {
+                group: None,
+                locked: false,
+                z,
+                kind,
+            };
+            (bits, element)
+        });
+        Editor::new(board(elements))
+    }
+
+    pub(crate) fn image(x: f64, y: f64, width: f64, height: f64) -> ElementKind {
+        ElementKind::Image {
+            asset: AssetId::of(b""),
+            natural_size: Size {
+                width: 1,
+                height: 1,
+            },
+            frame: area(x, y, width, height),
+            rotation: 0.0,
+            edits: ImageEdits::default(),
+            source: None,
+            filename: None,
+            caption: None,
+            opacity: Opacity::default(),
+        }
+    }
+
+    pub(crate) fn image_of(bytes: &[u8], edits: ImageEdits) -> ElementKind {
+        let mut kind = image(0.0, 0.0, 1.0, 1.0);
+        if let ElementKind::Image {
+            asset, edits: made, ..
+        } = &mut kind
+        {
+            (*asset, *made) = (AssetId::of(bytes), edits);
+        }
+        kind
+    }
+
+    pub(crate) fn note(x: f64, y: f64, width: f64, height: f64) -> ElementKind {
+        ElementKind::Note {
+            frame: area(x, y, width, height),
+            rotation: 0.0,
+            text: Text::new("", 2.0),
+            target: None,
+            colour: Colour::Ink,
+            opacity: Opacity::default(),
+        }
+    }
+
+    pub(crate) fn sticky(x: f64, y: f64, width: f64, height: f64) -> ElementKind {
+        ElementKind::Sticky {
+            frame: area(x, y, width, height),
+            rotation: 0.0,
+            text: Text::new("", 20.0),
+            target: None,
+            paper: Paper::Yellow,
+            opacity: Opacity::default(),
+        }
+    }
+
+    pub(crate) fn labelled(shape: Shape, frame: Rect, rotation: f64, content: &str) -> ElementKind {
+        ElementKind::Shape {
+            frame,
+            rotation,
+            shape,
+            corners: Corners::default(),
+            text: Text::new(content, 20.0),
+            target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            fill: Fill::Hollow,
+            dash: Dash::Solid,
+            opacity: Opacity::default(),
+        }
+    }
+
+    pub(crate) fn counted(shape: Shape, frame: Rect, corners: u8, fill: Fill) -> ElementKind {
+        let mut kind = filled(labelled(shape, frame, 0.0, ""), fill);
+        if let ElementKind::Shape { corners: drawn, .. } = &mut kind {
+            *drawn = Corners::new(corners).unwrap();
+        }
+        kind
+    }
+
+    pub(crate) fn arrow() -> ElementKind {
+        stuck((0.0, 0.0), None, (0.0, 0.0), None)
+    }
+
+    pub(crate) fn stuck(
+        from: (f64, f64),
+        on: Option<u128>,
+        to: (f64, f64),
+        at: Option<u128>,
+    ) -> ElementKind {
+        ElementKind::Arrow {
+            from: point(from.0, from.1),
+            to: point(to.0, to.1),
+            from_target: on.map(id),
+            to_target: at.map(id),
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
+            heads: Heads::End,
+            opacity: Opacity::default(),
+        }
+    }
+
+    pub(crate) fn line(from: (f64, f64), to: (f64, f64)) -> ElementKind {
+        ElementKind::Line {
+            from: point(from.0, from.1),
+            to: point(to.0, to.1),
+            from_target: None,
+            to_target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            dash: Dash::Solid,
+            opacity: Opacity::default(),
+        }
+    }
+
+    pub(crate) fn stroke() -> ElementKind {
+        pen(
+            area(0.0, 0.0, 100.0, 50.0),
+            0.0,
+            &[(0.0, 1.0), (0.5, 0.0), (1.0, 1.0)],
+        )
+    }
+
+    pub(crate) fn pen(frame: Rect, rotation: f64, points: &[(f64, f64)]) -> ElementKind {
+        ElementKind::Stroke {
+            tip: Tip::Pen,
+            frame,
+            rotation,
+            points: points.iter().map(|&(x, y)| point(x, y)).collect(),
+            target: None,
+            colour: Colour::Ink,
+            weight: Weight::Medium,
+            opacity: Opacity::default(),
+        }
+    }
+
+    pub(crate) fn highlighted(mut kind: ElementKind) -> ElementKind {
+        let ElementKind::Stroke { tip, .. } = &mut kind else {
+            panic!("{kind:?} is no stroke")
+        };
+        *tip = Tip::Highlighter;
+        kind
+    }
+
+    pub(crate) fn comment(x: f64, y: f64) -> ElementKind {
+        ElementKind::Comment {
+            at: point(x, y),
+            text: "Here".to_owned(),
+            target: None,
+        }
+    }
+
+    pub(crate) fn turned(mut kind: ElementKind, degrees: f64) -> ElementKind {
+        match &mut kind {
+            ElementKind::Image { rotation, .. }
+            | ElementKind::Note { rotation, .. }
+            | ElementKind::Sticky { rotation, .. }
+            | ElementKind::Shape { rotation, .. }
+            | ElementKind::Stroke { rotation, .. } => *rotation = degrees,
+            other => panic!("{other:?} does not turn"),
+        }
+        kind
+    }
+
+    pub(crate) fn filled(mut kind: ElementKind, fill: Fill) -> ElementKind {
+        match &mut kind {
+            ElementKind::Shape { fill: drawn, .. } | ElementKind::Group { fill: drawn, .. } => {
+                *drawn = fill;
+            }
+            other => panic!("{other:?} is not filled"),
+        }
+        kind
+    }
+
+    pub(crate) fn on(mut kind: ElementKind, bits: u128) -> ElementKind {
+        *kind.target_mut().unwrap() = Some(id(bits));
+        kind
+    }
+
+    pub(crate) fn position(editor: &Editor, bits: u128) -> Point {
+        match &editor.board().elements[&id(bits)].kind {
+            ElementKind::Image { frame, .. }
+            | ElementKind::Note { frame, .. }
+            | ElementKind::Sticky { frame, .. }
+            | ElementKind::Shape { frame, .. }
+            | ElementKind::Stroke { frame, .. } => point(frame.x, frame.y),
+            ElementKind::Comment { at, .. } => *at,
+            other => panic!("{other:?} has no frame"),
+        }
+    }
+
+    pub(crate) fn edits_of(editor: &Editor, bits: u128) -> ImageEdits {
+        match &editor.board().elements[&id(bits)].kind {
+            ElementKind::Image { edits, .. } => *edits,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    pub(crate) fn near(a: &Rect, b: &Rect) -> bool {
+        [a.x - b.x, a.y - b.y, a.width - b.width, a.height - b.height]
+            .iter()
+            .all(|off| off.abs() < 1e-9)
+    }
+
+    pub(crate) fn assert_at(found: Point, x: f64, y: f64) {
+        assert!(
+            (found.x - x).abs() < 1e-9 && (found.y - y).abs() < 1e-9,
+            "{found:?} is not ({x}, {y})"
+        );
+    }
+
     #[test]
     fn an_id_reads_back_from_its_spelling() {
         let id = ElementId::from_random(0x0123_4567_89ab_cdef);
@@ -1677,190 +1950,66 @@ mod tests {
 
     #[test]
     fn every_float_is_checked_for_nan_and_every_font_size_for_a_size() {
-        let rect = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 1.0,
-            height: 1.0,
+        let nan = f64::NAN;
+        let rect = area(0.0, 0.0, 1.0, 1.0);
+        let edited = |edits| image_of(b"", edits);
+        let cropped = |crop| {
+            edited(ImageEdits {
+                crop: Some(crop),
+                ..ImageEdits::default()
+            })
         };
-        let point = Point { x: 0.0, y: 0.0 };
-        let image = |frame, rotation, edits| ElementKind::Image {
-            asset: AssetId::of(b""),
-            natural_size: Size {
-                width: 1,
-                height: 1,
-            },
-            frame,
-            rotation,
-            edits,
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
+        let trimmed = |start, end| {
+            edited(ImageEdits {
+                trim: Some(Trim { start, end }),
+                ..ImageEdits::default()
+            })
         };
-        let text = |font_size| Text::new(String::new(), font_size);
-        let note = |frame, rotation| ElementKind::Note {
-            frame,
-            rotation,
-            text: text(20.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
+        let sized = |mut kind: ElementKind, font_size| {
+            if let ElementKind::Sticky { text, .. } | ElementKind::Shape { text, .. } = &mut kind {
+                text.font_size = font_size;
+            }
+            kind
         };
-        let sticky = |frame, rotation, font_size| ElementKind::Sticky {
-            frame,
-            rotation,
-            text: text(font_size),
-            target: None,
-            paper: Paper::Yellow,
-            opacity: Default::default(),
-        };
-        let shape = |frame, rotation, font_size| ElementKind::Shape {
-            frame,
-            rotation,
-            shape: Shape::Rectangle,
-            corners: Default::default(),
-            text: text(font_size),
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            fill: Fill::Hollow,
-            dash: Dash::Solid,
-            opacity: Default::default(),
-        };
-        let arrow = |from, to| ElementKind::Arrow {
-            from,
-            to,
-            from_target: None,
-            to_target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
-            heads: Heads::End,
-            opacity: Default::default(),
-        };
-        let line = |from, to| ElementKind::Line {
-            from,
-            to,
-            from_target: None,
-            to_target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
-            opacity: Default::default(),
-        };
-        let comment = |at| ElementKind::Comment {
-            at,
-            text: String::new(),
-            target: None,
-        };
-        let edits = ImageEdits::default();
+        let shape = |rect, rotation| labelled(Shape::Rectangle, rect, rotation, "");
 
         let valid = [
-            image(rect, 0.0, edits),
-            image(
-                rect,
-                90.0,
-                ImageEdits {
-                    crop: Some(rect),
-                    ..edits
-                },
-            ),
-            image(
-                rect,
-                0.0,
-                ImageEdits {
-                    trim: Some(Trim {
-                        start: 0.0,
-                        end: 0.1,
-                    }),
-                    ..edits
-                },
-            ),
-            note(rect, -45.0),
-            sticky(rect, 0.0, 20.0),
-            shape(rect, 0.0, 20.0),
-            arrow(point, point),
-            line(point, point),
-            comment(point),
+            image(0.0, 0.0, 1.0, 1.0),
+            turned(cropped(rect), 90.0),
+            trimmed(0.0, 0.1),
+            turned(note(0.0, 0.0, 1.0, 1.0), -45.0),
+            sticky(0.0, 0.0, 1.0, 1.0),
+            shape(rect, 0.0),
+            arrow(),
+            line((0.0, 0.0), (0.0, 0.0)),
+            comment(0.0, 0.0),
         ];
         assert!(valid.iter().all(ElementKind::is_valid));
 
-        let nan = f64::NAN;
         let invalid = [
-            image(Rect { x: nan, ..rect }, 0.0, edits),
-            image(Rect { y: nan, ..rect }, 0.0, edits),
-            image(Rect { width: nan, ..rect }, 0.0, edits),
-            image(
-                Rect {
-                    height: nan,
-                    ..rect
-                },
-                0.0,
-                edits,
-            ),
-            image(
-                rect,
-                0.0,
-                ImageEdits {
-                    crop: Some(Rect { x: nan, ..rect }),
-                    ..edits
-                },
-            ),
-            image(rect, nan, edits),
-            image(
-                rect,
-                0.0,
-                ImageEdits {
-                    trim: Some(Trim {
-                        start: 1.0,
-                        end: 1.0,
-                    }),
-                    ..edits
-                },
-            ),
-            image(
-                rect,
-                0.0,
-                ImageEdits {
-                    trim: Some(Trim {
-                        start: -0.5,
-                        end: 1.0,
-                    }),
-                    ..edits
-                },
-            ),
-            image(
-                rect,
-                0.0,
-                ImageEdits {
-                    trim: Some(Trim {
-                        start: 0.0,
-                        end: f64::INFINITY,
-                    }),
-                    ..edits
-                },
-            ),
-            note(Rect { x: nan, ..rect }, 0.0),
-            note(rect, f64::INFINITY),
-            sticky(Rect { x: nan, ..rect }, 0.0, 20.0),
-            sticky(rect, nan, 20.0),
-            sticky(rect, 0.0, nan),
-            sticky(rect, 0.0, 0.0),
-            shape(Rect { x: nan, ..rect }, 0.0, 20.0),
-            shape(rect, nan, 20.0),
-            shape(rect, 0.0, f64::INFINITY),
-            shape(rect, 0.0, -1.0),
-            arrow(Point { x: nan, ..point }, point),
-            arrow(
-                point,
-                Point {
-                    y: f64::INFINITY,
-                    ..point
-                },
-            ),
-            line(point, Point { x: nan, ..point }),
-            comment(Point { y: nan, ..point }),
+            image(nan, 0.0, 1.0, 1.0),
+            image(0.0, nan, 1.0, 1.0),
+            image(0.0, 0.0, nan, 1.0),
+            image(0.0, 0.0, 1.0, nan),
+            cropped(area(nan, 0.0, 1.0, 1.0)),
+            turned(image(0.0, 0.0, 1.0, 1.0), nan),
+            trimmed(1.0, 1.0),
+            trimmed(-0.5, 1.0),
+            trimmed(0.0, f64::INFINITY),
+            note(nan, 0.0, 1.0, 1.0),
+            turned(note(0.0, 0.0, 1.0, 1.0), f64::INFINITY),
+            sticky(nan, 0.0, 1.0, 1.0),
+            turned(sticky(0.0, 0.0, 1.0, 1.0), nan),
+            sized(sticky(0.0, 0.0, 1.0, 1.0), nan),
+            sized(sticky(0.0, 0.0, 1.0, 1.0), 0.0),
+            shape(area(nan, 0.0, 1.0, 1.0), 0.0),
+            shape(rect, nan),
+            sized(shape(rect, 0.0), f64::INFINITY),
+            sized(shape(rect, 0.0), -1.0),
+            stuck((nan, 0.0), None, (0.0, 0.0), None),
+            stuck((0.0, 0.0), None, (0.0, f64::INFINITY), None),
+            line((0.0, 0.0), (nan, 0.0)),
+            comment(0.0, nan),
         ];
         for kind in invalid {
             assert!(!kind.is_valid(), "{kind:?}");
@@ -1869,47 +2018,17 @@ mod tests {
 
     #[test]
     fn a_pen_stroke_draws_at_least_one_point_within_its_frame() {
-        let ElementKind::Stroke {
-            frame,
-            colour,
-            weight,
-            opacity,
-            ..
-        } = stroke()
-        else {
-            unreachable!()
-        };
-        let drawn = |frame, rotation, points| ElementKind::Stroke {
-            tip: Tip::Pen,
-            frame,
-            rotation,
-            points,
-            target: None,
-            colour,
-            weight,
-            opacity,
-        };
-        let at = |x, y| Point { x, y };
-        let flat = Rect {
-            height: 0.0,
-            ..frame
-        };
-        assert!(drawn(frame, 0.0, vec![at(0.5, 0.5)]).is_valid());
-        assert!(drawn(flat, 30.0, vec![at(0.0, 0.0), at(1.0, 0.0)]).is_valid());
+        let frame = area(0.0, 0.0, 100.0, 50.0);
+        let flat = area(0.0, 0.0, 100.0, 0.0);
+        assert!(pen(frame, 0.0, &[(0.5, 0.5)]).is_valid());
+        assert!(pen(flat, 30.0, &[(0.0, 0.0), (1.0, 0.0)]).is_valid());
         for kind in [
-            drawn(frame, 0.0, vec![]),
-            drawn(frame, 0.0, vec![at(1.5, 0.5)]),
-            drawn(frame, 0.0, vec![at(0.5, -0.1)]),
-            drawn(frame, 0.0, vec![at(f64::NAN, 0.5)]),
-            drawn(frame, f64::INFINITY, vec![at(0.5, 0.5)]),
-            drawn(
-                Rect {
-                    x: f64::NAN,
-                    ..frame
-                },
-                0.0,
-                vec![at(0.5, 0.5)],
-            ),
+            pen(frame, 0.0, &[]),
+            pen(frame, 0.0, &[(1.5, 0.5)]),
+            pen(frame, 0.0, &[(0.5, -0.1)]),
+            pen(frame, 0.0, &[(f64::NAN, 0.5)]),
+            pen(frame, f64::INFINITY, &[(0.5, 0.5)]),
+            pen(area(f64::NAN, 0.0, 100.0, 50.0), 0.0, &[(0.5, 0.5)]),
         ] {
             assert!(!kind.is_valid(), "{kind:?}");
         }
@@ -1928,77 +2047,6 @@ mod tests {
         );
         written["points"] = serde_json::json!([0.0, 1.0, 0.5]);
         assert!(serde_json::from_value::<ElementKind>(written).is_err());
-    }
-
-    pub(crate) fn id(bits: u128) -> ElementId {
-        ElementId::from_random(bits)
-    }
-
-    pub(crate) fn z(key: &str) -> ZIndex {
-        key.parse().unwrap()
-    }
-
-    pub(crate) fn element(group: Option<u128>, key: &str, kind: ElementKind) -> Element {
-        Element {
-            group: group.map(id),
-            locked: false,
-            z: z(key),
-            kind,
-        }
-    }
-
-    pub(crate) fn locked(group: Option<u128>, key: &str, kind: ElementKind) -> Element {
-        Element {
-            locked: true,
-            ..element(group, key, kind)
-        }
-    }
-
-    pub(crate) fn arrow() -> ElementKind {
-        let point = Point { x: 0.0, y: 0.0 };
-        ElementKind::Arrow {
-            from: point,
-            to: point,
-            from_target: None,
-            to_target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
-            heads: Heads::End,
-            opacity: Default::default(),
-        }
-    }
-
-    pub(crate) fn stroke() -> ElementKind {
-        ElementKind::Stroke {
-            tip: Tip::Pen,
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 100.0,
-                height: 50.0,
-            },
-            rotation: 0.0,
-            points: vec![
-                Point { x: 0.0, y: 1.0 },
-                Point { x: 0.5, y: 0.0 },
-                Point { x: 1.0, y: 1.0 },
-            ],
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            opacity: Default::default(),
-        }
-    }
-
-    pub(crate) fn board(elements: impl IntoIterator<Item = (u128, Element)>) -> Board {
-        Board {
-            elements: elements
-                .into_iter()
-                .map(|(bits, element)| (id(bits), element))
-                .collect(),
-            ..Board::default()
-        }
     }
 
     #[test]
@@ -2118,35 +2166,18 @@ mod tests {
 
     #[test]
     fn an_end_stuck_to_what_is_gone_comes_free_on_repair() {
-        let point = Point { x: 1.0, y: 2.0 };
-        let line = |from_target: u128, to_target: u128| ElementKind::Line {
-            from: point,
-            to: point,
-            from_target: Some(id(from_target)),
-            to_target: Some(id(to_target)),
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
-            opacity: Default::default(),
-        };
-        let note = ElementKind::Note {
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            rotation: 0.0,
-            text: Text::new(String::new(), 1.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
+        let point = point(1.0, 2.0);
+        let linking = |from_target, to_target| {
+            let mut kind = line((point.x, point.y), (point.x, point.y));
+            let [(_, from), (_, to)] = kind.ends_mut().unwrap();
+            (*from, *to) = (Some(id(from_target)), Some(id(to_target)));
+            kind
         };
         let mut broken = board([
-            (1, element(None, "a0", note)),
+            (1, element(None, "a0", note(0.0, 0.0, 1.0, 1.0))),
             (2, element(None, "a1", ElementKind::group())),
-            (3, element(None, "a2", line(1, 9))),
-            (4, element(None, "a3", line(2, 3))),
+            (3, element(None, "a2", linking(1, 9))),
+            (4, element(None, "a3", linking(2, 3))),
         ]);
         broken.repair(&BTreeSet::new());
 
@@ -2157,25 +2188,13 @@ mod tests {
 
     #[test]
     fn what_sticks_whole_in_a_cycle_comes_free_at_its_smallest_id_on_repair() {
-        let note = |target: u128| ElementKind::Note {
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            rotation: 0.0,
-            text: Text::new(String::new(), 1.0),
-            target: Some(id(target)),
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        };
+        let note_on = |target| on(note(0.0, 0.0, 1.0, 1.0), target);
         let mut broken = board([
-            (1, element(None, "a0", note(3))),
-            (2, element(None, "a1", note(1))),
-            (3, element(None, "a2", note(2))),
-            (4, element(None, "a3", note(9))),
-            (5, element(None, "a4", note(6))),
+            (1, element(None, "a0", note_on(3))),
+            (2, element(None, "a1", note_on(1))),
+            (3, element(None, "a2", note_on(2))),
+            (4, element(None, "a3", note_on(9))),
+            (5, element(None, "a4", note_on(6))),
             (6, element(None, "a5", ElementKind::group())),
         ]);
         broken.repair(&BTreeSet::new());
@@ -2185,20 +2204,19 @@ mod tests {
 
     #[test]
     fn what_sticks_whole_to_an_unread_element_keeps_its_link_until_it_moves_off() {
-        let note = |x: f64, colour, target| ElementKind::Note {
-            frame: Rect {
-                x,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            rotation: 0.0,
-            text: Text::new(String::new(), 1.0),
-            target,
-            colour,
-            opacity: Default::default(),
+        let note_with = |x, colour, target: Option<u128>| {
+            let mut kind = note(x, 0.0, 1.0, 1.0);
+            if let ElementKind::Note {
+                colour: painted,
+                target: stuck,
+                ..
+            } = &mut kind
+            {
+                (*painted, *stuck) = (colour, target.map(id));
+            }
+            kind
         };
-        let read = board([(1, element(None, "a0", note(0.0, Colour::Ink, Some(id(9)))))]);
+        let read = board([(1, element(None, "a0", note_with(0.0, Colour::Ink, Some(9))))]);
         let mut board = read.clone();
         board.repair(&BTreeSet::from([id(9)]));
         let written = |board: &Board, kind| {
@@ -2207,11 +2225,14 @@ mod tests {
             edited.written(id(1)).unwrap().kind.target()
         };
         assert_eq!(board.elements[&id(1)].kind.target(), None);
-        assert_eq!(written(&board, note(0.0, Colour::Red, None)), Some(id(9)));
-        assert_eq!(written(&board, note(5.0, Colour::Ink, None)), None);
+        assert_eq!(
+            written(&board, note_with(0.0, Colour::Red, None)),
+            Some(id(9))
+        );
+        assert_eq!(written(&board, note_with(5.0, Colour::Ink, None)), None);
         let mut deleted = read;
         deleted.repair(&BTreeSet::new());
-        assert_eq!(written(&deleted, note(0.0, Colour::Red, None)), None);
+        assert_eq!(written(&deleted, note_with(0.0, Colour::Red, None)), None);
         assert_eq!(deleted.written(id(1)).unwrap().kind.target(), None);
     }
 
@@ -2373,29 +2394,8 @@ mod tests {
 
     #[test]
     fn a_stroke_writes_its_tip_only_when_a_highlighter() {
-        let ElementKind::Stroke {
-            frame,
-            rotation,
-            points,
-            colour,
-            weight,
-            opacity,
-            ..
-        } = stroke()
-        else {
-            unreachable!()
-        };
         assert!(serde_json::to_value(stroke()).unwrap().get("tip").is_none());
-        let highlighter = ElementKind::Stroke {
-            tip: Tip::Highlighter,
-            frame,
-            rotation,
-            points,
-            target: None,
-            colour,
-            weight,
-            opacity,
-        };
+        let highlighter = highlighted(stroke());
         let written = serde_json::to_value(&highlighter).unwrap();
         assert_eq!(written["tip"], "highlighter");
         assert_eq!(

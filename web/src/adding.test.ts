@@ -1,31 +1,19 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rectangleKind } from "../test/kinds.js";
+import { boardOf } from "../test/boards.js";
+import { fakeRenderer } from "../test/renderers.js";
 import { sample } from "../test/folders.js";
 import { adding, type Host } from "./adding.js";
-import { imageKind, untitled, type Opened, type Reader } from "./board.js";
+import { imageKind, type Opened, type Reader } from "./board.js";
 import * as core from "./core.js";
-import type { Kind } from "./core.js";
 import type { Edits } from "./edit.js";
 import type { Renderer } from "./renderer.js";
 
 const IMAGE = "a".repeat(32);
 const SHAPE = "c".repeat(32);
 const ASSET = "f".repeat(64);
-const shape: Kind = {
-  type: "shape",
-  frame: { x: 0, y: 0, width: 100, height: 100 },
-  shape: "rectangle",
-  text: { content: "", font_size: 20 },
-};
-
-function boardOf(elements: [string, Kind][]): Opened {
-  const opened = untitled();
-  for (const [id, kind] of elements) {
-    opened.editor.add(id, undefined, JSON.stringify(kind));
-  }
-  opened.board = core.board(opened.editor);
-  return opened;
-}
+const shape = rectangleKind();
 
 const PNG = (() => {
   const [bytes] = [...sample("demo")]
@@ -56,7 +44,7 @@ function intake(
   {
     selected = [],
     stopped = () => false,
-    renderer = {} as Renderer,
+    renderer = fakeRenderer(),
     later,
     heldSize = () => undefined,
     idle = () => {},
@@ -208,7 +196,7 @@ describe("what the board takes in", () => {
 
     it("lands in the renderer as soon as it is decoded, then on the board, selected, as one edit", async () => {
       const opened = boardOf([]);
-      const renderer = {} as Renderer;
+      const renderer = fakeRenderer();
       const { taking, select, keep, load } = intake(opened, { renderer });
       await taking.images(incoming(), { x: 400, y: 300 });
       const [bitmap] = decoded;
@@ -229,7 +217,7 @@ describe("what the board takes in", () => {
 
     it("lands in the renderer that draws the board once the image is decoded, though none did when adding began", async () => {
       const opened = boardOf([]);
-      const renderer = {} as Renderer;
+      const renderer = fakeRenderer();
       const { taking, select, keep, load, shown } = intake(opened, { renderer });
       shown.renderer = undefined;
       meanwhile = () => {
@@ -250,7 +238,7 @@ describe("what the board takes in", () => {
 
     it("hands an image added over to the board when the renderer draws only once it is decoded", async () => {
       const opened = boardOf([]);
-      const { taking, select, keep, load } = intake(opened, { later: {} as Renderer });
+      const { taking, select, keep, load } = intake(opened, { later: fakeRenderer() });
       await taking.images(incoming(), { x: 400, y: 300 });
       expect(load).not.toHaveBeenCalled();
       expect(keep).toHaveBeenCalledOnce();
@@ -290,7 +278,7 @@ describe("what the board takes in", () => {
     it("is not added, but freed, when another board shows while an edit under way ends", async () => {
       const opened = boardOf([]);
       const { taking, select, keep } = intake(opened, {
-        later: {} as Renderer,
+        later: fakeRenderer(),
         idle: (shown) => {
           shown.board = boardOf([]);
         },
@@ -305,7 +293,7 @@ describe("what the board takes in", () => {
     it("is not added, but freed, once the app stopped", async () => {
       const opened = boardOf([]);
       const { taking, select, keep } = intake(opened, {
-        later: {} as Renderer,
+        later: fakeRenderer(),
         stopped: () => true,
       });
       await taking.images(incoming(), { x: 400, y: 300 });
@@ -341,7 +329,7 @@ describe("what the board takes in", () => {
     it("pastes an image copied in another window from its bytes, loaded as soon as it is decoded", async () => {
       const { copied, asset } = await copiedImage();
       const opened = boardOf([]);
-      const renderer = {} as Renderer;
+      const renderer = fakeRenderer();
       const { taking, said, select, keep, load } = intake(opened, { renderer });
       const assets = vi.fn<Reader>(async () => new Map([[asset, PNG]]));
       await taking.paste({ copied, assets }, { x: 500, y: 500 });
@@ -364,7 +352,7 @@ describe("what the board takes in", () => {
     it("hands an image pasted over to the board when the renderer draws only once it is decoded", async () => {
       const { copied, asset } = await copiedImage();
       const opened = boardOf([]);
-      const { taking, select, keep, load } = intake(opened, { later: {} as Renderer });
+      const { taking, select, keep, load } = intake(opened, { later: fakeRenderer() });
       await taking.paste(
         { copied, assets: async () => new Map([[asset, PNG]]) },
         { x: 500, y: 500 },
@@ -400,7 +388,7 @@ describe("what the board takes in", () => {
       const { copied, asset } = await copiedImage();
       const opened = boardOf([]);
       const { taking, said, select, keep } = intake(opened, {
-        later: {} as Renderer,
+        later: fakeRenderer(),
         stopped: () => true,
       });
       await taking.paste(

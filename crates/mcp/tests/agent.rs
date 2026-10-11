@@ -487,13 +487,13 @@ fn too_many_agents_are_turned_away_with_a_reason() {
     let directory = scratch("crowded");
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (address, secrets, _task) = runtime.block_on(serving(Echo(None)));
-    // As many connections as the app takes, which never give a token.
+    // As many sessions as the app takes, each past the token, which the app answers once it
+    // counts the connection.
     let _crowd: Vec<TcpStream> = runtime.block_on(async {
         let mut crowd = Vec::new();
         for _ in 0..8 {
-            crowd.push(TcpStream::connect(address).await.unwrap());
+            crowd.push(connected(address, &secrets).await);
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
         crowd
     });
     discovery(address, secrets, std::process::id())
@@ -502,29 +502,6 @@ fn too_many_agents_are_turned_away_with_a_reason() {
 
     let error = gateway(&directory, std::io::empty(), std::io::sink()).unwrap_err();
     assert!(matches!(error, GatewayError::Refused), "{error:?}");
-    std::fs::remove_dir_all(&directory).unwrap();
-}
-
-#[test]
-fn a_process_on_the_port_of_an_app_that_died_and_says_nothing_is_not_planche() {
-    let directory = scratch("silent-impostor");
-    let impostor = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = impostor.local_addr().unwrap();
-    let secrets = Secrets {
-        token: token().unwrap(),
-        answer: token().unwrap(),
-    };
-    discovery(address, secrets, std::process::id() + 1)
-        .write(&directory)
-        .unwrap();
-    std::thread::spawn(move || {
-        let held: Vec<_> = impostor.incoming().take(1).collect();
-        std::thread::sleep(Duration::from_secs(10));
-        drop(held);
-    });
-
-    let error = gateway(&directory, std::io::empty(), std::io::sink()).unwrap_err();
-    assert!(matches!(error, GatewayError::Unreachable(port) if port == address.port()));
     std::fs::remove_dir_all(&directory).unwrap();
 }
 

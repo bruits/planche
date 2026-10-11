@@ -42,7 +42,11 @@ jobs:
           # rust-cache keys on every installed toolchain: keep only the pinned one.
           rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
           rustup toolchain uninstall stable
+      # Pull requests restore main's caches but save none, as each would add a whole set to the
+      # repository's 10 GB.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Tauri renders through WebKitGTK on Linux.
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
@@ -65,6 +69,8 @@ jobs:
           rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
           rustup toolchain uninstall stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --workspace
 
   wasm:
@@ -79,6 +85,8 @@ jobs:
           rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
           rustup toolchain uninstall stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build -p board -p format -p bindings --target wasm32-unknown-unknown
 
   web:
@@ -93,6 +101,8 @@ jobs:
           rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
           rustup toolchain uninstall stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: web/package.json
@@ -131,6 +141,8 @@ jobs:
           rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
           rustup toolchain uninstall stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Tauri renders through WebKitGTK on Linux.
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev

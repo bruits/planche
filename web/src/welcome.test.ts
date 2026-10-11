@@ -26,7 +26,6 @@ describe("welcome", () => {
   });
 
   afterEach(() => {
-    document.body.replaceChildren();
     vi.restoreAllMocks();
   });
 
@@ -64,6 +63,7 @@ describe("welcome", () => {
     greeting.follow(EMPTY);
     expect(shown()).toBe(false);
 
+    // The next launch's page, without this one's greeting.
     document.body.replaceChildren();
     const next = made();
     expect(next.quietsHint()).toBe(false);

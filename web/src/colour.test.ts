@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { open } from "./board.js";
-import { meanColours } from "./colour.js";
+import { openedFrom } from "../test/boards.js";
 import { memoryHome, sample } from "../test/folders.js";
+import { meanColours } from "./colour.js";
 
 /** Two of the demo's images. */
 const [LARGEST, MIDDLE] = [
@@ -14,7 +14,7 @@ describe("meanColours", () => {
     const files = sample("demo");
     files.delete(`assets/${LARGEST}`);
     files.get(`assets/${MIDDLE}`)![100]! ^= 0xff;
-    const { opened } = (await open(async () => memoryHome("demo", files).home, new Map()))!;
+    const { opened } = await openedFrom(memoryHome("demo", files).home);
     const ids = Object.entries(opened.board.elements)
       .filter(([, { kind }]) => kind.type === "image" && [LARGEST, MIDDLE].includes(kind.asset))
       .map(([id]) => id);

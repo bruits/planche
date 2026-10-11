@@ -73,24 +73,8 @@ impl Board {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{arrow, board, element, id, z};
-    use crate::{Colour, ElementKind, ImageEdits, Rect, Size, Text};
-
-    fn note() -> ElementKind {
-        ElementKind::Note {
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 10.0,
-                height: 10.0,
-            },
-            rotation: 0.0,
-            text: Text::new(String::new(), 2.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Default::default(),
-        }
-    }
+    use crate::tests::{arrow, board, element, id, image_of, note, on, stuck, z};
+    use crate::{ElementKind, ImageEdits};
 
     #[test]
     fn a_copy_holds_what_its_groups_hold_its_outermost_elements_stacked_at_the_top_level() {
@@ -126,25 +110,7 @@ mod tests {
 
     #[test]
     fn keeping_assets_leaves_out_other_images_and_the_groups_that_empties() {
-        let image = |bytes: &[u8]| ElementKind::Image {
-            asset: AssetId::of(bytes),
-            natural_size: Size {
-                width: 1,
-                height: 1,
-            },
-            frame: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            rotation: 0.0,
-            edits: ImageEdits::default(),
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        };
+        let image = |bytes: &[u8]| image_of(bytes, ImageEdits::default());
         let copied = Copied {
             elements: board([
                 (1, element(None, "a0", ElementKind::group())),
@@ -167,16 +133,13 @@ mod tests {
 
     #[test]
     fn a_copy_lets_go_of_what_it_leaves_out() {
-        let mut arrow = arrow();
-        for (_, target) in arrow.ends_mut().unwrap() {
-            *target = Some(id(1));
-        }
-        let mut stuck = note();
-        *stuck.target_mut().unwrap() = Some(id(3));
+        let blank = || note(0.0, 0.0, 10.0, 10.0);
+        let arrow = stuck((0.0, 0.0), Some(1), (0.0, 0.0), Some(1));
+        let stuck = on(blank(), 3);
         let board = board([
-            (1, element(None, "a0", note())),
+            (1, element(None, "a0", blank())),
             (2, element(None, "a1", arrow)),
-            (3, element(None, "a2", note())),
+            (3, element(None, "a2", blank())),
             (4, element(None, "a3", stuck.clone())),
         ]);
         let copied = board.copy(&[2, 4].map(id));

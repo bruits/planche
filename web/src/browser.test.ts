@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { eventually } from "../test/waits.js";
 import { files as filesOf, untitled } from "./board.js";
 import { browser } from "./browser.js";
 import type { Bytes } from "./core.js";
@@ -111,7 +112,7 @@ describe("browser session", () => {
       throw refused;
     });
     await session.write("board.json", new TextEncoder().encode("{}"));
-    await vi.waitFor(() => expect(reported).toHaveBeenCalledExactlyOnceWith(refused));
+    await eventually(() => expect(reported).toHaveBeenCalledExactlyOnceWith(refused));
     expect(root.folders.get("session")!.files.has("board.json")).toBe(true);
   });
 

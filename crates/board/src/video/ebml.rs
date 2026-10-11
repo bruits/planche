@@ -289,13 +289,17 @@ fn unsigned(bytes: &[u8]) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    /// Its id as written, marker included, then its size on as many bytes as `width` says.
-    fn sized(id: u64, contents: &[u8], width: usize) -> Vec<u8> {
-        let id_bytes = id.to_be_bytes();
-        let mut bytes = id_bytes[id_bytes.iter().position(|&byte| byte != 0).unwrap()..].to_vec();
+    /// `id` as written, marker included.
+    fn written(id: u64) -> Vec<u8> {
+        let bytes = id.to_be_bytes();
+        bytes[bytes.iter().position(|&byte| byte != 0).unwrap()..].to_vec()
+    }
+
+    pub(crate) fn sized(id: u64, contents: &[u8], width: usize) -> Vec<u8> {
+        let mut bytes = written(id);
         let size = contents.len() as u64 | 1 << (7 * width);
         bytes.extend(&size.to_be_bytes()[8 - width..]);
         bytes.extend(contents);
@@ -308,8 +312,7 @@ mod tests {
 
     /// Of unknown size, which runs to where something else starts.
     fn open(id: u64, contents: &[u8]) -> Vec<u8> {
-        let id_bytes = id.to_be_bytes();
-        let mut bytes = id_bytes[id_bytes.iter().position(|&byte| byte != 0).unwrap()..].to_vec();
+        let mut bytes = written(id);
         bytes.push(0xFF);
         bytes.extend(contents);
         bytes

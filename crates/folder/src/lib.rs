@@ -7,7 +7,7 @@
 //! within a size. It knows nothing of boards, and needs no Tauri, so its tests run on every
 //! platform.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -178,6 +178,13 @@ fn visible(root: &Path, path: &str) -> io::Result<PathBuf> {
     Ok(file)
 }
 
+/// Tests that refuse a file on purpose need no patience.
+const PAUSE: Duration = if cfg!(test) {
+    Duration::from_millis(1)
+} else {
+    Duration::from_millis(100)
+};
+
 /// Windows refuses to replace or remove a file for as long as another program, such as an
 /// indexer or an antivirus, holds it open, which it mostly does for a moment.
 fn retried(mut act: impl FnMut() -> io::Result<()>) -> io::Result<()> {
@@ -189,7 +196,7 @@ fn retried(mut act: impl FnMut() -> io::Result<()>) -> io::Result<()> {
         match act() {
             Err(error) if held(&error) && tries < 5 => {
                 tries += 1;
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(PAUSE);
             }
             result => return result,
         }
@@ -238,6 +245,58 @@ pub fn write_all(root: &Path, entries: &[(&str, &[u8])]) -> Result<(), Interrupt
         }
     }
     Ok(())
+}
+
+/// Which files of a batch are in place, from the first, and why the next is not.
+#[derive(Debug)]
+pub struct Landed {
+    /// `None` for a file left as it was, a top-level dot file, or one that could not be stamped.
+    pub stamps: Vec<Option<Stamp>>,
+    pub error: Option<io::Error>,
+}
+
+/// What [`write_all`] does, except that a file `keep` takes, when there already, is left as it
+/// is. `Err` when one of those cannot be looked up, before anything is written.
+pub fn write_keeping(
+    root: &Path,
+    entries: &[(&str, &[u8])],
+    keep: impl Fn(&str) -> bool,
+) -> io::Result<Landed> {
+    let paths = || entries.iter().map(|(path, _)| *path);
+    let there: BTreeSet<&str> = stamps(root, paths().filter(|path| keep(path)))?
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    let written: Vec<(&str, &[u8])> = entries
+        .iter()
+        .copied()
+        .filter(|(path, _)| !there.contains(path))
+        .collect();
+    let (placed, error) = match write_all(root, &written) {
+        Ok(()) => (written.len(), None),
+        Err(Interrupted { done, error }) => (done, Some(error)),
+    };
+    let landed: BTreeSet<&str> = written[..placed]
+        .iter()
+        .map(|(path, _)| *path)
+        .chain(there.iter().copied())
+        .collect();
+    let done = paths().take_while(|path| landed.contains(path)).count();
+    // A top-level dot file is written but never stamped, as `stamps` refuses dot files.
+    let stamped = paths()
+        .take(done)
+        .filter(|path| !there.contains(path) && !path.starts_with('.'));
+    let found: BTreeMap<&str, Stamp> = stamps(root, stamped)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    Ok(Landed {
+        stamps: paths()
+            .take(done)
+            .map(|path| found.get(path).copied())
+            .collect(),
+        error,
+    })
 }
 
 /// Where `path` is written, `None` for a top-level dot file that is there already.
@@ -676,6 +735,86 @@ mod tests {
             ["a.json", "b.json", "c.json"]
         );
         assert_eq!(names(&root), ["elements"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_batch_keeping_what_is_there_writes_the_rest_and_stamps_it_in_order() {
+        let root = scratch("keeping");
+        write(&root, "assets/kept", b"kept").unwrap();
+        write(&root, "elements/a.json", b"before").unwrap();
+        let kept = stamp(&root.join("assets/kept")).unwrap();
+        let entries: [(&str, &[u8]); 4] = [
+            ("elements/b.json", b"b"),
+            ("assets/kept", b"new"),
+            ("assets/fresh", b"fresh"),
+            ("elements/a.json", b"after"),
+        ];
+        let landed = write_keeping(&root, &entries, |path| path.starts_with("assets/")).unwrap();
+        assert!(landed.error.is_none(), "{:?}", landed.error);
+        let expected = entries
+            .map(|(path, _)| (path != "assets/kept").then(|| stamp(&root.join(path)).unwrap()));
+        assert_eq!(landed.stamps, expected);
+        assert_eq!(read(&root, "assets/kept").unwrap(), b"kept");
+        assert_eq!(stamp(&root.join("assets/kept")).unwrap(), kept);
+        assert_eq!(read(&root, "assets/fresh").unwrap(), b"fresh");
+        assert_eq!(read(&root, "elements/a.json").unwrap(), b"after");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_batch_keeping_what_is_there_tells_what_landed_before_a_failure() {
+        let root = scratch("keeping-failure");
+        write(&root, "assets/kept", b"kept").unwrap();
+        // A folder that holds something cannot be replaced by a file, on any system.
+        touch(&root, "elements/b.json/inside");
+        let keep = |path: &str| path.starts_with("assets/");
+        let entries: [(&str, &[u8]); 4] = [
+            ("assets/kept", b"new"),
+            ("elements/a.json", b"a"),
+            ("elements/b.json", b"b"),
+            ("elements/c.json", b"c"),
+        ];
+        let landed = write_keeping(&root, &entries, keep).unwrap();
+        assert!(landed.error.is_some());
+        assert_eq!(
+            landed.stamps,
+            [None, Some(stamp(&root.join("elements/a.json")).unwrap())]
+        );
+        assert!(!root.join("elements/c.json").exists());
+
+        // What is there already counts for nothing past the first failure.
+        let entries: [(&str, &[u8]); 3] = [
+            ("elements/d.json", b"d"),
+            ("elements/b.json", b"b"),
+            ("assets/kept", b"new"),
+        ];
+        let landed = write_keeping(&root, &entries, keep).unwrap();
+        assert_eq!(landed.stamps.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_batch_keeping_what_is_there_writes_a_top_level_dot_file_unstamped() {
+        let root = scratch("keeping-dot");
+        let entries: [(&str, &[u8]); 2] = [(".gitattributes", b"* -text"), ("board.json", b"{}")];
+        let landed = write_keeping(&root, &entries, |_| false).unwrap();
+        assert_eq!(
+            landed.stamps,
+            [None, Some(stamp(&root.join("board.json")).unwrap())]
+        );
+        assert_eq!(fs::read(root.join(".gitattributes")).unwrap(), b"* -text");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_batch_keeping_what_is_there_writes_nothing_when_it_cannot_look() {
+        let root = scratch("keeping-refused");
+        let entries: [(&str, &[u8]); 2] = [("board.json", b"{}"), ("../outside", b"")];
+        assert!(refuses(write_keeping(&root, &entries, |_| true)));
+        assert!(!root.join("board.json").exists());
+        let landed = write_keeping(&root, &[], |_| true).unwrap();
+        assert!(landed.stamps.is_empty() && landed.error.is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

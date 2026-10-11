@@ -523,99 +523,71 @@ fn shown(natural: Size, edits: &ImageEdits) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{board, element, id, stroke};
-    use crate::{Corners, Opacity};
-
-    const FRAME: Rect = Rect {
-        x: 10.0,
-        y: 20.0,
-        width: 200.0,
-        height: 100.0,
+    use crate::tests::{
+        area, assert_at, board, comment, counted, element, highlighted, id, image_of, near, note,
+        pen, point, stroke, stuck, turned,
     };
+    use crate::{Opacity, Style};
+
+    const FRAME: Rect = area(10.0, 20.0, 200.0, 100.0);
 
     fn drawn(kind: ElementKind) -> Vec<Item> {
         board([(1, element(None, "a0", kind))]).drawn(id(1), &BTreeSet::new())
     }
 
-    fn image(edits: ImageEdits) -> ElementKind {
-        ElementKind::Image {
-            asset: AssetId::of(b"dusk"),
-            natural_size: Size {
-                width: 400,
-                height: 200,
-            },
-            frame: FRAME,
-            rotation: 30.0,
-            edits,
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Opacity::default(),
+    fn dusk(edits: ImageEdits) -> ElementKind {
+        let mut kind = turned(image_of(b"dusk", edits), 30.0);
+        if let ElementKind::Image {
+            natural_size,
+            frame,
+            ..
+        } = &mut kind
+        {
+            (*natural_size, *frame) = (
+                Size {
+                    width: 400,
+                    height: 200,
+                },
+                FRAME,
+            );
         }
+        kind
     }
 
-    fn note(content: &str) -> ElementKind {
-        ElementKind::Note {
-            frame: FRAME,
-            rotation: 0.0,
-            text: Text::new(content, 20.0),
-            target: None,
-            colour: Colour::Ink,
-            opacity: Opacity::default(),
+    fn saying(content: &str) -> ElementKind {
+        let mut kind = note(FRAME.x, FRAME.y, FRAME.width, FRAME.height);
+        if let ElementKind::Note { text, .. } = &mut kind {
+            *text = Text::new(content, 20.0);
         }
+        kind
     }
 
-    fn shape(shape: Shape, fill: Fill) -> ElementKind {
-        ElementKind::Shape {
-            frame: FRAME,
-            rotation: 45.0,
-            shape,
-            corners: Corners::new(7).unwrap(),
-            text: Text::new("", 20.0),
-            target: None,
-            colour: Colour::Red,
-            weight: Weight::Thick,
-            dash: Dash::Dashed,
-            fill,
-            opacity: Opacity::default(),
-        }
+    fn painted(shape: Shape, fill: Fill) -> ElementKind {
+        turned(counted(shape, FRAME, 7, fill), 45.0).with_style(&Style {
+            colour: Some(Colour::Red),
+            weight: Some(Weight::Thick),
+            dash: Some(Dash::Dashed),
+            ..Style::default()
+        })
     }
 
-    fn arrow(to: Point, weight: Weight, heads: Heads) -> ElementKind {
-        ElementKind::Arrow {
-            from: Point { x: 0.0, y: 0.0 },
-            to,
-            from_target: None,
-            to_target: None,
-            colour: Colour::Blue,
-            weight,
-            dash: Dash::Solid,
-            heads,
-            opacity: Opacity::default(),
-        }
-    }
-
-    fn texture(x: f64, y: f64, width: f64, height: f64) -> Rect {
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
+    fn pointing(to: Point, weight: Weight, heads: Heads) -> ElementKind {
+        stuck((0.0, 0.0), None, (to.x, to.y), None).with_style(&Style {
+            colour: Some(Colour::Blue),
+            weight: Some(weight),
+            heads: Some(heads),
+            ..Style::default()
+        })
     }
 
     #[test]
     fn groups_comments_blank_texts_and_unknown_ids_draw_nothing() {
-        let comment = ElementKind::Comment {
-            at: Point { x: 0.0, y: 0.0 },
-            text: "Later".to_owned(),
-            target: None,
-        };
+        let comment = comment(0.0, 0.0);
         let board = board([
             (1, element(None, "a0", ElementKind::group())),
             (2, element(Some(1), "a0", comment)),
-            (3, element(Some(1), "a1", note(" "))),
-            (4, element(None, "a1", note("Dusk"))),
+            (3, element(Some(1), "a1", saying(" "))),
+            (4, element(None, "a1", saying("Dusk"))),
         ]);
         let drawn = |bits| board.drawn(id(bits), &BTreeSet::new());
         for bits in [1, 2, 3, 9] {
@@ -633,7 +605,7 @@ mod tests {
     #[test]
     fn a_filled_group_draws_a_panel_around_its_elements_and_its_title_nothing() {
         let at = |x, y| {
-            let mut kind = note("Dusk");
+            let mut kind = saying("Dusk");
             if let ElementKind::Note { frame, .. } = &mut kind {
                 (frame.x, frame.y) = (x, y);
             }
@@ -658,7 +630,7 @@ mod tests {
         assert_eq!(
             drawn(1),
             [Item::Fill {
-                frame: texture(-17.5, -17.5, 535.0, 235.0),
+                frame: area(-17.5, -17.5, 535.0, 235.0),
                 rotation: 0.0,
                 paint: Paint::Colour(Colour::Red),
                 opacity: TINT,
@@ -669,7 +641,7 @@ mod tests {
 
     #[test]
     fn an_image_shows_its_crop_flipped_within_it_greyed_and_cut_to_an_ellipse() {
-        let shows = |edits| match &drawn(image(edits))[..] {
+        let shows = |edits| match &drawn(dusk(edits))[..] {
             [
                 Item::Image {
                     texture,
@@ -686,29 +658,29 @@ mod tests {
             drawn => panic!("{drawn:?}"),
         };
         let whole = ImageEdits::default();
-        assert_eq!(shows(whole), (texture(0.0, 0.0, 1.0, 1.0), false, false));
+        assert_eq!(shows(whole), (area(0.0, 0.0, 1.0, 1.0), false, false));
         let cropped = ImageEdits {
-            crop: Some(texture(100.0, 50.0, 200.0, 100.0)),
+            crop: Some(area(100.0, 50.0, 200.0, 100.0)),
             ..whole
         };
-        assert_eq!(shows(cropped).0, texture(0.25, 0.25, 0.5, 0.5));
+        assert_eq!(shows(cropped).0, area(0.25, 0.25, 0.5, 0.5));
         let flipped = ImageEdits {
             flip_horizontal: true,
             flip_vertical: true,
             ..cropped
         };
-        assert_eq!(shows(flipped).0, texture(0.75, 0.75, -0.5, -0.5));
+        assert_eq!(shows(flipped).0, area(0.75, 0.75, -0.5, -0.5));
         let greyed = ImageEdits {
             greyscale: true,
             crop_shape: CropShape::Ellipse,
             ..whole
         };
-        assert_eq!(shows(greyed), (texture(0.0, 0.0, 1.0, 1.0), true, true));
+        assert_eq!(shows(greyed), (area(0.0, 0.0, 1.0, 1.0), true, true));
     }
 
     #[test]
     fn an_image_whose_asset_does_not_show_is_crossed_out_where_it_lies() {
-        let mut faded = image(ImageEdits::default());
+        let mut faded = dusk(ImageEdits::default());
         if let ElementKind::Image { opacity, .. } = &mut faded {
             *opacity = Opacity::new(50).unwrap();
         }
@@ -737,15 +709,15 @@ mod tests {
 
     #[test]
     fn an_arrow_heads_as_its_stroke_asks_but_never_past_a_third_of_it() {
-        let head = |to, weight, heads| match &drawn(arrow(to, weight, heads))[..] {
+        let head = |to, weight, heads| match &drawn(pointing(to, weight, heads))[..] {
             [Item::Arrow { head, heads, .. }] => (*head, *heads),
             drawn => panic!("{drawn:?}"),
         };
-        let far = Point { x: 60.0, y: 80.0 };
+        let far = point(60.0, 80.0);
         assert_eq!(head(far, Weight::Medium, Heads::End), (16.0, Heads::End));
         assert_eq!(head(far, Weight::Thick, Heads::Both), (22.0, Heads::Both));
         assert_eq!(
-            head(Point { x: 30.0, y: 0.0 }, Weight::Thin, Heads::End),
+            head(point(30.0, 0.0), Weight::Thin, Heads::End),
             (10.0, Heads::End)
         );
     }
@@ -754,12 +726,7 @@ mod tests {
     fn an_arrow_head_turns_back_thirty_degrees_from_its_shaft() {
         // As the renderer's shader spells it.
         let (back, across) = (0.866_025_4, 0.5);
-        let ends = barbs(
-            Point { x: 0.0, y: 0.0 },
-            Point { x: 100.0, y: 0.0 },
-            10.0,
-            Heads::Both,
-        );
+        let ends = barbs(point(0.0, 0.0), point(100.0, 0.0), 10.0, Heads::Both);
         let expected = [
             (100.0 - 10.0 * back, 10.0 * across),
             (100.0 - 10.0 * back, -10.0 * across),
@@ -777,26 +744,16 @@ mod tests {
 
     #[test]
     fn what_elements_draw_reaches_as_far_as_their_strokes_and_heads() {
-        let near = |a: Rect, b: Rect| {
-            [
-                (a.x, b.x),
-                (a.y, b.y),
-                (a.width, b.width),
-                (a.height, b.height),
-            ]
-            .iter()
-            .all(|(a, b)| (a - b).abs() < 1e-9)
-        };
-        let to = Point { x: 100.0, y: 0.0 };
+        let to = point(100.0, 0.0);
         let board = board([
             (
                 1,
-                element(None, "a0", arrow(to, Weight::Medium, Heads::Both)),
+                element(None, "a0", pointing(to, Weight::Medium, Heads::Both)),
             ),
             (2, element(None, "a1", ElementKind::group())),
-            (3, element(Some(2), "a0", image(ImageEdits::default()))),
-            (4, element(Some(2), "a1", note("Dusk"))),
-            (5, element(None, "a2", note(""))),
+            (3, element(Some(2), "a0", dusk(ImageEdits::default()))),
+            (4, element(Some(2), "a1", saying("Dusk"))),
+            (5, element(None, "a2", saying(""))),
         ]);
         let none = BTreeSet::new();
         // A medium arrow's heads are 16 long, so they spread 8 across, and its stroke 1 more.
@@ -804,8 +761,8 @@ mod tests {
         let bounds = board.drawn_bounds(&[id(1)], &none, Annotations::Shown);
         assert!(
             bounds.is_some_and(|bounds| near(
-                bounds,
-                Rect {
+                &bounds,
+                &Rect {
                     x: -1.0,
                     y: -across,
                     width: 102.0,
@@ -832,8 +789,8 @@ mod tests {
         let grown = sin + cos;
         assert!(
             outlined.zip(image).is_some_and(|(outlined, image)| near(
-                outlined,
-                Rect {
+                &outlined,
+                &Rect {
                     x: image.x - grown,
                     y: image.y - grown,
                     width: image.width + 2.0 * grown,
@@ -846,14 +803,9 @@ mod tests {
 
     #[test]
     fn a_rectangle_or_cross_outline_on_a_frame_turned_over_by_a_negative_size_reaches_as_far() {
-        let turned = Rect {
-            x: 110.0,
-            y: 20.0,
-            width: -100.0,
-            height: 50.0,
-        };
+        let turned = area(110.0, 20.0, -100.0, 50.0);
         for kind in [Shape::Rectangle, Shape::Cross] {
-            let mut shape = shape(kind, Fill::Hollow);
+            let mut shape = painted(kind, Fill::Hollow);
             if let ElementKind::Shape {
                 frame,
                 rotation,
@@ -882,9 +834,9 @@ mod tests {
 
     #[test]
     fn an_arrow_without_length_draws_as_a_line() {
-        let origin = Point { x: 0.0, y: 0.0 };
+        let origin = point(0.0, 0.0);
         assert_eq!(
-            drawn(arrow(origin, Weight::Thin, Heads::Both)),
+            drawn(pointing(origin, Weight::Thin, Heads::Both)),
             [Item::Line {
                 from: origin,
                 to: origin,
@@ -898,7 +850,7 @@ mod tests {
 
     #[test]
     fn a_shape_drawn_as_a_polygon_tells_how_many_corners_it_goes_round() {
-        let corners = |kind| match &drawn(shape(kind, Fill::Hollow))[..] {
+        let corners = |kind| match &drawn(painted(kind, Fill::Hollow))[..] {
             [Item::Outline { corners, .. }] => *corners,
             drawn => panic!("{drawn:?}"),
         };
@@ -912,7 +864,7 @@ mod tests {
 
     #[test]
     fn a_shape_outlines_its_frame_with_its_fill_but_a_cross_fills_nothing() {
-        let fill = |kind, fill| match &drawn(shape(kind, fill))[..] {
+        let fill = |kind, fill| match &drawn(painted(kind, fill))[..] {
             [
                 Item::Outline {
                     shape,
@@ -991,11 +943,7 @@ mod tests {
     fn a_stroke_draws_round_where_it_bends_gently() {
         let bent = ElementKind::stroke(
             Tip::Pen,
-            &[
-                Point { x: 0.0, y: 0.0 },
-                Point { x: 100.0, y: 0.0 },
-                Point { x: 200.0, y: 30.0 },
-            ],
+            &[point(0.0, 0.0), point(100.0, 0.0), point(200.0, 30.0)],
             0.0,
         );
         let [Item::Stroke { points, .. }] = &drawn(bent)[..] else {
@@ -1004,34 +952,16 @@ mod tests {
         assert!(points.len() > 3, "{points:?}");
         assert_eq!(
             (points.first(), points.last()),
-            (
-                Some(&Point { x: 0.0, y: 0.0 }),
-                Some(&Point { x: 200.0, y: 30.0 })
-            )
+            (Some(&point(0.0, 0.0)), Some(&point(200.0, 30.0)))
         );
     }
 
     #[test]
     fn a_pen_stroke_draws_its_points_where_its_frame_turns_them_and_fades_whole() {
-        let ElementKind::Stroke {
-            colour,
-            weight,
-            points,
-            ..
-        } = stroke()
-        else {
-            unreachable!()
-        };
-        let turned = ElementKind::Stroke {
-            tip: Tip::Pen,
-            frame: FRAME,
-            rotation: 180.0,
-            points,
-            target: None,
-            colour,
-            weight,
-            opacity: Opacity::new(40).unwrap(),
-        };
+        let turned = pen(FRAME, 180.0, &[(0.0, 1.0), (0.5, 0.0), (1.0, 1.0)]).with_style(&Style {
+            opacity: Opacity::new(40),
+            ..Style::default()
+        });
         let [
             Item::Stroke {
                 points,
@@ -1046,10 +976,7 @@ mod tests {
         // Upright at (10, 120), (110, 20), and (210, 120), half turned around (110, 70).
         let expected = [(210.0, 20.0), (110.0, 120.0), (10.0, 20.0)];
         for (point, (x, y)) in points.iter().zip(expected) {
-            assert!(
-                (point.x - x).abs() < 1e-9 && (point.y - y).abs() < 1e-9,
-                "{point:?}"
-            );
+            assert_at(*point, x, y);
         }
         assert_eq!(points.len(), 3);
         assert_eq!(
@@ -1060,35 +987,23 @@ mod tests {
 
     #[test]
     fn a_highlighter_draws_wide_and_see_through_in_its_bright_version_of_the_colour() {
-        let ElementKind::Stroke {
-            frame,
-            rotation,
-            points,
-            ..
-        } = stroke()
-        else {
-            unreachable!()
-        };
-        let highlighter = |colour| ElementKind::Stroke {
-            tip: Tip::Highlighter,
-            frame,
-            rotation,
-            points: points.clone(),
-            target: None,
-            colour,
-            weight: Weight::Medium,
-            opacity: Opacity::new(50).unwrap(),
-        };
-        let look = |colour| match &drawn(highlighter(colour))[..] {
-            [
-                Item::Stroke {
-                    width,
-                    paint,
-                    opacity,
-                    ..
-                },
-            ] => (*width, serde_json::to_value(paint).unwrap(), *opacity),
-            drawn => panic!("{drawn:?}"),
+        let look = |colour| {
+            let kind = highlighted(stroke()).with_style(&Style {
+                colour: Some(colour),
+                opacity: Opacity::new(50),
+                ..Style::default()
+            });
+            match &drawn(kind)[..] {
+                [
+                    Item::Stroke {
+                        width,
+                        paint,
+                        opacity,
+                        ..
+                    },
+                ] => (*width, serde_json::to_value(paint).unwrap(), *opacity),
+                drawn => panic!("{drawn:?}"),
+            }
         };
         assert_eq!(look(Colour::Ink), (16.0, "highlight-yellow".into(), 0.2));
         assert_eq!(look(Colour::Red).1, "highlight-red");

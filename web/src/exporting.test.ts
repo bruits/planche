@@ -1,33 +1,18 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { untitled, type Opened } from "./board.js";
-import * as core from "./core.js";
-import type { Kind } from "./core.js";
+import { rectangleKind } from "../test/kinds.js";
+import { memorySink } from "../test/folders.js";
+import { boardOf } from "../test/boards.js";
+import { messages } from "../test/messages.js";
+import { fakeRenderer } from "../test/renderers.js";
+import { deferred, tick } from "../test/waits.js";
 import { exporting, type Host } from "./exporting.js";
 import type { Sink } from "./platform.js";
-import type { Renderer } from "./renderer.js";
 import type { Vectors } from "./vector.js";
 
 const SHAPE = "c".repeat(32);
-const shape: Kind = {
-  type: "shape",
-  frame: { x: 0, y: 0, width: 100, height: 100 },
-  shape: "rectangle",
-  text: { content: "", font_size: 20 },
-};
+const shape = rectangleKind();
 const OPTIONS = { longest: undefined, background: "board", margin: false } as const;
-
-function file(name: string) {
-  const parts: Uint8Array[] = [];
-  let state: "open" | "closed" | "discarded" = "open";
-  const sink: Sink = {
-    name,
-    append: async (bytes) => void parts.push(bytes),
-    close: async () => void (state = "closed"),
-    discard: async () => void (state = "discarded"),
-  };
-  return { sink, state: () => state, bytes: () => parts.flatMap((part) => [...part]) };
-}
 
 type CopyImage = ReturnType<Host["clip"]>["copyImage"];
 
@@ -35,19 +20,15 @@ function exports(
   pick: Host["platform"]["pickExport"],
   { shows = () => true, copy = async () => true }: { shows?: () => boolean; copy?: CopyImage } = {},
 ) {
-  const opened: Opened = untitled();
-  opened.editor.add(SHAPE, undefined, JSON.stringify(shape));
-  opened.board = core.board(opened.editor);
-  const said: string[] = [];
+  const opened = boardOf([[SHAPE, shape]]);
+  const told = messages();
   const saved = vi.fn<Host["life"]["saved"]>();
   const closed = vi.fn<() => void>();
-  const reported: Promise<unknown>[] = [];
   const out = exporting({
     platform: { pickExport: pick },
     opened: () => opened,
     hold: () => ({ board: opened, shows }),
-    ready: () =>
-      ({ maxTextureSide: 16_384, render: async () => ({}) as ImageData }) as unknown as Renderer,
+    ready: () => fakeRenderer({ render: async () => ({}) as ImageData }),
     editing: { selection: () => [SHAPE] },
     showsAnnotations: () => true,
     life: { saver: () => undefined, saved },
@@ -58,48 +39,43 @@ function exports(
     clip: () => ({ copyImage: copy }),
     pictureCard: () => ({ close: closed }),
     timings: new Map(),
-    say: (text) => void said.push(text),
-    report: (work) => void reported.push(work),
+    say: told.say,
+    report: told.report,
   });
-  return { out, opened, said, saved, closed, settled: () => Promise.all(reported) };
+  return { out, opened, said: told.said, saved, closed, settled: told.settled };
 }
 
 describe("what the board exports", () => {
   it("writes a ZIP file of the board as it stood, which it marks as saved", async () => {
-    const written = file("Untitled.zip");
+    const written = memorySink("Untitled.zip");
     const pick = vi.fn<Host["platform"]["pickExport"]>(async () => written.sink);
     const { out, opened, said, saved } = exports(pick);
     await out.zip();
     expect(pick).toHaveBeenCalledWith("Untitled.zip", "zip");
     expect(written.state()).toBe("closed");
     // A ZIP file opens with its first local header.
-    expect(written.bytes().slice(0, 2)).toEqual([0x50, 0x4b]);
+    expect([...written.bytes()].slice(0, 2)).toEqual([0x50, 0x4b]);
     expect(said).toEqual(["Exporting Untitled.zip…", "Exported Untitled.zip"]);
     expect(saved.mock.calls[0]![0]).toBe(opened.editor);
     expect(out.busy()).toBe(false);
   });
 
   it("refuses another export while one waits for where to go", async () => {
-    let answer: ((sink: Sink | null) => void) | undefined;
-    const pick = vi.fn<Host["platform"]["pickExport"]>(
-      () =>
-        new Promise((resolve) => {
-          answer = resolve;
-        }),
-    );
+    const { promise: picked, resolve: answer } = deferred<Sink | null>();
+    const pick = vi.fn<Host["platform"]["pickExport"]>(() => picked);
     const { out } = exports(pick);
     const first = out.zip();
     expect(out.busy()).toBe(true);
     await expect(out.png(OPTIONS)).rejects.toThrow("An export is under way");
     await out.zip();
     expect(pick).toHaveBeenCalledOnce();
-    answer?.(null);
+    answer(null);
     await first;
     expect(out.busy()).toBe(false);
   });
 
   it("leaves no file behind of a picture of a board no longer shown", async () => {
-    const written = file("Untitled.png");
+    const written = memorySink("Untitled.png");
     let shown = true;
     const { out, closed } = exports(
       async () => {
@@ -110,7 +86,8 @@ describe("what the board exports", () => {
     );
     await expect(out.png(OPTIONS)).rejects.toThrow("Another board opened meanwhile");
     expect(written.state()).toBe("discarded");
-    expect(written.bytes()).toEqual([]);
+    // Refused before it wrote anything.
+    expect(written.appended()).toBe(0);
     expect(closed).not.toHaveBeenCalled();
     expect(out.busy()).toBe(false);
   });
@@ -123,8 +100,6 @@ describe("what the board exports", () => {
     expect(out.busy()).toBe(false);
   });
 });
-
-const flush = () => new Promise((done) => setTimeout(done));
 
 const taking =
   (answer: () => boolean | Promise<boolean>): CopyImage =>
@@ -149,14 +124,14 @@ describe("what the board saves as a picture", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("writes the picture, then says its size and closes the card that asked for it", async () => {
-    const written = file("Untitled.png");
+    const written = memorySink("Untitled.png");
     const pick = vi.fn<Host["platform"]["pickExport"]>(async () => written.sink);
     const { out, said, closed } = exports(pick);
     await out.png(OPTIONS);
     expect(pick).toHaveBeenCalledWith("Untitled.png", "png");
     expect(written.state()).toBe("closed");
     // The bytes of "png".
-    expect(written.bytes()).toEqual([0x70, 0x6e, 0x67]);
+    expect([...written.bytes()]).toEqual([0x70, 0x6e, 0x67]);
     expect(said).toEqual(["Exporting Untitled.png…", "Exported Untitled.png, 2048 × 2048"]);
     expect(closed).toHaveBeenCalledOnce();
     expect(out.busy()).toBe(false);
@@ -214,9 +189,9 @@ describe("what the board copies as a picture", () => {
     out.copyPng(OPTIONS);
     out.copyPng(OPTIONS);
     // Once both pictures are made, which is when the clipboard has them to answer for.
-    await flush();
+    await tick();
     answers[0]!(false);
-    await flush();
+    await tick();
     expect(said).toEqual(["Copying as PNG…", "Copying as PNG…"]);
     answers[1]!(true);
     await settled();

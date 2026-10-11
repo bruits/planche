@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { command } from "../test/commands.js";
+import { press, pressAway } from "../test/events.js";
 import { listen, type Command } from "./commands.js";
 import { closeFinder, finderOpen, openFinder, ranked, type Listed } from "./finder.js";
-
-function command(label: string, more: Partial<Listed> = {}): Listed {
-  return { label, run: vi.fn<() => void>(), ...more };
-}
 
 const names = (listed: Listed[]) => listed.map(({ label }) => label);
 
@@ -45,12 +43,6 @@ const field = () => document.querySelector<HTMLInputElement>(".finder input")!;
 const options = () => [...document.querySelectorAll(".finder [role='option']")];
 const picked = () => document.getElementById(field().getAttribute("aria-activedescendant")!);
 
-function press(init: KeyboardEventInit): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  field().dispatchEvent(event);
-  return event;
-}
-
 function type(text: string): void {
   field().value = text;
   field().dispatchEvent(new Event("input"));
@@ -67,8 +59,10 @@ function opened(listed: Listed[]): HTMLButtonElement {
 /** ⌘K held on whatever has the focus, and whether the finder is open after each repeat. */
 function held(repeats: boolean[]): boolean[] {
   return repeats.map((repeat) => {
-    const event = { key: "k", code: "KeyK", metaKey: true, repeat, bubbles: true };
-    (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", event));
+    press(
+      { key: "k", code: "KeyK", metaKey: true, repeat },
+      document.activeElement ?? document.body,
+    );
     return finderOpen();
   });
 }
@@ -76,7 +70,6 @@ function held(repeats: boolean[]): boolean[] {
 describe("the finder", () => {
   afterEach(() => {
     closeFinder();
-    document.body.replaceChildren();
   });
 
   it("lists every command, the menu it sits in, its keys, and whether it is on", () => {
@@ -101,9 +94,9 @@ describe("the finder", () => {
 
   it("moves the pick with the arrow keys, round from one end to the other", () => {
     opened([command("Undo"), command("Redo")]);
-    press({ key: "ArrowUp" });
+    press({ key: "ArrowUp" }, field());
     expect(picked()?.textContent).toBe("Redo");
-    press({ key: "ArrowDown" });
+    press({ key: "ArrowDown" }, field());
     expect(picked()?.textContent).toBe("Undo");
   });
 
@@ -112,8 +105,8 @@ describe("the finder", () => {
     let focused: Element | null = null;
     vi.mocked(redo.run).mockImplementation(() => (focused = document.activeElement));
     const button = opened([command("Undo"), redo]);
-    press({ key: "ArrowDown" });
-    expect(press({ key: "Enter" }).defaultPrevented).toBe(true);
+    press({ key: "ArrowDown" }, field());
+    expect(press({ key: "Enter" }, field()).defaultPrevented).toBe(true);
     expect(redo.run).toHaveBeenCalledOnce();
     expect(focused).toBe(button);
     expect(finderOpen()).toBe(false);
@@ -124,7 +117,7 @@ describe("the finder", () => {
     opened([bold]);
     expect(options()[0]!.getAttribute("aria-disabled")).toBe("true");
     expect(document.querySelector(".finder .why")?.textContent).toBe("Nothing is selected");
-    press({ key: "Enter" });
+    press({ key: "Enter" }, field());
     expect(bold.run).not.toHaveBeenCalled();
     expect(finderOpen()).toBe(true);
   });
@@ -145,18 +138,18 @@ describe("the finder", () => {
 
   it("closes on Escape, or its own keys, giving the focus back", () => {
     const button = opened([command("Undo")]);
-    press({ key: "Escape" });
+    press({ key: "Escape" }, field());
     expect(finderOpen()).toBe(false);
     expect(document.activeElement).toBe(button);
     opened([command("Undo")]);
-    press({ key: "k", metaKey: true });
+    press({ key: "k", metaKey: true }, field());
     expect(finderOpen()).toBe(false);
   });
 
   it("leaves Enter to an input method composing", () => {
     const undo = command("Undo");
     opened([undo]);
-    press({ key: "Enter", isComposing: true });
+    press({ key: "Enter", isComposing: true }, field());
     expect(undo.run).not.toHaveBeenCalled();
   });
 
@@ -175,7 +168,7 @@ describe("the finder", () => {
 
   it("closes on a press outside it", () => {
     opened([command("Undo")]);
-    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    pressAway();
     expect(finderOpen()).toBe(false);
   });
 });

@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect, vi } from "vitest";
+import { holding, openedFrom } from "../test/boards.js";
+import { demoHome, demoZip, lfsPointer, memoryHome, sample, SAMPLES } from "../test/folders.js";
+import { lineKind } from "../test/kinds.js";
+import { gifOf, MOVIE } from "../test/media.js";
+import { deferred } from "../test/waits.js";
 import {
   centring,
   copiedAssets,
@@ -17,16 +22,14 @@ import {
   readAsset,
   refresh,
   row,
-  untitled,
   webAddress,
 } from "./board.js";
 import * as core from "./core.js";
-import type { Bytes, Kind } from "./core.js";
+import type { Bytes } from "./core.js";
 import type { Placed } from "./renderer.js";
 import type { Slices, ZipHome } from "./platform.js";
 import { saving, zipStore } from "./save.js";
 import { zipFolder } from "./zip.js";
-import { lfsPointer, memoryHome, sample, SAMPLES } from "../test/folders.js";
 
 const bytes = (text: string): Bytes => new TextEncoder().encode(text);
 
@@ -40,7 +43,7 @@ describe("open", () => {
     const held = files.get(`assets/${ASSET}`)!;
     files.delete(`assets/${ASSET}`);
     const { home } = memoryHome("demo", files);
-    const { opened } = (await open(async () => home, new Map()))!;
+    const { opened } = await openedFrom(home);
     expect(opened.missing).toEqual(new Set([`assets/${ASSET}`]));
     const source = filesOf(opened);
     expect(source.lacking).toEqual([`assets/${ASSET}`]);
@@ -60,7 +63,7 @@ describe("open", () => {
     const stray = `elements/${id} (conflicted copy).json`;
     files.set(stray, files.get(conflicted!)!);
     const { home } = memoryHome("demo", files);
-    const { opened } = (await open(async () => home, new Map()))!;
+    const { opened } = await openedFrom(home);
     expect(opened.board.elements[id]).toBeUndefined();
     expect(opened.leftOut.get(conflicted!)).toBe(
       `\`${conflicted}\` holds an unresolved Git conflict`,
@@ -79,7 +82,7 @@ describe("open", () => {
 
 describe("readAsset", () => {
   it("reads an asset whose bytes match its digest", async () => {
-    const { home } = memoryHome("demo", sample("demo"));
+    const { home } = demoHome();
     const read = await readAsset(home, ASSET, NATURAL);
     expect(read).toMatchObject({ asset: ASSET, natural: NATURAL, vector: false });
     expect(read.blob.size).toBe(readFileSync(join(SAMPLES, "demo/assets", ASSET)).length);
@@ -101,15 +104,8 @@ describe("readAsset", () => {
   });
 
   it("tells what an asset holds from as little of it as tells", async () => {
-    const frame = "\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4C\x01\x00";
-    const gif = Uint8Array.from(`GIF89a\x01\x00\x01\x00\x00\x00\x00${frame}${frame};`, (c) =>
-      c.charCodeAt(0),
-    );
-    const movie = Uint8Array.from(
-      "\x00\x00\x00\x10ftypisom\x00\x00\x02\x00\x00\x00\x00\x08mdat",
-      (c) => c.charCodeAt(0),
-    );
-    const assets = [bytes('<svg width="20" height="10"/>'), bytes("<html></html>"), gif, movie];
+    const gif = gifOf(2);
+    const assets = [bytes('<svg width="20" height="10"/>'), bytes("<html></html>"), gif, MOVIE];
     const ids = assets.map((asset) => core.assetOf(core.digestOf(asset), asset));
     const files = new Map(ids.map((id, at) => [core.assetPath(id), assets[at]!]));
     const { home } = memoryHome("media", files);
@@ -124,13 +120,8 @@ describe("readAsset", () => {
   });
 
   it("tells what an asset holds from all of it when its start does not", async () => {
-    const frame = "\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4C\x01\x00";
     // Both frames past its start, behind a comment, so that its start alone shows none.
-    const blocks = `\xFF${"\x00".repeat(255)}`.repeat(Math.ceil(core.mediaStart() / 256));
-    const gif = Uint8Array.from(
-      `GIF89a\x01\x00\x01\x00\x00\x00\x00\x21\xFE${blocks}\x00${frame}${frame};`,
-      (c) => c.charCodeAt(0),
-    );
+    const gif = gifOf(2, { comment: core.mediaStart() });
     const id = core.assetOf(core.digestOf(gif), gif);
     const { home } = memoryHome("media", new Map([[core.assetPath(id), gif]]));
     const read = await readAsset(home, id, NATURAL);
@@ -161,12 +152,8 @@ describe("prepare", () => {
   );
 
   it("names a video's asset after its type", async () => {
-    const movie = Uint8Array.from(
-      "\x00\x00\x00\x10ftypisom\x00\x00\x02\x00\x00\x00\x00\x08mdat",
-      (c) => c.charCodeAt(0),
-    );
-    const added = await prepare(new Blob([movie]), 2048, () => NATURAL);
-    expect(added.asset).toBe(`${core.digestOf(movie)}.mp4`);
+    const added = await prepare(new Blob([MOVIE]), 2048, () => NATURAL);
+    expect(added.asset).toBe(`${core.digestOf(MOVIE)}.mp4`);
   });
 
   it("refuses markup that is not an SVG", async () => {
@@ -175,21 +162,6 @@ describe("prepare", () => {
     );
   });
 });
-
-/** A new board holding `kinds`, back to front, and their ids. */
-function holding(kinds: Kind[]) {
-  const opened = untitled();
-  const ids = kinds.map((kind) => {
-    const id = newId();
-    refresh(opened, opened.editor.add(id, undefined, JSON.stringify(kind)));
-    return id;
-  });
-  return { opened, ids };
-}
-
-function level(y: number): Kind {
-  return { type: "line", from: { x: 0, y }, to: { x: 100, y } };
-}
 
 function heights(shown: Placed[]): (number | undefined)[] {
   return shown.map((each) => (each.kind === "line" ? each.from.y : undefined));
@@ -202,7 +174,7 @@ describe("placed", () => {
   it("lays each text out where its element stacks, faded with it, but the one being written and those not laid out", () => {
     const { opened, ids } = holding([
       { type: "sticky", frame, rotation: 0, text: { content: "Dusk", font_size: 20 }, opacity: 50 },
-      { type: "line", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } },
+      lineKind(),
     ]);
     const sticky = ids[0]!;
     const texts = {
@@ -219,10 +191,10 @@ describe("placed", () => {
   });
 
   it("stacks what is being added where an element added to its group goes, under what lies above", () => {
-    const { opened, ids } = holding([level(0), level(10)]);
+    const { opened, ids } = holding([lineKind(0), lineKind(10)]);
     const group = newId();
     refresh(opened, opened.editor.group(group, ids));
-    refresh(opened, opened.editor.add(newId(), undefined, JSON.stringify(level(20))));
+    refresh(opened, opened.editor.add(newId(), undefined, JSON.stringify(lineKind(20))));
     const item: Placed = {
       kind: "line",
       from: { x: 0, y: 99 },
@@ -241,7 +213,7 @@ describe("placed", () => {
   });
 
   it("lays a group's panel under its elements, which an edit to one of them moves", () => {
-    const { opened, ids } = holding([level(0), level(100)]);
+    const { opened, ids } = holding([lineKind(0), lineKind(100)]);
     const group = newId();
     refresh(opened, opened.editor.group(group, ids));
     const filled = { ...core.element(opened.editor, group)!.kind, colour: "blue", fill: "tint" };
@@ -256,7 +228,7 @@ describe("placed", () => {
 
   it("leaves the annotations out unless they show, but not the panel of a group holding them", () => {
     const { opened, ids } = holding([
-      level(0),
+      lineKind(0),
       imageKind(ASSET, NATURAL, { x: 0, y: 0, ...NATURAL }),
     ]);
     const group = newId();
@@ -270,7 +242,7 @@ describe("placed", () => {
   });
 
   it("lays anew the panels of every group holding an element an edit moves", () => {
-    const { opened, ids } = holding([level(0), level(100), level(200)]);
+    const { opened, ids } = holding([lineKind(0), lineKind(100), lineKind(200)]);
     const [inner, outer] = [newId(), newId()];
     refresh(opened, opened.editor.group(inner, ids.slice(0, 2)));
     refresh(opened, opened.editor.group(outer, [inner, ids[2]!]));
@@ -300,9 +272,9 @@ describe("placed", () => {
 
   it("draws anew only the images whose assets were crossed out or back since", () => {
     const { opened, ids } = holding([
-      { type: "line", from: { x: 0, y: 0 }, to: { x: 100, y: 0 } },
+      lineKind(),
       imageKind(ASSET, NATURAL, { x: 0, y: 0, ...NATURAL }),
-      { type: "line", from: { x: 0, y: 10 }, to: { x: 100, y: 10 } },
+      lineKind(10),
     ]);
     const image = ids[1]!;
     placed(opened, none, undefined, new Set());
@@ -331,7 +303,7 @@ describe("exposing", () => {
   };
 
   it("draws the elements chosen, their groups' included, over what stands for the background, over the rest", () => {
-    const { opened, ids } = holding([level(0), level(10), level(20), level(30)]);
+    const { opened, ids } = holding([lineKind(0), lineKind(10), lineKind(20), lineKind(30)]);
     const group = newId();
     refresh(opened, opened.editor.group(group, [ids[0]!, ids[2]!]));
     const shown = exposing(opened, none, [group], { backing: [backing], light: false });
@@ -340,7 +312,7 @@ describe("exposing", () => {
   });
 
   it("draws the elements chosen in the light theme's colours when asked", () => {
-    const { opened, ids } = holding([level(0), level(10)]);
+    const { opened, ids } = holding([lineKind(0), lineKind(10)]);
     const shown = exposing(opened, none, [ids[1]!], { backing: [], light: true });
     expect(shown.map(({ light }) => light ?? false)).toEqual([false, true]);
   });
@@ -348,19 +320,25 @@ describe("exposing", () => {
 
 describe("refresh", () => {
   it("reports the groups holding what an edit touched, before it and after, all the way up", () => {
-    const { opened, ids } = holding([level(0), level(100), level(200), level(300), level(400)]);
+    const { opened, ids } = holding([
+      lineKind(0),
+      lineKind(100),
+      lineKind(200),
+      lineKind(300),
+      lineKind(400),
+    ]);
     const [inner, outer, beside] = [newId(), newId(), newId()];
     refresh(opened, opened.editor.group(inner, ids.slice(0, 2)));
     refresh(opened, opened.editor.group(outer, [inner, ids[2]!]));
     refresh(opened, opened.editor.group(beside, ids.slice(3)));
     const groups = (touched: string[]) => refresh(opened, touched).groups;
     expect(groups(opened.editor.remove([ids[0]!]))).toEqual(new Set([inner, outer]));
-    expect(groups(opened.editor.add(newId(), inner, JSON.stringify(level(50))))).toEqual(
+    expect(groups(opened.editor.add(newId(), inner, JSON.stringify(lineKind(50))))).toEqual(
       new Set([inner, outer]),
     );
     expect(groups(opened.editor.ungroup(inner))).toEqual(new Set([inner, outer]));
     expect(groups(opened.editor.translate([ids[4]!], 10, 0))).toEqual(new Set([beside]));
-    expect(groups(opened.editor.add(newId(), undefined, JSON.stringify(level(500))))).toEqual(
+    expect(groups(opened.editor.add(newId(), undefined, JSON.stringify(lineKind(500))))).toEqual(
       new Set(),
     );
   });
@@ -478,17 +456,17 @@ function zipInPlace(initial: Bytes) {
     remember: async () => {},
   };
   const hold = () => {
-    let release!: () => void;
-    gate = new Promise((resolve) => (release = resolve));
-    return release;
+    const { promise, resolve } = deferred();
+    gate = promise;
+    return resolve;
   };
   return { home, hold };
 }
 
 describe("reader", () => {
   it("reads only what a paste asks for, once it asks", async () => {
-    const { home } = memoryHome("demo", sample("demo"));
-    const { opened } = (await open(async () => home, new Map()))!;
+    const { home } = demoHome();
+    const { opened } = await openedFrom(home);
     const read = vi.spyOn(home, "read");
     const assets = reader(opened, [ASSET]);
     expect(read).not.toHaveBeenCalled();
@@ -499,8 +477,8 @@ describe("reader", () => {
   });
 
   it("reads at once the images of a ZIP file saved in place, which a save meanwhile keeps", async () => {
-    const zip = zipInPlace(new Uint8Array(readFileSync(join(SAMPLES, "demo.zip"))));
-    const { opened } = (await open(async () => zipFolder(await zip.home.reread()), new Map()))!;
+    const zip = zipInPlace(demoZip());
+    const { opened } = await openedFrom(await zipFolder(await zip.home.reread()));
     const saver = saving(zipStore(zip.home, opened), {
       snapshot: () => opened.editor.snapshot(),
       source: () => filesOf(opened),
@@ -534,8 +512,8 @@ describe("reader", () => {
 
 describe("a ZIP file saved in place", () => {
   it("keeps readable an image that an undo brings back once a save left it out, then holds it again", async () => {
-    const zip = zipInPlace(new Uint8Array(readFileSync(join(SAMPLES, "demo.zip"))));
-    const { opened } = (await open(async () => zipFolder(await zip.home.reread()), new Map()))!;
+    const zip = zipInPlace(demoZip());
+    const { opened } = await openedFrom(await zipFolder(await zip.home.reread()));
     const store = zipStore(zip.home, opened);
     const source = () => filesOf(opened);
     const save = async (touched: string[]) => {

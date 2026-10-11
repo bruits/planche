@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { measuring } from "../test/canvases.js";
 import { alignment, defaultAlignment, layout, needed, paint, type Holder } from "./text.js";
 
 const frame = { x: 0, y: 0, width: 100, height: 50 };
@@ -7,13 +8,6 @@ const text = { content: "Hello", font_size: 20 };
 const note: Holder = { type: "note", frame, rotation: 0, text };
 const sticky: Holder = { type: "sticky", frame, rotation: 0, text };
 const rectangle: Holder = { type: "shape", frame, rotation: 0, shape: "rectangle", text };
-/** Text fits what holds it as a font of fixed widths would. */
-const measure = (content: string) => ({
-  width: content.length * 50,
-  fontBoundingBoxAscent: 80,
-  fontBoundingBoxDescent: 20,
-  actualBoundingBoxAscent: 70,
-});
 
 /** Where its text wraps, in font sizes from its frame's top-left. */
 function area(kind: Holder) {
@@ -35,10 +29,7 @@ describe("text", () => {
   });
 
   it("lies within a shape's outline, low in a triangle, and grows a star more than a rectangle", () => {
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      font: "",
-      measureText: measure,
-    } as unknown as CanvasRenderingContext2D);
+    measuring();
     const square = { ...rectangle, frame: { x: 0, y: 0, width: 200, height: 200 } };
     const shaped = (shape: "ellipse" | "triangle" | "star"): Holder => ({ ...square, shape });
     // Half a font size within.

@@ -1,37 +1,17 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { captureLost, pointer } from "../test/events.js";
+import { fakeRenderer } from "../test/renderers.js";
+import { mounted } from "../test/views.js";
+import { nextFrame } from "../test/waits.js";
 import type { Point } from "./core.js";
 import type { Renderer } from "./renderer.js";
-import { view, type Drawing, type View } from "./view.js";
-
-function nextFrame(): Promise<number> {
-  return new Promise((resolve) => requestAnimationFrame(resolve));
-}
+import type { Drawing, View } from "./view.js";
 
 /** Over a board shown from the origin at `zoom`, in a viewport 400 CSS pixels wide. */
 function shown(zoom = 1, drawing: Partial<Pick<Drawing, "advance" | "failed">> = {}) {
-  const host = document.body.appendChild(document.createElement("div"));
-  host.getBoundingClientRect = () => new DOMRect(0, 0, 400, 300);
-  const panned = vi.fn<Drawing["panned"]>();
-  const viewport = view(host, {
-    advance() {},
-    frame() {},
-    painted() {},
-    failed(error) {
-      throw error;
-    },
-    panned,
-    ...drawing,
-  });
   const draw = vi.fn<Renderer["draw"]>();
-  const renderer = {
-    canvas: document.createElement("canvas"),
-    resize() {},
-    draw,
-    destroy() {},
-  };
-  viewport.show(renderer as unknown as Renderer, { x: 0, y: 0, zoom });
-  return { host, viewport, draw, panned };
+  return { ...mounted({ zoom, drawing, renderer: fakeRenderer({ draw }) }), draw };
 }
 
 function wheel(host: HTMLElement, init: WheelEventInit) {
@@ -46,16 +26,7 @@ function wheel(host: HTMLElement, init: WheelEventInit) {
   host.dispatchEvent(event);
 }
 
-function pointer(host: HTMLElement, type: string, init: PointerEventInit) {
-  host.setPointerCapture = () => {};
-  host.dispatchEvent(new PointerEvent(type, { pointerId: 1, ...init }));
-}
-
 describe("a pan", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("follows the finger across the page, whatever movement its moves report", () => {
     const { host, viewport } = shown(2);
     viewport.hand(true);
@@ -99,11 +70,6 @@ function finger(
   pointer(host, type, { pointerType: "touch", button: 0, pointerId, clientX, clientY });
 }
 
-/** As some engines let a finger's capture go, while still pressed or not. */
-function captureLost(host: HTMLElement, pointerId: number, buttons: number) {
-  pointer(host, "lostpointercapture", { pointerType: "touch", pointerId, buttons });
-}
-
 /** Safari's own pinch, at `scale` since it started. */
 function gesture(type: string, scale: number) {
   const event = new Event(type, { cancelable: true });
@@ -141,10 +107,6 @@ function pinch(host: HTMLElement, viewport: View) {
 }
 
 describe("two fingers", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("keep under them what they pressed, as they spread, go together, or close", () => {
     const { host, viewport } = shown();
     pinch(host, viewport);
@@ -215,7 +177,7 @@ describe("two fingers", () => {
     const { host, viewport } = shown();
     pinch(host, viewport);
     expect(viewport.zoom()).toBeCloseTo(0.5, 9);
-    captureLost(host, 2, 1);
+    captureLost(host, { pointerType: "touch", pointerId: 2, buttons: 1 });
     expect(viewport.panning()).toBe(true);
     // Spread to twice as far apart as the pinch left them.
     finger(host, "pointermove", 2, 220, 160);
@@ -226,7 +188,7 @@ describe("two fingers", () => {
     const { host, viewport } = shown();
     pinch(host, viewport);
     const camera = viewport.camera();
-    captureLost(host, 2, 0);
+    captureLost(host, { pointerType: "touch", pointerId: 2, buttons: 0 });
     expect(viewport.panning()).toBe(false);
     finger(host, "pointermove", 1, 200, 200);
     expect(viewport.camera()).toEqual(camera);
@@ -253,7 +215,7 @@ describe("two fingers", () => {
     const under = [100, 200].map((clientX) => viewport.at({ clientX, clientY: 100 })!);
     finger(host, "pointerdown", 1, 100, 100);
     finger(host, "pointerdown", 2, 200, 100);
-    captureLost(host, 2, 1);
+    captureLost(host, { pointerType: "touch", pointerId: 2, buttons: 1 });
     finger(beside, "pointermove", 2, 300, 100);
     finger(host, "pointermove", 1, 120, 160);
     finger(beside, "pointermove", 2, 170, 160);
@@ -285,10 +247,6 @@ describe("two fingers", () => {
 });
 
 describe("a zoom", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("goes a tenth at most for each notch of a wheel, whether it counts in pixels or lines", () => {
     const { host, viewport } = shown();
     wheel(host, { deltaY: 100, ctrlKey: true });
@@ -306,10 +264,6 @@ describe("a zoom", () => {
 });
 
 describe("a mirrored view", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("shows the board's left on the right, and finds under the pointer what shows there", () => {
     const { host, viewport } = shown(2);
     viewport.mirror(true);
@@ -356,10 +310,6 @@ describe("a mirrored view", () => {
 });
 
 describe("a greyed view", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("draws in greys on each frame, but in the board's own colours when drawn at once", async () => {
     const { viewport, draw } = shown();
     viewport.grey(true);
@@ -373,10 +323,6 @@ describe("a greyed view", () => {
 });
 
 describe("a frame", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("reports what failed before it, and still draws", async () => {
     const failed = vi.fn<Drawing["failed"]>();
     const caught = new Error("the press could not catch up");

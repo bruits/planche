@@ -1,12 +1,15 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { around } from "../test/actions.js";
+import { press } from "../test/events.js";
+import { commentKind, rectangleKind } from "../test/kinds.js";
+import { deferred } from "../test/waits.js";
 import { assetPlayback, imageKind } from "./board.js";
 import type { Card } from "./card.js";
 import { listen, named } from "./commands.js";
 import * as core from "./core.js";
 import type { Kind, Order, Tip } from "./core.js";
 import type { Options } from "./render.js";
-import { around } from "../test/actions.js";
 
 const IMAGE = "a".repeat(32);
 const OTHER = "b".repeat(32);
@@ -32,13 +35,8 @@ function image(
     : kind;
 }
 
-const shape: Kind = {
-  type: "shape",
-  frame: { x: 0, y: 300, width: 100, height: 100 },
-  shape: "rectangle",
-  text: { content: "", font_size: 20 },
-};
-const comment: Kind = { type: "comment", at: { x: 40, y: 60 }, text: "Why here?" };
+const shape = rectangleKind(300);
+const comment = commentKind();
 
 function pen(): Tip {
   return "pen";
@@ -386,17 +384,14 @@ describe("what the commands offer", () => {
       edits: { crop },
     });
     leaving.push(listen(Object.values(app.commands), () => true));
-    dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    press({ key: "Enter" }, window);
     expect(exports.png).toHaveBeenCalledOnce();
     expect(crop).not.toHaveBeenCalled();
   });
 
   it("arranges nothing once another board shows meanwhile", async () => {
     const arrange = vi.fn<(order: Order) => void>();
-    let finish: (() => void) | undefined;
-    const idle = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    const { promise: idle, resolve: finish } = deferred();
     const { app, said, settled, leave } = around(
       [
         [IMAGE, image(0)],
@@ -407,7 +402,7 @@ describe("what the commands offer", () => {
     app.commands.arrangeByName.run();
     expect(app.commands.arrangeByName.unavailable?.()).toBe("Images are being arranged");
     leave();
-    finish?.();
+    finish();
     await settled();
     expect(arrange).not.toHaveBeenCalled();
     expect(said).toEqual(["Not arranged, as the selection changed"]);

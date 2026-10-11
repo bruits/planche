@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { tick } from "../test/waits.js";
 import type { Point } from "./core.js";
 import { GpuLost, NoRenderer, Panic } from "./errors.js";
 import { create, packed, type Placed } from "./renderer.js";
@@ -160,9 +161,6 @@ describe("the board in greys the renderer takes", () => {
   });
 });
 
-/** A tick of the event loop, which is when a browser fires the event `loseContext` queues. */
-const tick = () => new Promise((done) => setTimeout(done));
-
 /** A browser that has WebGPU, whose warning when it fails stays out of the output. */
 function withWebGpu(): void {
   Object.defineProperty(navigator, "gpu", { value: {}, configurable: true });
@@ -200,7 +198,6 @@ function restorePage(): void {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   Reflect.deleteProperty(navigator, "gpu");
-  document.body.replaceChildren();
 }
 
 describe("a renderer that cannot go on", () => {

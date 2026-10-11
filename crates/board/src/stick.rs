@@ -557,53 +557,21 @@ impl Picture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{board, element, id};
-    use crate::{Colour, Dash, Fill, Heads, Shape, Text, Weight};
+    use crate::tests::{
+        area, assert_at, board, comment, element, filled, id, image, labelled, on, point, stuck,
+        turned,
+    };
+    use crate::{Fill, Shape};
 
-    fn area(x: f64, y: f64, width: f64, height: f64) -> Rect {
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    fn shape(shape: Shape, frame: Rect, rotation: f64, content: &str) -> ElementKind {
-        ElementKind::Shape {
-            frame,
-            rotation,
-            shape,
-            corners: Default::default(),
-            text: Text::new(content.to_owned(), 20.0),
-            target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            fill: Fill::Hollow,
-            dash: Dash::Solid,
-            opacity: Default::default(),
-        }
-    }
-
-    fn image(frame: Rect) -> ElementKind {
-        ElementKind::Image {
-            asset: crate::AssetId::of(b""),
-            natural_size: crate::Size {
+    fn coarse(frame: Rect) -> ElementKind {
+        let mut kind = image(frame.x, frame.y, frame.width, frame.height);
+        if let ElementKind::Image { natural_size, .. } = &mut kind {
+            *natural_size = crate::Size {
                 width: 10,
                 height: 10,
-            },
-            frame,
-            rotation: 0.0,
-            edits: crate::ImageEdits::default(),
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
+            };
         }
-    }
-
-    fn point(x: f64, y: f64) -> Point {
-        Point { x, y }
+        kind
     }
 
     fn stick(board: &Board, point: Point, tolerance: f64) -> Option<(ElementId, Point)> {
@@ -611,56 +579,42 @@ mod tests {
         target.map(|target| (target, at))
     }
 
-    fn assert_at(stuck: Option<(ElementId, Point)>, bits: u128, x: f64, y: f64) {
+    fn assert_stuck(stuck: Option<(ElementId, Point)>, bits: u128, x: f64, y: f64) {
         let (target, at) = stuck.expect("stuck");
         assert_eq!(target, id(bits));
-        assert!(apart(at, point(x, y)) < 1e-9, "{at:?} is not ({x}, {y})");
+        assert_at(at, x, y);
     }
 
     #[test]
     fn an_end_sticks_to_the_topmost_element_that_takes_ends() {
-        let arrow = ElementKind::Arrow {
-            from: point(0.0, 50.0),
-            to: point(100.0, 50.0),
-            from_target: None,
-            to_target: None,
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
-            heads: Heads::End,
-            opacity: Default::default(),
-        };
-        let comment = ElementKind::Comment {
-            at: point(50.0, 50.0),
-            text: "Here".to_owned(),
-            target: None,
-        };
+        let arrow = stuck((0.0, 50.0), None, (100.0, 50.0), None);
+        let comment = comment(50.0, 50.0);
         let board = board([
-            (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0)))),
+            (1, element(None, "a0", coarse(area(0.0, 0.0, 100.0, 100.0)))),
             (2, element(None, "a1", ElementKind::group())),
             (
                 3,
-                element(Some(2), "a0", image(area(50.0, 0.0, 100.0, 100.0))),
+                element(Some(2), "a0", coarse(area(50.0, 0.0, 100.0, 100.0))),
             ),
             (4, element(None, "a2", arrow)),
             (5, element(None, "a3", comment)),
         ]);
         // Through the arrow and the comment, onto the image within the group.
-        assert_at(stick(&board, point(60.0, 50.0), 3.0), 3, 60.0, 50.0);
-        assert_at(stick(&board, point(20.0, 50.0), 3.0), 1, 20.0, 50.0);
+        assert_stuck(stick(&board, point(60.0, 50.0), 3.0), 3, 60.0, 50.0);
+        assert_stuck(stick(&board, point(20.0, 50.0), 3.0), 1, 20.0, 50.0);
         assert_eq!(stick(&board, point(200.0, 50.0), 3.0), None);
     }
 
     #[test]
     fn an_end_sticks_through_what_a_shape_without_text_surrounds() {
         let board = board([
-            (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0)))),
+            (1, element(None, "a0", coarse(area(0.0, 0.0, 100.0, 100.0)))),
             (
                 2,
                 element(
                     None,
                     "a1",
-                    shape(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), 0.0, ""),
+                    labelled(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), 0.0, ""),
                 ),
             ),
             (
@@ -668,31 +622,25 @@ mod tests {
                 element(
                     None,
                     "a2",
-                    shape(Shape::Rectangle, area(200.0, 0.0, 100.0, 100.0), 0.0, "A"),
+                    labelled(Shape::Rectangle, area(200.0, 0.0, 100.0, 100.0), 0.0, "A"),
                 ),
             ),
         ]);
-        assert_at(stick(&board, point(50.0, 50.0), 3.0), 1, 50.0, 50.0);
-        assert_at(stick(&board, point(250.0, 50.0), 3.0), 3, 250.0, 50.0);
+        assert_stuck(stick(&board, point(50.0, 50.0), 3.0), 1, 50.0, 50.0);
+        assert_stuck(stick(&board, point(250.0, 50.0), 3.0), 3, 250.0, 50.0);
     }
 
     #[test]
     fn an_end_stays_where_let_go_within_a_filled_shape_but_not_a_filled_cross() {
-        let filled = |kind, frame, fill| {
-            let mut kind = shape(kind, frame, 0.0, "");
-            if let ElementKind::Shape { fill: drawn, .. } = &mut kind {
-                *drawn = fill;
-            }
-            kind
-        };
+        let shaped = |shape, frame, fill| filled(labelled(shape, frame, 0.0, ""), fill);
         let board = board([
-            (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0)))),
+            (1, element(None, "a0", coarse(area(0.0, 0.0, 100.0, 100.0)))),
             (
                 2,
                 element(
                     None,
                     "a1",
-                    filled(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), Fill::Tint),
+                    shaped(Shape::Rectangle, area(0.0, 0.0, 100.0, 100.0), Fill::Tint),
                 ),
             ),
             (
@@ -700,39 +648,39 @@ mod tests {
                 element(
                     None,
                     "a2",
-                    filled(Shape::Ellipse, area(200.0, 0.0, 200.0, 100.0), Fill::Solid),
+                    shaped(Shape::Ellipse, area(200.0, 0.0, 200.0, 100.0), Fill::Solid),
                 ),
             ),
             (
                 4,
-                element(None, "a3", image(area(600.0, 0.0, 100.0, 100.0))),
+                element(None, "a3", coarse(area(600.0, 0.0, 100.0, 100.0))),
             ),
             (
                 5,
                 element(
                     None,
                     "a4",
-                    filled(Shape::Cross, area(600.0, 0.0, 100.0, 100.0), Fill::Solid),
+                    shaped(Shape::Cross, area(600.0, 0.0, 100.0, 100.0), Fill::Solid),
                 ),
             ),
         ]);
-        assert_at(stick(&board, point(50.0, 50.0), 3.0), 2, 50.0, 50.0);
-        assert_at(stick(&board, point(50.0, 98.0), 3.0), 2, 50.0, 100.0);
-        assert_at(stick(&board, point(300.0, 50.0), 3.0), 3, 300.0, 50.0);
+        assert_stuck(stick(&board, point(50.0, 50.0), 3.0), 2, 50.0, 50.0);
+        assert_stuck(stick(&board, point(50.0, 98.0), 3.0), 2, 50.0, 100.0);
+        assert_stuck(stick(&board, point(300.0, 50.0), 3.0), 3, 300.0, 50.0);
         // Between the cross's strokes, onto the image below it.
-        assert_at(stick(&board, point(620.0, 50.0), 3.0), 4, 620.0, 50.0);
+        assert_stuck(stick(&board, point(620.0, 50.0), 3.0), 4, 620.0, 50.0);
     }
 
     #[test]
     fn an_end_near_an_outline_snaps_onto_it() {
         let board = board([
-            (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 20.0)))),
+            (1, element(None, "a0", coarse(area(0.0, 0.0, 100.0, 20.0)))),
             (
                 2,
                 element(
                     None,
                     "a1",
-                    shape(Shape::Rectangle, area(200.0, 0.0, 100.0, 20.0), 90.0, ""),
+                    labelled(Shape::Rectangle, area(200.0, 0.0, 100.0, 20.0), 90.0, ""),
                 ),
             ),
             (
@@ -740,7 +688,7 @@ mod tests {
                 element(
                     None,
                     "a2",
-                    shape(Shape::Ellipse, area(400.0, 0.0, 200.0, 100.0), 30.0, ""),
+                    labelled(Shape::Ellipse, area(400.0, 0.0, 200.0, 100.0), 30.0, ""),
                 ),
             ),
             (
@@ -748,7 +696,7 @@ mod tests {
                 element(
                     None,
                     "a3",
-                    shape(Shape::Ellipse, area(0.0, 200.0, 100.0, 0.0), 0.0, ""),
+                    labelled(Shape::Ellipse, area(0.0, 200.0, 100.0, 0.0), 0.0, ""),
                 ),
             ),
             (
@@ -756,14 +704,14 @@ mod tests {
                 element(
                     None,
                     "a4",
-                    shape(Shape::Cross, area(200.0, 200.0, 100.0, 100.0), 0.0, "C"),
+                    labelled(Shape::Cross, area(200.0, 200.0, 100.0, 100.0), 0.0, "C"),
                 ),
             ),
         ]);
         // Within reach of the image's bottom side, and away from its sides.
-        assert_at(stick(&board, point(30.0, 18.0), 3.0), 1, 30.0, 20.0);
-        assert_at(stick(&board, point(30.0, 10.0), 3.0), 1, 30.0, 10.0);
-        assert_at(stick(&board, point(262.0, 0.0), 3.0), 2, 260.0, 0.0);
+        assert_stuck(stick(&board, point(30.0, 18.0), 3.0), 1, 30.0, 20.0);
+        assert_stuck(stick(&board, point(30.0, 10.0), 3.0), 1, 30.0, 10.0);
+        assert_stuck(stick(&board, point(262.0, 0.0), 3.0), 2, 260.0, 0.0);
         // Just out of the ellipse's side, whose middle turned to (475, 93.3). Turned back
         // upright, its curve is where its equation gives 1, and the nearest point of it is
         // where the way to the end runs along its normal.
@@ -779,39 +727,39 @@ mod tests {
         );
         let aslant = (end.x - upright.x) * normal.1 - (end.y - upright.y) * normal.0;
         assert!(aslant.abs() < 1e-9, "{aslant}");
-        assert_at(stick(&board, point(50.0, 202.0), 3.0), 4, 50.0, 200.0);
-        assert_at(stick(&board, point(221.0, 219.0), 3.0), 5, 220.0, 220.0);
-        assert_at(stick(&board, point(250.0, 220.0), 3.0), 5, 250.0, 220.0);
+        assert_stuck(stick(&board, point(50.0, 202.0), 3.0), 4, 50.0, 200.0);
+        assert_stuck(stick(&board, point(221.0, 219.0), 3.0), 5, 220.0, 220.0);
+        assert_stuck(stick(&board, point(250.0, 220.0), 3.0), 5, 250.0, 220.0);
     }
 
     #[test]
     fn an_end_sticks_to_the_sides_of_a_triangle_and_not_to_a_star_s_dents() {
-        let mut star = shape(Shape::Star, area(200.0, 0.0, 100.0, 100.0), 0.0, "");
-        if let ElementKind::Shape { fill, .. } = &mut star {
-            *fill = Fill::Solid;
-        }
+        let star = filled(
+            labelled(Shape::Star, area(200.0, 0.0, 100.0, 100.0), 0.0, ""),
+            Fill::Solid,
+        );
         let board = board([
             (
                 1,
                 element(
                     None,
                     "a0",
-                    shape(Shape::Triangle, area(0.0, 0.0, 100.0, 100.0), 0.0, ""),
+                    labelled(Shape::Triangle, area(0.0, 0.0, 100.0, 100.0), 0.0, ""),
                 ),
             ),
             (
                 2,
-                element(None, "a1", image(area(200.0, 0.0, 100.0, 100.0))),
+                element(None, "a1", coarse(area(200.0, 0.0, 100.0, 100.0))),
             ),
             (3, element(None, "a2", star)),
         ]);
         // Just out of its right side, from (50, 0) to (100, 100), onto the nearest point of it.
-        assert_at(stick(&board, point(77.0, 49.0), 3.0), 1, 75.0, 50.0);
+        assert_stuck(stick(&board, point(77.0, 49.0), 3.0), 1, 75.0, 50.0);
         // In its frame's corner, away from its sides.
         assert_eq!(stick(&board, point(95.0, 10.0), 3.0), None);
         // In the dent between the star's bottom points, onto the image under it.
-        assert_at(stick(&board, point(250.0, 90.0), 3.0), 2, 250.0, 90.0);
-        assert_at(stick(&board, point(250.0, 50.0), 3.0), 3, 250.0, 50.0);
+        assert_stuck(stick(&board, point(250.0, 90.0), 3.0), 2, 250.0, 90.0);
+        assert_stuck(stick(&board, point(250.0, 50.0), 3.0), 3, 250.0, 50.0);
     }
 
     fn end(at: Point, target: Option<u128>) -> End {
@@ -823,7 +771,7 @@ mod tests {
 
     #[test]
     fn an_end_let_go_sticks_or_else_the_grid_pulls_it() {
-        let board = board([(1, element(None, "a0", image(area(0.0, 0.0, 120.0, 120.0))))]);
+        let board = board([(1, element(None, "a0", coarse(area(0.0, 0.0, 120.0, 120.0))))]);
         // At a zoom of 1, lines 40 apart pull from 8 away.
         let near = point(77.0, 122.0);
         assert_eq!(
@@ -843,7 +791,7 @@ mod tests {
 
     #[test]
     fn an_end_locked_around_the_other_keeps_to_its_angle() {
-        let board = board([(1, element(None, "a0", image(area(90.0, 90.0, 40.0, 40.0))))]);
+        let board = board([(1, element(None, "a0", coarse(area(90.0, 90.0, 40.0, 40.0))))]);
         let origin = point(0.0, 0.0);
         let aslant = 120.0_f64.hypot(110.0) * FRAC_1_SQRT_2;
         // On what it lies on, with no pull and no snap onto its outline.
@@ -875,29 +823,20 @@ mod tests {
 
     #[test]
     fn the_targets_of_elements_are_what_they_stick_to_whole() {
-        let stuck = |target: u128| {
-            let mut kind = shape(Shape::Rectangle, area(10.0, 10.0, 5.0, 5.0), 0.0, "");
-            *kind.target_mut().expect("sticks whole") = Some(id(target));
-            kind
+        let held = |target| {
+            on(
+                labelled(Shape::Rectangle, area(10.0, 10.0, 5.0, 5.0), 0.0, ""),
+                target,
+            )
         };
-        let arrow = ElementKind::Arrow {
-            from: point(10.0, 10.0),
-            to: point(50.0, 50.0),
-            from_target: Some(id(1)),
-            to_target: Some(id(2)),
-            colour: Colour::Ink,
-            weight: Weight::Medium,
-            dash: Dash::Solid,
-            heads: Heads::End,
-            opacity: Default::default(),
-        };
+        let arrow = stuck((10.0, 10.0), Some(1), (50.0, 50.0), Some(2));
         let board = board([
-            (1, element(None, "a0", image(area(0.0, 0.0, 100.0, 100.0)))),
-            (2, element(None, "a1", image(area(0.0, 0.0, 100.0, 100.0)))),
+            (1, element(None, "a0", coarse(area(0.0, 0.0, 100.0, 100.0)))),
+            (2, element(None, "a1", coarse(area(0.0, 0.0, 100.0, 100.0)))),
             (3, element(None, "a2", ElementKind::group())),
-            (4, element(Some(3), "a0", stuck(1))),
-            (5, element(Some(3), "a1", stuck(1))),
-            (6, element(None, "a3", stuck(2))),
+            (4, element(Some(3), "a0", held(1))),
+            (5, element(Some(3), "a1", held(1))),
+            (6, element(None, "a3", held(2))),
             (7, element(None, "a4", arrow)),
         ]);
         assert_eq!(board.targets_of(&[id(3)]), BTreeSet::from([id(1)]));
@@ -910,7 +849,7 @@ mod tests {
 
     #[test]
     fn an_end_near_the_curve_of_an_image_shown_as_an_ellipse_snaps_onto_it() {
-        let mut shown = image(area(0.0, 0.0, 200.0, 100.0));
+        let mut shown = coarse(area(0.0, 0.0, 200.0, 100.0));
         if let ElementKind::Image { edits, .. } = &mut shown {
             edits.crop_shape = crate::CropShape::Ellipse;
         }
@@ -926,41 +865,23 @@ mod tests {
 
     #[test]
     fn an_end_keeps_to_the_same_point_of_what_it_sticks_to() {
-        let before = image(area(0.0, 0.0, 100.0, 100.0));
-        let ElementKind::Image {
-            asset,
-            natural_size,
-            ..
-        } = before
-        else {
-            unreachable!()
-        };
+        let before = coarse(area(0.0, 0.0, 100.0, 100.0));
         // Moved, doubled, turned a quarter, cropped to the picture's right half, and flipped
         // upside down within it.
-        let after = ElementKind::Image {
-            asset,
-            natural_size,
-            frame: area(100.0, 0.0, 100.0, 200.0),
-            rotation: 90.0,
-            edits: crate::ImageEdits {
-                crop: Some(area(5.0, 0.0, 5.0, 10.0)),
-                flip_vertical: true,
-                ..crate::ImageEdits::default()
-            },
-            source: None,
-            filename: None,
-            caption: None,
-            opacity: Default::default(),
-        };
+        let mut after = turned(coarse(area(100.0, 0.0, 100.0, 200.0)), 90.0);
+        if let ElementKind::Image { edits, .. } = &mut after {
+            edits.crop = Some(area(5.0, 0.0, 5.0, 10.0));
+            edits.flip_vertical = true;
+        }
         // At the picture's (7.5, 2.5), which lands at the crop's (0.5, 0.75) once flipped:
         // (150, 150) upright, turned a quarter around (150, 100).
         let followed = |before, after, point| Motion::of(before, after)?.point(point);
         let to = followed(&before, &after, point(75.0, 25.0)).unwrap();
-        assert!(apart(to, point(100.0, 100.0)) < 1e-9, "{to:?}");
+        assert_at(to, 100.0, 100.0);
         assert!(Motion::of(&before, &before).is_none());
         // Flat, it keeps its points at its left side, which is all there is of it.
-        let flat = image(area(0.0, 0.0, 0.0, 100.0));
+        let flat = coarse(area(0.0, 0.0, 0.0, 100.0));
         let to = followed(&flat, &before, point(0.0, 50.0)).unwrap();
-        assert!(apart(to, point(0.0, 50.0)) < 1e-9, "{to:?}");
+        assert_at(to, 0.0, 50.0);
     }
 }
