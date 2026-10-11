@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startsOf, trimOf, type Playback } from "./playback.js";
+import { startsOf, trimOf, type Media, type Playback } from "./playback.js";
 import { imageKind, untitled } from "./board.js";
-import { card, type CardCommands, type CardMedia } from "./card.js";
+import { card, type CardCommands } from "./card.js";
 import type { Command } from "./commands.js";
 import * as core from "./core.js";
 import type { Kind, Tip } from "./core.js";
@@ -83,17 +83,17 @@ function opened(moving?: Playback, showsAnnotations = () => true) {
   };
   const media = {
     playback: (asset: string) => (asset === ASSET ? moving : undefined),
-    play: vi.fn<CardMedia["play"]>((_, playing) => {
+    play: vi.fn<Media<never>["play"]>((_, playing) => {
       if (moving) {
         moving.playing = playing;
       }
     }),
-    seek: vi.fn<CardMedia["seek"]>((_, at) => {
+    seek: vi.fn<Media<never>["seek"]>((_, at) => {
       if (moving) {
         moving.at = at;
       }
     }),
-    preview: vi.fn<CardMedia["preview"]>(),
+    preview: vi.fn<Media<never>["preview"]>(),
   };
   const trimmed = vi.fn<() => void>();
   const shown = card(

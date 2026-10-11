@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, it, expect, vi } from "vitest";
 import { refresh, type Opened } from "./board.js";
 import type { Camera } from "./camera.js";
 import { lifecycle, type Host } from "./lifecycle.js";
-import type { Folder, Home, Reopening, Session } from "./platform.js";
-import { memoryHome, memorySession, sample } from "../test/folders.js";
+import type { Folder, Home, Reopening, Session, Slices, ZipHome } from "./platform.js";
+import { memoryHome, memorySession, sample, SAMPLES } from "../test/folders.js";
 
 /** One of the demo's sticky notes. */
 const STICKY = "b7d4e1f05a2c4c8e9f3a6d2b1c0e5f74";
@@ -31,6 +33,23 @@ function remembered(kept: { name: string; unsaved: boolean }): void {
   localStorage.setItem("planche.session", JSON.stringify(kept));
 }
 
+function zipped(): Slices {
+  const bytes = new Uint8Array(readFileSync(join(SAMPLES, "demo.zip")));
+  const slices = (): Slices => ({
+    name: "demo.zip",
+    size: bytes.length,
+    read: async (start, end) => bytes.slice(start, end),
+  });
+  const home: ZipHome = {
+    rewrite: async () => null,
+    changed: async () => false,
+    reread: async () => slices(),
+    adopt: async () => {},
+    remember: async () => {},
+  };
+  return { ...slices(), home };
+}
+
 function sticky(opened: Opened | undefined, id: string): string | undefined {
   const kind = opened?.board.elements[id]?.kind;
   return kind?.type === "sticky" ? kind.text.content : undefined;
@@ -38,14 +57,16 @@ function sticky(opened: Opened | undefined, id: string): string | undefined {
 
 /**
  * The app around the boards, launched with `session`, or none where another window holds it,
- * `reopen` to open again, `picked` as the board the user opens, and `target` as the folder they
- * save it as, answering `answer` when asked, and looking at the board shown from `camera`. A
- * board `fails` to show as one would on the app's own fault, and tells the files it left out.
+ * `reopen` to open again, `picked` as the board the user opens, or `zip` as the ZIP file, and
+ * `target` as the folder they save it as, answering `answer` when asked, and looking at the board
+ * shown from `camera`. A board `fails` to show as one would on the app's own fault, and tells the
+ * files it left out.
  */
 function app({
   session,
   reopen,
   picked,
+  zip,
   target,
   answer = true,
   camera,
@@ -54,6 +75,7 @@ function app({
   session?: Session;
   reopen?: Reopening;
   picked?: Folder | Home;
+  zip?: Slices;
   target?: Home;
   answer?: boolean;
   camera?: Camera;
@@ -70,7 +92,7 @@ function app({
     reopen: async () => reopen ?? null,
     forget,
     open: async () => chosen ?? null,
-    openZip: async () => null,
+    openZip: async () => zip ?? null,
     pickTarget: async () => target ?? null,
     confirm,
     markUnsaved() {},
@@ -785,5 +807,42 @@ describe("saveAs, as an image's file comes back", () => {
     const closed = await life.closing();
     expect(life.saver()?.failure()).toBeUndefined();
     expect(closed).toBe(true);
+  });
+});
+
+describe("where the board saves", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("keeps a session board in no files of its own, whose images a paste reads from the session", async () => {
+    remembered({ name: "demo", unsaved: true });
+    const { home } = memoryHome("target");
+    const { life } = app({ session: memorySession(sample("demo")).session, target: home });
+    await life.start();
+    expect(life.savesToFiles()).toBe(false);
+    expect(life.fleeting()).toBe(life.saver());
+    await life.saveAs();
+    expect(life.savesToFiles()).toBe(true);
+    expect(life.fleeting()).toBeUndefined();
+  });
+
+  it("pastes from a ZIP file's own saver, whose saves drop what the board no longer shows", async () => {
+    const { life } = app({ session: memorySession().session, zip: zipped() });
+    await life.start();
+    await life.openZip();
+    expect(life.savesToFiles()).toBe(true);
+    expect(life.saver()).toBeDefined();
+    expect(life.fleeting()).toBe(life.saver());
+    await life.closing();
+  });
+
+  it("saves into a folder opened, whose images stay where they are for a paste", async () => {
+    const { home } = memoryHome("demo", sample("demo"));
+    const { life } = app({ session: memorySession().session, picked: home });
+    await life.start();
+    await life.openFolder();
+    expect(life.savesToFiles()).toBe(true);
+    expect(life.fleeting()).toBeUndefined();
   });
 });

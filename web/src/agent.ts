@@ -7,7 +7,8 @@ import { CAPTURE_SIDE, capture, type Capture } from "./capture.js";
 import * as core from "./core.js";
 import type { Element, Kind, Rect } from "./core.js";
 import { clipped, message } from "./errors.js";
-import type { AgentCall } from "./platform.js";
+import type { Agent, AgentCall } from "./platform.js";
+import { recall, remember } from "./preferences.js";
 import type { Rendered, Request } from "./render.js";
 
 /** The page's state that agents read. */
@@ -35,12 +36,52 @@ export interface Reading {
   background(): string;
 }
 
+/** Whether agents may read and edit the open board, which only the user changes. */
+export interface Access {
+  /**
+   * Ready to answer before any agent may ask, then on or off as it was left. The shell follows,
+   * even when the browser forgot, so that the menu's switch never hides access left on.
+   */
+  serve(): Promise<void>;
+  /** Remembered once it works, so that a refusal leaves the choice as it was. */
+  allow(on: boolean): Promise<void>;
+  allowed(): boolean;
+}
+
+/** Where the browser remembers that agent access is on. */
+const ALLOWED = "planche.agent";
 /** Longer texts are cut in the outline, and read whole by id. */
 const MOST_TEXT = 280;
 const MOST_LEFT_OUT = 100;
 /** Pixels along the longest side, at least, of an SVG, which draws sharp at any size. */
 const SMALLEST_VECTOR = 512;
 const STOPPED = "Planche stopped working, so ask the user to reload it";
+
+export function access(agent: Agent | undefined, page: Reading & Writing): Access {
+  let allowed = false;
+  async function allow(on: boolean): Promise<void> {
+    try {
+      await agent?.allow(on);
+    } catch (error) {
+      throw new Error(on ? `Agent access stays off, as ${String(error)}` : String(error), {
+        cause: error,
+      });
+    }
+    allowed = on;
+    remember(ALLOWED, on ? "on" : undefined);
+  }
+  return {
+    async serve() {
+      if (agent === undefined) {
+        return;
+      }
+      await agent.serve((call) => answer(call, page));
+      await allow(recall(ALLOWED) === "on");
+    },
+    allow,
+    allowed: () => allowed,
+  };
+}
 
 /**
  * Rejects with what the agent reads when there is no answer. Once the app stopped, nothing more,

@@ -1,4 +1,4 @@
-// Measurements the app shows, taken the same way on every platform.
+// Measurements the app shows, taken the same way on every platform, and the panel that shows them.
 
 export interface Rate {
   count(): void;
@@ -33,6 +33,44 @@ export function rate(show: (perSecond: number) => void): Rate {
   };
 }
 
+export interface Measurements {
+  shown(): boolean;
+  toggle(): void;
+  drew(): void;
+}
+
+export function measurements(
+  panel: HTMLElement,
+  list: HTMLElement,
+  lines: (draws: string) => [name: string, value: string][],
+): Measurements {
+  /** `undefined` until they showed for a second. */
+  let perSecond: number | undefined;
+  const draws = rate((counted) => {
+    perSecond = counted;
+    show();
+  });
+  function show(): void {
+    if (panel.hidden) {
+      return;
+    }
+    const counted = perSecond === undefined ? "…" : `${perSecond.toFixed(0)} a second`;
+    list.replaceChildren(
+      ...lines(counted).flatMap(([name, value]) => [withText("dt", name), withText("dd", value)]),
+    );
+  }
+  return {
+    shown: () => !panel.hidden,
+    toggle() {
+      panel.hidden = !panel.hidden;
+      perSecond = undefined;
+      draws.watch(!panel.hidden);
+      show();
+    },
+    drew: () => draws.count(),
+  };
+}
+
 /** The smallest of `values`, which must not be empty, with at least `share` of them at or below it. */
 export function percentile(values: number[], share: number): number {
   const sorted = values.toSorted((a, b) => a - b);
@@ -57,4 +95,13 @@ export function megabytes(bytes: number): string {
 
 export function milliseconds(duration: number): string {
   return `${duration.toFixed(1)} ms`;
+}
+
+function withText<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  content: string,
+): HTMLElementTagNameMap[K] {
+  const element = document.createElement(tag);
+  element.textContent = content;
+  return element;
 }

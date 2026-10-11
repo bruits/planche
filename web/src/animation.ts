@@ -9,7 +9,7 @@ import { assetPlayback } from "./board.js";
 import type { Camera, Viewport } from "./camera.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Size, Trim } from "./core.js";
-import { spanOf, startsOf, stepped, type Playback, type Span } from "./playback.js";
+import { spanOf, startsOf, stepped, type Player, type Span } from "./playback.js";
 import { TEXTURE_SIDE, shownAssets } from "./raster.js";
 import type { Playing, Renderer } from "./renderer.js";
 
@@ -24,27 +24,17 @@ export interface Moving {
   plays: number;
 }
 
-export interface Animations {
+type Kept = { asset: string; natural: Size; moving?: Moving | undefined };
+
+export interface Animations extends Player<Kept> {
   /** Plays those that move from now on, unless one already does, or its texture is smaller than it. */
-  keep(images: Iterable<{ asset: string; natural: Size; moving?: Moving | undefined }>): void;
+  keep(images: Iterable<Kept>): void;
   /** Draws the frames due of those that show, and asks for a frame once the next one is. */
   update(board: Board, renderer: Renderer, camera: Camera, viewport: Viewport): void;
-  holds(asset: string): boolean;
   /** Whether `asset` plays, which one that played through does not. */
   playing(asset: string): boolean;
-  /** Plays or pauses them, which motion being reduced then leaves as they are. */
-  play(assets: string[], playing: boolean): void;
-  /** Whether motion is reduced, which pauses those the user did not play. */
-  reduce(reduced: boolean): void;
-  playback(asset: string): Playback | undefined;
-  /** Goes to frame `at`, within what plays of it, and plays on from there if it plays. */
-  seek(asset: string, at: number): void;
   /** Pauses them, and goes `by` frames on within what plays of each, round from one end to the other. */
   step(assets: string[], by: number): void;
-  /** Plays `span` of it, whatever its trim, until `undefined`. */
-  preview(asset: string, span: Span | undefined): void;
-  /** Forgets them all, as their renderer is gone. */
-  reset(): void;
 }
 
 interface Run {

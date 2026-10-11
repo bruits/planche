@@ -123,6 +123,8 @@ export type Draw =
   | "sticky"
   | "comment";
 
+export type Tool = "select" | "hand" | "eraser" | Draw;
+
 export interface Hooks {
   /**
    * The elements every edit, undo, and redo touches, once `current` would have them up to date,
@@ -2569,6 +2571,10 @@ function isSegment(kind: Kind | undefined): kind is Segment {
 
 export function isTip(tool: string | undefined): tool is Tip {
   return tool !== undefined && Object.hasOwn(TIPS, tool);
+}
+
+export function drawTool(tool: Tool): Draw | undefined {
+  return tool === "select" || tool === "hand" || tool === "eraser" ? undefined : tool;
 }
 
 /** Whether `id` draws before, so under, every one of the `chosen` and what they hold. */

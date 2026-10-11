@@ -7,7 +7,7 @@ import { assetPlayback } from "./board.js";
 import type { Camera, Viewport } from "./camera.js";
 import * as core from "./core.js";
 import type { Board, Bytes, Size, Trim } from "./core.js";
-import { frameAt, spanOf, stepped, type Playback, type Span } from "./playback.js";
+import { frameAt, spanOf, stepped, type Player, type Playback, type Span } from "./playback.js";
 import { shownAssets } from "./raster.js";
 import type { Renderer } from "./renderer.js";
 
@@ -139,25 +139,19 @@ function loaded(element: HTMLVideoElement): Promise<void> {
   });
 }
 
-export interface Videos {
+type Kept = { asset: string; video?: Blob };
+
+export interface Videos extends Player<Kept> {
   /** Plays those that are videos from now on, unless one already does. */
-  keep(images: Iterable<{ asset: string; video?: Blob }>): void;
+  keep(images: Iterable<Kept>): void;
   /** Copies the new frames of those that show, and starts or stops them as they show. */
   update(board: Board, renderer: Renderer, camera: Camera, viewport: Viewport): void;
-  holds(asset: string): boolean;
-  playing(asset: string): boolean;
-  /** Plays or pauses them, which motion being reduced then leaves as they are. */
-  play(assets: string[], playing: boolean): void;
-  /** Whether motion is reduced, which pauses those the user did not play. */
-  reduce(reduced: boolean): void;
   /** Whether those the user did not play play only while the pointer is on them. */
   playOnHover(on: boolean): void;
   /** What the pointer is on, `undefined` when no image. */
   hover(asset: string | undefined): void;
   /** Without frames until they are read, which asking starts. */
   playback(asset: string): Playback | undefined;
-  /** Goes to frame `at`, within what plays of it, and plays on from there if it plays. */
-  seek(asset: string, at: number): void;
   /** Whether it goes frame by frame, as one whose frames are not read yet may. */
   steps(asset: string): boolean;
   /**
@@ -165,15 +159,11 @@ export interface Videos {
    * other, once their frames are read.
    */
   step(assets: string[], by: number): void;
-  /** Plays `span` of it, whatever its trim, until `undefined`. */
-  preview(asset: string, span: Span | undefined): void;
   /** The lone video selected, which keeps its decoder while paused, to go to another frame at once. */
   select(asset: string | undefined): void;
   /** Whether `asset` plays with its sound, which it does from when asked until the board closes. */
   sounding(asset: string): boolean;
   sound(assets: string[], on: boolean): void;
-  /** Forgets them all, as their renderer is gone. */
-  reset(): void;
   /**
    * Stops them all, once nothing draws any more to start or stop them. It calls into no renderer,
    * which may have just panicked.

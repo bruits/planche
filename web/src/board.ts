@@ -31,6 +31,13 @@ export interface Opened {
   drawn: Drawn;
 }
 
+/** A board shown, for work that lands on it once it awaited. */
+export interface Hold {
+  board: Opened;
+  /** Whether it still shows, in its renderer, as another board may show meanwhile, or it fail to. */
+  shows(): boolean;
+}
+
 /**
  * A board's files as they stand, with the element files it left out, which a copy of the board
  * takes as they are, and the assets its images show that none holds, which it goes without.

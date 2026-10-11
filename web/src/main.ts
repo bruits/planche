@@ -1,151 +1,89 @@
-// The app: start a board, or open one from a folder or a ZIP file, look around it, add images
-// to it and edit it, which it saves as it goes, and save it elsewhere or export it.
+// The app, wired together: start a board, or open one from a folder or a ZIP file, look around
+// it, add images to it and edit it, which it saves as it goes, and save it elsewhere or export it.
 
 import * as core from "./core.js";
-import type {
-  Alignment,
-  Axis,
-  Background,
-  Copied,
-  CropShape,
-  Kind,
-  Order,
-  Point,
-  Rect,
-  Restack,
-  Size,
-  Tip,
-} from "./core.js";
-import { pick, receive, type Incoming } from "./add.js";
-import { answer } from "./agent.js";
+import type { Point, Size, Tip } from "./core.js";
+import { actions } from "./actions.js";
+import { pick, receive } from "./add.js";
+import { adding } from "./adding.js";
+import { access } from "./agent.js";
 import { animations } from "./animation.js";
 import { bugReport } from "./bugreport.js";
 import {
   assetSizes,
-  assetPlayback,
-  assetsOf,
-  centring,
   copiedAssets,
-  duplicateOffset,
   decodeAsset,
   exposing,
   extent,
-  files,
-  imageKind,
   isAnnotation,
   loneImage,
   placed,
-  prepare,
-  newId,
   reader,
   refresh,
   release,
-  renamed,
-  shownOrder,
-  webAddress,
-  row,
   type Added,
   type Decoded,
+  type Hold,
   type Opened,
 } from "./board.js";
-import { pool } from "./pool.js";
-import { fit, onScreen, toBoard, type Camera } from "./camera.js";
-import { card, type CardMedia } from "./card.js";
-import { clipboard, type Pasted } from "./clipboard.js";
-import { meanColours } from "./colour.js";
-import {
-  describe,
-  learnLayout,
-  listen,
-  mac,
-  typed,
-  typing,
-  type Command,
-  type Shortcut,
-} from "./commands.js";
-import { edits, isTip, type Draw, type Pen } from "./edit.js";
+import { fit, onScreen, type Camera } from "./camera.js";
+import { card } from "./card.js";
+import { clipboard } from "./clipboard.js";
+import { learnLayout, listen, mac, typed, typing, type Command } from "./commands.js";
+import { drawTool, edits, isTip, type Draw, type Pen, type Tool } from "./edit.js";
 import { message } from "./errors.js";
 import { exportCard, recalled, remembered } from "./exportcard.js";
+import { exporting } from "./exporting.js";
 import { failures } from "./failures.js";
 import { handle } from "./handle.js";
 import type { Icon } from "./icons.js";
 import { lifecycle } from "./lifecycle.js";
-import { menuOpen, openMenu, type Entry, type Item } from "./menu.js";
-import { openFinder, type Listed } from "./finder.js";
-import { heapInUse, megabytes, milliseconds, percentile, rate, timed } from "./metrics.js";
+import { menuOpen } from "./menu.js";
+import { menus, percent } from "./menus.js";
+import { heapInUse, measurements, megabytes, milliseconds, percentile } from "./metrics.js";
 import { overlay } from "./overlay.js";
-import { testPhotos } from "./photos.js";
-import { sped } from "./playback.js";
+import { together } from "./playback.js";
 import { lockedPin, pinned, pins } from "./pins.js";
 import { titledGroup, titles } from "./titles.js";
-import { platform, type ErrorLog } from "./platform.js";
+import { platform } from "./platform.js";
 import { recall, remember } from "./preferences.js";
 import { TEXTURE_SIDE } from "./raster.js";
-import {
-  backing,
-  drawnOver,
-  exported,
-  pictureName,
-  planned,
-  render,
-  type Options,
-} from "./render.js";
-import type { Saving } from "./save.js";
+import { backing, planned, render } from "./render.js";
 import { create, type Placed, type Renderer } from "./renderer.js";
 import { ACROSS, sampler } from "./sampler.js";
 import { showing } from "./showing.js";
-import { png, still } from "./still.js";
-import { PALETTE, PAPERS, highlight, styles } from "./style.js";
+import { still } from "./still.js";
+import { styles } from "./style.js";
 import { loadFont, texts } from "./text.js";
-import { theme, type Scheme } from "./theme.js";
+import { theme } from "./theme.js";
 import { toolbar, type Button } from "./toolbar.js";
 import { vectors } from "./vector.js";
 import { videos } from "./video.js";
 import { view } from "./view.js";
 import { welcome } from "./welcome.js";
-import { writeZip } from "./zip.js";
 
-/** Where the browser remembers that hints are hidden. */
-const HINTS = "planche.hints";
-/** Where the browser remembers that agent access is on. */
-const AGENT = "planche.agent";
-/** Where the browser remembers that the window stays on top. */
-const ON_TOP = "planche.ontop";
-/** Where the browser remembers that videos play only while the pointer is on them. */
-const HOVER_PLAY = "planche.hoverplay";
-/** Where the browser remembers that the style card stays open. */
-const KEEP_STYLE = "planche.keepstyle";
-/** Where the browser remembers that nothing lines up with its neighbours. */
-const NEIGHBOURS = "planche.neighbours";
-const ZOOM_STEP = 1.25;
-/** What the zoom's menu zooms to at once. */
-const ZOOMS = [0.25, 0.5, 1, 2, 4];
-/** Each side for the other, as a mirrored board shows them. */
-const MIRRORED_SIDES: Partial<Record<Alignment, Alignment>> = { left: "right", right: "left" };
-/** Left around images added, in CSS pixels, past the zones outside their corners that turn them. */
-const ADDED_MARGIN = 48;
-/** How far right and down a duplicate lies from what it copies, at least, in CSS pixels. */
-const DUPLICATE_OFFSET = 16;
-/** In the order the key goes through them. */
-const BACKGROUNDS: Background[] = ["plain", "grid", "dots"];
-/** The tools a drag draws with, or a click places. */
-const FRAMED: ReadonlySet<string> = new Set([
-  "rectangle",
-  "ellipse",
-  "triangle",
-  "diamond",
-  "star",
-  "polygon",
-  "cross",
-  "sticky",
-] satisfies Draw[]);
-const SCHEMES: Scheme[] = ["light", "dark", "system"];
-/** How many test photos the measurements offer to add at once, each about 17 MB of textures. */
-const TEST_PHOTOS = [10, 50, 100];
-/** As their assets would stay in the board's folder or file once undone. */
-const NOT_FOR_TEST_PHOTOS = "Only on a board not saved in a folder or a ZIP file";
+let opened: Opened | undefined;
+let renderer: Renderer | undefined;
+let halfDrawn = false;
+let looking: Promise<void> | undefined;
+let tool: Tool = "select";
+/** What the pen draws while pressed, over the board. */
+let inking: Pen | undefined;
+/** Left out of the board, it starts as the board's background suggests. */
+let snapping = false;
+/** The assets whose images show crossed out, as their files or this machine cannot show them. */
+let crossedOut: ReadonlySet<string> = new Set();
+/** The assets the renderer holds a texture or a drawing of, which adding them again needs not decode. */
+const loaded = new Set<string>();
+let spaceHeld = false;
+/** Left out of the preferences, as annotations hidden at the next launch would look lost. */
+let annotationsShown = true;
+/** Whether an agent's screenshot draws, which shows every annotation, whatever the window hides. */
+let screenshotting = false;
+let copying: { key: string; png: Promise<Blob> } | undefined;
+/** What of the export card's picture the board last drew. */
+let exposed = "";
 
-const measurements = byId("measurements");
 /** What the measurements show, which the details of a failure tell too. */
 const details = new Map<string, string>();
 // First after them, to hear of whatever fails while the rest is set up.
@@ -175,9 +113,22 @@ const { fail, report } = failing;
 
 /** The rows of the measurements that the next draw ends, with when each began. */
 const untilDrawn = new Map<string, number>();
-const draws = rate((perSecond) => {
-  drawRate = perSecond;
-  showMetrics();
+const metrics = measurements(byId("measurements"), byId("metrics"), (draws) => {
+  const heap = heapInUse();
+  const lines = new Map([
+    ["platform", platform.name],
+    ["draws", draws],
+    ["core memory", megabytes(core.coreMemory())],
+  ]);
+  if (renderer !== undefined) {
+    lines.set("textures", megabytes(renderer.textureBytes));
+    lines.set("texts", String(lettering.count()));
+  }
+  if (heap !== undefined) {
+    lines.set("JS heap", megabytes(heap));
+  }
+  details.forEach((value, name) => lines.set(name, value));
+  return [...lines];
 });
 const overlaid = overlay(byId("viewport"));
 const viewport = view(byId("viewport"), {
@@ -198,15 +149,14 @@ const viewport = view(byId("viewport"), {
     if (opened && renderer) {
       present.free();
       drawings.update(opened.board, renderer, camera, size);
-      animated.update(opened.board, renderer, camera, size);
-      films.update(opened.board, renderer, camera, size);
+      media.update(opened.board, renderer, camera, size);
       if (lettering.update(opened.board, renderer, camera, size, editing.writing())) {
         placeNow(renderer, opened);
       }
     }
   },
   painted() {
-    draws.count();
+    metrics.drew();
     if (untilDrawn.size > 0) {
       const now = performance.now();
       untilDrawn.forEach((since, name) => details.set(name, milliseconds(now - since)));
@@ -230,21 +180,7 @@ const films = videos(
   },
   () => say("A video cannot play here"),
 );
-const media: CardMedia = {
-  playback: (asset) => animated.playback(asset) ?? films.playback(asset),
-  play(assets, playing) {
-    animated.play(assets, playing);
-    films.play(assets, playing);
-  },
-  seek(asset, at) {
-    animated.seek(asset, at);
-    films.seek(asset, at);
-  },
-  preview(asset, span) {
-    animated.preview(asset, span);
-    films.preview(asset, span);
-  },
-};
+const media = together(animated, films);
 const editing = edits(viewport, overlaid, () => opened, {
   changed,
   retitle: (id) => groupTitles.write(id),
@@ -265,10 +201,10 @@ const editing = edits(viewport, overlaid, () => opened, {
     present.free();
   },
   snapping: () => snapping,
-  aligning: () => aligning,
+  aligning: () => app.aligning(),
   showsAnnotations: () => annotationsShown,
   reveal: () => showAnnotations(true),
-  drawing: () => drawTool(),
+  drawing: () => drawTool(tool),
   erasing: () => tool === "eraser",
   sampling: () => picker.sampling() !== undefined,
   drawn: () => useTool("select"),
@@ -330,13 +266,8 @@ const present = showing({
     renderer = undefined;
     snapping = next.board.background !== "plain";
     lettering.reset();
-    drawings.reset();
-    animated.reset();
-    films.reset();
-    crossedOut = new Set();
-    loaded.clear();
-    comments.clear();
-    groupTitles.clear();
+    // Before the edits let go of the selection, which shows the pins and titles of the board.
+    letGo();
     life.showSaved();
     showTitle();
     editing.reset();
@@ -371,8 +302,7 @@ const present = showing({
   load(into, asset, decoded, read) {
     load(into, new Map([[asset, decoded]]));
     // Once their texture is there, which they play onto.
-    animated.keep([read]);
-    films.keep([read]);
+    media.keep([read]);
     // Its file came back.
     if (crossedOut.has(asset)) {
       crossedOut = new Set([...crossedOut].filter((other) => other !== asset));
@@ -398,1014 +328,147 @@ const present = showing({
       viewport.clear();
       renderer = undefined;
     }
-    drawings.reset();
-    animated.reset();
-    films.reset();
-    crossedOut = new Set();
-    loaded.clear();
+    // After the edits let go of the selection, which would show the board's pins and titles again.
     editing.reset();
-    comments.clear();
-    groupTitles.clear();
+    letGo();
   },
   changed,
   drawn: (name, since) => untilDrawn.set(name, since),
 });
 
-let opened: Opened | undefined;
-let renderer: Renderer | undefined;
-let halfDrawn = false;
-let looking: Promise<void> | undefined;
-/** On the desktop, a second export to the same file would take over the first one's draft. */
-let exporting = false;
-let tool: "select" | "hand" | "eraser" | Draw = "select";
-/** What the pen draws while pressed, over the board. */
-let inking: Pen | undefined;
-/** Left out of the board, it starts as the board's background suggests. */
-let snapping = false;
-/** The assets whose images show crossed out, as their files or this machine cannot show them. */
-let crossedOut: ReadonlySet<string> = new Set();
-/** The assets the renderer holds a texture or a drawing of, which adding them again needs not decode. */
-const loaded = new Set<string>();
-let spaceHeld = false;
-/** Left out of the preferences, as a window without its title bar would open at full size. */
-let compact = false;
-/** Draws per second, `undefined` until the measurements were shown for a second. */
-let drawRate: number | undefined;
-let hintsShown = recall(HINTS) !== "hidden";
-/** Left out of the preferences, as annotations hidden at the next launch would look lost. */
-let annotationsShown = true;
-/** Whether an agent's screenshot draws, which shows every annotation, whatever the window hides. */
-let screenshotting = false;
-let agentsAllowed = false;
-let onTop = false;
-let hoverPlay = recall(HOVER_PLAY) === "on";
-let styleKept = recall(KEEP_STYLE) === "on";
-let aligning = recall(NEIGHBOURS) !== "off";
-let arranging = false;
-let copying: { key: string; png: Promise<Blob> } | undefined;
-/** Copies as PNG asked for, so that one cancelled clears no later one's message. */
-let pngCopies = 0;
-/** What of the export card's picture the board last drew. */
-let exposed = "";
-
-type Ordering = (opened: Opened, ids: string[]) => Order | Promise<Order>;
-
-const loadingBoard = () => (life.loading() ? "A board is opening" : undefined);
-const noBoard = () => (opened === undefined ? "No board is open yet" : undefined);
-const noneSelected = () => (editing.selection().length === 0 ? "Nothing is selected" : undefined);
-/** With nothing selected, the pen's style is what styling sets. */
-const nothingToStyle = () => (penStyling() ? undefined : noneSelected());
-const unexportable = () => {
-  const ids = editing.selection();
-  if (ids.length === 0) {
-    return "Select what to export";
-  }
-  return opened && drawnOver(opened, ids, crossedOut, annotationsShown) === undefined
-    ? "The selection draws nothing"
-    : undefined;
-};
-// Images within a selected group do not count, as arranging leaves groups where they are.
-const fewImages = () =>
-  editing.selection().filter((id) => opened?.board.elements[id]?.kind.type === "image").length < 2
-    ? "Select two images or more"
-    : undefined;
-/**
- * What is selected, with what the groups selected hold, but for what is locked, whose looks edits
- * leave alone.
- */
-const selectedKinds = (): Kind[] => {
-  if (!opened) {
-    return [];
-  }
-  const { board, editor } = opened;
-  return editor.withDescendants(editing.selection()).flatMap((id) => {
-    const kind = board.elements[id]?.kind;
-    return kind && editor.lockedBy(id) === undefined ? [kind] : [];
-  });
-};
-const selectedImages = () => selectedKinds().filter((kind) => kind.type === "image");
-/** What the lock command unlocks, as nothing is selected. */
-const unlocking = () => (editing.selection().length === 0 ? editing.lockedUnder() : undefined);
-const selectedImage = () => loneImage(opened?.board, editing.selection())?.image;
-const loneGroup = () => {
-  const [id, ...more] = editing.selection();
-  const kind = id === undefined || more.length > 0 ? undefined : opened?.board.elements[id]?.kind;
-  return kind?.type === "group" ? kind : undefined;
-};
-const greyed = () => {
-  const images = selectedImages();
-  return images.length > 0 && images.every((kind) => core.editsOf(kind).greyscale);
-};
-const shapedAs = (shape: CropShape) => {
-  const images = selectedImages();
-  return (
-    images.length > 0 &&
-    images.every((kind) => (core.editsOf(kind).crop_shape ?? "rectangle") === shape)
-  );
-};
-/** Whether the crop under way, or else every image selected, is an ellipse. */
-const elliptical = () => {
-  const cropping = editing.croppedAs();
-  return cropping === undefined ? shapedAs("ellipse") : cropping === "ellipse";
-};
-const croppable = () =>
-  noneSelected() ?? (selectedImages().length > 0 ? undefined : "Only images are cropped");
-const noneShown = () => (viewport.zoom() === undefined ? "No board is shown yet" : undefined);
-// Not before the board shows, which would select what nobody sees yet.
-const nothingToSelect = () =>
-  noneShown() ?? (opened?.board.draw_order.length ? undefined : "The board is empty");
-const selectedAssets = () => (opened ? assetsOf(opened, editing.selection()) : []);
-const selectedMoving = () =>
-  selectedAssets().filter((asset) => animated.holds(asset) || films.holds(asset));
-const moving = (asset: string) => animated.playing(asset) || films.playing(asset);
-const selectedStepping = () =>
-  selectedAssets().filter((asset) => animated.holds(asset) || films.steps(asset));
-const frameStep = (label: string, by: number, keys: Shortcut[]): Command => ({
-  label,
-  keys,
-  unavailable: () =>
-    noneSelected() ??
-    (selectedStepping().length > 0
-      ? undefined
-      : "Only animated images and videos go frame by frame"),
-  run: () => {
-    const assets = selectedStepping();
-    animated.step(assets, by);
-    films.step(assets, by);
-    refreshBar();
+const agents = access(platform.agent, {
+  opened: () => opened,
+  unsaved: () => life.unsaved(),
+  selection: () => editing.selection(),
+  entered: () => editing.entered(),
+  writing: () => editing.writing(),
+  shown: () => {
+    const camera = viewport.camera();
+    return camera && onScreen(camera, viewport.size());
   },
-});
-/**
- * The animated images and videos of the selection's assets, wherever they show, that the speed
- * commands set, as a still selected with them takes no speed, and those locked take it from the
- * others of their asset.
- */
-const paced = (): string[] => {
-  if (!opened) {
-    return [];
-  }
-  const { board, editor } = opened;
-  const assets = new Set(selectedMoving());
-  return Object.entries(board.elements).flatMap(([id, { kind }]) =>
-    kind.type === "image" && assets.has(kind.asset) && editor.lockedBy(id) === undefined
-      ? [id]
-      : [],
-  );
-};
-/** Of an asset the speed commands set, which leave out those whose images are all locked. */
-const speedOf = (): number => {
-  const board = opened?.board;
-  const [id] = paced();
-  const kind = id === undefined ? undefined : board?.elements[id]?.kind;
-  return (
-    (kind?.type === "image" ? board && assetPlayback(board).get(kind.asset)?.speed : undefined) ?? 1
-  );
-};
-const pace = (label: string, faster: boolean, keys: Shortcut[]): Command => ({
-  label,
-  keys,
-  unavailable: () =>
-    noneSelected() ??
-    (paced().length > 0 ? undefined : "Only animated images and videos change speed") ??
-    (sped(speedOf(), faster) === undefined
-      ? `Already at the ${faster ? "fastest" : "slowest"}`
-      : undefined),
-  run: () => {
-    const speed = sped(speedOf(), faster);
-    const ids = paced();
-    if (speed === undefined || ids.length === 0) {
-      return;
+  halfDrawn: () => halfDrawn || present.reloading(),
+  stopped: () => failing.stopped(),
+  crossedOut: (asset) =>
+    crossedOut.has(asset) ? (present.crossedOut(asset) ?? "it cannot show") : undefined,
+  drawNow() {
+    if (annotationsShown || opened === undefined || renderer === undefined) {
+      return viewport.drawNow();
     }
-    editing.apply((editor, touched) => touched.push(...editor.setSpeed(ids, speed)));
-  },
-});
-const restack = (label: string, to: Restack, shortcut: Shortcut): Command => ({
-  label,
-  keys: [shortcut],
-  unavailable: noneSelected,
-  run: () => editing.restack(to),
-});
-const flip = (label: string, key: string, horizontally: boolean): Command => ({
-  label,
-  keys: [{ key, shift: true }],
-  unavailable: () =>
-    noneSelected() ?? (selectedImages().length > 0 ? undefined : "Only images flip"),
-  run: () => editing.flip(horizontally),
-  once: true,
-});
-const turn = (label: string, degrees: number, key: string): Command => ({
-  label,
-  keys: [{ key, shift: true }],
-  unavailable: () =>
-    noneSelected() ??
-    (opened && core.bounds(opened.editor, editing.selection())
-      ? undefined
-      : "Comments do not turn"),
-  // As the board shows.
-  run: () => editing.rotate(viewport.mirrored() ? -degrees : degrees),
-});
-const arrangement = (label: string, order: Ordering): Command => ({
-  label,
-  unavailable: () => (arranging ? "Images are being arranged" : fewImages()),
-  run: () => report(arrange(label, order)),
-});
-const alignment = (label: string, to: Alignment, key: string): Command => ({
-  label,
-  keys: [{ key, alt: true }],
-  unavailable: () => (editing.selection().length < 2 ? "Select two elements or more" : undefined),
-  run: () => editing.align(viewport.mirrored() ? (MIRRORED_SIDES[to] ?? to) : to),
-});
-const distribution = (label: string, axis: Axis, key: string): Command => ({
-  label,
-  keys: [{ key, alt: true, shift: true }],
-  unavailable: () => (editing.selection().length < 3 ? "Select three elements or more" : undefined),
-  run: () => editing.distribute(axis),
-});
-const backdrop = (label: string, background: Background): Command => ({
-  label,
-  unavailable: noBoard,
-  run: () => useBackground(background),
-});
-const zoomTo = (label: string, zoom: number, keys?: Shortcut[]): Command => ({
-  label,
-  keys,
-  unavailable: noneShown,
-  run: () => viewport.zoomBy(zoom / viewport.zoom()!),
-});
-const palette = (label: string, to: Scheme): Command => ({
-  label,
-  run: () => appearance.choose(to),
-});
-/** The palette's colour, or a sticky note's paper, at `at`. */
-const colourCommand = (at: number): Command => ({
-  label: () =>
-    (styleCard.common().includes("paper") ? PAPERS[at]?.label : undefined) ??
-    (styleCard.highlighting() ? highlight(at) : PALETTE[at]!).label,
-  keys: [{ key: String(at + 1), code: `Digit${at + 1}` }],
-  unavailable() {
-    const can = styleCard.common();
-    if (can.includes("paper")) {
-      return PAPERS[at] ? undefined : `Sticky notes come in ${PAPERS.length} papers`;
+    // Through `placeNow`, as texts drawn anew meanwhile place the board again.
+    screenshotting = true;
+    try {
+      placeNow(renderer, opened);
+      return viewport.drawNow();
+    } finally {
+      screenshotting = false;
+      placeNow(renderer, opened);
+      viewport.redraw();
     }
-    return (
-      nothingToStyle() ??
-      (can.includes("colour") ? undefined : "Not everything selected takes a colour")
-    );
   },
-  run: () =>
-    styleCard.set(
-      styleCard.common().includes("paper")
-        ? { paper: PAPERS[at]!.paper }
-        : { colour: PALETTE[at]!.colour },
-    ),
+  async render(request) {
+    if (opened === undefined || renderer === undefined) {
+      throw new Error("Planche shows no board yet");
+    }
+    const background = getComputedStyle(document.body).backgroundColor;
+    return render({ opened, renderer, drawings, crossedOut, background }, request);
+  },
+  background: () => getComputedStyle(document.body).backgroundColor,
+  loading: () => life.loading(),
+  busy: () => editing.busy(),
+  idle: () => editing.idle(),
+  apply: (work) => editing.apply(work),
+  keep,
+  zoom: () => viewport.zoom(),
+  centre: () => viewport.centre(),
+  select: (ids) => editing.select(ids),
+  frame: fitTo,
 });
-const textStyle = (
-  label: string,
-  setting: "bold" | "italic" | "strike",
-  shortcut: Shortcut,
-): Command => ({
-  label,
-  keys: [shortcut],
-  unavailable: () =>
-    noneSelected() ??
-    (styleCard.common().includes(setting) ? undefined : "Not everything selected is text"),
-  run: () => styleCard.set({ [setting]: styleCard.value(setting) !== true }),
-  once: true,
+const outgoing = exporting({
+  platform,
+  opened: () => opened,
+  hold,
+  ready,
+  editing,
+  showsAnnotations: () => annotationsShown,
+  life,
+  drawings,
+  crossedOut: () => crossedOut,
+  loaded: (asset) => loaded.has(asset),
+  media,
+  clip: () => clip,
+  pictureCard: () => pictureCard,
+  timings: details,
+  say,
+  report,
 });
-const resize = (label: string, larger: boolean, keys: Shortcut[]): Command => ({
-  label,
-  keys,
-  unavailable: () =>
-    noneSelected() ??
-    (styleCard.common().includes("size") ? undefined : "Not everything selected is text"),
-  run: () => styleCard.resize(larger),
+const intake = adding({
+  hold,
+  renderer: () => renderer,
+  load,
+  keep,
+  heldSize,
+  editing,
+  viewport,
+  // A press on the handle drags the window instead. It measures 0 while hidden.
+  between: () => ({ top: byId("handle").getBoundingClientRect().bottom, bottom: bar.top() }),
+  savesToFiles: () => life.savesToFiles(),
+  stopped: () => failing.stopped(),
+  say,
+  drawn: (name, since) => untilDrawn.set(name, since),
 });
-const furthest: Shortcut = mac ? { alt: true } : { shift: true };
-const backspace: Shortcut = { key: "backspace" };
-const deleteKey: Shortcut = { key: "delete" };
-const shiftZ: Shortcut = { key: "z", command: true, shift: true };
-const ctrlY: Shortcut = { key: "y", ctrl: true };
-
-const commands = {
-  select: { label: "Select", keys: [{ key: "v" }], run: () => useTool("select") },
-  hand: { label: "Hand", keys: [{ key: "h" }], run: () => useTool("hand") },
-  eraser: {
-    label: "Eraser",
-    keys: [{ key: "e" }],
-    unavailable: noneShown,
-    run: () => useTool("eraser"),
-  },
-  pen: {
-    label: "Pen",
-    keys: [{ key: "d" }],
-    unavailable: noneShown,
-    run: () => useTool("pen"),
-  },
-  highlighter: {
-    label: "Highlighter",
-    keys: [{ key: "d", shift: true }],
-    unavailable: noneShown,
-    run: () => useTool("highlighter"),
-  },
-  arrow: {
-    label: "Arrow",
-    keys: [{ key: "a" }],
-    unavailable: noneShown,
-    run: () => useTool("arrow"),
-  },
-  line: { label: "Line", keys: [{ key: "l" }], unavailable: noneShown, run: () => useTool("line") },
-  rectangle: {
-    label: "Rectangle",
-    keys: [{ key: "r" }],
-    unavailable: noneShown,
-    run: () => useTool("rectangle"),
-  },
-  ellipse: {
-    label: "Ellipse",
-    keys: [{ key: "o" }],
-    unavailable: noneShown,
-    run: () => useTool("ellipse"),
-  },
-  cross: {
-    label: "Cross",
-    keys: [{ key: "x" }],
-    unavailable: noneShown,
-    run: () => useTool("cross"),
-  },
-  triangle: { label: "Triangle", unavailable: noneShown, run: () => useTool("triangle") },
-  diamond: { label: "Diamond", unavailable: noneShown, run: () => useTool("diamond") },
-  star: { label: "Star", unavailable: noneShown, run: () => useTool("star") },
-  polygon: { label: "Polygon", unavailable: noneShown, run: () => useTool("polygon") },
-  note: { label: "Text", keys: [{ key: "t" }], unavailable: noneShown, run: () => useTool("note") },
-  sticky: {
-    label: "Sticky note",
-    keys: [{ key: "n" }],
-    unavailable: noneShown,
-    run: () => useTool("sticky"),
-  },
-  comment: {
-    label: "Comment",
-    keys: [{ key: "c" }],
-    unavailable: noneShown,
-    run: () => useTool("comment"),
-  },
-  addImages: {
-    label: "Add images…",
-    keys: [{ key: "i" }],
-    unavailable: noneShown,
-    run: () => addPicked(viewport.centre()),
-  },
-  newBoard: {
-    label: "New board",
-    // Where the app has a window of its own, as browsers keep their keys for a new one.
-    keys: platform.titleBar ? [{ key: "n", command: true }] : undefined,
-    unavailable: loadingBoard,
-    run: () => report(life.newBoard()),
-    everywhere: true,
-  },
-  open: {
-    label: "Open a board…",
-    keys: [{ key: "o", command: true }],
-    unavailable: loadingBoard,
-    run: () => report(life.openFolder()),
-    everywhere: true,
-  },
-  openZip: {
-    label: "Open a ZIP file…",
-    unavailable: loadingBoard,
-    run: () => report(life.openZip()),
-  },
-  save: {
-    label: () => (savesToFiles() ? "Save" : "Save…"),
-    keys: [{ key: "s", command: true }],
-    unavailable: () => loadingBoard() ?? noBoard(),
-    // Where the browser cannot write a board, as a ZIP file it downloads.
-    run: () =>
-      report(platform.cannotSave !== undefined && !savesToFiles() ? exportZip() : life.save()),
-    everywhere: true,
-  },
-  saveAs: {
-    label: "Save as…",
-    keys: [{ key: "s", command: true, shift: true }],
-    unavailable: () => platform.cannotSave ?? noBoard(),
-    run: () => report(life.saveAs()),
-    everywhere: true,
-  },
-  exportZip: {
-    label: "Export a ZIP file…",
-    unavailable: () => (exporting ? "An export is under way" : noBoard()),
-    run: () => report(exportZip()),
-  },
-  exportPng: {
-    label: () => (pictureCard.isOpen() ? "Hide export" : "Export the selection as PNG…"),
-    keys: [{ key: "e", command: true, shift: true }],
-    unavailable: unexportable,
-    run: () => {
-      if (pictureCard.isOpen()) {
-        pictureCard.close();
-      } else {
-        styleCard.close();
-        // As the picture would hide what they draw or erase, which closes it again.
-        if (drawTool() !== undefined || tool === "eraser") {
-          useTool("select");
-        }
-        pictureCard.open(true);
-      }
-    },
-    once: true,
-  },
-  // Before the others on its key, which it takes while the export card is open.
-  savePng: {
-    label: "Save as PNG…",
-    keys: [{ key: "enter" }],
-    unavailable: () => (pictureCard.isOpen() ? unexportable() : "Open the export card first"),
-    run: () => report(exportPng(pictureCard.options())),
-  },
-  copyPng: {
-    label: "Copy as PNG",
-    keys: [{ key: "c", shift: true, alt: true }],
-    unavailable: unexportable,
-    run: () => copyPng(pictureCard.options()),
-    once: true,
-  },
-  undo: {
-    label: "Undo",
-    keys: [{ key: "z", command: true }],
-    unavailable: () => (opened?.editor.canUndo() ? undefined : "Nothing to undo"),
-    run: () => editing.undo(),
-  },
-  redo: {
-    label: "Redo",
-    keys: mac ? [shiftZ, ctrlY] : [ctrlY, shiftZ],
-    unavailable: () => (opened?.editor.canRedo() ? undefined : "Nothing to redo"),
-    run: () => editing.redo(),
-  },
-  selectAll: {
-    label: "Select all",
-    keys: [{ key: "a", command: true }],
-    unavailable: nothingToSelect,
-    run: () => editing.selectAll(),
-  },
-  invertSelection: {
-    label: "Invert selection",
-    keys: [{ key: "a", command: true, shift: true }],
-    unavailable: nothingToSelect,
-    run: () => editing.invertSelection(),
-    once: true,
-  },
-  selectSameType: {
-    label: "Select same type",
-    keys: [{ key: "a", code: "KeyA", command: true, alt: true }],
-    unavailable: noneSelected,
-    run: () => editing.selectSameType(),
-  },
-  escape: { label: "Go back up, or deselect", keys: [{ key: "escape" }], run: escape },
-  cut: {
-    label: "Cut",
-    keys: [{ key: "x", command: true }],
-    unavailable: noneSelected,
-    run: () => clip.copy(true),
-  },
-  copy: {
-    label: "Copy",
-    keys: [{ key: "c", command: true }],
-    unavailable: noneSelected,
-    run: () => clip.copy(false),
-  },
-  paste: {
-    label: "Paste",
-    keys: [{ key: "v", command: true }],
-    unavailable: noneShown,
-    run: () => pasteAt(viewport.centre()),
-  },
-  duplicate: {
-    label: "Duplicate",
-    keys: [{ key: "d", command: true }],
-    unavailable: noneSelected,
-    run: duplicate,
-  },
-  remove: {
-    label: "Delete",
-    keys: mac ? [backspace, deleteKey] : [deleteKey, backspace],
-    unavailable: noneSelected,
-    run: () => editing.remove(),
-  },
-  // By the bracket typed, or where it sits on US keys where the layout types it with more keys, as
-  // with AltGr. With ⌥ on macOS, whose browsers switch tabs on ⌘⇧ and a bracket, but Shift
-  // elsewhere, where Ctrl and Alt together are AltGr.
-  front: restack("Bring to front", "front", {
-    key: "]",
-    code: "BracketRight",
-    command: true,
-    ...furthest,
-  }),
-  forward: restack("Bring forward", "forward", { key: "]", code: "BracketRight", command: true }),
-  backward: restack("Send backward", "backward", { key: "[", code: "BracketLeft", command: true }),
-  back: restack("Send to back", "back", {
-    key: "[",
-    code: "BracketLeft",
-    command: true,
-    ...furthest,
-  }),
-  arrangeByName: arrangement("By name", () => ({ by: "name" })),
-  arrangeBySize: arrangement("By size", () => ({ by: "size" })),
-  arrangeByColour: arrangement("By colour", async (target, ids) => ({
-    by: "hue",
-    colours: await meanColours(target, ids),
-  })),
-  arrangeRandomly: arrangement("At random", () => ({
-    by: "random",
-    seed: crypto.getRandomValues(new Uint32Array(1))[0]!,
-  })),
-  sameHeight: {
-    label: "Same height",
-    unavailable: fewImages,
-    run: () => editing.normalize("height"),
-  },
-  sameWidth: { label: "Same width", unavailable: fewImages, run: () => editing.normalize("width") },
-  // Web design tools' keys.
-  alignLeft: alignment("Left", "left", "a"),
-  alignCentre: alignment("Centre", "centre", "h"),
-  alignRight: alignment("Right", "right", "d"),
-  alignTop: alignment("Top", "top", "w"),
-  alignMiddle: alignment("Middle", "middle", "v"),
-  alignBottom: alignment("Bottom", "bottom", "s"),
-  distributeHorizontally: distribution("Distribute horizontally", "horizontal", "h"),
-  distributeVertically: distribution("Distribute vertically", "vertical", "v"),
-  rotateLeft: turn("Rotate left", -90, "l"),
-  rotateRight: turn("Rotate right", 90, "r"),
-  straighten: {
-    label: "Straighten",
-    keys: [{ key: "r", alt: true }],
-    unavailable: () =>
-      noneSelected() ??
-      (selectedKinds().some((kind) => core.rotationOf(kind) !== 0)
-        ? undefined
-        : "Nothing selected is turned"),
-    run: () => editing.straighten(),
-  },
-  actualSize: {
-    label: "Actual size",
-    keys: [{ key: "t", alt: true }],
-    unavailable: () =>
-      noneSelected() ??
-      (selectedImages().length > 0 ? undefined : "Only images have an actual size") ??
-      (opened?.editor.atActualSize(editing.selection()) ? "Already at actual size" : undefined),
-    run: () => editing.actualSize(),
-  },
-  flipHorizontally: flip("Flip horizontally", "h", true),
-  flipVertically: flip("Flip vertically", "v", false),
-  crop: {
-    label: "Crop",
-    keys: [{ key: "enter" }],
-    unavailable: () => (selectedImage() ? undefined : "Select one image"),
-    run: () => editing.crop(),
-  },
-  resetCrop: {
-    label: "Reset crop",
-    keys: [{ key: "c", command: true, shift: true }],
-    unavailable: () =>
-      editing.cropping() !== undefined
-        ? undefined
-        : (noneSelected() ??
-          (selectedImages().some(
-            (kind) => core.editsOf(kind).crop || core.editsOf(kind).crop_shape === "ellipse",
-          )
-            ? undefined
-            : "Nothing selected is cropped")),
-    run: () => editing.resetCrop(),
-  },
-  rectangularCrop: {
-    label: "Rectangular crop",
-    unavailable: croppable,
-    run: () => editing.cropShape("rectangle"),
-  },
-  ellipticalCrop: {
-    label: "Elliptical crop",
-    keys: [{ key: "c", alt: true }],
-    unavailable: croppable,
-    run: () => editing.cropShape(elliptical() ? "rectangle" : "ellipse"),
-    once: true,
-  },
-  greyscale: {
-    label: "Greyscale",
-    keys: [{ key: "g", alt: true }],
-    unavailable: () =>
-      noneSelected() ?? (selectedImages().length > 0 ? undefined : "Only images turn grey"),
-    run: () => editing.greyscale(!greyed()),
-    once: true,
-  },
-  play: {
-    label: () => (selectedMoving().some(moving) ? "Pause" : "Play"),
-    keys: [{ key: "p" }],
-    unavailable: () =>
-      noneSelected() ??
-      (selectedMoving().length > 0 ? undefined : "Only animated images and videos play"),
-    run: () => {
-      const assets = selectedMoving();
-      const playing = !assets.some(moving);
-      animated.play(assets, playing);
-      films.play(assets, playing);
-      refreshBar();
-    },
-    once: true,
-  },
-  previousFrame: frameStep("Previous frame", -1, [{ key: "," }]),
-  // AZERTY types it with Shift.
-  nextFrame: frameStep("Next frame", 1, [{ key: "." }, { key: ".", shift: true }]),
-  // US types them with Shift, AZERTY one of them without.
-  slower: pace("Slower", false, [{ key: "<" }, { key: "<", shift: true }]),
-  faster: pace("Faster", true, [{ key: ">" }, { key: ">", shift: true }]),
-  sound: {
-    label: () => (selectedAssets().some(films.sounding) ? "Turn sound off" : "Turn sound on"),
-    keys: [{ key: "m" }],
-    unavailable: () =>
-      noneSelected() ?? (selectedAssets().some(films.holds) ? undefined : "Only videos have sound"),
-    run: () => {
-      const assets = selectedAssets().filter(films.holds);
-      films.sound(assets, !assets.some(films.sounding));
-      refreshBar();
-    },
-    once: true,
-  },
-  openSource: {
-    label: "Open source",
-    keys: [{ key: "o", command: true, shift: true }],
-    unavailable: () => {
-      const image = selectedImage();
-      if (image === undefined) {
-        return "Select one image";
-      }
-      return webAddress(image.source) === undefined ? "Its source is no web address" : undefined;
-    },
-    run: () => {
-      const address = webAddress(selectedImage()?.source);
-      if (address !== undefined) {
-        report(platform.openAddress(address));
-      }
-    },
-  },
-  group: {
-    label: "Group",
-    keys: [{ key: "g", command: true }],
-    unavailable: () => (editing.selection().length < 2 ? "Select two elements or more" : undefined),
-    run: () => editing.group(newId()),
-  },
-  ungroup: {
-    label: "Ungroup",
-    keys: [{ key: "g", command: true, shift: true }],
-    unavailable: () => noneSelected() ?? (selectsGroup() ? undefined : "Only groups ungroup"),
-    run: () => editing.ungroup(),
-  },
-  lock: {
-    label: () => (unlocking() === undefined ? "Lock" : "Unlock"),
-    keys: [{ key: "l", command: true, shift: true }],
-    unavailable: () => (unlocking() === undefined ? noneSelected() : undefined),
-    run: () => {
-      const under = unlocking();
-      if (under === undefined) {
-        editing.lock();
-      } else {
-        editing.unlock([under]);
-      }
-    },
-    once: true,
-  },
-  goInside: {
-    label: "Go inside",
-    keys: [{ key: "enter" }],
-    unavailable: () =>
-      editing.selection().length === 1 && selectsGroup() ? undefined : "Select one group",
-    run: () => editing.goInside(),
-  },
-  rename: {
-    label: () => (loneGroup()?.title === undefined ? "Add title" : "Rename"),
-    unavailable: () => (loneGroup() ? undefined : "Select one group"),
-    run: () => groupTitles.write(editing.selection()[0]!),
-  },
-  write: {
-    label: "Edit text",
-    keys: [{ key: "enter" }],
-    unavailable: () =>
-      editing.writable() ? undefined : "Select one text, sticky note, shape, or comment",
-    run: () => editing.write(),
-  },
-  zoomIn: {
-    label: "Zoom in",
-    // Shift types + on most layouts, but not on a number pad.
-    keys: [
-      { key: "+", command: true },
-      { key: "+", command: true, shift: true },
-      { key: "=", code: "Equal", command: true },
-    ],
-    unavailable: noneShown,
-    run: () => viewport.zoomBy(ZOOM_STEP),
-  },
-  zoomOut: {
-    label: "Zoom out",
-    keys: [{ key: "-", code: "Minus", command: true }],
-    unavailable: noneShown,
-    run: () => viewport.zoomBy(1 / ZOOM_STEP),
-  },
-  zoomActual: zoomTo("Zoom to 100%", 1, [{ key: "0", code: "Digit0", command: true }]),
-  fit: {
-    label: "Zoom to fit",
-    keys: [{ code: "Digit1", shift: true }],
-    unavailable: noneShown,
-    run: () => {
-      if (opened) {
-        viewport.look(
-          fit(extent(opened, shownOrder(opened.board, annotationsShown)), viewport.size()),
-        );
-      }
-    },
-  },
-  fitSelection: {
-    label: "Zoom to selection",
-    keys: [{ code: "Digit2", shift: true }],
-    unavailable: noneSelected,
-    run: () => fitTo(editing.selection()),
-  },
-  hints: {
-    label: "Hints",
-    run: () => {
-      hintsShown = !hintsShown;
-      remember(HINTS, hintsShown ? undefined : "hidden");
-      refreshBar();
-    },
-  },
-  compact: {
-    label: "Compact mode",
-    keys: [{ key: "\\", code: "Backslash", command: true }],
-    unavailable: () =>
-      platform.titleBar ? undefined : "Only the desktop app has a window of its own",
-    run: () => report(useCompact(!compact)),
-    once: true,
-  },
-  plain: backdrop("No grid", "plain"),
-  grid: backdrop("Lines", "grid"),
-  dots: backdrop("Dots", "dots"),
-  nextBackground: {
-    label: "Grid",
-    keys: [{ key: "g" }],
-    unavailable: noBoard,
-    run: () => {
-      const at = BACKGROUNDS.indexOf(opened!.board.background);
-      useBackground(BACKGROUNDS[(at + 1) % BACKGROUNDS.length]!);
-    },
-    once: true,
-  },
-  snap: {
-    label: "Snap to grid",
-    run: () => {
-      snapping = !snapping;
-    },
-  },
-  snapNeighbours: {
-    label: "Snap to neighbours",
-    run: () => {
-      aligning = !aligning;
-      remember(NEIGHBOURS, aligning ? undefined : "off");
-    },
-  },
-  light: palette("Light", "light"),
-  dark: palette("Dark", "dark"),
-  system: palette("System", "system"),
-  highContrast: { label: "High contrast", run: () => appearance.toggleContrast() },
-  agentAccess: {
-    label: "Agent access",
-    unavailable: () => (platform.agent ? undefined : "Only the desktop app lets agents in"),
-    run: () => report(allowAgents(!agentsAllowed)),
-  },
-  errorLog: {
-    label: "Open the error log",
-    unavailable: () => (platform.errorLog ? undefined : "Only the desktop app keeps one"),
-    run: () => {
-      if (platform.errorLog) {
-        report(showErrorLog(platform.errorLog));
-      }
-    },
-  },
-  alwaysOnTop: {
-    label: "Always on top",
-    unavailable: () =>
-      platform.keepOnTop ? undefined : "Only the desktop app has a window of its own",
-    run: () => report(keepOnTop(!onTop)),
-  },
-  hoverPlay: {
-    label: "Play videos on hover",
-    run: () => {
-      hoverPlay = !hoverPlay;
-      remember(HOVER_PLAY, hoverPlay ? "on" : undefined);
-      films.playOnHover(hoverPlay);
-      refreshBar();
-    },
-  },
-  keepStyle: {
-    label: "Keep style open",
-    run: () => {
-      styleKept = !styleKept;
-      remember(KEEP_STYLE, styleKept ? "on" : undefined);
-      styleCard.keepOpen(styleKept);
-      refreshBar();
-    },
-  },
-  measurements: {
-    label: "Measurements",
-    run: () => {
-      measurements.hidden = !measurements.hidden;
-      drawRate = undefined;
-      draws.watch(!measurements.hidden);
-      showMetrics();
-    },
-  },
-  greyBoard: {
-    label: "Greyscale board",
-    keys: [{ key: "g", code: "KeyG", command: true, alt: true }],
-    run: () => viewport.grey(!viewport.greyed()),
-    once: true,
-  },
-  mirrorBoard: {
-    label: "Mirror board",
-    keys: [{ key: "f", code: "KeyF", command: true, alt: true }],
-    run: () => viewport.mirror(!viewport.mirrored()),
-    once: true,
-  },
-  annotations: {
-    label: "Annotations",
-    keys: [{ key: "h", command: true, shift: true }],
-    run: () => showAnnotations(!annotationsShown),
-    once: true,
-  },
-  style: {
-    label: () => (styleCard.isOpen() ? "Hide style" : "Show style"),
-    keys: [{ key: "s", shift: true }],
-    unavailable: () =>
-      nothingToStyle() ??
-      (styleCard.common().length > 0 || styleCard.images() ? undefined : "Comments have no style"),
-    run: () => {
-      if (styleCard.isOpen()) {
-        styleCard.close();
-      } else {
-        pictureCard.close();
-        styleCard.open(true);
-      }
-    },
-    once: true,
-  },
-  colour1: colourCommand(0),
-  colour2: colourCommand(1),
-  colour3: colourCommand(2),
-  colour4: colourCommand(3),
-  colour5: colourCommand(4),
-  colour6: colourCommand(5),
-  bold: textStyle("Bold", "bold", { key: "b", command: true }),
-  italic: textStyle("Italic", "italic", { key: "i", command: true }),
-  strike: textStyle("Strikethrough", "strike", { key: "x", command: true, shift: true }),
-  // Where < and > sit apart from comma and period, on a key of their own, as on AZERTY.
-  larger: resize("Larger text", true, [
-    { key: ">", command: true, shift: true },
-    { key: ">", command: true },
-    { code: "Period", command: true, shift: true },
-  ]),
-  smaller: resize("Smaller text", false, [
-    { key: "<", command: true, shift: true },
-    { key: "<", command: true },
-    { code: "Comma", command: true, shift: true },
-  ]),
-  copyStyle: {
-    label: "Copy style",
-    keys: [{ key: "c", code: "KeyC", command: true, alt: true }],
-    unavailable: () =>
-      noneSelected() ?? (styleCard.common().length > 0 ? undefined : "Comments have no style"),
-    run: () => styleCard.copy(),
-  },
-  pasteStyle: {
-    label: "Paste style",
-    keys: [{ key: "v", code: "KeyV", command: true, alt: true }],
-    unavailable: () => noneSelected() ?? (styleCard.canPaste() ? undefined : "Copy a style first"),
-    run: () => styleCard.paste(),
-  },
-  contextMenu: {
-    label: "Show the context menu",
-    keys: [{ key: "contextmenu" }, { key: "f10", shift: true }],
-    unavailable: noneShown,
-    run: contextMenuFromKeys,
-  },
-  find: {
-    label: "Find a command…",
-    keys: [
-      { key: "k", command: true },
-      { key: "/", code: "Slash", command: true },
-    ],
-    run: () => openFinder(listed),
-    once: true,
-  },
-  desktopApp: {
-    label: "Get the desktop app",
-    run: () => {
-      if (platform.desktopApp !== undefined) {
-        report(platform.openAddress(platform.desktopApp));
-      }
-    },
-  },
-  reportBug: {
-    label: "Report a bug",
-    run: () => report(openBugReport()),
-  },
-} satisfies Record<string, Command>;
-const leaveCompact: Command = { ...commands.compact, label: "Leave compact mode" };
-const colourCommands = [
-  commands.colour1,
-  commands.colour2,
-  commands.colour3,
-  commands.colour4,
-  commands.colour5,
-  commands.colour6,
-];
-/** Whether what each turns on and off is on. */
-const SWITCHES = new Map<Command, () => boolean>([
-  [commands.ellipticalCrop, elliptical],
-  [commands.greyscale, greyed],
-  [commands.bold, () => styleCard.value("bold") === true],
-  [commands.italic, () => styleCard.value("italic") === true],
-  [commands.strike, () => styleCard.value("strike") === true],
-  [commands.snap, () => snapping],
-  [commands.snapNeighbours, () => aligning],
-  [commands.highContrast, () => appearance.highContrast()],
-  [commands.hints, () => hintsShown],
-  [commands.measurements, () => !measurements.hidden],
-  [commands.greyBoard, () => viewport.greyed()],
-  [commands.mirrorBoard, () => viewport.mirrored()],
-  [commands.annotations, () => annotationsShown],
-  [commands.alwaysOnTop, () => onTop],
-  [commands.compact, () => compact],
-  [commands.hoverPlay, () => hoverPlay],
-  [commands.keepStyle, () => styleKept],
-  [commands.agentAccess, () => agentsAllowed],
-]);
-/** Whether each is the one in use among those that exclude each other. */
-const TICKS = new Map<Command, () => boolean>([
-  ...BACKGROUNDS.map((to): [Command, () => boolean] => [
-    commands[to],
-    () => opened?.board.background === to,
-  ]),
-  ...SCHEMES.map((to): [Command, () => boolean] => [
-    commands[to],
-    () => appearance.scheme() === to,
-  ]),
-]);
-/** The menu each sits in, which the finder names where theirs would not tell alone. */
-const WITHIN = new Map<Command, string>(
-  (
-    [
-      ["Align", [commands.alignLeft, commands.alignCentre, commands.alignRight]],
-      ["Align", [commands.alignTop, commands.alignMiddle, commands.alignBottom]],
-      [
-        "Arrange",
-        [
-          commands.arrangeByName,
-          commands.arrangeBySize,
-          commands.arrangeByColour,
-          commands.arrangeRandomly,
-          commands.sameHeight,
-          commands.sameWidth,
-        ],
-      ],
-      [
-        "Grid",
-        [commands.plain, commands.grid, commands.dots, commands.snap, commands.snapNeighbours],
-      ],
-      ["Theme", [commands.light, commands.dark, commands.system, commands.highContrast]],
-      [
-        "View",
-        [
-          commands.greyBoard,
-          commands.mirrorBoard,
-          commands.annotations,
-          commands.hints,
-          commands.measurements,
-          commands.alwaysOnTop,
-          commands.compact,
-        ],
-      ],
-      [
-        "Settings",
-        [commands.hoverPlay, commands.keepStyle, commands.agentAccess, commands.errorLog],
-      ],
-      ["Colour", colourCommands],
-    ] satisfies [string, Command[]][]
-  ).flatMap(([name, members]) => members.map((member): [Command, string] => [member, name])),
-);
-/** What only answers keys, or opens the finder. */
-const UNLISTED = new Set<Command>([
-  commands.escape,
-  commands.contextMenu,
-  commands.find,
-  // The export card's own button, which says its keys.
-  commands.savePng,
-  ...(platform.desktopApp === undefined ? [commands.desktopApp] : []),
-]);
+const app = actions({
+  platform,
+  opened: () => opened,
+  hold,
+  crossedOut: () => crossedOut,
+  editing,
+  viewport,
+  life,
+  media,
+  films,
+  appearance,
+  groupTitles,
+  measurements: metrics,
+  agents,
+  exports: outgoing,
+  greeting,
+  styleCard: () => styleCard,
+  pictureCard: () => pictureCard,
+  picker: () => picker,
+  clip: () => clip,
+  tool: () => tool,
+  useTool,
+  spaceHeld: () => spaceHeld,
+  penStyling,
+  showsAnnotations: () => annotationsShown,
+  showAnnotations,
+  snapping: () => snapping,
+  snap(on) {
+    snapping = on;
+  },
+  fitTo,
+  addPicked,
+  duplicate: () => intake.duplicate(),
+  contextMenuFromKeys: () => offers.fromKeys(),
+  listed: () => offers.listed(),
+  openBugReport,
+  refreshBar,
+  say,
+  report,
+});
+const { commands } = app;
+const offers = menus(app, {
+  platform,
+  viewport,
+  editing,
+  groupTitles,
+  measurements: metrics,
+  pictureCard: () => pictureCard,
+  savesToFiles: () => life.savesToFiles(),
+  addPicked,
+  addTestPhotos: (count) => intake.testPhotos(count),
+  report,
+});
 
 const bar = toolbar(
   byId("toolbar"),
@@ -1453,30 +516,14 @@ const bar = toolbar(
           const zoom = viewport.zoom();
           return zoom === undefined ? undefined : percent(zoom);
         },
-        unavailable: noneShown,
-        entries: zooms,
+        unavailable: app.noneShown,
+        entries: offers.zooms,
       },
       { command: steady(commands.undo), icon: "undo" },
       { command: steady(commands.redo), icon: "redo" },
     ],
   ],
-  () => [
-    commands.find,
-    ...(platform.desktopApp ? [commands.desktopApp] : []),
-    commands.reportBug,
-    "separator",
-    commands.newBoard,
-    commands.open,
-    commands.openZip,
-    commands.save,
-    commands.saveAs,
-    commands.exportZip,
-    "separator",
-    grids(),
-    themes(),
-    views(),
-    settings(),
-  ],
+  offers.toolbar,
 );
 const look = styles();
 const styleCard = card(
@@ -1507,7 +554,7 @@ const styleCard = card(
   },
   look,
   {
-    colours: colourCommands,
+    colours: app.colours,
     bold: commands.bold,
     italic: commands.italic,
     strike: commands.strike,
@@ -1544,8 +591,8 @@ const pictureCard = exportCard(
     explain: (element, explanation) => bar.explain(element, explanation),
     changed: showPicture,
     chose: (options) => remembered(options).forEach(([key, value]) => remember(key, value)),
-    save: (options) => report(exportPng(options)),
-    copy: copyPng,
+    save: (options) => report(outgoing.png(options)),
+    copy: (options) => outgoing.copyPng(options),
   },
   recalled(recall),
   { save: commands.savePng.keys[0]!, copy: commands.copy.keys[0]! },
@@ -1557,7 +604,7 @@ new ResizeObserver(() => {
   pictureCard.frame();
   greeting.fit();
 }).observe(byId("toolbar"));
-styleCard.keepOpen(styleKept);
+app.restore();
 const picker = sampler(
   {
     read: readBoard,
@@ -1576,7 +623,7 @@ const picker = sampler(
 );
 refreshBar();
 if (platform.titleBar) {
-  handle(byId("handle"), viewport.host, platform.titleBar.drag, leaveCompact);
+  handle(byId("handle"), viewport.host, platform.titleBar.drag, app.leaveCompact);
 }
 // The page's own copy, cut, and paste events run these, which handling their keys would cancel.
 const native = new Set<Command>([commands.cut, commands.copy, commands.paste]);
@@ -1620,7 +667,7 @@ addEventListener("keydown", (event) => {
     menuOpen() ||
     busy() ||
     typing(event.target) ||
-    noneShown()
+    app.noneShown()
   ) {
     return;
   }
@@ -1633,12 +680,9 @@ addEventListener(
 );
 addEventListener("blur", () => holdSpace(false));
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
-animated.reduce(reducedMotion.matches);
-films.reduce(reducedMotion.matches);
-films.playOnHover(hoverPlay);
+media.reduce(reducedMotion.matches);
 reducedMotion.addEventListener("change", () => {
-  animated.reduce(reducedMotion.matches);
-  films.reduce(reducedMotion.matches);
+  media.reduce(reducedMotion.matches);
   refreshBar();
 });
 addEventListener("blur", () => void life.saver()?.flush());
@@ -1668,23 +712,15 @@ document.addEventListener("contextmenu", (event) => {
   const titled = titledGroup(event.target);
   const pin = pinned(event.target) ?? lockedPin(event.target) ?? titled;
   const locked = editing.lockedAt(at, pin);
-  contextMenu(editing.aim(at, pin), at, { x: event.clientX, y: event.clientY }, locked, titled);
+  offers.context(editing.aim(at, pin), at, { x: event.clientX, y: event.clientY }, locked, titled);
 });
 
-// The window outlives a reload of the page, so it follows how the page starts, even when the
-// browser forgot.
-if (platform.keepOnTop) {
-  report(keepOnTop(recall(ON_TOP) === "on"));
-}
-if (platform.titleBar) {
-  report(platform.titleBar.show(true));
-}
 // Nothing after it runs when the core fails to load.
 await failing.started(Promise.all([core.start(failing.stop), loadFont()]));
 receive(viewport, (incoming, at) => {
   // The shell's own drops come with no event that a stopped page holds back.
   if (!failing.stopped()) {
-    report(addImages(incoming, at));
+    report(intake.images(incoming, at));
   }
 });
 const clip = clipboard(viewport, {
@@ -1697,10 +733,10 @@ const clip = clipboard(viewport, {
   },
   copyable: () => editing.selection().length > 0,
   bytes: (copied) =>
-    opened ? reader(opened, copiedAssets(copied), fleeting()) : async () => new Map(),
+    opened ? reader(opened, copiedAssets(copied), life.fleeting()) : async () => new Map(),
   cut: () => editing.remove(),
   png() {
-    const image = selectedImage();
+    const image = app.selectedImage();
     // Not a video, whose whole file a copy would read and hash for its first frame.
     if (!opened || !image || crossedOut.has(image.asset) || films.holds(image.asset)) {
       return undefined;
@@ -1721,13 +757,28 @@ const clip = clipboard(viewport, {
   },
   failed: (error, copied) =>
     say(`${copied ? "Copied without the image" : "Nothing was copied"}. ${message(error)}`),
-  pasted: (pasted, at) => report(pasteElements(pasted, at)),
-  received: (incoming, at) => report(addImages(incoming, at)),
+  pasted: (pasted, at) => report(intake.paste(pasted, at)),
+  received: (incoming, at) => report(intake.images(incoming, at)),
 });
-report(serveAgents());
+report(agents.serve());
 // Something to drop images on from the start.
 report(life.start());
 failing.ready();
+
+/** A board shows in one renderer at most, which goes once it fails to show. */
+function hold(): Hold | undefined {
+  const board = opened;
+  return board && { board, shows: () => opened === board && renderer !== undefined };
+}
+
+function letGo(): void {
+  drawings.reset();
+  media.reset();
+  crossedOut = new Set();
+  loaded.clear();
+  comments.clear();
+  groupTitles.clear();
+}
 
 /** A drag under way, which a command or a menu would cut across. */
 function busy(): boolean {
@@ -1747,19 +798,15 @@ function steady(command: Command): Command {
   };
 }
 
-function drawTool(): Draw | undefined {
-  return tool === "select" || tool === "hand" || tool === "eraser" ? undefined : tool;
-}
-
-function useTool(next: typeof tool): void {
+function useTool(next: Tool): void {
   const chosen = next !== tool;
   tool = next;
   // So that what it would draw over shows.
-  if (chosen && drawTool() !== undefined && !annotationsShown) {
+  if (chosen && drawTool(tool) !== undefined && !annotationsShown) {
     showAnnotations(true);
   }
   // Whose drawing would go unseen under the picture.
-  if (drawTool() !== undefined || tool === "eraser") {
+  if (drawTool(tool) !== undefined || tool === "eraser") {
     pictureCard.close();
   }
   // So that the card shows the pen's style.
@@ -1767,7 +814,7 @@ function useTool(next: typeof tool): void {
     editing.select([]);
   }
   viewport.hand(tool === "hand" || spaceHeld);
-  viewport.host.classList.toggle("drawing", drawTool() !== undefined);
+  viewport.host.classList.toggle("drawing", drawTool(tool) !== undefined);
   viewport.host.classList.toggle("erasing", tool === "eraser");
   refreshBar();
   styleCard.refresh();
@@ -1796,8 +843,8 @@ function drawnNow(board: Opened, shown: boolean): Placed[] {
     const ids = editing.selection();
     return exposing(board, lettering, ids, behind, writing, crossedOut, shown);
   }
-  const adding = inking && { item: inking, group: editing.entered() };
-  return placed(board, lettering, writing, crossedOut, adding, shown);
+  const inked = inking && { item: inking, group: editing.entered() };
+  return placed(board, lettering, writing, crossedOut, inked, shown);
 }
 
 function showAnnotations(shown: boolean): void {
@@ -1820,25 +867,6 @@ function holdSpace(held: boolean): void {
   }
 }
 
-function percent(zoom: number): string {
-  return `${Math.round(zoom * 100)}%`;
-}
-
-function zooms(): Entry[] {
-  const now = viewport.zoom();
-  return [
-    commands.zoomIn,
-    commands.zoomOut,
-    commands.fit,
-    commands.fitSelection,
-    "separator",
-    ...ZOOMS.map((zoom) => ({
-      ...zoomTo(percent(zoom), zoom, zoom === 1 ? commands.zoomActual.keys : undefined),
-      checked: now !== undefined && percent(now) === percent(zoom),
-    })),
-  ];
-}
-
 /** Zooms to fit `ids`, when any of them shows. */
 function fitTo(ids: string[]): void {
   const area = opened && extent(opened, ids);
@@ -1847,206 +875,10 @@ function fitTo(ids: string[]): void {
   }
 }
 
-function grids(): Entry {
-  return {
-    ...commands.nextBackground,
-    options: [
-      ...BACKGROUNDS.map((background) => stated(commands[background])),
-      "separator",
-      stated(commands.snap),
-      stated(commands.snapNeighbours),
-    ],
-  };
-}
-
-function themes(): Entry {
-  return submenu("Theme", [
-    ...SCHEMES.map((scheme) => stated(commands[scheme])),
-    "separator",
-    stated(commands.highContrast),
-  ]);
-}
-
-function views(): Entry {
-  return submenu(
-    "View",
-    sectioned([
-      [stated(commands.greyBoard), stated(commands.mirrorBoard), stated(commands.annotations)],
-      [
-        stated(commands.hints),
-        stated(commands.measurements),
-        ...(platform.keepOnTop ? [stated(commands.alwaysOnTop)] : []),
-        ...(platform.titleBar ? [stated(commands.compact)] : []),
-      ],
-      measurements.hidden ? [] : TEST_PHOTOS.map(testPhotosItem),
-    ]),
-  );
-}
-
-/** Ticked, or switched on or off, where it says what it does. */
-function stated(command: Command): Item {
-  const on = SWITCHES.get(command);
-  if (on) {
-    return { ...command, checked: on(), toggle: true };
-  }
-  const ticked = TICKS.get(command);
-  return ticked ? { ...command, checked: ticked() } : command;
-}
-
-function listed(): Listed[] {
-  return Object.values(commands)
-    .filter((command) => !UNLISTED.has(command))
-    .map((command) => ({ ...stated(command), within: WITHIN.get(command) }));
-}
-
-function testPhotosItem(count: number): Item {
-  return {
-    label: `Add ${count} test photos`,
-    unavailable: () => noneShown() ?? (savesToFiles() ? NOT_FOR_TEST_PHOTOS : undefined),
-    run: () => report(addTestPhotos(count)),
-  };
-}
-
 function learnKeys(): void {
   if (mac && platform.layout) {
     void platform.layout().then(learnLayout, () => learnLayout(undefined));
   }
-}
-
-/** Whether the board saves itself into a folder or a ZIP file, rather than in the session or nowhere. */
-function savesToFiles(): boolean {
-  const saver = life.saver();
-  return saver !== undefined && !saver.store.session;
-}
-
-function settings(): Entry {
-  return submenu("Settings", [
-    stated(commands.hoverPlay),
-    stated(commands.keepStyle),
-    ...(platform.agent ? [stated(commands.agentAccess)] : []),
-    ...(platform.errorLog ? [commands.errorLog] : []),
-  ]);
-}
-
-/**
- * Ready to answer before any agent may ask, then on or off as it was left. The shell follows,
- * even when the browser forgot, so that the menu's switch never hides access left on.
- */
-async function serveAgents(): Promise<void> {
-  const { agent } = platform;
-  if (agent === undefined) {
-    return;
-  }
-  await agent.serve((call) =>
-    answer(call, {
-      opened: () => opened,
-      unsaved: () => life.unsaved(),
-      selection: () => editing.selection(),
-      entered: () => editing.entered(),
-      writing: () => editing.writing(),
-      shown: () => {
-        const camera = viewport.camera();
-        return camera && onScreen(camera, viewport.size());
-      },
-      halfDrawn: () => halfDrawn || present.reloading(),
-      stopped: () => failing.stopped(),
-      crossedOut: (asset) =>
-        crossedOut.has(asset) ? (present.crossedOut(asset) ?? "it cannot show") : undefined,
-      drawNow() {
-        if (annotationsShown || opened === undefined || renderer === undefined) {
-          return viewport.drawNow();
-        }
-        // Through `placeNow`, as texts drawn anew meanwhile place the board again.
-        screenshotting = true;
-        try {
-          placeNow(renderer, opened);
-          return viewport.drawNow();
-        } finally {
-          screenshotting = false;
-          placeNow(renderer, opened);
-          viewport.redraw();
-        }
-      },
-      async render(request) {
-        if (opened === undefined || renderer === undefined) {
-          throw new Error("Planche shows no board yet");
-        }
-        const background = getComputedStyle(document.body).backgroundColor;
-        return render({ opened, renderer, drawings, crossedOut, background }, request);
-      },
-      background: () => getComputedStyle(document.body).backgroundColor,
-      loading: () => life.loading(),
-      busy: () => editing.busy(),
-      idle: () => editing.idle(),
-      apply: (work) => editing.apply(work),
-      keep,
-      zoom: () => viewport.zoom(),
-      centre: () => viewport.centre(),
-      select: (ids) => editing.select(ids),
-      frame: fitTo,
-    }),
-  );
-  await allowAgents(recall(AGENT) === "on");
-}
-
-/** Remembered once it works, so that a refusal leaves the choice as it was. */
-async function allowAgents(on: boolean): Promise<void> {
-  try {
-    await platform.agent?.allow(on);
-  } catch (error) {
-    throw new Error(on ? `Agent access stays off, as ${String(error)}` : String(error), {
-      cause: error,
-    });
-  }
-  agentsAllowed = on;
-  remember(AGENT, on ? "on" : undefined);
-}
-
-/** Remembered as the window is, so that a start the shell refuses forgets the choice. */
-async function keepOnTop(on: boolean): Promise<void> {
-  try {
-    await platform.keepOnTop?.(on);
-    onTop = on;
-  } finally {
-    remember(ON_TOP, onTop ? "on" : undefined);
-  }
-}
-
-async function showErrorLog(log: ErrorLog): Promise<void> {
-  if (!(await log.show())) {
-    say("No error was logged yet");
-  }
-}
-
-async function useCompact(on: boolean): Promise<void> {
-  await platform.titleBar?.show(!on);
-  compact = on;
-  document.documentElement.toggleAttribute("data-compact", on);
-  if (on) {
-    say(
-      `Compact mode: drag the top edge to move, ${describe(commands.compact.keys[0]!)} or right-click to leave`,
-    );
-  }
-}
-
-/** One that only opens its options, so never runs. */
-function submenu(label: string, options: Entry[]): Item {
-  return { label, run() {}, options };
-}
-
-function sectioned(sections: Entry[][]): Entry[] {
-  return sections
-    .filter((section) => section.length > 0)
-    .flatMap((section, at) => (at > 0 ? ["separator", ...section] : section));
-}
-
-/** Of the options that apply to the selection, and left out of it when none does. */
-function relevantSubmenu(label: string, options: Entry[]): Item {
-  const shown = relevant(options);
-  return {
-    ...submenu(label, shown),
-    unavailable: () => (shown.length > 0 ? undefined : "None applies"),
-  };
 }
 
 /** Strokes and text draw in the theme's colours. */
@@ -2055,73 +887,10 @@ function restyle(): void {
   viewport.redraw();
 }
 
-function useBackground(background: Background): void {
-  if (background !== "plain") {
-    snapping = true;
-  }
-  editing.background(background);
-}
-
-/**
- * Esc lets go of a colour being picked first, then of the style card or the export card, then of
- * the tool in use, which leaves the selection to act on, then of the group gone into, one level
- * at a time, then of the selection.
- */
-function escape(): void {
-  if (picker.sampling()) {
-    picker.end(true);
-  } else if (styleCard.isOpen()) {
-    styleCard.close();
-  } else if (pictureCard.isOpen()) {
-    pictureCard.close();
-  } else if (tool !== "select") {
-    useTool("select");
-  } else if (!editing.up()) {
-    editing.select([]);
-  }
-}
-
-async function arrange(label: string, order: Ordering): Promise<void> {
-  const target = opened;
-  const ids = editing.selection();
-  if (target === undefined || arranging) {
-    return;
-  }
-  arranging = true;
-  try {
-    const working = order(target, ids);
-    const slow = working instanceof Promise;
-    if (slow) {
-      say(`Arranging ${label.toLowerCase()}…`, true);
-    }
-    const chosen = await working;
-    await editing.idle();
-    const selection = new Set(editing.selection());
-    if (
-      opened !== target ||
-      selection.size !== ids.length ||
-      ids.some((id) => !selection.has(id))
-    ) {
-      say("Not arranged, as the selection changed");
-    } else {
-      editing.arrange(chosen);
-      if (slow) {
-        say(`Arranged ${label.toLowerCase()}`);
-      }
-    }
-  } finally {
-    arranging = false;
-  }
-}
-
-function selectsGroup(): boolean {
-  return editing.selection().some((id) => opened?.board.elements[id]?.kind.type === "group");
-}
-
 function showComments(): void {
   if (opened) {
     comments.show(opened, editing.selection(), editing.writing());
-    const lone = loneGroup();
+    const lone = app.loneGroup();
     const offered = lone && lone.title === undefined ? editing.selection()[0] : undefined;
     const { editor } = opened;
     groupTitles.show(opened, (id) => core.extent(editor, [id]), editing.selection(), offered);
@@ -2145,243 +914,7 @@ function retitle(id: string, title: string): void {
 
 function refreshBar(): void {
   // Buttons still explain themselves when hovered or focused.
-  bar.refresh(hintsShown ? hint() : "");
-}
-
-function hint(): string {
-  // As the menus name them.
-  const [escapeKey, insideKey] = [commands.escape, commands.goInside].map(({ keys }) =>
-    describe(keys[0]!),
-  );
-  const [centreKey, stepKey] = mac ? ["⌥", "⇧"] : ["Alt", "Shift"];
-  const picking = picker.sampling();
-  if (picking !== undefined) {
-    return `${picking === "holding" ? "Let go of S" : "Click"} to pick a colour · ${escapeKey} to cancel`;
-  }
-  if (editing.writing() !== undefined) {
-    return `${escapeKey} or click away to finish`;
-  }
-  if (styleCard.trimming()) {
-    return `Drag an end to trim · ${insideKey} when done · ${escapeKey} to cancel`;
-  }
-  if (editing.cropping() !== undefined) {
-    return `Drag the edges to crop · ${insideKey} when done · ${escapeKey} to cancel`;
-  }
-  if (pictureCard.isOpen()) {
-    const [saveKey, copyKey] = [commands.savePng.keys[0]!, commands.copy.keys[0]!].map(describe);
-    return `${saveKey} to save · ${copyKey} to copy · ${escapeKey} to close`;
-  }
-  if (tool === "hand") {
-    return `Drag to move around · ${escapeKey} to select again`;
-  }
-  if (spaceHeld) {
-    return "Drag to move around";
-  }
-  // The handles leave the menu out, as a right-click outside the selection's box, where turns
-  // start, clears it.
-  switch (tool === "select" ? editing.grab() : undefined) {
-    case "corner":
-      return `Drag to scale · hold ${centreKey} to scale around the centre`;
-    case "side":
-      return "Drag to stretch";
-    case "turn":
-      return `Drag to turn · hold ${stepKey} for steps of 15°`;
-  }
-  if (tool === "eraser") {
-    return `Click or drag over what to erase · ${escapeKey} to select again`;
-  }
-  if (isTip(tool)) {
-    return `Drag to draw · hold ${stepKey} to draw straight · ${escapeKey} to select again`;
-  }
-  if (tool === "arrow" || tool === "line") {
-    return `Drag to draw · hold ${stepKey} for steps of 45° · ${escapeKey} to select again`;
-  }
-  if (FRAMED.has(tool)) {
-    return `Drag to draw, or click to place · ${escapeKey} to select again`;
-  }
-  if (tool === "comment") {
-    return `Click where to comment · ${escapeKey} to select again`;
-  }
-  if (tool === "note") {
-    return `Click to write, or drag to set how wide · ${escapeKey} to select again`;
-  }
-  if (editing.entered() !== undefined) {
-    return `Inside a group · ${escapeKey} to go back up · right-click for more`;
-  }
-  if (commands.goInside.unavailable() === undefined) {
-    return "Drag to move · double-click to go inside · right-click for more";
-  }
-  if (editing.writable()) {
-    return "Drag to move · double-click to write · right-click for more";
-  }
-  if (editing.loneSegment()) {
-    return "Drag to move · drag an end to move it · right-click for more";
-  }
-  if (editing.selection().length > 0) {
-    const focuses =
-      editing.selection().length === 1 ? "double-click to zoom to it and back · " : "";
-    return `Drag to move · ${focuses}right-click for more`;
-  }
-  if (unlocking() !== undefined) {
-    return "Locked · right-click to unlock";
-  }
-  return greeting.quietsHint()
-    ? ""
-    : "Drop or paste images · scroll to move around · right-click for more";
-}
-
-/**
- * About the selection, or else the board, with its images landing where it opens. Each keeps to
- * three groups, and each submenu to two, so that it stays quick to scan. What the style card and
- * the keys already reach, such as colours, mostly stays out.
- */
-function contextMenu(
-  onSelection: boolean,
-  at: Point,
-  place: { x: number; y: number },
-  locked?: string,
-  titled?: string,
-): void {
-  const paste = { ...commands.paste, run: () => pasteAt(at) };
-  // The title right-clicked, which may be a group's within the one selected.
-  const rename =
-    titled === undefined
-      ? commands.rename
-      : { label: "Rename", run: () => groupTitles.write(titled) };
-  // What the right-click landed on, though the selection's box may hold it.
-  const unlock =
-    locked === undefined ? [] : [{ label: "Unlock", run: () => editing.unlock([locked]) }];
-  const entries: Entry[] = onSelection
-    ? [
-        commands.cut,
-        commands.copy,
-        commands.copyPng,
-        paste,
-        commands.duplicate,
-        {
-          ...commands.exportPng,
-          label: () => (pictureCard.isOpen() ? "Hide export" : "Export as PNG…"),
-        },
-        commands.remove,
-        "separator",
-        commands.write,
-        rename,
-        commands.openSource,
-        relevantSubmenu("Playback", [
-          commands.play,
-          commands.sound,
-          "separator",
-          commands.previousFrame,
-          commands.nextFrame,
-          commands.slower,
-          commands.faster,
-        ]),
-        {
-          ...submenu(
-            "Style",
-            sectioned([
-              [commands.style, commands.copyStyle, commands.pasteStyle],
-              relevant([
-                commands.crop,
-                commands.resetCrop,
-                stated(commands.ellipticalCrop),
-                stated(commands.greyscale),
-                stated(commands.bold),
-                stated(commands.italic),
-              ]),
-            ]),
-          ),
-          unavailable: commands.style.unavailable,
-        },
-        relevantSubmenu("Transform", [
-          commands.rotateLeft,
-          commands.rotateRight,
-          commands.straighten,
-          commands.actualSize,
-          "separator",
-          commands.flipHorizontally,
-          commands.flipVertically,
-        ]),
-        "separator",
-        commands.group,
-        commands.ungroup,
-        commands.goInside,
-        commands.lock,
-        ...unlock,
-        relevantSubmenu("Select", [
-          { ...commands.selectAll, label: "All" },
-          { ...commands.invertSelection, label: "Invert" },
-          { ...commands.selectSameType, label: "Same type" },
-        ]),
-        relevantSubmenu("Order", [
-          commands.front,
-          commands.forward,
-          commands.backward,
-          commands.back,
-        ]),
-        // By the axis they move along.
-        relevantSubmenu("Align", [
-          commands.alignLeft,
-          commands.alignCentre,
-          commands.alignRight,
-          commands.distributeHorizontally,
-          "separator",
-          commands.alignTop,
-          commands.alignMiddle,
-          commands.alignBottom,
-          commands.distributeVertically,
-        ]),
-        {
-          ...submenu("Arrange", [
-            commands.arrangeByName,
-            commands.arrangeBySize,
-            commands.arrangeByColour,
-            commands.arrangeRandomly,
-            "separator",
-            commands.sameHeight,
-            commands.sameWidth,
-          ]),
-          unavailable: fewImages,
-        },
-      ]
-    : [
-        { ...commands.addImages, run: () => addPicked(at) },
-        paste,
-        commands.selectAll,
-        // Which the lock command does too, as nothing is selected then.
-        ...unlock.map((entry) => ({ ...entry, keys: commands.lock.keys })),
-        "separator",
-        commands.fit,
-        grids(),
-      ];
-  const shown = onSelection ? relevant(entries) : entries;
-  // First, as the menu may not fit a small window.
-  if (compact) {
-    shown.unshift(leaveCompact, "separator");
-  }
-  openMenu(shown, { label: onSelection ? "Selection" : "Board", place });
-}
-
-/**
- * Leaves out what does not apply to the selection, and the separators that would stand alone. Every
- * reason the entries give must be about what is selected, as one that passes would hide them for a
- * while.
- */
-function relevant(entries: Entry[]): Entry[] {
-  const kept: Entry[] = [];
-  let parted = false;
-  for (const entry of entries) {
-    if (entry === "separator") {
-      parted = kept.length > 0;
-    } else if (entry.unavailable?.() === undefined) {
-      if (parted) {
-        kept.push("separator");
-      }
-      kept.push(entry);
-      parted = false;
-    }
-  }
-  return kept;
+  bar.refresh(app.hint());
 }
 
 /**
@@ -2417,120 +950,11 @@ async function readBoard(at: { clientX: number; clientY: number }): Promise<Imag
   });
 }
 
-/** Over the selection's centre, or the viewport's, as the keys point nowhere. */
-function contextMenuFromKeys(): void {
-  const selection = editing.centre();
-  const at = selection ?? viewport.centre();
-  const place = at && viewport.client(at);
-  if (at && place) {
-    contextMenu(selection !== undefined, at, { x: place.clientX, y: place.clientY });
-  }
-}
-
 /** Opens the picker at once, as browsers only let a page do right after a click or a key. */
 function addPicked(at: Point | undefined): void {
   if (at !== undefined) {
-    report(addImages(pick(), at));
+    report(intake.images(pick(), at));
   }
-}
-
-/** What the clipboard holds, centred on `at`, as the menus paste. */
-function pasteAt(at: Point | undefined): void {
-  if (at !== undefined) {
-    const key = describe(commands.paste.keys[0]!);
-    report(
-      clip.paste(at).catch(() => {
-        throw new Error(`The browser lets only ${key} paste here`);
-      }),
-    );
-  }
-}
-
-/** The selection again, right and down of it, as one edit that selects it. */
-function duplicate(): void {
-  const zoom = viewport.zoom();
-  if (opened === undefined || zoom === undefined) {
-    return;
-  }
-  const by = duplicateOffset(zoom, DUPLICATE_OFFSET);
-  placeCopy(core.copy(opened.editor, editing.selection()), () => ({ x: by, y: by }));
-}
-
-/**
- * Centred on `at` by whole steps of the grid, as one edit that selects them. Images whose assets the
- * board lacks take them from the bytes copied, or are left out without them, as when copied in
- * another window.
- */
-async function pasteElements({ copied, assets }: Pasted, at: Point): Promise<void> {
-  const target = opened;
-  const into = renderer;
-  if (target === undefined) {
-    return;
-  }
-  const shown = assetSizes(target.board);
-  const lacking = copiedAssets(copied).filter((asset) => !shown.has(asset));
-  const bytes = lacking.length > 0 ? await assets(lacking) : new Map<string, Blob>();
-  const prepared: Added[] = [];
-  const pending = lacking.values();
-  await pool(
-    () => pending.next().value,
-    async (asset) => {
-      const blob = bytes.get(asset);
-      const one = blob && (await prepare(blob, TEXTURE_SIDE, heldSize).catch(() => undefined));
-      if (one?.asset === asset) {
-        loadAtOnce(one, target, into);
-        prepared.push(one);
-      } else {
-        release(one?.decoded);
-      }
-    },
-  );
-  await editing.idle();
-  const zoom = viewport.zoom();
-  if (target !== opened || renderer === undefined || zoom === undefined || failing.stopped()) {
-    prepared.forEach(({ decoded }) => release(decoded));
-    return;
-  }
-  keep(target, prepared);
-  const kept = [...assetSizes(target.board).keys(), ...prepared.map(({ asset }) => asset)];
-  const pasting = core.keeping(copied, kept);
-  if (Object.keys(pasting.elements).length > 0) {
-    placeCopy(pasting, (area) => centring(area, at, zoom));
-  }
-  if (Object.keys(pasting.elements).length < Object.keys(copied.elements).length) {
-    say("Not pasted, the images whose files are out of reach here");
-  }
-}
-
-/** Into the group gone into, moved by what `by` gives for its extent, as one edit that selects it. */
-function placeCopy(copied: Copied, by: (extent: Rect) => Point): void {
-  const group = editing.entered();
-  let pasted: string[] = [];
-  editing.apply((editor, touched) => {
-    const ids = renamed(copied);
-    touched.push(...core.paste(editor, copied, ids, group));
-    pasted = core.outermost(editor, ids, group);
-    const area = core.extent(editor, pasted);
-    if (area) {
-      touched.push(...core.transform(editor, pasted, { place: { by: by(area) } }));
-    }
-  });
-  editing.select(pasted);
-}
-
-/**
- * The open board's saver when the files of its images may be gone by the time a paste reads them,
- * the session's own, which leaving the board clears, or a ZIP file's, whose saves drop what the
- * board no longer shows.
- */
-function fleeting(): Saving | undefined {
-  const saver = life.saver();
-  if (opened === undefined || saver === undefined) {
-    return undefined;
-  }
-  // The session also saves boards read from elsewhere, whose files it leaves alone.
-  const ownFiles = "write" in opened.folder;
-  return (saver.store.session ? ownFiles : !ownFiles) ? saver : undefined;
 }
 
 function lookAgain(): void {
@@ -2568,141 +992,10 @@ function crossOut(into: Renderer, asset: string): void {
   reframe();
 }
 
-/** Side by side around `at`, at their natural size unless they would not show whole, and as one edit. */
-async function addImages(incoming: Promise<Incoming[]>, at: Point): Promise<void> {
-  const target = opened;
-  const into = renderer;
-  // By where each came, which they are laid out in.
-  const prepared: (Added | undefined)[] = [];
-  const notAdded: (string | undefined)[] = [];
-  const images = await incoming;
-  // Once read, as the user's pace and the platform's reading are not the app's.
-  const since = performance.now();
-  const pending = images.entries();
-  let done = 0;
-  await pool(
-    () => pending.next().value,
-    async ([index, image]) => {
-      try {
-        if ("failure" in image) {
-          notAdded[index] = `${image.name}: ${image.failure}`;
-          return;
-        }
-        const one: Added = {
-          ...(await prepare(image.bytes, TEXTURE_SIDE, heldSize)),
-          filename: image.filename,
-          source: image.source,
-        };
-        loadAtOnce(one, target, into);
-        prepared[index] = one;
-      } catch (error) {
-        notAdded[index] = `${image.name}: this app cannot open it here (${message(error)})`;
-      } finally {
-        done += 1;
-        if (images.length > 1) {
-          say(`Adding ${done} of ${images.length} images…`, true);
-        }
-      }
-    },
-  );
-  const added = prepared.filter((one) => one !== undefined);
-  // Nor the time an edit under way takes to end.
-  const [, waited] = await timed(() => editing.idle());
-  const landing = target !== undefined && target === opened && renderer !== undefined;
-  if (added.length > 0 && landing && !failing.stopped()) {
-    keep(target, added);
-    const frames = row(
-      added.map(({ natural }) => natural),
-      at,
-      room(),
-    );
-    const ids = added.map(() => newId());
-    // Into the group gone into, where they stay selected.
-    const group = editing.entered();
-    editing.apply((editor, touched) =>
-      added.forEach(({ asset, natural, filename, source }, index) => {
-        touched.push(
-          ...editor.add(
-            ids[index]!,
-            group,
-            JSON.stringify(imageKind(asset, natural, frames[index]!, { filename, source })),
-          ),
-        );
-      }),
-    );
-    editing.select(ids);
-    untilDrawn.set(`add ${added.length} images`, since + waited);
-  } else {
-    added.forEach(({ decoded }) => release(decoded));
-  }
-  const failed = notAdded.filter((failure) => failure !== undefined);
-  if (failed.length > 0) {
-    say(`Not added, ${failed.join("; ")}`);
-  } else if (images.length > 1) {
-    say("");
-  }
-}
-
-/** At once, so that bitmaps do not pile up. */
-function loadAtOnce(one: Added, target: Opened | undefined, into: Renderer | undefined): void {
-  if (one.decoded && into && target === opened && into === renderer) {
-    load(into, new Map([[one.asset, one.decoded]]));
-    one.decoded = undefined;
-  }
-}
-
 function heldSize(asset: string): Size | undefined {
   return opened && loaded.has(asset) && !crossedOut.has(asset)
     ? assetSizes(opened.board).get(asset)
     : undefined;
-}
-
-/**
- * Into the board shown when asked, as `addImages` adds, unless it saves into a folder or a file once they
- * are made. A Save as while they are prepared still lets them in, as one right after they are added would.
- */
-async function addTestPhotos(count: number): Promise<void> {
-  const at = viewport.centre();
-  if (at === undefined) {
-    return;
-  }
-  const photos = testPhotos(count, (done) => say(`Making test photos, ${done} of ${count}…`, true));
-  await addImages(
-    photos.then((made) => {
-      if (!savesToFiles()) {
-        return made;
-      }
-      say("Not added, as the board now saves into a folder or a ZIP file");
-      return [];
-    }),
-    at,
-  );
-}
-
-/** What of the board shows between the handle and the toolbar, less a margin, `undefined` when none of it shows. */
-function room(): Rect | undefined {
-  const camera = viewport.camera();
-  if (camera === undefined) {
-    return undefined;
-  }
-  const { width, height } = viewport.size();
-  // A press on the handle drags the window instead. It measures 0 while hidden.
-  const top = byId("handle").getBoundingClientRect().bottom;
-  const under = toBoard(camera, { x: 0, y: top });
-  const shown = onScreen(
-    { ...camera, y: under.y },
-    { width, height: Math.min(height, bar.top()) - top },
-  );
-  if (shown.width <= 0 || shown.height <= 0) {
-    return undefined;
-  }
-  const margin = Math.min(ADDED_MARGIN / camera.zoom, Math.min(shown.width, shown.height) / 10);
-  return {
-    x: shown.x + margin,
-    y: shown.y + margin,
-    width: shown.width - 2 * margin,
-    height: shown.height - 2 * margin,
-  };
 }
 
 function keep(target: Opened, added: Added[]): void {
@@ -2712,8 +1005,7 @@ function keep(target: Opened, added: Added[]): void {
       new Map(added.flatMap(({ asset, decoded }) => (decoded ? [[asset, decoded] as const] : []))),
     );
   }
-  animated.keep(added);
-  films.keep(added);
+  media.keep(added);
   const fresh = new Set(added.map(({ asset }) => asset));
   crossedOut = new Set([...crossedOut].filter((asset) => !fresh.has(asset)));
   added.forEach(({ asset, bytes }) => target.added.set(core.assetPath(asset), bytes));
@@ -2756,137 +1048,12 @@ function changed(touched: string[]): void {
   viewport.redraw();
 }
 
-async function exportZip(): Promise<void> {
-  if (opened === undefined || exporting) {
-    return;
-  }
-  const current = opened;
-  const { editor } = current;
-  exporting = true;
-  const snapshot = editor.snapshot();
-  try {
-    const sink = await platform.pickExport(`${current.folder.name}.zip`, "zip");
-    if (sink === null) {
-      return;
-    }
-    say(`Exporting ${sink.name}…`, true);
-    // Its images from where they lie once no save moves them.
-    const write = () => writeZip(snapshot, files(current), sink);
-    const saver = life.saver();
-    const [count, writing] = await timed(() => (saver ? saver.during(write) : write()));
-    details.set(`export ${count} files`, milliseconds(writing));
-    say(`Exported ${sink.name}`);
-    life.saved(editor, snapshot);
-  } finally {
-    snapshot.free();
-    exporting = false;
-  }
-}
-
-async function exportPng(options: Options): Promise<void> {
-  if (opened === undefined) {
-    return;
-  }
-  if (exporting) {
-    throw new Error("An export is under way");
-  }
-  // Before the user picks where, which would be in vain.
-  ready();
-  const current = opened;
-  const ids = editing.selection();
-  const shown = annotationsShown;
-  exporting = true;
-  try {
-    const sink = await platform.pickExport(
-      pictureName(current.board, ids, current.folder.name),
-      "png",
-    );
-    if (sink === null) {
-      return;
-    }
-    say(`Exporting ${sink.name}…`, true);
-    let made: Picture;
-    try {
-      if (opened !== current) {
-        throw new Error("Another board opened meanwhile");
-      }
-      made = await selectionPng(current, ids, options, shown);
-      await sink.append(new Uint8Array(await made.blob.arrayBuffer()));
-    } catch (error) {
-      await sink.discard().catch(() => {});
-      throw error;
-    }
-    await sink.close();
-    say(`Exported ${sink.name}, ${sized(made)}`);
-    pictureCard.close();
-  } finally {
-    exporting = false;
-  }
-}
-
-function copyPng(options: Options): void {
-  if (opened === undefined) {
-    return;
-  }
-  pngCopies += 1;
-  const copy = pngCopies;
-  const made = selectionPng(opened, editing.selection(), options, annotationsShown);
-  const written = clip.copyImage(made.then(({ blob }) => blob));
-  say("Copying as PNG…", true);
-  report(
-    (async () => {
-      if (await written) {
-        say(`Copied as PNG, ${sized(await made)}`);
-      } else if (copy === pngCopies) {
-        say("");
-      }
-    })(),
-  );
-}
-
-interface Picture {
-  blob: Blob;
-  size: Size;
-  /** Whether it is smaller than its images would have it. */
-  capped: boolean;
-}
-
-/** The elements `ids` as the board shows them, the annotations if `shown`, as `options` frame them. */
-async function selectionPng(
-  current: Opened,
-  ids: string[],
-  options: Options,
-  shown: boolean,
-): Promise<Picture> {
-  const scene = {
-    opened: current,
-    renderer: ready(),
-    drawings,
-    crossedOut,
-    background: getComputedStyle(document.body).backgroundColor,
-  };
-  const textures = {
-    holds: (asset: string) => loaded.has(asset),
-    plays: (asset: string) => animated.holds(asset) || films.holds(asset),
-    current: () => opened === current && renderer === scene.renderer,
-  };
-  // Its images from where they lie once no save moves them.
-  const draw = () => exported(scene, ids, textures, options, shown);
-  const saver = life.saver();
-  const { canvas, capped } = await (saver ? saver.during(draw) : draw());
-  return { blob: await png(canvas), size: { width: canvas.width, height: canvas.height }, capped };
-}
-
 /** The renderer, once the board shows whole. */
 function ready(): Renderer {
   if (renderer === undefined || halfDrawn || life.loading()) {
     throw new Error("A board is opening");
   }
   return renderer;
-}
-
-function sized({ size, capped }: Picture): string {
-  return `${size.width} × ${size.height}${capped ? ", scaled down to fit" : ""}`;
 }
 
 function showPicture(): void {
@@ -2931,29 +1098,6 @@ function showTitle(): void {
     : "Planche";
 }
 
-function showMetrics(): void {
-  if (measurements.hidden) {
-    return;
-  }
-  const heap = heapInUse();
-  const lines = new Map([
-    ["platform", platform.name],
-    ["draws", drawRate === undefined ? "…" : `${drawRate.toFixed(0)} a second`],
-    ["core memory", megabytes(core.coreMemory())],
-    ...(renderer === undefined
-      ? []
-      : [
-          ["textures", megabytes(renderer.textureBytes)] as [string, string],
-          ["texts", String(lettering.count())] as [string, string],
-        ]),
-    ...(heap === undefined ? [] : [["JS heap", megabytes(heap)] as [string, string]]),
-    ...details,
-  ]);
-  byId("metrics").replaceChildren(
-    ...[...lines].flatMap(([name, value]) => [withText("dt", name), withText("dd", value)]),
-  );
-}
-
 async function openBugReport(): Promise<void> {
   // Awaits nothing in a browser, which opens a tab only right after a click or a key.
   const version = platform.version ? await platform.version() : undefined;
@@ -2972,15 +1116,6 @@ function say(text: string, lasting?: boolean): void {
   if (!failing.stopped()) {
     bar.say(text, lasting);
   }
-}
-
-function withText<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  content: string,
-): HTMLElementTagNameMap[K] {
-  const element = document.createElement(tag);
-  element.textContent = content;
-  return element;
 }
 
 function byId(id: string): HTMLElement {

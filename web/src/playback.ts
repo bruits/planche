@@ -1,7 +1,9 @@
 // What animated images and videos share as they play: their frames, by when each starts, what
-// their trim leaves of them, and the speeds they play at.
+// their trim leaves of them, the speeds they play at, and how the app plays both alike.
 
-import type { Trim } from "./core.js";
+import type { Camera, Viewport } from "./camera.js";
+import type { Board, Trim } from "./core.js";
+import type { Renderer } from "./renderer.js";
 
 /** How far a time may fall before the frame it means, in seconds, as one rounds. */
 const LEEWAY = 0.0005;
@@ -22,6 +24,81 @@ export interface Playback {
   starts: ArrayLike<number>;
   /** Whether its sound plays, `undefined` for an animated image. */
   sound?: boolean | undefined;
+}
+
+/**
+ * What plays the board's animated images, or its videos, by asset. `Kept` is what it takes of an
+ * image to play it.
+ */
+export interface Player<Kept> {
+  keep(images: Iterable<Kept>): void;
+  update(board: Board, renderer: Renderer, camera: Camera, viewport: Viewport): void;
+  holds(asset: string): boolean;
+  playing(asset: string): boolean;
+  /** Plays or pauses them, which motion being reduced then leaves as they are. */
+  play(assets: string[], playing: boolean): void;
+  /** Whether motion is reduced, which pauses those the user did not play. */
+  reduce(reduced: boolean): void;
+  /** `undefined` for one that does not play. */
+  playback(asset: string): Playback | undefined;
+  /** Goes to frame `at`, within what plays of it, and plays on from there if it plays. */
+  seek(asset: string, at: number): void;
+  step(assets: string[], by: number): void;
+  /** Plays `span` of it, whatever its trim, until `undefined`. */
+  preview(asset: string, span: Span | undefined): void;
+  /** Forgets them all, as their renderer is gone. */
+  reset(): void;
+}
+
+export interface Media<Kept> extends Player<Kept> {
+  /** Whether it goes frame by frame, as a video whose frames are not read yet may. */
+  steps(asset: string): boolean;
+}
+
+export function together<Animated, Film>(
+  animated: Player<Animated>,
+  films: Player<Film> & Pick<Media<Film>, "steps">,
+): Media<Animated & Film> {
+  return {
+    keep(images) {
+      const kept = [...images];
+      animated.keep(kept);
+      films.keep(kept);
+    },
+    update(board, renderer, camera, viewport) {
+      animated.update(board, renderer, camera, viewport);
+      films.update(board, renderer, camera, viewport);
+    },
+    holds: (asset) => animated.holds(asset) || films.holds(asset),
+    playing: (asset) => animated.playing(asset) || films.playing(asset),
+    steps: (asset) => animated.holds(asset) || films.steps(asset),
+    play(assets, playing) {
+      animated.play(assets, playing);
+      films.play(assets, playing);
+    },
+    reduce(reduced) {
+      animated.reduce(reduced);
+      films.reduce(reduced);
+    },
+    // A video's starts reading its frames, which an animated image's spares it.
+    playback: (asset) => animated.playback(asset) ?? films.playback(asset),
+    seek(asset, at) {
+      animated.seek(asset, at);
+      films.seek(asset, at);
+    },
+    step(assets, by) {
+      animated.step(assets, by);
+      films.step(assets, by);
+    },
+    preview(asset, span) {
+      animated.preview(asset, span);
+      films.preview(asset, span);
+    },
+    reset() {
+      animated.reset();
+      films.reset();
+    },
+  };
 }
 
 /** The speed offered after `speed`, or before it, `undefined` past the last. */

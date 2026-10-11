@@ -7,7 +7,7 @@
 // to play, step through, speed up or down, and trim to the part that plays, and a video's sound, to
 // turn on or off.
 
-import { clock, trimOf, type Playback, type Span } from "./playback.js";
+import { clock, trimOf, type Media, type Playback, type Span } from "./playback.js";
 import { loneImage, shownOrder, type Opened } from "./board.js";
 import { clamp } from "./geometry.js";
 import {
@@ -125,18 +125,9 @@ export interface CardHost {
   /** Names `button` in the hint while it is hovered or focused. */
   explain(button: HTMLElement, text: () => string): void;
   say(message: string): void;
-  media: CardMedia;
+  media: Pick<Media<never>, "playback" | "play" | "seek" | "preview">;
   /** Once it starts trimming the lone animated image or video selected, or stops, which the hint tells. */
   trimmed(): void;
-}
-
-export interface CardMedia {
-  /** `undefined` for one that does not play. */
-  playback(asset: string): Playback | undefined;
-  play(assets: string[], playing: boolean): void;
-  seek(asset: string, at: number): void;
-  /** Plays `span` of it, whatever its trim, until `undefined`. */
-  preview(asset: string, span: Span | undefined): void;
 }
 
 /** Those that share its keys, for their hints. */

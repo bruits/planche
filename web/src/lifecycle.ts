@@ -46,6 +46,14 @@ export interface Lifecycle {
   save(): Promise<void>;
   /** Where the open board saves itself, `undefined` when nowhere. */
   saver(): Saving | undefined;
+  /** Whether the board saves itself into a folder or a ZIP file, rather than in the session or nowhere. */
+  savesToFiles(): boolean;
+  /**
+   * Where the open board saves itself when the files of its images may be gone by the time a paste
+   * reads them: the session, which leaving the board clears, or a ZIP file, whose saves drop what
+   * the board no longer shows.
+   */
+  fleeting(): Saving | undefined;
   touched(ids: string[]): void;
   /** The open board as written as `snapshot`, unless another board opened meanwhile, which freed `editor`. */
   saved(editor: core.Editor, snapshot: core.Snapshot): void;
@@ -556,6 +564,16 @@ export function lifecycle(host: Host): Lifecycle {
     }
   }
 
+  function fleeting(): Saving | undefined {
+    const opened = host.opened();
+    if (opened === undefined || autosave === undefined) {
+      return undefined;
+    }
+    // The session also saves boards read from elsewhere, whose files it leaves alone.
+    const ownFiles = "write" in opened.folder;
+    return (autosave.store.session ? ownFiles : !ownFiles) ? autosave : undefined;
+  }
+
   return {
     start: () => opening(start),
     newBoard,
@@ -564,6 +582,8 @@ export function lifecycle(host: Host): Lifecycle {
     saveAs,
     save,
     saver: () => autosave,
+    savesToFiles: () => autosave !== undefined && !autosave.store.session,
+    fleeting,
     touched(ids) {
       autosave?.touched(ids);
       showSaved();

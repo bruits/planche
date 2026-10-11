@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { clock, frameAt, sped, spanOf, startsOf, stepped, trimOf } from "./playback.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  clock,
+  frameAt,
+  sped,
+  spanOf,
+  startsOf,
+  stepped,
+  together,
+  trimOf,
+  type Media,
+  type Playback,
+} from "./playback.js";
 
 describe("frames", () => {
   const starts = startsOf([40, 100, 60]);
@@ -62,5 +73,69 @@ describe("speeds", () => {
     expect(sped(1.1, false)).toBe(1);
     expect(sped(2, true)).toBeUndefined();
     expect(sped(0.25, false)).toBeUndefined();
+  });
+});
+
+function player<Kept>(assets: string[], given: Partial<Media<Kept>> = {}): Media<Kept> {
+  return {
+    keep() {},
+    update() {},
+    holds: (asset) => assets.includes(asset),
+    playing: () => false,
+    play() {},
+    reduce() {},
+    playback: () => undefined,
+    seek() {},
+    step() {},
+    preview() {},
+    reset() {},
+    steps: () => false,
+    ...given,
+  };
+}
+
+/** What `keep` was handed, which it reads through as the players do. */
+function keeper() {
+  return vi.fn<(images: Iterable<{ asset: string }>) => void>((images) => void [...images]);
+}
+
+/** Images to keep, read once, as a generator is. */
+function* bothKinds() {
+  yield { asset: "gif" };
+  yield { asset: "mp4" };
+}
+
+describe("animated images and videos together", () => {
+  const shown: Playback = {
+    at: 0,
+    count: 3,
+    playing: true,
+    span: [0, 2],
+    starts: [0, 0.1, 0.2, 0.3],
+  };
+
+  it("hands every image kept to both, as each asset is one or the other", () => {
+    const [kept, filmed] = [keeper(), keeper()];
+    together(player(["gif"], { keep: kept }), player(["mp4"], { keep: filmed })).keep(bothKinds());
+    expect(kept.mock.calls[0]![0]).toEqual([{ asset: "gif" }, { asset: "mp4" }]);
+    expect(filmed.mock.calls[0]![0]).toEqual([{ asset: "gif" }, { asset: "mp4" }]);
+  });
+
+  it("asks the videos for a playback only when the animated images have none", () => {
+    const asked = vi.fn<(asset: string) => Playback | undefined>(() => undefined);
+    const animated = player(["gif"], {
+      playback: (asset) => (asset === "gif" ? shown : undefined),
+    });
+    const media = together(animated, player(["mp4"], { playback: asked }));
+    expect(media.playback("gif")).toBe(shown);
+    expect(asked).not.toHaveBeenCalled();
+    media.playback("mp4");
+    expect(asked).toHaveBeenCalledWith("mp4");
+  });
+
+  it("holds either's assets, and steps an animated image or a video whose frames are not read yet", () => {
+    const media = together(player(["gif"]), player(["mp4"], { steps: (asset) => asset === "new" }));
+    expect(["gif", "mp4", "png"].map(media.holds)).toEqual([true, true, false]);
+    expect(["gif", "new", "png"].map(media.steps)).toEqual([true, true, false]);
   });
 });

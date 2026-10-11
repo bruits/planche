@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
-import { describe, it, expect } from "vitest";
-import { answer, type Reading } from "./agent.js";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { access, answer, type Reading } from "./agent.js";
 import type { Writing } from "./author.js";
 import { open, type Opened } from "./board.js";
 import type { Bytes } from "./core.js";
+import type { AgentCall } from "./platform.js";
 import { memoryHome, sample } from "../test/folders.js";
 
 const MISSING = "5e352e848cf1aacc7aca97973322210c9c22b09de57d51546a5f9d7926bcb04f.png";
@@ -84,5 +85,58 @@ describe("answer", () => {
     await expect(answer(call, reading)).rejects.toThrow(
       "Planche stopped working, so ask the user to reload it",
     );
+  });
+});
+
+function bridge(refusal?: string) {
+  return {
+    serve: vi.fn<(answer: (call: AgentCall) => Promise<unknown>) => Promise<void>>(async () => {}),
+    allow: vi.fn<(on: boolean) => Promise<void>>(async () => {
+      if (refusal !== undefined) {
+        throw new Error(refusal);
+      }
+    }),
+  };
+}
+
+describe("access", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("answers agents' calls with the open board, then lets them in as the user left it", async () => {
+    const agent = bridge();
+    const reading = await page(() => {});
+    await access(agent, reading).allow(true);
+    const next = access(agent, reading);
+    await next.serve();
+    expect(next.allowed()).toBe(true);
+    expect(agent.allow).toHaveBeenLastCalledWith(true);
+    const answered = agent.serve.mock.calls[0]![0];
+    const told = (await answered({
+      id: 1,
+      tool: "board",
+      args: {},
+      deadline: Date.now() + 1000,
+    })) as {
+      board: { name: string };
+    };
+    expect(told.board.name).toBe("demo");
+  });
+
+  it("stays off and says why when the shell refuses, remembering nothing", async () => {
+    const reading = await page(() => {});
+    const refused = access(bridge("another Planche has it on"), reading);
+    await expect(refused.allow(true)).rejects.toThrow(
+      "Agent access stays off, as Error: another Planche has it on",
+    );
+    expect(refused.allowed()).toBe(false);
+    const next = access(bridge(), reading);
+    await next.serve();
+    expect(next.allowed()).toBe(false);
+  });
+
+  it("serves nothing where no agent can reach the app", async () => {
+    const served = access(undefined, await page(() => {}));
+    await served.serve();
+    expect(served.allowed()).toBe(false);
   });
 });

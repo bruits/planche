@@ -1,5 +1,5 @@
-// What the app can do, each named and bound to its keys in one place, so that the toolbar, the
-// menus, and the keyboard offer it alike.
+// Commands, each named and bound to its keys, which the keyboard runs as the toolbar and the menus
+// do, and the keys as each layout types them.
 
 export const mac = /mac|iphone|ipad/i.test(navigator.platform);
 
