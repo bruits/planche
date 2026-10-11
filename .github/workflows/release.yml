@@ -137,6 +137,7 @@ jobs:
           - os: macos-latest
             args: --target universal-apple-darwin
             installers: target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            app: target/universal-apple-darwin/release/bundle/macos/Planche.app
           - os: windows-latest
             installers: target/release/bundle/nsis/*.exe
           # The oldest runner, as the deb and the AppImage need at least the glibc they were built
@@ -171,10 +172,29 @@ jobs:
         with:
           name: web
           path: web/public
-      - run: npm install --global @tauri-apps/cli@2
-      # 0.x has no signing certificate, so the Mac app is signed ad hoc and the Windows installer not
-      # at all.
-      - run: tauri build ${{ matrix.args }}
+      # Pinned, as the Mac build hands the Apple signing secrets to this CLI. Bump it with the tauri
+      # crate.
+      - run: npm install --global @tauri-apps/cli@2.12.2
+      # The Windows installer is not signed yet.
+      - if: runner.os != 'macOS'
+        run: tauri build ${{ matrix.args }}
+      # Tauri signs the Mac app with the Developer ID, notarizes it, and staples the ticket.
+      - if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: tauri build ${{ matrix.args }}
+      # Tauri only warns when it cannot notarize and ignores a failed staple, so the Mac app proves
+      # it is notarized and stapled before it ships. spctl alone accepts an unstapled app, whose
+      # first launch then needs the network.
+      - if: runner.os == 'macOS'
+        run: |
+          xcrun stapler validate "${{ matrix.app }}"
+          spctl --assess --type execute --verbose=2 "${{ matrix.app }}"
       - env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.web.outputs.tag }}
