@@ -39,9 +39,10 @@ const z = (at) => (at < 62 ? `a${DIGITS[at]}` : `b${DIGITS[Math.floor((at - 62) 
 
 /**
  * `count` elements, seven in ten of them images, the others notes stuck to an image, shapes, and
- * arrows from one, spread as thinly whatever their count.
+ * arrows from one, spread as thinly whatever their count. With `grouped`, the first `grouped` of
+ * them also sit in a group that fills its panel with a tint, at the back.
  */
-function board(count) {
+function board(count, grouped = 0) {
   const next = random(count);
   const side = 400 * Math.sqrt(count);
   const encoder = new TextEncoder();
@@ -55,6 +56,11 @@ function board(count) {
   const ids = [];
   let image;
   let imageId;
+  const group = hex(32, 1);
+  if (grouped > 0) {
+    paths.push(`elements/${group}.json`);
+    contents.push(encoder.encode(`${JSON.stringify({ z: z(0), kind: { type: "group", colour: "blue", fill: "tint" } }, null, 2)}\n`));
+  }
   for (let at = 0; at < count; at++) {
     const id = hex(32, 0x1000 + at * 7919);
     const frame = { x: next() * side, y: next() * side, width: 100 + next() * 300, height: 100 + next() * 300 };
@@ -97,9 +103,10 @@ function board(count) {
     }
     ids.push(id);
     paths.push(`elements/${id}.json`);
-    contents.push(encoder.encode(`${JSON.stringify({ z: z(at), kind }, null, 2)}\n`));
+    const member = at < grouped ? { group } : {};
+    contents.push(encoder.encode(`${JSON.stringify({ ...member, z: z(at), kind }, null, 2)}\n`));
   }
-  return { ids, paths, contents };
+  return { ids, paths, contents, group };
 }
 
 function measure(count) {
@@ -120,6 +127,15 @@ function measure(count) {
   rows.set("json", median(() => editor.json()));
   rows.set("hit", median(() => editor.hit(next() * side, next() * side, 6, true)));
   rows.set("touching, a quarter of the board", median(() => editor.touching(0, 0, side / 2, side / 2)));
+  // A group of 50 whose tinted panel spans most of the board. Aimed apart, so that the other rows
+  // keep their points.
+  const aim = random(3);
+  const filled = board(count, 50);
+  const panelled = core.Editor.read(filled.paths, filled.contents);
+  rows.set("hit, a filled group", median(() => panelled.hit(aim() * side, aim() * side, 6, true)));
+  rows.set("touching, a filled group", median(() => panelled.touching(0, 0, side / 2, side / 2)));
+  rows.set("bounds all, a filled group", median(() => panelled.bounds([filled.group, ...filled.ids])));
+  panelled.free();
   // Read again after each edit, as the app draws in that order.
   rows.set("drawOrder", median(() => editor.drawOrder()));
   // As the app reads it once it opens the board, parsed.

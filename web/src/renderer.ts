@@ -115,7 +115,7 @@ export interface Renderer {
 
 /** How long a render may wait for the GPU to hand its pixels over, in milliseconds. */
 const READBACK_TIME = 15_000;
-/** Floats per item, as `draw` reads them, those an item leaves out being zeros. */
+/** Floats per item, as `place` and `render` read them, those an item leaves out being zeros. */
 const STRIDE = 15;
 /**
  * As the renderer tells its items apart. The segments of a see-through pen stroke draw `once`,
@@ -218,20 +218,18 @@ async function on(
   const texts = new Map<string, number>();
   let placed: Placed[] = [];
   let background: Background = "plain";
-  /** Packed at the next draw, as uploads and releases move the textures that items name. */
-  let items: Float32Array | undefined;
-  let packedGrey = false;
-  const pack = (grey: boolean) => {
-    packedGrey = grey;
-    return (items = packed(placed, images, texts, painted, light, grey));
-  };
+  /**
+   * Whether the renderer holds the items in greys, or `undefined` until it is handed them again at
+   * the next draw, as uploads and releases move the textures they name.
+   */
+  let placedGrey: boolean | undefined;
   const replace = (textures: Map<string, number>, key: string, canvas: HTMLCanvasElement) => {
     const before = textures.get(key);
     textures.set(key, renderer.uploadCanvas(canvas));
     if (before !== undefined) {
       renderer.release(before);
     }
-    items = undefined;
+    placedGrey = undefined;
   };
   // The next upload takes the texture's index, so no item may name it from then on.
   const drop = (textures: Map<string, number>, key: string) => {
@@ -239,7 +237,7 @@ async function on(
     if (texture !== undefined) {
       renderer.release(texture);
       textures.delete(key);
-      items = undefined;
+      placedGrey = undefined;
     }
   };
   return {
@@ -260,7 +258,7 @@ async function on(
       } finally {
         // Closing one twice does nothing.
         bitmaps.forEach((bitmap) => bitmap.close());
-        items = undefined;
+        placedGrey = undefined;
       }
     },
     setImage(asset, canvas) {
@@ -300,7 +298,7 @@ async function on(
     dropText: (id) => drop(texts, id),
     place(next) {
       placed = next;
-      items = undefined;
+      placedGrey = undefined;
     },
     backdrop(next) {
       background = next;
@@ -309,16 +307,19 @@ async function on(
       painted = paints(host);
       light = lightPaints();
       strength = gridStrength(host);
-      items = undefined;
+      placedGrey = undefined;
     },
     draw(camera, grey = false) {
+      if (placedGrey !== grey) {
+        renderer.place(packed(placed, images, texts, painted, light, grey));
+        placedGrey = grey;
+      }
       const { x, y, zoom } = camera;
       const ink = (grey ? greyed(painted) : painted)("ink");
       renderer.draw(
         x,
         y,
         zoom * devicePixelRatio,
-        items !== undefined && packedGrey === grey ? items : pack(grey),
         grid(background, camera, ink, strength, devicePixelRatio),
       );
     },

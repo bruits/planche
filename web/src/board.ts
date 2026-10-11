@@ -420,8 +420,14 @@ export function centring(area: Rect, at: Point, zoom: number): Point {
   };
 }
 
-/** The assets that the touched elements showed and no longer do, which other images may. */
-export function refresh({ editor, board, drawn }: Opened, touched: string[]): string[] {
+/**
+ * The assets that the touched elements showed and no longer do, which other images may, and the
+ * groups whose drawing follows the touched elements, before the edit and after it, all the way up.
+ */
+export function refresh(
+  { editor, board, drawn }: Opened,
+  touched: string[],
+): { undrawn: string[]; groups: Set<string> } {
   // Only which elements there are, where each stacks, and in which group, order the board.
   let reordered = false;
   const shown = new Set<string>();
@@ -453,10 +459,10 @@ export function refresh({ editor, board, drawn }: Opened, touched: string[]): st
     }
   }
   // A group's panel follows what its elements draw, all the way up.
-  const seen = new Set<string>();
+  const groups = new Set<string>();
   for (const group of containers) {
-    for (let up: string | undefined = group; up !== undefined && !seen.has(up);) {
-      seen.add(up);
+    for (let up: string | undefined = group; up !== undefined && !groups.has(up);) {
+      groups.add(up);
       drawn.items.delete(up);
       up = board.elements[up]?.group;
     }
@@ -465,7 +471,7 @@ export function refresh({ editor, board, drawn }: Opened, touched: string[]): st
     board.draw_order = editor.drawOrder();
   }
   board.background = core.background(editor);
-  return [...shown].filter((asset) => !kept.has(asset));
+  return { undrawn: [...shown].filter((asset) => !kept.has(asset)), groups };
 }
 
 /**

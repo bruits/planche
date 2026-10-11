@@ -1082,8 +1082,9 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     }
   };
   // Not hidden by the edit its opacity holds open as it slides.
+  // Whether a press holds first, as it does at every step of a drag, which hides the card anyway.
   const visible = () =>
-    targets().length > 0 && (common().length > 0 || images()) && (host.adjusting() || !host.busy());
+    (host.adjusting() || !host.busy()) && targets().length > 0 && (common().length > 0 || images());
   const show = (focus = false) => {
     const reading = host.reading();
     readout.hidden = reading === undefined;

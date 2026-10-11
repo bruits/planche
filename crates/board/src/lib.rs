@@ -311,13 +311,12 @@ impl Board {
     /// With the elements of the groups among them, all the way down. Unknown ids are left out.
     fn with_descendants(&self, ids: &[ElementId]) -> BTreeSet<ElementId> {
         let mut found = BTreeSet::new();
-        let mut pending: Vec<ElementId> = ids
-            .iter()
-            .copied()
-            .filter(|id| self.elements.contains_key(id))
-            .collect();
+        let mut pending: Vec<ElementId> = ids.to_vec();
         while let Some(id) = pending.pop() {
-            if found.insert(id) && matches!(self.elements[&id].kind, ElementKind::Group { .. }) {
+            let Some(element) = self.elements.get(&id) else {
+                continue;
+            };
+            if found.insert(id) && matches!(element.kind, ElementKind::Group { .. }) {
                 pending.extend(self.members(id));
             }
         }

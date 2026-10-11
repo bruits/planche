@@ -57,6 +57,22 @@ describe("titles", () => {
     expect(label(GROUP)?.style.transform).toBe("translate(550px, 25px)");
   });
 
+  it("asks for a group's area again only once told that group changed", () => {
+    const { made } = shown();
+    const titled = board({
+      [GROUP]: { type: "group", title: "Moods" },
+      [OTHER]: { type: "group", title: "Colours" },
+    });
+    const moved = { ...AREA, x: 300, y: 150 };
+    made.show(titled, () => AREA, []);
+    made.show(titled, () => moved, []);
+    expect(label(GROUP)?.style.transform).toBe("translate(50px, 25px)");
+    made.changed([GROUP]);
+    made.show(titled, () => moved, []);
+    expect(label(GROUP)?.style.transform).toBe("translate(150px, 75px)");
+    expect(label(OTHER)?.style.transform).toBe("translate(50px, 25px)");
+  });
+
   it("offers a title to the group selected alone that has none, which a click writes", () => {
     const { made, rename } = shown();
     made.show(board({ [GROUP]: { type: "group" } }), () => AREA, [GROUP], GROUP);

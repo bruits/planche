@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
 
 use crate::{
-    Annotations, Board, Corners, CropShape, ElementId, ElementKind, Fill, ImageEdits, Point, Rect,
-    Shape, Text, Tip,
+    Annotations, Board, Corners, CropShape, Element, ElementId, ElementKind, Fill, ImageEdits,
+    Point, Rect, Shape, Text, Tip,
 };
 
 /// The most points [`Board::hit_along`] tries, so that however long the way, it stays quick.
@@ -211,33 +211,33 @@ impl Board {
     /// The smallest upright rectangle around what the elements draw, their groups' elements and
     /// panels included. `None` when they draw nothing.
     pub fn bounds(&self, ids: &[ElementId]) -> Option<Rect> {
-        let within = self.with_descendants(ids);
-        let points: Vec<Point> = within
-            .iter()
-            .filter_map(|id| shape(&self.elements[id].kind))
-            .flatten()
-            .collect();
-        self.around_panels(points, &within)
+        self.drawn_around(ids, false)
     }
 
     /// As [`Board::bounds`], with the points where the comments among them are pinned, which a
     /// view must show though they draw nothing on the board.
     pub fn extent(&self, ids: &[ElementId]) -> Option<Rect> {
-        let within = self.with_descendants(ids);
-        let points: Vec<Point> = within
-            .iter()
-            .filter_map(|id| match &self.elements[id].kind {
-                ElementKind::Comment { at, .. } => Some(vec![*at]),
-                kind => shape(kind),
-            })
-            .flatten()
-            .collect();
-        self.around_panels(points, &within)
+        self.drawn_around(ids, true)
     }
 
-    fn around_panels(&self, mut points: Vec<Point>, within: &BTreeSet<ElementId>) -> Option<Rect> {
-        let panels = self.panels(within);
-        points.extend(panels.values().flat_map(|panel| corners(panel, 0.0)));
+    /// As [`Board::bounds`], and around where the comments are pinned when `pins`. Panels are
+    /// looked for only once a group among them is filled, as none is the usual case.
+    fn drawn_around(&self, ids: &[ElementId], pins: bool) -> Option<Rect> {
+        let within = self.with_descendants(ids);
+        let mut points = Vec::new();
+        let mut filled = false;
+        for id in &within {
+            let kind = &self.elements[id].kind;
+            filled |= panelled(kind);
+            match kind {
+                ElementKind::Comment { at, .. } if pins => points.push(*at),
+                kind => points.extend(shape(kind).into_iter().flatten()),
+            }
+        }
+        if filled {
+            let panels = self.panels(&within);
+            points.extend(panels.values().flat_map(|panel| corners(panel, 0.0)));
+        }
         around(&points)
     }
 
@@ -246,47 +246,37 @@ impl Board {
             return None;
         }
         let within = self.with_descendants(&[id]);
+        let (_, members) = forest(within.iter().map(|id| (*id, &self.elements[id])), |group| {
+            within.contains(group)
+        });
         let mut panels = BTreeMap::new();
-        self.drawn_box(
-            id,
-            &self.membership(&within),
-            &mut panels,
-            &mut BTreeSet::new(),
-        );
+        self.drawn_box(id, &members, &mut panels, &mut BTreeSet::new());
         panels.remove(&id)
     }
 
-    /// The panel of each filled group `within`, which stands clear of what its elements draw, the
-    /// panels within it included. A group whose elements draw nothing has none.
     fn panels(&self, within: &BTreeSet<ElementId>) -> BTreeMap<ElementId, Rect> {
+        self.panels_among(within.iter().map(|id| (*id, &self.elements[id])), |group| {
+            within.contains(group)
+        })
+    }
+
+    /// The panel of each filled group among `elements`, which stands clear of what its elements
+    /// draw, the panels within it included. A group whose elements draw nothing has none, and an
+    /// element whose group is not `inside` stands alone.
+    fn panels_among<'a>(
+        &self,
+        elements: impl Iterator<Item = (ElementId, &'a Element)>,
+        inside: impl Fn(&ElementId) -> bool,
+    ) -> BTreeMap<ElementId, Rect> {
+        let (roots, members) = forest(elements, inside);
         let mut panels = BTreeMap::new();
-        if !within.iter().any(|id| panelled(&self.elements[id].kind)) {
-            return panels;
-        }
-        let members = self.membership(within);
         let mut seen = BTreeSet::new();
-        for id in within {
-            if !self.elements[id]
-                .group
-                .is_some_and(|group| within.contains(&group))
-            {
-                self.drawn_box(*id, &members, &mut panels, &mut seen);
+        for id in roots {
+            if matches!(self.elements[&id].kind, ElementKind::Group { .. }) {
+                self.drawn_box(id, &members, &mut panels, &mut seen);
             }
         }
         panels
-    }
-
-    fn membership(&self, within: &BTreeSet<ElementId>) -> BTreeMap<ElementId, Vec<ElementId>> {
-        let mut members: BTreeMap<ElementId, Vec<ElementId>> = BTreeMap::new();
-        for id in within {
-            if let Some(group) = self.elements[id]
-                .group
-                .filter(|group| within.contains(group))
-            {
-                members.entry(group).or_default().push(*id);
-            }
-        }
-        members
     }
 
     /// The upright rectangle around what element `id` draws, its panel when a filled group, which
@@ -319,6 +309,8 @@ impl Board {
         Some(panel)
     }
 
+    /// As [`Board::panels`] of the whole board, without gathering it in a set first, as each
+    /// hover asks for them.
     fn all_panels(&self) -> BTreeMap<ElementId, Rect> {
         if !self
             .elements
@@ -327,8 +319,28 @@ impl Board {
         {
             return BTreeMap::new();
         }
-        self.panels(&self.elements.keys().copied().collect())
+        self.panels_among(
+            self.elements.iter().map(|(id, element)| (*id, element)),
+            |group| self.elements.contains_key(group),
+        )
     }
+}
+
+/// The `elements` that stand alone, as their group is not `inside`, and the elements of each
+/// group that is.
+fn forest<'a>(
+    elements: impl Iterator<Item = (ElementId, &'a Element)>,
+    inside: impl Fn(&ElementId) -> bool,
+) -> (Vec<ElementId>, BTreeMap<ElementId, Vec<ElementId>>) {
+    let mut roots = Vec::new();
+    let mut members: BTreeMap<ElementId, Vec<ElementId>> = BTreeMap::new();
+    for (id, element) in elements {
+        match element.group.filter(|group| inside(group)) {
+            Some(group) => members.entry(group).or_default().push(id),
+            None => roots.push(id),
+        }
+    }
+    (roots, members)
 }
 
 fn panelled(kind: &ElementKind) -> bool {
@@ -1632,6 +1644,32 @@ mod tests {
         assert!(outer.x + outer.width > 600.0);
         assert_eq!(board.hit(point(200.0, 50.0), 0.0, Shown), Some(id(2)));
         assert_eq!(board.hit(point(450.0, 50.0), 0.0, Shown), Some(id(1)));
+    }
+
+    #[test]
+    fn a_filled_group_within_a_hollow_one_keeps_its_panel() {
+        let filled = ElementKind::Group {
+            colour: Colour::Blue,
+            fill: Fill::Tint,
+            title: None,
+        };
+        let board = board([
+            (1, element(None, "a0", ElementKind::group())),
+            (2, element(Some(1), "a0", filled)),
+            (
+                3,
+                element(Some(2), "a0", image(0.0, 0.0, 100.0, 100.0, 0.0)),
+            ),
+            (
+                4,
+                element(Some(2), "a1", image(300.0, 100.0, 100.0, 100.0, 0.0)),
+            ),
+        ]);
+        let panel = area(-15.0, -15.0, 430.0, 230.0);
+        assert_eq!(board.hit(point(200.0, 50.0), 0.0, Shown), Some(id(2)));
+        assert_eq!(board.bounds(&[id(1)]), Some(panel));
+        assert_eq!(board.extent(&[id(1)]), Some(panel));
+        assert_eq!(board.bounds(&[id(3)]), Some(area(0.0, 0.0, 100.0, 100.0)));
     }
 
     #[test]

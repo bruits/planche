@@ -494,7 +494,7 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f };
 /// Read in linear light, so that mipmaps and filtering keep an image's brightness. Texts read
 /// only the alpha, which stays linear.
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
-/// Floats per item in [`Renderer::draw`]: its kind, which is 0 for an image, 1 for a stroke, 2
+/// Floats per item in [`Renderer::place`]: its kind, which is 0 for an image, 1 for a stroke, 2
 /// for a text, and 3 for a line of a see-through pen stroke, its texture or -1, then its instance,
 /// whose last float is its opacity from 0 to 1, whatever its kind.
 ///
@@ -556,7 +556,10 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     /// By index, which a released texture leaves free for the next one.
     textures: Vec<Option<Texture>>,
-    instances: wgpu::Buffer,
+    /// The window's, kept from frame to frame, so that a frame moving only the camera uploads none.
+    placed: Instances,
+    /// The last [`Renderer::render`]'s, apart, so that rendering leaves the window's as they are.
+    rendered: Instances,
     backend: String,
     webgpu: bool,
     /// wgpu's default is to panic, which would leave the page waiting on a dead module.
@@ -570,6 +573,58 @@ struct Pipelines {
     texts: wgpu::RenderPipeline,
     strokes: wgpu::RenderPipeline,
     grid: wgpu::RenderPipeline,
+}
+
+struct Instances {
+    buffer: wgpu::Buffer,
+    items: Vec<Item>,
+    /// Whether they hold a see-through pen stroke, which only a pass with the depth and the
+    /// stencil draws.
+    once: bool,
+}
+
+/// What drawing an item takes besides its instance, as [`STRIDE`] lays it out.
+#[derive(Clone, Copy)]
+struct Item {
+    kind: f32,
+    texture: f32,
+    /// Which stroke a line of a see-through pen stroke belongs to.
+    stroke: f32,
+}
+
+impl Instances {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            buffer: instance_buffer(device, 0),
+            items: Vec::new(),
+            once: false,
+        }
+    }
+
+    /// `items` holds [`STRIDE`] floats per item, back to front.
+    fn fill(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, items: &[f32]) {
+        let (items, _) = items.as_chunks::<STRIDE>();
+        let capacity = (self.buffer.size() / INSTANCE) as usize;
+        if capacity < items.len() {
+            // By half again, so that a board gaining images one by one does not make one at each
+            // place, and destroyed, as dropping one frees nothing on WebGPU.
+            let grown = instance_buffer(device, items.len().max(capacity + capacity / 2));
+            mem::replace(&mut self.buffer, grown).destroy();
+        }
+        let instances: Vec<u8> = items
+            .iter()
+            .flat_map(|item| &item[2..])
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        queue.write_buffer(&self.buffer, 0, &instances);
+        self.items.clear();
+        self.items.extend(items.iter().map(|item| Item {
+            kind: item[0],
+            texture: item[1],
+            stroke: item[STRIDE - 2],
+        }));
+        self.once = self.items.iter().any(|item| item.kind == ONCE);
+    }
 }
 
 struct Texture {
@@ -814,7 +869,8 @@ pub async fn create(
     });
     let info = adapter.get_info();
     Ok(Renderer {
-        instances: instance_buffer(&device, 0),
+        placed: Instances::new(&device),
+        rendered: Instances::new(&device),
         device,
         queue,
         surface,
@@ -845,7 +901,7 @@ impl Renderer {
         self.backend.clone()
     }
 
-    /// The texture's index, for [`Renderer::draw`], until it is released.
+    /// The texture's index, for the items [`Renderer::place`] is given, until it is released.
     pub fn upload(&mut self, bitmap: ImageBitmap) -> Result<u32, JsError> {
         self.upload_from(wgpu::ExternalImageSource::ImageBitmap(bitmap))
     }
@@ -931,8 +987,8 @@ impl Renderer {
         Ok(true)
     }
 
-    /// Frees the texture, whose index the next upload may take. Items that still name it draw
-    /// nothing.
+    /// Frees the texture, whose index the next upload may take. Items placed that still name it
+    /// draw nothing until then, and the new texture after.
     pub fn release(&mut self, index: u32) {
         if let Some(texture) = self.textures.get_mut(index as usize).and_then(Option::take) {
             texture.texture.destroy();
@@ -965,23 +1021,22 @@ impl Renderer {
         }
     }
 
-    /// `zoom` is in device pixels per board unit, `items` holds [`STRIDE`] floats per item,
-    /// back to front, and `grid` its [`GRID_FLOATS`], or none when there is no grid.
-    pub fn draw(
-        &mut self,
-        x: f32,
-        y: f32,
-        zoom: f32,
-        items: &[f32],
-        grid: &[f32],
-    ) -> Result<(), JsError> {
+    /// What the window draws from now on, with [`STRIDE`] floats per item, back to front. Items
+    /// name their textures by index, so they are placed again after any upload or release.
+    pub fn place(&mut self, items: &[f32]) {
+        self.placed.fill(&self.device, &self.queue, items);
+    }
+
+    /// The items last placed, where `zoom` is in device pixels per board unit, over `grid`'s
+    /// [`GRID_FLOATS`], or none when there is no grid.
+    pub fn draw(&mut self, x: f32, y: f32, zoom: f32, grid: &[f32]) -> Result<(), JsError> {
         check_grid(grid)?;
         let Some((frame, suboptimal)) = self.next_frame()? else {
             return Ok(());
         };
         let view = frame.texture.create_view(&Default::default());
         let size = frame.texture.size();
-        let depth = if holds_once(items) {
+        let depth = if self.placed.once {
             if self.depth.as_ref().is_none_or(|depth| depth.size() != size) {
                 let made = depth_texture(&self.device, size);
                 if let Some(old) = self.depth.replace(made) {
@@ -1001,7 +1056,7 @@ impl Renderer {
             (&view, depth.as_ref()),
             wgpu::Color::TRANSPARENT,
             [x, y, zoom, viewport[0], viewport[1]],
-            items,
+            &self.placed,
             grid,
         );
         self.queue.submit([encoder.finish()]);
@@ -1013,9 +1068,9 @@ impl Renderer {
         self.check()
     }
 
-    /// Draws as [`Renderer::draw`] does, but onto a texture of its own, which the surface and
-    /// the camera of the window never see. Read back with [`Readback::poll`] until it says so,
-    /// then [`Readback::pixels`].
+    /// Draws `items` as [`Renderer::draw`] draws those placed, but onto a texture of its own,
+    /// which the surface and the camera of the window never see. Read back with
+    /// [`Readback::poll`] until it says so, then [`Readback::pixels`].
     pub fn render(
         &mut self,
         view: &[f32],
@@ -1073,7 +1128,11 @@ impl Renderer {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let depth = holds_once(items).then(|| depth_texture(&self.device, target.size()));
+        self.rendered.fill(&self.device, &self.queue, items);
+        let depth = self
+            .rendered
+            .once
+            .then(|| depth_texture(&self.device, target.size()));
         let mut encoder = self.device.create_command_encoder(&Default::default());
         // Multiplied by its alpha, as blending over it leaves every colour.
         let alpha = f64::from(alpha.clamp(0.0, 1.0));
@@ -1094,7 +1153,7 @@ impl Renderer {
             ),
             clear,
             [x, y, zoom, width as f32, height as f32],
-            items,
+            &self.rendered,
             grid,
         );
         encoder.copy_texture_to_buffer(
@@ -1325,12 +1384,12 @@ impl Renderer {
     }
 
     fn record(
-        &mut self,
+        &self,
         encoder: &mut wgpu::CommandEncoder,
         (target, depth): (&wgpu::TextureView, Option<&wgpu::TextureView>),
         clear: wgpu::Color,
         [x, y, zoom, width, height]: [f32; 5],
-        items: &[f32],
+        instances: &Instances,
         grid: &[f32],
     ) {
         let camera: Vec<u8> = [x, y, zoom, 0.0, width, height, 0.0, 0.0]
@@ -1342,22 +1401,6 @@ impl Renderer {
             let grid: Vec<u8> = grid.iter().flat_map(|value| value.to_le_bytes()).collect();
             self.queue.write_buffer(&self.grid_uniform, 0, &grid);
         }
-        let needed = items.len() / STRIDE;
-        let capacity = (self.instances.size() / INSTANCE) as usize;
-        if capacity < needed {
-            // By half again, so that a board gaining images one by one does not make one at each
-            // draw, and destroyed, as dropping one frees nothing on WebGPU.
-            let grown = instance_buffer(&self.device, needed.max(capacity + capacity / 2));
-            mem::replace(&mut self.instances, grown).destroy();
-        }
-        let (items, _) = items.as_chunks::<STRIDE>();
-        let instances: Vec<u8> = items
-            .iter()
-            .flat_map(|item| &item[2..])
-            .flat_map(|value| value.to_le_bytes())
-            .collect();
-        self.queue.write_buffer(&self.instances, 0, &instances);
-
         let pipelines = if depth.is_some() {
             &self.deep
         } else {
@@ -1370,18 +1413,22 @@ impl Renderer {
             pass.set_bind_group(1, &self.grid_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        pass.set_vertex_buffer(0, self.instances.slice(..));
+        pass.set_vertex_buffer(0, instances.buffer.slice(..));
         // Strokes one after the other draw at once, as each draw rebinds the instances on
         // WebGL2.
+        let items = &instances.items;
         let mut drawing = None;
         let mut at = 0;
         while at < items.len() {
-            let [kind, texture, ..] = items[at];
+            let Item {
+                kind,
+                texture,
+                stroke,
+            } = items[at];
             if kind == ONCE {
-                let stroke = items[at][STRIDE - 2];
                 let run = items[at..]
                     .iter()
-                    .take_while(|item| item[0] == ONCE && item[STRIDE - 2] == stroke)
+                    .take_while(|item| item.kind == ONCE && item.stroke == stroke)
                     .count();
                 for pipeline in &self.once {
                     pass.set_pipeline(pipeline);
@@ -1394,7 +1441,7 @@ impl Renderer {
             let (pipeline, run) = if kind == STROKE {
                 let run = items[at..]
                     .iter()
-                    .take_while(|item| item[0] == STROKE)
+                    .take_while(|item| item.kind == STROKE)
                     .count();
                 (&pipelines.strokes, run)
             } else if let Some(Some(texture)) = self.textures.get(texture as usize) {
@@ -1687,13 +1734,6 @@ fn depth(use_: Depth) -> wgpu::DepthStencilState {
         stencil,
         bias: Default::default(),
     }
-}
-
-/// Whether `items` hold a see-through pen stroke, which only a pass with the depth and the
-/// stencil draws.
-fn holds_once(items: &[f32]) -> bool {
-    let (items, _) = items.as_chunks::<STRIDE>();
-    items.iter().any(|item| item[0] == ONCE)
 }
 
 fn depth_texture(device: &wgpu::Device, size: wgpu::Extent3d) -> wgpu::Texture {

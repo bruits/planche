@@ -10,7 +10,8 @@ import type { Board, Rect } from "./core.js";
 export interface Titles {
   /**
    * The titles of `board`'s groups, each over the area `over` gives it, marked when its group is
-   * `selected`, and one to add over `offered`, a group selected alone with none.
+   * `selected`, and one to add over `offered`, a group selected alone with none. A group's area is
+   * asked for once, until `changed` says it may differ.
    */
   show(
     board: Board,
@@ -18,6 +19,11 @@ export interface Titles {
     selected: string[],
     offered?: string,
   ): void;
+  /**
+   * Has the next `show` ask again for the area of each group among `ids`, which must include the
+   * groups an edit changed, and those holding an element it changed, before or after the edit.
+   */
+  changed(ids: Iterable<string>): void;
   /** Mirrored left to right across the viewport `mirrored` when given, as the board shows. */
   frame(camera: Camera, mirrored?: Viewport): void;
   /** Writes the title of group `id` where it shows, until Enter, Esc, or a press elsewhere. */
@@ -48,12 +54,16 @@ export function titles(host: HTMLElement, rename: (id: string, title: string) =>
   const layer = document.createElement("div");
   layer.className = "titles";
   host.append(layer);
-  const shown = new Map<string, { label: HTMLElement; over: Rect; title: string }>();
+  /** Each title, with its group's area, valid while `measured` is set. */
+  const shown = new Map<
+    string,
+    { label: HTMLElement; over: Rect | undefined; measured: boolean; title: string }
+  >();
   let camera: Camera | undefined;
   let mirrored: Viewport | undefined;
   let writing: { id: string; field: HTMLInputElement } | undefined;
-  const place = ({ label, over }: { label: HTMLElement; over: Rect }) => {
-    if (!camera) {
+  const place = ({ label, over }: { label: HTMLElement; over: Rect | undefined }) => {
+    if (!camera || !over) {
       return;
     }
     // Over the corner that shows on the left, which mirroring swaps.
@@ -85,7 +95,7 @@ export function titles(host: HTMLElement, rename: (id: string, title: string) =>
       write(id);
     });
     layer.append(label);
-    return { label, over: { x: 0, y: 0, width: 0, height: 0 }, title: "" };
+    return { label, over: undefined, measured: false, title: "" };
   };
   const finish = () => {
     const ended = writing;
@@ -163,12 +173,16 @@ export function titles(host: HTMLElement, rename: (id: string, title: string) =>
       for (const { id, title } of groups) {
         const entry = shown.get(id) ?? create(id);
         shown.set(id, entry);
-        const area = over(id);
-        entry.label.hidden = area === undefined;
-        if (area === undefined) {
+        // `show` runs at every step of a drag, so a group is measured again only once `changed`
+        // names it.
+        if (!entry.measured) {
+          entry.over = over(id);
+          entry.measured = true;
+        }
+        entry.label.hidden = entry.over === undefined;
+        if (entry.over === undefined) {
           continue;
         }
-        entry.over = area;
         entry.title = title;
         if (writing?.id !== id) {
           entry.label.textContent = title || OFFER;
@@ -177,6 +191,14 @@ export function titles(host: HTMLElement, rename: (id: string, title: string) =>
         entry.label.classList.toggle("selected", chosen.has(id));
         entry.label.classList.toggle("locked", lockedUp(board, id));
         place(entry);
+      }
+    },
+    changed(ids) {
+      for (const id of ids) {
+        const entry = shown.get(id);
+        if (entry) {
+          entry.measured = false;
+        }
       }
     },
     frame(next, across) {

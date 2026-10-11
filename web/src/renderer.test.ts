@@ -3,30 +3,33 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import type { Point } from "./core.js";
 import { GpuLost, NoRenderer, Panic } from "./errors.js";
 import { create, packed, type Placed } from "./renderer.js";
-import start, { create as createWgpu, reportPanics } from "./wasm/renderer.js";
+import start, {
+  create as createWgpu,
+  reportPanics,
+  type Renderer as Gpu,
+} from "./wasm/renderer.js";
 
 // The wasm renderer is not the core, and has no place in Node, so the module is faked.
-vi.mock("./wasm/renderer.js", () => {
-  const renderer = {
+vi.mock("./wasm/renderer.js", () => ({
+  default: vi.fn<() => Promise<void>>(async () => {}),
+  reportPanics: vi.fn<(report: (text: string) => void) => void>(),
+  // One per canvas.
+  create: vi.fn<
+    (canvas: HTMLCanvasElement, webgpu: boolean, gone: (why: string) => void) => Promise<object>
+  >(async () => ({
     backend: "fake",
     maxTextureSide: 1,
     textureBytes: 0,
     free() {},
     resize() {},
-  };
-  return {
-    default: vi.fn<() => Promise<void>>(async () => {}),
-    reportPanics: vi.fn<(report: (text: string) => void) => void>(),
-    create: vi.fn<
-      (
-        canvas: HTMLCanvasElement,
-        webgpu: boolean,
-        gone: (why: string) => void,
-      ) => Promise<typeof renderer>
-    >(async () => renderer),
-    Animation: function () {},
-  };
-});
+    upload: () => 0,
+    uploadCanvas: () => 0,
+    release() {},
+    place: vi.fn<(items: Float32Array) => void>(),
+    draw: vi.fn<(x: number, y: number, zoom: number, grid: Float32Array) => void>(),
+  })),
+  Animation: function () {},
+}));
 
 /** Floats per item, its kind first, its extra then its opacity last. */
 const STRIDE = 15;
@@ -126,22 +129,23 @@ describe("the colours the renderer takes", () => {
   });
 });
 
-describe("the board in greys the renderer takes", () => {
-  const image: Placed = {
-    kind: "image",
-    asset: "a",
-    frame: { x: 0, y: 0, width: 1, height: 1 },
-    texture: { x: 0, y: 0, width: 1, height: 1 },
-    rotation: 0,
-    greyscale: false,
-    elliptical: false,
-    opacity: 1,
-  };
-  const both = (grey: boolean) =>
-    packed([fill(false), image], new Map([["a", 0]]), new Map(), () => [1, 0, 0], undefined, grey);
+const image: Placed = {
+  kind: "image",
+  asset: "a",
+  frame: { x: 0, y: 0, width: 1, height: 1 },
+  texture: { x: 0, y: 0, width: 1, height: 1 },
+  rotation: 0,
+  greyscale: false,
+  elliptical: false,
+  opacity: 1,
+};
 
+const fillAndImage = (grey: boolean) =>
+  packed([fill(false), image], new Map([["a", 0]]), new Map(), () => [1, 0, 0], undefined, grey);
+
+describe("the board in greys the renderer takes", () => {
   it("draws each colour as its grey, and each image in greyscale", () => {
-    const floats = both(true);
+    const floats = fillAndImage(true);
     const [red, green, blue] = floats.subarray(9, 12);
     expect(red).toBeCloseTo(127 / 255, 2);
     expect([green, blue]).toEqual([red, red]);
@@ -150,7 +154,7 @@ describe("the board in greys the renderer takes", () => {
   });
 
   it("keeps their own colours otherwise", () => {
-    const floats = both(false);
+    const floats = fillAndImage(false);
     expect([...floats.subarray(9, 12)]).toEqual([1, 0, 0]);
     expect(floats[STRIDE + 11]).toBe(0);
   });
@@ -165,6 +169,40 @@ function withWebGpu(): void {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 }
 
+/** A page whose canvases give the contexts `create` asks for, which happy-dom lacks. */
+function stubContexts(): void {
+  vi.stubGlobal("matchMedia", () => ({ matches: false }));
+  // happy-dom has no `navigator.gpu`, so `create` takes the WebGL2 path.
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (
+    this: HTMLCanvasElement,
+    kind: string,
+  ) {
+    if (kind === "webgl2") {
+      // As a browser does, the loss comes as a queued event.
+      return {
+        getExtension: () => ({
+          loseContext: () => {
+            setTimeout(() => this.dispatchEvent(new Event("webglcontextlost")));
+          },
+        }),
+      } as unknown as WebGL2RenderingContext;
+    }
+    // The 2D context `paints` reads colours through.
+    return {
+      clearRect() {},
+      fillRect() {},
+      getImageData: () => ({ data: Uint8ClampedArray.from([0, 0, 0, 255]) }),
+    } as unknown as CanvasRenderingContext2D;
+  });
+}
+
+function restorePage(): void {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  Reflect.deleteProperty(navigator, "gpu");
+  document.body.replaceChildren();
+}
+
 describe("a renderer that cannot go on", () => {
   let lost: Mock<(why: unknown) => void>;
   let host: HTMLElement;
@@ -174,37 +212,10 @@ describe("a renderer that cannot go on", () => {
     vi.mocked(createWgpu).mockClear();
     vi.mocked(reportPanics).mockClear();
     host = document.body.appendChild(document.createElement("div"));
-    vi.stubGlobal("matchMedia", () => ({ matches: false }));
-    // happy-dom has no `navigator.gpu`, so `create` takes the WebGL2 path.
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (
-      this: HTMLCanvasElement,
-      kind: string,
-    ) {
-      if (kind === "webgl2") {
-        // As a browser does, the loss comes as a queued event.
-        return {
-          getExtension: () => ({
-            loseContext: () => {
-              setTimeout(() => this.dispatchEvent(new Event("webglcontextlost")));
-            },
-          }),
-        } as unknown as WebGL2RenderingContext;
-      }
-      // The 2D context `paints` reads colours through.
-      return {
-        clearRect() {},
-        fillRect() {},
-        getImageData: () => ({ data: Uint8ClampedArray.from([0, 0, 0, 255]) }),
-      } as unknown as CanvasRenderingContext2D;
-    });
+    stubContexts();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    Reflect.deleteProperty(navigator, "gpu");
-    document.body.replaceChildren();
-  });
+  afterEach(restorePage);
 
   it("stops the app when no backend can draw here, keeping wgpu's words", async () => {
     const said = "Failed to create surface for any enabled backend";
@@ -293,5 +304,95 @@ describe("a renderer that cannot go on", () => {
     await tick();
     canvas.dispatchEvent(new Event("webglcontextlost"));
     expect(lost).not.toHaveBeenCalled();
+  });
+});
+
+async function opened() {
+  const host = document.body.appendChild(document.createElement("div"));
+  const renderer = await create(host, 100, 100, () => {});
+  const gpu: Gpu = await vi.mocked(createWgpu).mock.results.at(-1)!.value;
+  const handedOver = () =>
+    vi.mocked(gpu.place).mock.calls.map(([floats]) => floats.length / STRIDE);
+  return { renderer, gpu, handedOver };
+}
+
+describe("drawing the board", () => {
+  const camera = { x: 0, y: 0, zoom: 1 };
+  const text: Placed = {
+    kind: "text",
+    id: "t",
+    frame: { x: 0, y: 0, width: 10, height: 10 },
+    rotation: 0,
+    paint: "ink",
+    opacity: 1,
+  };
+
+  beforeEach(() => {
+    vi.mocked(createWgpu).mockClear();
+    stubContexts();
+  });
+
+  afterEach(restorePage);
+
+  it("hands its items to the GPU once, however often the camera moves", async () => {
+    const { renderer, gpu, handedOver } = await opened();
+    renderer.place([fill(false), fill(false)]);
+    renderer.draw(camera);
+    renderer.draw({ x: 40, y: 0, zoom: 1 });
+    renderer.draw({ x: 40, y: 0, zoom: 3 });
+    expect(handedOver()).toEqual([2]);
+    expect(gpu.draw).toHaveBeenCalledTimes(3);
+  });
+
+  it("hands them over again once they change", async () => {
+    const { renderer, handedOver } = await opened();
+    renderer.place([fill(false)]);
+    renderer.draw(camera);
+    renderer.place([fill(false), fill(true)]);
+    renderer.draw(camera);
+    renderer.draw(camera);
+    expect(handedOver()).toEqual([1, 2]);
+  });
+
+  it("hands a text over once its texture arrives", async () => {
+    const { renderer, handedOver } = await opened();
+    renderer.place([text]);
+    renderer.draw(camera);
+    renderer.setText("t", document.createElement("canvas"));
+    renderer.draw(camera);
+    renderer.dropText("t");
+    renderer.draw(camera);
+    expect(handedOver()).toEqual([0, 1, 0]);
+  });
+
+  it("hands them over in greys, and back in colour, only as that changes", async () => {
+    const { renderer, gpu } = await opened();
+    renderer.place([fill(false)]);
+    renderer.draw(camera, true);
+    renderer.draw(camera, true);
+    renderer.draw(camera);
+    expect(gpu.place).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands them over again once the theme changes", async () => {
+    const { renderer, handedOver } = await opened();
+    renderer.place([fill(false)]);
+    renderer.draw(camera);
+    renderer.draw(camera);
+    renderer.restyle();
+    renderer.draw(camera);
+    renderer.draw(camera);
+    expect(handedOver()).toEqual([1, 1]);
+  });
+
+  it("hands an image over once its bitmap loads", async () => {
+    const { renderer, handedOver } = await opened();
+    const bitmap = { close: vi.fn<() => void>() } as unknown as ImageBitmap;
+    renderer.place([image]);
+    renderer.draw(camera);
+    renderer.load(new Map([["a", bitmap]]));
+    renderer.draw(camera);
+    renderer.draw(camera);
+    expect(handedOver()).toEqual([0, 1]);
   });
 });

@@ -273,7 +273,7 @@ function imagesOf({ board }: Opened, asset?: string): string[] {
 
 /** As the app edits the board it shows. */
 function edit(present: Showing, board: Opened, touched: string[]): void {
-  present.edited(refresh(board, touched));
+  present.edited(refresh(board, touched).undrawn);
 }
 
 /** The demo with its images shown, then deleted, and their textures freed. */

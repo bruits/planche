@@ -2753,7 +2753,8 @@ function changed(touched: string[]): void {
   if (touched.length > 0) {
     greeting.end();
   }
-  const undrawn = refresh(opened, touched);
+  const { undrawn, groups } = refresh(opened, touched);
+  groupTitles.changed([...touched, ...groups]);
   pictureCard.refresh();
   overlaid.exporting(pictureCard.plan()?.area);
   if (renderer) {

@@ -61,6 +61,7 @@ function opened(moving?: Playback, showsAnnotations = () => true) {
   board.board = core.board(board.editor);
   let selected = [IMAGE];
   let held = false;
+  let pressed = false;
   const commands: CardCommands = {
     colours: [],
     bold: command(),
@@ -109,7 +110,7 @@ function opened(moving?: Playback, showsAnnotations = () => true) {
       ],
       client: ({ x, y }) => ({ clientX: x, clientY: y }),
       zoom: () => 1,
-      busy: () => held,
+      busy: () => held || pressed,
       reading: () => undefined,
       floor: () => 800,
       apply(work) {
@@ -164,7 +165,12 @@ function opened(moving?: Playback, showsAnnotations = () => true) {
     held = false;
     board.editor.endGesture();
   };
-  return { board, shown, commands, media, trimmed, image, select, drop };
+  /** A press on the board, held `down` or let go, at whose every step the app refreshes the card. */
+  const pressing = (down: boolean) => {
+    pressed = down;
+    shown.refresh();
+  };
+  return { board, shown, commands, media, trimmed, image, select, drop, pressing };
 }
 
 describe("the card of a lone image", () => {
@@ -715,6 +721,24 @@ describe("the card of a star and a polygon", () => {
 describe("the card as the selection goes", () => {
   afterEach(() => {
     document.body.replaceChildren();
+  });
+
+  it("hides while a press on the board holds, and shows as it was once it ends", () => {
+    const { pressing } = opened();
+    pressing(true);
+    pressing(true);
+    expect([chip().hidden, panel().hidden]).toEqual([true, true]);
+    pressing(false);
+    expect([chip().hidden, panel().hidden]).toEqual([true, false]);
+  });
+
+  it("stays a chip through a press when closed", () => {
+    const { shown, pressing } = opened();
+    shown.close();
+    pressing(true);
+    expect(chip().hidden).toBe(true);
+    pressing(false);
+    expect([chip().hidden, panel().hidden]).toEqual([false, true]);
   });
 
   it("closes once nothing is selected", () => {

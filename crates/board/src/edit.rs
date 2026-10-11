@@ -323,10 +323,11 @@ impl Editor {
         self.land_each(ids)
     }
 
-    /// As [`Editor::land`] does, the locked elements among them too.
+    /// As [`Editor::land`] does, the locked elements among them too, which must be known.
     fn land_each(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
         let landing: Vec<ElementId> = self
-            .with_descendants(ids)?
+            .board
+            .with_descendants(ids)
             .into_iter()
             .filter(|id| self.board.elements[id].kind.sticks_whole())
             .collect();
@@ -1484,8 +1485,12 @@ impl Editor {
     /// Refuses the elements that are locked, or within a locked group.
     fn check_unlocked(&self, ids: &[ElementId]) -> Result<()> {
         for id in ids {
-            self.get(*id)?;
-            if self.board.locked_by(*id).is_some() {
+            let element = self.get(*id)?;
+            if element.locked
+                || element
+                    .group
+                    .is_some_and(|group| self.board.locked_by(group).is_some())
+            {
                 return Err(Error::Locked(*id));
             }
         }
@@ -5011,7 +5016,8 @@ mod tests {
     fn what_is_locked_or_within_a_locked_group_refuses_every_edit() {
         let mut editor = Editor::new(board([
             (1, locked(None, "a0", ElementKind::group())),
-            (2, element(Some(1), "a0", picture(0.0, 0.0))),
+            (5, element(Some(1), "a0", ElementKind::group())),
+            (2, element(Some(5), "a0", picture(0.0, 0.0))),
             (3, locked(None, "a1", picture(300.0, 0.0))),
             (4, element(None, "a2", picture(600.0, 0.0))),
         ]));

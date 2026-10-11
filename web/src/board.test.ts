@@ -346,6 +346,26 @@ describe("exposing", () => {
   });
 });
 
+describe("refresh", () => {
+  it("reports the groups holding what an edit touched, before it and after, all the way up", () => {
+    const { opened, ids } = holding([level(0), level(100), level(200), level(300), level(400)]);
+    const [inner, outer, beside] = [newId(), newId(), newId()];
+    refresh(opened, opened.editor.group(inner, ids.slice(0, 2)));
+    refresh(opened, opened.editor.group(outer, [inner, ids[2]!]));
+    refresh(opened, opened.editor.group(beside, ids.slice(3)));
+    const groups = (touched: string[]) => refresh(opened, touched).groups;
+    expect(groups(opened.editor.remove([ids[0]!]))).toEqual(new Set([inner, outer]));
+    expect(groups(opened.editor.add(newId(), inner, JSON.stringify(level(50))))).toEqual(
+      new Set([inner, outer]),
+    );
+    expect(groups(opened.editor.ungroup(inner))).toEqual(new Set([inner, outer]));
+    expect(groups(opened.editor.translate([ids[4]!], 10, 0))).toEqual(new Set([beside]));
+    expect(groups(opened.editor.add(newId(), undefined, JSON.stringify(level(500))))).toEqual(
+      new Set(),
+    );
+  });
+});
+
 describe("row", () => {
   const sizes = [
     { width: 200, height: 100 },
