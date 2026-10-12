@@ -75,15 +75,28 @@ export function toolbar(
 
   let base = "";
   // Apart, since a click takes the focus away from the button still under the pointer.
-  let hovered: (() => string) | undefined;
+  let hovered: { button: HTMLElement; shown: () => string } | undefined;
   let focused: (() => string) | undefined;
   // Refreshed at every pointer move of a drag, when it seldom changes.
   const showHint = () => {
-    const text = hovered?.() ?? focused?.() ?? base;
+    const text = hovered?.shown() ?? focused?.() ?? base;
     if (hint.textContent !== text) {
       hint.textContent = text;
     }
   };
+  // In the gap between two buttons the pointer is over what holds them, where the hint stays on
+  // the last one. Short of the page, which holds them all.
+  const near = (node: EventTarget | null) =>
+    hovered !== undefined &&
+    node instanceof Element &&
+    !node.contains(document.body) &&
+    (node.contains(hovered.button) || hovered.button.contains(node));
+  addEventListener("pointerout", ({ target, relatedTarget }) => {
+    if (near(target) && !near(relatedTarget)) {
+      hovered = undefined;
+      showHint();
+    }
+  });
 
   /** Each button for a tool or a command, with the one it stands for, and the one it shows. */
   const buttons: { button: HTMLButtonElement; current: () => Button; shown: Button }[] = [];
@@ -209,8 +222,7 @@ export function toolbar(
         change();
         showHint();
       });
-    listen("pointerenter", () => (hovered = shown));
-    listen("pointerleave", () => (hovered = undefined));
+    listen("pointerenter", () => (hovered = { button, shown }));
     listen("focus", () => (focused = shown));
     listen("blur", () => (focused = undefined));
   }

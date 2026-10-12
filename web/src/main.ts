@@ -607,8 +607,8 @@ const pictureCard = exportCard(
   recalled(recall),
   { save: commands.savePng.keys[0]!, copy: commands.copy.keys[0]! },
 );
-// As a message or a hint showing in the toolbar raises it, which the cards stay above, and the
-// welcome's arrow clear of.
+// As a message showing in the toolbar raises it, which the cards stay above, and the welcome's
+// arrow clear of.
 new ResizeObserver(() => {
   styleCard.frame();
   pictureCard.frame();

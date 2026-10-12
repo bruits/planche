@@ -27,6 +27,17 @@ export function pointer(
   return event;
 }
 
+export function move(from: Element, to: Element): void {
+  pointer(from, "pointerout", { relatedTarget: to });
+  for (let left: Element | null = from; left && !left.contains(to); left = left.parentElement) {
+    left.dispatchEvent(new PointerEvent("pointerleave", { relatedTarget: to }));
+  }
+  pointer(to, "pointerover", { relatedTarget: from });
+  for (let came: Element | null = to; came && !came.contains(from); came = came.parentElement) {
+    came.dispatchEvent(new PointerEvent("pointerenter", { relatedTarget: from }));
+  }
+}
+
 export function captureLost(target: EventTarget, init: PointerEventInit = {}): PointerEvent {
   return pointer(target, "lostpointercapture", init);
 }

@@ -2,14 +2,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { boardOf } from "../test/boards.js";
 import { command } from "../test/commands.js";
-import { captureLost, pointer, press, release } from "../test/events.js";
+import { captureLost, move, pointer, press, release } from "../test/events.js";
 import { arrowKind } from "../test/kinds.js";
 import { startsOf, trimOf, type Media, type Playback } from "./playback.js";
 import { imageKind, untitled } from "./board.js";
-import { card, type CardCommands } from "./card.js";
+import { card, type CardCommands, type CardHost } from "./card.js";
 import * as core from "./core.js";
 import type { Kind, Tip } from "./core.js";
 import { styles } from "./style.js";
+import { toolbar } from "./toolbar.js";
 
 const IMAGE = "a".repeat(32);
 const ARROW = "d".repeat(32);
@@ -67,7 +68,11 @@ function slide(percent: number, { committed = false } = {}) {
 }
 
 /** The card over a board holding one image, selected, which plays as `moving` says when given. */
-function opened(moving?: Playback, showsAnnotations = () => true) {
+function opened(
+  moving?: Playback,
+  showsAnnotations = () => true,
+  explain: CardHost["explain"] = () => {},
+) {
   const kind = imageKind(ASSET, { width: 320, height: 240 }, frame, { filename: "cat.png" });
   const board = boardOf([[IMAGE, kind]]);
   let selected = [IMAGE];
@@ -136,7 +141,7 @@ function opened(moving?: Playback, showsAnnotations = () => true) {
       },
       adjusting: () => held,
       pick() {},
-      explain() {},
+      explain,
       say() {},
       media,
       trimmed,
@@ -466,6 +471,21 @@ describe("the card of a lone video", () => {
     expect(named("Pause")).not.toBeNull();
     expect(named("Normal speed")).not.toBeNull();
     expect(named("Turn sound on")).not.toBeNull();
+  });
+});
+
+describe("the hint of the card", () => {
+  it("goes with what named it, once the card is built again under the pointer", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const bar = toolbar(host, [[]], () => []);
+    opened({ ...gif(), sound: false }, undefined, bar.explain);
+    const hint = host.querySelector(".hint")!;
+    move(document.body, document.querySelector(".style-card .clock")!);
+    expect(hint.textContent).toBe("Frame 3 of 24");
+    named("Trim").click();
+    expect(hint.textContent).toBe("");
+    // Out of trim, as the window keeps listening to each card's keys.
+    press({ key: "Escape" }, document.body);
   });
 });
 

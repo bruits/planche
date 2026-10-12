@@ -916,6 +916,13 @@ body {
   background: var(--line);
 }
 
+/* Part of the gap they stand in, where the hint stays on the last button hovered. */
+.bar .separator,
+.style-card .separator,
+.style-card .rule {
+  pointer-events: none;
+}
+
 /* Under the selection. */
 .style-chip,
 .style-card,
@@ -1482,8 +1489,13 @@ body {
   text-align: center;
 }
 
+/* Its line kept, so that a hint showing on hover moves nothing above it. */
 .hint:empty {
-  display: none;
+  visibility: hidden;
+}
+
+.hint:empty::before {
+  content: "\200b";
 }
 
 #message {

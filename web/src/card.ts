@@ -997,9 +997,7 @@ export function card(host: CardHost, store: Styles, commands: CardCommands): Car
     const focused = panel.contains(document.activeElement) ? document.activeElement : null;
     const label = focused?.getAttribute("aria-label");
     // Gone without the pointer leaving them, they would leave their hint behind.
-    panel
-      .querySelectorAll("button, .custom, input[type=range]")
-      .forEach((old) => old.dispatchEvent(new PointerEvent("pointerleave")));
+    panel.dispatchEvent(new PointerEvent("pointerout", { bubbles: true }));
     built = signature;
     panel.replaceChildren(...rows.flatMap((made, at) => (at > 0 ? [rule(), made] : [made])));
     live();
