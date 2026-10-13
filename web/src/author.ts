@@ -16,7 +16,7 @@ import {
   type Opened,
 } from "./board.js";
 import * as core from "./core.js";
-import type { Alignment, Axis, Editor, Kind, Point, Rect, Restack, Size } from "./core.js";
+import type { Alignment, Axis, Editor, End, Kind, Point, Rect, Restack, Size } from "./core.js";
 import { message } from "./errors.js";
 import { TEXTURE_SIDE } from "./raster.js";
 import { restyled, settings, TEXT, type Style } from "./style.js";
@@ -75,7 +75,7 @@ export async function write(
     case "add":
       return add(page, target, clock, args.elements as NewElement[], args.stick !== false);
     case "update":
-      return update(page, target, clock, args.updates as Update[]);
+      return update(page, target, clock, args.updates as Update[], args.stick !== false);
     case "transform":
       return transform(page, target, clock, args as unknown as TransformArguments);
     case "restack": {
@@ -207,6 +207,19 @@ function positive(value: number, what: string): number {
     throw new Error(`${what} must be a positive number`);
   }
   return value;
+}
+
+function checkedBend(value: number): number {
+  const most = core.mostBend();
+  if (!(Math.abs(value) <= most)) {
+    throw new Error(`\`bend\` is a number from -${most} to ${most}, not ${String(value)}`);
+  }
+  return value;
+}
+
+/** Where an end an agent puts at `point` lands, on what lies there when it sticks. */
+function landed(editor: Editor, point: Point, stick: boolean): End {
+  return core.landEnd(editor, point, { reach: stick ? 0 : undefined });
 }
 
 /** As the shell passes it on, its file read. */
@@ -430,14 +443,14 @@ function kindOf(editor: Editor, element: NewElement, zoom: number, stick: boolea
       if (element.from.x === element.to.x && element.from.y === element.to.y) {
         throw new Error(`An ${element.type === "arrow" ? "arrow" : "line"} needs two ends apart`);
       }
-      const end = (point: Point) => core.landEnd(editor, point, { reach: stick ? 0 : undefined });
-      const [from, to] = [end(element.from), end(element.to)];
+      const [from, to] = [landed(editor, element.from, stick), landed(editor, element.to, stick)];
       const kind: Kind = {
         type: element.type,
         from: from.at,
         to: to.at,
         ...(from.target !== undefined && { from_target: from.target }),
         ...(to.target !== undefined && { to_target: to.target }),
+        ...(element.bend !== undefined && { bend: checkedBend(element.bend) }),
       };
       return styled(kind, element, (field) => new Error(`A new ${element.type} takes no ${field}`));
     }
@@ -458,7 +471,13 @@ function kindOf(editor: Editor, element: NewElement, zoom: number, stick: boolea
   }
 }
 
-async function update(page: Writing, target: Opened, clock: Clock, changes: Update[]) {
+async function update(
+  page: Writing,
+  target: Opened,
+  clock: Clock,
+  changes: Update[],
+  stick: boolean,
+) {
   await ready(page, target, clock);
   known(
     target,
@@ -466,7 +485,7 @@ async function update(page: Writing, target: Opened, clock: Clock, changes: Upda
   );
   const changed = page.apply((editor, touched) =>
     changes.forEach((change) => {
-      touched.push(...editor.update(change.id, JSON.stringify(patched(editor, change))));
+      touched.push(...editor.update(change.id, JSON.stringify(patched(editor, change, stick))));
       const { crop } = change;
       if (crop !== undefined) {
         touched.push(...editor.crop(change.id, crop.x, crop.y, crop.width, crop.height));
@@ -477,8 +496,9 @@ async function update(page: Writing, target: Opened, clock: Clock, changes: Upda
 }
 
 /** From the core, as earlier changes of the call left it, but for the crop, which the core makes. */
-function patched(editor: Editor, change: Update): Kind {
-  const { id, text, font_size, shape, caption, source, greyscale, crop, crop_shape } = change;
+function patched(editor: Editor, change: Update, stick: boolean): Kind {
+  const { id, text, font_size, shape, from, to, bend } = change;
+  const { caption, source, greyscale, crop, crop_shape } = change;
   const kind = core.element(editor, id)!.kind;
   const refuse = (field: string, blank = false) =>
     new Error(
@@ -513,6 +533,38 @@ function patched(editor: Editor, change: Update): Kind {
       throw refuse("shape");
     }
     kind.shape = shape;
+  }
+  const segmentField = [
+    from !== undefined && "from",
+    to !== undefined && "to",
+    bend !== undefined && "bend",
+  ].find((field) => field);
+  if (segmentField) {
+    if (kind.type !== "arrow" && kind.type !== "line") {
+      throw refuse(segmentField);
+    }
+    for (const [end, point] of [
+      ["from", from],
+      ["to", to],
+    ] as const) {
+      if (point === undefined) {
+        continue;
+      }
+      const { at, target } = landed(editor, point, stick);
+      kind[end] = at;
+      if (target === undefined) {
+        delete kind[`${end}_target`];
+      } else {
+        kind[`${end}_target`] = target;
+      }
+    }
+    const together = kind.from.x === kind.to.x && kind.from.y === kind.to.y;
+    if ((from !== undefined || to !== undefined) && together) {
+      throw new Error(`${id} needs two ends apart`);
+    }
+    if (bend !== undefined) {
+      kind.bend = checkedBend(bend);
+    }
   }
   const imageField = [
     caption !== undefined && "caption",

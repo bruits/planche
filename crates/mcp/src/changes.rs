@@ -182,6 +182,11 @@ pub enum NewElement {
     Arrow {
         from: Point,
         to: Point,
+        /// How far the middle of its arc lies from the middle of the straight between its ends,
+        /// in lengths of that straight, square to it, to its right going from `from` to `to`, or
+        /// to its left when negative. Straight by default, and half a circle at 0.5.
+        #[schemars(range(min = -1000, max = 1000))]
+        bend: Option<f64>,
         group: Option<String>,
         colour: Option<Colour>,
         weight: Option<Weight>,
@@ -191,9 +196,12 @@ pub enum NewElement {
         #[schemars(range(min = 1, max = 100))]
         opacity: Option<u8>,
     },
+    /// Takes `bend` as an arrow does.
     Line {
         from: Point,
         to: Point,
+        #[schemars(range(min = -1000, max = 1000))]
+        bend: Option<f64>,
         group: Option<String>,
         colour: Option<Colour>,
         weight: Option<Weight>,
@@ -361,6 +369,9 @@ pub enum Align {
 pub struct UpdateArguments {
     #[schemars(length(min = 1, max = MOST_IDS))]
     pub updates: Vec<Update>,
+    /// Whether an end of an arrow or a line moved onto an element sticks to it, and follows it.
+    /// True by default.
+    pub stick: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -375,6 +386,13 @@ pub struct Update {
     /// For a note, a sticky note, or a shape.
     pub font_size: Option<f64>,
     pub shape: Option<ShapeKind>,
+    /// For an arrow or a line, where its start goes, landing as when it is added.
+    pub from: Option<Point>,
+    /// For an arrow or a line, where its end goes, landing as when it is added.
+    pub to: Option<Point>,
+    /// For an arrow or a line, as when it is added, 0 straightening it.
+    #[schemars(range(min = -1000, max = 1000))]
+    pub bend: Option<f64>,
     /// For an image. Empty, it goes.
     pub caption: Option<String>,
     /// For an image. Empty, it goes.

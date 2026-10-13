@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { around } from "../test/actions.js";
 import { press } from "../test/events.js";
-import { commentKind, rectangleKind } from "../test/kinds.js";
+import { arrowKind, commentKind, lineKind, rectangleKind } from "../test/kinds.js";
 import { deferred } from "../test/waits.js";
 import { assetPlayback, imageKind } from "./board.js";
 import type { Card } from "./card.js";
@@ -121,9 +121,20 @@ describe("what the commands offer", () => {
     const turned = around([[IMAGE, image(0, { rotation: 30 })]], { selected: [IMAGE] });
     expect(turned.app.commands.straighten.unavailable()).toBeUndefined();
     turned.opened.editor.setLocked([IMAGE], true);
-    expect(turned.app.commands.straighten.unavailable()).toBe("Nothing selected is turned");
+    expect(turned.app.commands.straighten.unavailable()).toBe("Nothing selected is turned or bent");
     const upright = around([[IMAGE, image(0)]], { selected: [IMAGE] });
-    expect(upright.app.commands.straighten.unavailable()).toBe("Nothing selected is turned");
+    expect(upright.app.commands.straighten.unavailable()).toBe(
+      "Nothing selected is turned or bent",
+    );
+  });
+
+  it("straightens a bent arrow or line", () => {
+    const bent = around([[SHAPE, { ...arrowKind(), bend: 0.25 }]], { selected: [SHAPE] });
+    expect(bent.app.commands.straighten.unavailable()).toBeUndefined();
+    const straight = around([[SHAPE, lineKind()]], { selected: [SHAPE] });
+    expect(straight.app.commands.straighten.unavailable()).toBe(
+      "Nothing selected is turned or bent",
+    );
   });
 
   it("tells an image already at its actual size", () => {

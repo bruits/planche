@@ -94,11 +94,17 @@ align?: Align,
 /**
  * In percent, whole by default.
  */
-opacity?: number, } | { "type": "arrow", from: Point, to: Point, group?: string, colour?: Colour, weight?: Weight, dash?: Dash, heads?: Heads, 
+opacity?: number, } | { "type": "arrow", from: Point, to: Point, 
+/**
+ * How far the middle of its arc lies from the middle of the straight between its ends,
+ * in lengths of that straight, square to it, to its right going from `from` to `to`, or
+ * to its left when negative. Straight by default, and half a circle at 0.5.
+ */
+bend?: number, group?: string, colour?: Colour, weight?: Weight, dash?: Dash, heads?: Heads, 
 /**
  * In percent, whole by default.
  */
-opacity?: number, } | { "type": "line", from: Point, to: Point, group?: string, colour?: Colour, weight?: Weight, dash?: Dash, 
+opacity?: number, } | { "type": "line", from: Point, to: Point, bend?: number, group?: string, colour?: Colour, weight?: Weight, dash?: Dash, 
 /**
  * In percent, whole by default.
  */
@@ -215,6 +221,18 @@ text?: string,
  */
 font_size?: number, shape?: ShapeKind, 
 /**
+ * For an arrow or a line, where its start goes, landing as when it is added.
+ */
+from?: Point, 
+/**
+ * For an arrow or a line, where its end goes, landing as when it is added.
+ */
+to?: Point, 
+/**
+ * For an arrow or a line, as when it is added, 0 straightening it.
+ */
+bend?: number, 
+/**
  * For an image. Empty, it goes.
  */
 caption?: string, 
@@ -286,6 +304,11 @@ align?: Align,
  */
 opacity?: number, };
 
-export type UpdateArguments = { updates: Array<Update>, };
+export type UpdateArguments = { updates: Array<Update>, 
+/**
+ * Whether an end of an arrow or a line moved onto an element sticks to it, and follows it.
+ * True by default.
+ */
+stick?: boolean, };
 
 export type Weight = "thin" | "medium" | "thick";

@@ -714,9 +714,9 @@ export function actions(host: Host) {
       keys: [{ key: "r", alt: true }],
       unavailable: () =>
         noneSelected() ??
-        (selectedKinds().some((kind) => core.rotationOf(kind) !== 0)
+        (selectedKinds().some((kind) => core.rotationOf(kind) !== 0 || core.bendOf(kind) !== 0)
           ? undefined
-          : "Nothing selected is turned"),
+          : "Nothing selected is turned or bent"),
       run: () => editing.straighten(),
     },
     actualSize: {
@@ -1303,7 +1303,7 @@ export function actions(host: Host) {
       return "Drag to move · double-click to write · right-click for more";
     }
     if (editing.loneSegment()) {
-      return "Drag to move · drag an end to move it · right-click for more";
+      return "Drag to move · drag an end or the middle to reshape it · right-click for more";
     }
     if (editing.selection().length > 0) {
       const focuses =

@@ -104,6 +104,33 @@ describe("the outlines the renderer takes", () => {
   });
 });
 
+const ENDS = { from: { x: 1, y: 2 }, to: { x: 30, y: 40 } };
+
+function line(bend: number): Placed {
+  return { kind: "line", ...ENDS, bend, width: 2, paint: "ink", dashed: false, opacity: 1 };
+}
+
+function arrow(bend: number, heads: "end" | "both"): Placed {
+  const stroke = { ...ENDS, bend, width: 2, paint: "ink", dashed: false } as const;
+  return { kind: "arrow", ...stroke, head: 16, heads, opacity: 1 };
+}
+
+describe("the lines and arrows the renderer takes", () => {
+  it("bend them by their corners, an arrow's heads after, whose count is 2 at both ends", () => {
+    const [bent, straight, aimed, both] = items([
+      line(0.25),
+      line(0),
+      arrow(-0.5, "end"),
+      arrow(0.25, "both"),
+    ]);
+    // Their bend after their colour, in the slot a polygon's corners take, then their heads.
+    expect([bent![STRIDE - 3], bent![STRIDE - 2]]).toEqual([0.25, 0]);
+    expect([straight![STRIDE - 3], straight![STRIDE - 2]]).toEqual([0, 0]);
+    expect([aimed![STRIDE - 3], aimed![STRIDE - 2]]).toEqual([-0.5, 1]);
+    expect([both![STRIDE - 3], both![STRIDE - 2]]).toEqual([0.25, 2]);
+  });
+});
+
 function fill(light: boolean): Placed {
   return {
     kind: "fill",

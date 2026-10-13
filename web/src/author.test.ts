@@ -395,6 +395,64 @@ describe("write", () => {
     ).rejects.toThrow("opacity");
   });
 
+  it("bends an arrow or a line as an agent asks, and leaves out a bend of none", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const bent = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 }, bend: 0.5 };
+    const straight = { type: "line", from: { x: 0, y: 50 }, to: { x: 100, y: 50 }, bend: 0 };
+    const { added } = (await write("add", { elements: [bent, straight] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const [arc, line] = added.map(({ id }) => opened.board.elements[id]!.kind);
+    expect(arc).toMatchObject({ bend: 0.5 });
+    expect(line).not.toHaveProperty("bend");
+  });
+
+  it("moves an arrow's ends and bends it as an agent asks, an end sticking where it lands", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const shape = { type: "shape", x: 300, y: 0, width: 100, height: 100, fill: "solid" };
+    const { added } = (await write("add", { elements: [arrow, shape] }, writing, later())) as {
+      added: { id: string }[];
+    };
+    const [drawn, under] = added.map(({ id }) => id) as [string, string];
+    const kind = () => opened.board.elements[drawn]!.kind;
+    const updated = (change: object, stick?: boolean) =>
+      write("update", { updates: [{ id: drawn, ...change }], stick }, writing, later());
+
+    await updated({ to: { x: 350, y: 50 }, bend: 0.25 });
+    expect(kind()).toEqual({ ...arrow, to: { x: 350, y: 50 }, to_target: under, bend: 0.25 });
+    await updated({ from: { x: 320, y: 20 }, bend: 0 }, false);
+    expect(kind()).toEqual({
+      ...arrow,
+      from: { x: 320, y: 20 },
+      to: { x: 350, y: 50 },
+      to_target: under,
+    });
+
+    await updated({ to: { x: 200, y: 200 } });
+    expect(kind()).not.toHaveProperty("to_target");
+    await expect(updated({ to: { x: 320, y: 20 } })).rejects.toThrow("needs two ends apart");
+    await expect(updated({ bend: 5000 })).rejects.toThrow("`bend` is a number from");
+    await expect(
+      write("update", { updates: [{ id: under, from: { x: 0, y: 0 } }] }, writing, later()),
+    ).rejects.toThrow("takes no from");
+  });
+
+  it("refuses a bend past what the board holds, naming its limit", async () => {
+    const opened = untitled();
+    const { writing } = page(opened);
+    const before = opened.editor.json();
+    const most = core.mostBend();
+    for (const bend of [5000, -5000, most + 0.0001]) {
+      const bent = { type: "arrow", from: { x: 0, y: 0 }, to: { x: 100, y: 0 }, bend };
+      await expect(write("add", { elements: [bent] }, writing, later())).rejects.toThrow(
+        `\`bend\` is a number from -${most} to ${most}`,
+      );
+    }
+    expect(opened.editor.json()).toBe(before);
+  });
+
   it("titles and fills a group as an agent asks, and takes its title away once empty", async () => {
     const opened = untitled();
     const { writing } = page(opened);

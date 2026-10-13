@@ -74,8 +74,8 @@ pub enum Error {
     #[error("element {0} cannot change kind")]
     KindChanged(ElementId),
     #[error(
-        "element {0} would hold a NaN, an infinity, a font size that is not positive, or a stroke \
-         with no point or one off its frame"
+        "element {0} would hold a NaN, an infinity, a font size that is not positive, a stroke \
+         with no point or one off its frame, or an arrow or a line bent by more than {MOST_BEND}"
     )]
     Invalid(ElementId),
     #[error("only two elements or more of the same group can be grouped")]
@@ -415,6 +415,9 @@ impl Board {
     }
 }
 
+/// The most an arrow or a line bends either way, as far as floats still place its arc.
+pub const MOST_BEND: f64 = 1000.0;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -523,6 +526,11 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         to_target: Option<ElementId>,
+        /// How far the middle of the arc it draws lies from the middle of the straight between its
+        /// ends, in lengths of that straight, square to it and to its right going from `from` to
+        /// `to`, as y points down, or to its left when negative. A half is a half circle.
+        #[serde(default, skip_serializing_if = "is_default")]
+        bend: f64,
         #[serde(default, skip_serializing_if = "is_default")]
         colour: Colour,
         #[serde(default, skip_serializing_if = "is_default")]
@@ -534,6 +542,7 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "is_default")]
         opacity: Opacity,
     },
+    /// Bent as an arrow is.
     Line {
         from: Point,
         to: Point,
@@ -543,6 +552,8 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         to_target: Option<ElementId>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        bend: f64,
         #[serde(default, skip_serializing_if = "is_default")]
         colour: Colour,
         #[serde(default, skip_serializing_if = "is_default")]
@@ -755,7 +766,8 @@ impl ElementKind {
     }
 
     /// JSON cannot hold a NaN or an infinity, text of no size cannot be laid out, a pen stroke
-    /// draws at least one point, within its frame, and a trim plays from its start to a later end.
+    /// draws at least one point, within its frame, a trim plays from its start to a later end, and
+    /// an arrow or a line bends by [`MOST_BEND`] at most.
     /// Fields are destructured in full, so a new one fails to compile until it is checked here.
     pub fn is_valid(&self) -> bool {
         match self {
@@ -805,6 +817,7 @@ impl ElementKind {
                 to,
                 from_target: _,
                 to_target: _,
+                bend,
                 colour: _,
                 weight: _,
                 dash: _,
@@ -816,11 +829,12 @@ impl ElementKind {
                 to,
                 from_target: _,
                 to_target: _,
+                bend,
                 colour: _,
                 weight: _,
                 dash: _,
                 opacity: _,
-            } => from.is_finite() && to.is_finite(),
+            } => from.is_finite() && to.is_finite() && bend.abs() <= MOST_BEND,
             // Ink off its frame would pass what the frame bounds.
             Self::Stroke {
                 tip: _,
@@ -1774,6 +1788,7 @@ mod tests {
             to: point(to.0, to.1),
             from_target: on.map(id),
             to_target: at.map(id),
+            bend: 0.0,
             colour: Colour::Ink,
             weight: Weight::Medium,
             dash: Dash::Solid,
@@ -1788,11 +1803,19 @@ mod tests {
             to: point(to.0, to.1),
             from_target: None,
             to_target: None,
+            bend: 0.0,
             colour: Colour::Ink,
             weight: Weight::Medium,
             dash: Dash::Solid,
             opacity: Opacity::default(),
         }
+    }
+
+    pub(crate) fn bent(mut kind: ElementKind, by: f64) -> ElementKind {
+        if let ElementKind::Arrow { bend, .. } | ElementKind::Line { bend, .. } = &mut kind {
+            *bend = by;
+        }
+        kind
     }
 
     pub(crate) fn stroke() -> ElementKind {

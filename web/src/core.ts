@@ -28,6 +28,7 @@ import init, {
   matchesDigest,
   media as told,
   mediaStart,
+  mostBend,
   movieFrames,
   movieIndex as indexIn,
   newBoardFiles,
@@ -324,6 +325,9 @@ export function media(bytes: Bytes, whole: boolean): Media | undefined {
 /** How much of a file's start tells what most files hold. */
 export { mediaStart };
 
+/** The most an arrow or a line bends either way. */
+export { mostBend };
+
 /** The SVG with its root sized to `natural`, for every host to draw it at that size. */
 export function sizedSvg(bytes: Bytes, natural: Size): Bytes | undefined {
   return sized(bytes, natural.width, natural.height) as Bytes | undefined;
@@ -538,6 +542,11 @@ export function textAreaOf(kind: Extract<Kind, { type: "shape" }>): Readonly<Rec
 /** How far `kind` turns, which an element's file leaves out when it does not. */
 export function rotationOf(kind: Kind): number {
   return ("rotation" in kind ? kind.rotation : undefined) ?? 0;
+}
+
+/** How far an arrow or a line bends, which its file leaves out when it runs straight. */
+export function bendOf(kind: Kind): number {
+  return ("bend" in kind ? kind.bend : undefined) ?? 0;
 }
 
 const UNEDITED: Readonly<ImageEdits> = Object.freeze({

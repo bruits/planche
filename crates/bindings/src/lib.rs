@@ -986,6 +986,12 @@ pub fn media_start() -> usize {
     board::MEDIA_START
 }
 
+/// The most an arrow or a line bends either way.
+#[wasm_bindgen(js_name = mostBend)]
+pub fn most_bend() -> f64 {
+    board::MOST_BEND
+}
+
 /// The SVG with its root sized to `width` by `height`, for every host to draw it at that size,
 /// `undefined` when `bytes` are not an SVG document.
 #[wasm_bindgen(js_name = sizedSvg)]

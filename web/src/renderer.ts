@@ -506,13 +506,13 @@ function floats(
     case "line": {
       const { from, to } = item;
       const line = [from.x, from.y, to.x, to.y, 0, stroke(item)];
-      return [KINDS.stroke, -1, SHAPES.line, ...line, ...colours(item.paint)];
+      return [KINDS.stroke, -1, SHAPES.line, ...line, ...colours(item.paint), item.bend];
     }
     case "arrow": {
       const { from, to } = item;
       const arrow = [from.x, from.y, to.x, to.y, item.head, stroke(item)];
       const heads = item.heads === "both" ? 2 : 1;
-      return [KINDS.stroke, -1, SHAPES.arrow, ...arrow, ...colours(item.paint), 0, heads];
+      return [KINDS.stroke, -1, SHAPES.arrow, ...arrow, ...colours(item.paint), item.bend, heads];
     }
     case "fill": {
       const { frame } = item;

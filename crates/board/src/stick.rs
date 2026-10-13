@@ -340,6 +340,13 @@ impl Motion {
         kind.is_valid().then_some(kind)
     }
 
+    /// Whether what sticks to it is reflected, as its picture flips across or down but not both,
+    /// which sends an arc to the other side of its ends. Flipping both is a half turn.
+    pub(crate) fn reflects(&self) -> bool {
+        let (across, down) = self.mirrors();
+        across != down
+    }
+
     /// Whether what sticks to it mirrors, across and down, as its picture flips.
     fn mirrors(&self) -> (bool, bool) {
         let Self::Map { before, after } = self else {

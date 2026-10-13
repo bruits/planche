@@ -2,7 +2,7 @@
 //! the outlines that show a selection.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
+use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI, TAU};
 
 use crate::{
     Annotations, Board, CropShape, Element, ElementId, ElementKind, Fill, ImageEdits, Point, Rect,
@@ -18,6 +18,9 @@ const CORNER: f64 = 70.0;
 const PIECE: f64 = 4.0;
 /// So that a corner rounded near its limit costs the renderer little.
 const MOST_PIECES: f64 = 16.0;
+/// Bent less, in lengths of the straight between its ends, an arrow or a line runs straight, as
+/// the centre of its arc would lie too far out for floats to place it.
+const FLAT: f64 = 1e-6;
 /// How far a group's panel reaches past what its elements draw, in parts of their mean side.
 const PANEL_MARGIN: f64 = 0.05;
 /// How far a star's inner corners are from its centre, in parts of its points' distance, as in a
@@ -195,11 +198,15 @@ impl Board {
         }
     }
 
-    /// The closed outline of what an element draws: a frame's corners, clockwise from its
-    /// top-left once rotated, an arrow's or a line's two ends, or the corners of the bounds of
-    /// a group's elements, if they draw anything. `None` when there is no such element.
+    /// The outline of what an element draws, which closes: a frame's corners, clockwise from its
+    /// top-left once rotated, or the corners of the bounds of a group's elements, if they draw
+    /// anything. An arrow's or a line's runs instead from its start to its end, along its arc
+    /// when bent. `None` when there is no such element.
     pub fn outline(&self, id: ElementId) -> Option<Vec<Point>> {
         let element = self.elements.get(&id)?;
+        if let Some(arc) = arc(&element.kind) {
+            return Some(arc.points());
+        }
         Some(match shape(&element.kind) {
             Some(shape) => shape,
             None => self
@@ -427,7 +434,8 @@ impl Rect {
 }
 
 /// What an element draws over, as a convex polygon or a segment, its frame for a pen stroke, whose
-/// line would close into a polygon. `None` for a comment or a group.
+/// line would close into a polygon, and the upright bounds of a bent arrow's or line's arc. `None`
+/// for a comment or a group.
 fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
     match kind {
         ElementKind::Image {
@@ -445,10 +453,125 @@ fn shape(kind: &ElementKind) -> Option<Vec<Point>> {
         | ElementKind::Stroke {
             frame, rotation, ..
         } => Some(corners(frame, *rotation).to_vec()),
-        ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
-            Some(vec![*from, *to])
+        ElementKind::Arrow { from, to, bend, .. } | ElementKind::Line { from, to, bend, .. } => {
+            match Arc::new(*from, *to, *bend) {
+                Some(arc) => Some(corners(&around(&arc.extremes())?, 0.0).to_vec()),
+                None => Some(vec![*from, *to]),
+            }
         }
         ElementKind::Comment { .. } | ElementKind::Group { .. } => None,
+    }
+}
+
+/// The arc a bent arrow or line draws, `None` for what runs straight or is neither.
+fn arc(kind: &ElementKind) -> Option<Arc> {
+    match kind {
+        ElementKind::Arrow { from, to, bend, .. } | ElementKind::Line { from, to, bend, .. } => {
+            Arc::new(*from, *to, *bend)
+        }
+        _ => None,
+    }
+}
+
+/// Of a circle, from `from` round to `to`, as [`ElementKind::Arrow`] bends it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Arc {
+    from: Point,
+    to: Point,
+    centre: Point,
+    radius: f64,
+    /// Where `from` lies around the centre, in radians from straight across towards straight
+    /// down.
+    start: f64,
+    /// How far round it goes to `to`, in radians, negative the other way.
+    sweep: f64,
+}
+
+impl Arc {
+    /// `None` when its ends meet, or when it bends so little that it runs straight.
+    pub(crate) fn new(from: Point, to: Point, bend: f64) -> Option<Self> {
+        let span = apart(from, to);
+        if span == 0.0 || bend.abs() < FLAT {
+            return None;
+        }
+        // Square to the straight between the ends, to its right.
+        let across = Point {
+            x: (from.y - to.y) / span,
+            y: (to.x - from.x) / span,
+        };
+        // As far across from the middle of the straight as the centre lies.
+        let off = span * (4.0 * bend * bend - 1.0) / (8.0 * bend);
+        let centre = Point {
+            x: (from.x + to.x) / 2.0 + across.x * off,
+            y: (from.y + to.y) / 2.0 + across.y * off,
+        };
+        Some(Self {
+            from,
+            to,
+            centre,
+            radius: span * (1.0 + 4.0 * bend * bend) / (8.0 * bend.abs()),
+            start: (from.y - centre.y).atan2(from.x - centre.x),
+            // Twice the angle between the straight and the arc at either end, half of which has a
+            // tangent of twice the bend.
+            sweep: -bend.signum() * 4.0 * (2.0 * bend.abs()).atan(),
+        })
+    }
+
+    /// `along` of the way round, from 0 at `from` to 1 at `to`.
+    pub(crate) fn at(&self, along: f64) -> Point {
+        let angle = self.start + self.sweep * along;
+        Point {
+            x: self.centre.x + self.radius * angle.cos(),
+            y: self.centre.y + self.radius * angle.sin(),
+        }
+    }
+
+    pub(crate) fn length(&self) -> f64 {
+        self.radius * self.sweep.abs()
+    }
+
+    /// From `from` to `to`, in pieces that turn little enough to look round.
+    pub(crate) fn points(&self) -> Vec<Point> {
+        let pieces = (self.sweep.abs().to_degrees() / PIECE).ceil().max(1.0);
+        let within = (1..pieces as usize).map(|piece| self.at(piece as f64 / pieces));
+        [self.from]
+            .into_iter()
+            .chain(within)
+            .chain([self.to])
+            .collect()
+    }
+
+    /// Its ends, and where it reaches furthest across or down, which its upright bounds go round.
+    pub(crate) fn extremes(&self) -> Vec<Point> {
+        let mut points = vec![self.from, self.to];
+        for (angle, x, y) in [
+            (0.0, 1.0, 0.0),
+            (FRAC_PI_2, 0.0, 1.0),
+            (PI, -1.0, 0.0),
+            (-FRAC_PI_2, 0.0, -1.0),
+        ] {
+            if self.passes(angle) {
+                points.push(Point {
+                    x: self.centre.x + self.radius * x,
+                    y: self.centre.y + self.radius * y,
+                });
+            }
+        }
+        points
+    }
+
+    pub(crate) fn distance(&self, point: Point) -> f64 {
+        let angle = (point.y - self.centre.y).atan2(point.x - self.centre.x);
+        if self.passes(angle) {
+            (apart(point, self.centre) - self.radius).abs()
+        } else {
+            apart(point, self.from).min(apart(point, self.to))
+        }
+    }
+
+    /// Whether it goes round through `angle`, in radians as `start` is.
+    fn passes(&self, angle: f64) -> bool {
+        ((angle - self.start) * self.sweep.signum()).rem_euclid(TAU) <= self.sweep.abs()
     }
 }
 
@@ -784,8 +907,10 @@ pub(crate) fn hits(kind: &ElementKind, point: Point, tolerance: f64) -> bool {
         ElementKind::Shape {
             frame, rotation, ..
         } => near_edges(&corners(frame, *rotation), point, reach) || covers(kind, point),
-        ElementKind::Arrow { from, to, .. } | ElementKind::Line { from, to, .. } => {
-            distance(point, *from, *to) <= reach
+        ElementKind::Arrow { from, to, bend, .. } | ElementKind::Line { from, to, bend, .. } => {
+            Arc::new(*from, *to, *bend)
+                .map_or_else(|| distance(point, *from, *to), |arc| arc.distance(point))
+                <= reach
         }
         ElementKind::Stroke { .. } => hits_any(kind, &[point], tolerance),
         ElementKind::Image {
@@ -853,7 +978,7 @@ pub(crate) fn covers(kind: &ElementKind, point: Point) -> bool {
         ElementKind::Shape { .. } if let Some(outline) = polygon_of(kind) => {
             encloses(&outline, point)
         }
-        ElementKind::Stroke { .. } => false,
+        ElementKind::Arrow { .. } | ElementKind::Line { .. } | ElementKind::Stroke { .. } => false,
         _ => shape(kind).is_some_and(|shape| inside(&shape, point)),
     }
 }
@@ -986,6 +1111,9 @@ fn touches(kind: &ElementKind, area: &[Point; 4]) -> bool {
                 pieces(&smoothed(&upright(frame, points), kind.stroke_width()))
                     .any(|piece| within(piece, &area, reach))
             }
+        }
+        ElementKind::Arrow { .. } | ElementKind::Line { .. } if let Some(arc) = arc(kind) => {
+            arc.points().windows(2).any(|piece| overlap(piece, area))
         }
         ElementKind::Comment { at, .. } => {
             around(area).is_some_and(|upright| upright.contains(*at))
@@ -1317,8 +1445,8 @@ mod tests {
     use super::*;
     use crate::Annotations::{Hidden, Shown};
     use crate::tests::{
-        area, assert_at, board, comment, counted, element, filled, highlighted, id, image,
-        labelled, line, locked, note, pen, point, sticky, stuck, turned,
+        area, assert_at, bent, board, comment, counted, element, filled, highlighted, id, image,
+        labelled, line, locked, near, note, pen, point, sticky, stuck, turned,
     };
     use crate::{Corners, Fill, Weight};
 
@@ -2210,6 +2338,121 @@ mod tests {
             assert_eq!(board.hit(point(102.0, 102.0), 3.0, Shown), Some(id(1)));
             assert_eq!(board.touching(area(40.0, 40.0, 5.0, 5.0)), [id(1)]);
         }
+    }
+
+    #[test]
+    fn a_bent_arrow_or_line_is_hit_and_touched_along_its_arc_and_bounded_around_it() {
+        for kind in [
+            stuck((0.0, 0.0), None, (100.0, 0.0), None),
+            line((0.0, 0.0), (100.0, 0.0)),
+        ] {
+            // Half a circle around (50, 0), down to (50, 50) as it goes to the right.
+            let board = board([(1, element(None, "a0", bent(kind, 0.5)))]);
+            let (sin, cos) = 45_f64.to_radians().sin_cos();
+            for (x, y) in [(50.0, 51.0), (50.0 + 50.0 * cos, 50.0 * sin), (101.0, 0.0)] {
+                assert_eq!(
+                    board.hit(point(x, y), 3.0, Shown),
+                    Some(id(1)),
+                    "({x}, {y})"
+                );
+            }
+            assert_eq!(board.hit(point(50.0, 0.0), 3.0, Shown), None);
+            assert_eq!(board.hit(point(50.0, -50.0), 3.0, Shown), None);
+            assert_eq!(board.touching(area(45.0, 45.0, 10.0, 10.0)), [id(1)]);
+            assert!(board.touching(area(40.0, -5.0, 20.0, 10.0)).is_empty());
+            assert!(board.covering(point(50.0, 25.0), Shown).is_empty());
+            let bounds = board.bounds(&[id(1)]).unwrap();
+            assert!(near(&bounds, &area(0.0, 0.0, 100.0, 50.0)), "{bounds:?}");
+            assert_eq!(
+                board.hit_along(point(50.0, 60.0), point(50.0, 40.0), 1.0, Shown),
+                [id(1)]
+            );
+        }
+    }
+
+    #[test]
+    fn bent_past_half_a_circle_an_arc_reaches_beyond_its_ends() {
+        // Around (50, 37.5), 62.5 away, the long way round below its ends.
+        let board = board([(
+            1,
+            element(None, "a0", bent(line((0.0, 0.0), (100.0, 0.0)), 1.0)),
+        )]);
+        let bounds = board.bounds(&[id(1)]).unwrap();
+        assert!(near(&bounds, &area(-12.5, 0.0, 125.0, 100.0)), "{bounds:?}");
+        assert_eq!(board.hit(point(-12.0, 37.5), 1.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(50.0, -25.0), 1.0, Shown), None);
+    }
+
+    #[test]
+    fn a_negative_bend_bends_the_other_way() {
+        let board = board([(
+            1,
+            element(None, "a0", bent(line((0.0, 0.0), (100.0, 0.0)), -0.25)),
+        )]);
+        let bounds = board.bounds(&[id(1)]).unwrap();
+        assert!(near(&bounds, &area(0.0, -25.0, 100.0, 25.0)), "{bounds:?}");
+        assert_eq!(board.hit(point(50.0, -25.0), 1.0, Shown), Some(id(1)));
+    }
+
+    #[test]
+    fn bent_as_far_as_it_goes_a_line_still_draws_round_its_arc() {
+        // Nearly all round a circle 10,000 across.
+        let board = board([(
+            1,
+            element(None, "a0", bent(line((0.0, 0.0), (10.0, 0.0)), 1000.0)),
+        )]);
+        let bounds = board.bounds(&[id(1)]).unwrap();
+        let radius = 10.0 * (1.0 + 4e6) / 8000.0;
+        assert!(
+            near(&bounds, &area(5.0 - radius, 0.0, 2.0 * radius, 10_000.0)),
+            "{bounds:?}"
+        );
+        for (x, y) in [(5.0, 10_000.0), (5.0 - radius, 5_000.0), (-1.0, 0.0)] {
+            assert_eq!(
+                board.hit(point(x, y), 1.0, Shown),
+                Some(id(1)),
+                "({x}, {y})"
+            );
+        }
+        assert_eq!(board.hit(point(5.0, 5_000.0), 1.0, Shown), None);
+    }
+
+    #[test]
+    fn a_bent_outline_runs_from_one_end_along_the_arc_to_the_other() {
+        let board = board([(
+            1,
+            element(None, "a0", bent(line((0.0, 0.0), (100.0, 0.0)), 0.5)),
+        )]);
+        let outline = board.outline(id(1)).unwrap();
+        assert_eq!(outline.first(), Some(&point(0.0, 0.0)));
+        assert_eq!(outline.last(), Some(&point(100.0, 0.0)));
+        // 4° to a piece.
+        assert_eq!(outline.len(), 46);
+        for point in &outline {
+            assert!((apart(*point, Point { x: 50.0, y: 0.0 }) - 50.0).abs() < 1e-9);
+            assert!(point.y >= 0.0, "{point:?}");
+        }
+    }
+
+    #[test]
+    fn bent_too_little_or_with_its_ends_together_it_runs_straight() {
+        let board = board([
+            (
+                1,
+                element(None, "a0", bent(line((0.0, 0.0), (100.0, 0.0)), 1e-9)),
+            ),
+            (
+                2,
+                element(None, "a1", bent(line((200.0, 0.0), (200.0, 0.0)), 0.5)),
+            ),
+        ]);
+        assert_eq!(
+            board.outline(id(1)),
+            Some(vec![point(0.0, 0.0), point(100.0, 0.0)])
+        );
+        assert_eq!(board.hit(point(50.0, 0.0), 1.0, Shown), Some(id(1)));
+        assert_eq!(board.hit(point(200.0, 0.0), 1.0, Shown), Some(id(2)));
+        assert_eq!(board.bounds(&[id(2)]), Some(area(200.0, 0.0, 0.0, 0.0)));
     }
 
     #[test]

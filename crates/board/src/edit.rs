@@ -542,10 +542,10 @@ impl Editor {
         })
     }
 
-    /// Turns each element, with those of the groups among them, upright around its own centre.
-    /// What sticks to them follows, and among them then turns upright in its turn, so that each
-    /// keeps to its pixel, but for a stroke, drawn as it lies on what it sticks to, which only
-    /// follows when that ends up turned.
+    /// Turns each element, with those of the groups among them, upright around its own centre,
+    /// and each arrow and line straight between its ends. What sticks to them follows, and among
+    /// them then turns upright in its turn, so that each keeps to its pixel, but for a stroke,
+    /// drawn as it lies on what it sticks to, which only follows when that ends up turned.
     pub fn straighten(&mut self, ids: &[ElementId]) -> Result<Vec<ElementId>> {
         self.check_unlocked(ids)?;
         let mut pending = self.with_descendants(ids)?;
@@ -584,15 +584,14 @@ impl Editor {
                 pending.iter().partition(|id| carried(id));
             pending = later;
             let now: Vec<ElementId> = now.into_iter().collect();
-            touched.extend(turning.reshape(&now, |kind| {
-                if let ElementKind::Image { rotation, .. }
+            touched.extend(turning.reshape(&now, |kind| match kind {
+                ElementKind::Image { rotation, .. }
                 | ElementKind::Note { rotation, .. }
                 | ElementKind::Sticky { rotation, .. }
                 | ElementKind::Shape { rotation, .. }
-                | ElementKind::Stroke { rotation, .. } = kind
-                {
-                    *rotation = 0.0;
-                }
+                | ElementKind::Stroke { rotation, .. } => *rotation = 0.0,
+                ElementKind::Arrow { bend, .. } | ElementKind::Line { bend, .. } => *bend = 0.0,
+                ElementKind::Comment { .. } | ElementKind::Group { .. } => {}
             })?);
         }
         let step = touched
@@ -1326,6 +1325,13 @@ impl Editor {
         unmoved: &BTreeSet<ElementId>,
     ) {
         let mut seen: BTreeSet<ElementId> = moved.keys().copied().collect();
+        // Only an image flips, and only when given, as it sticks to nothing.
+        let flipped: BTreeSet<ElementId> = moved
+            .iter()
+            .filter(|(_, motion)| motion.reflects())
+            .map(|(id, _)| *id)
+            .collect();
+        let mut carried_once = BTreeSet::new();
         while !moved.is_empty() {
             let mut next = BTreeMap::new();
             for (id, element) in &self.board.elements {
@@ -1336,9 +1342,13 @@ impl Editor {
                     .get(id)
                     .and_then(|change| change.after.as_ref())
                     .unwrap_or(element);
-                let Some(kind) = carried(&current.kind, &moved) else {
+                let Some(mut kind) = carried(&current.kind, &moved) else {
                     continue;
                 };
+                // In the first round that carries it, as its ends may follow in different ones.
+                if carried_once.insert(*id) {
+                    reflect(&self.board, &mut kind, &flipped);
+                }
                 if let Some(motion) = Motion::of(&element.kind, &kind)
                     && seen.insert(*id)
                 {
@@ -1760,11 +1770,42 @@ fn set(board: &mut Board, id: ElementId, element: Option<Element>) {
     };
 }
 
-/// What the element sticks to whole, then what that sticks to, and so on.
+/// What the element sticks to, whole or by an end, then what that sticks to, and so on.
 fn held_by(board: &Board, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
-    iter::successors(board.elements[&id].kind.target(), |target| {
-        board.elements.get(target)?.kind.target()
-    })
+    board.elements[&id]
+        .kind
+        .targets()
+        .flat_map(|target| lying_on(board, target))
+}
+
+/// The element, then what it sticks to whole, then what that sticks to, and so on.
+fn lying_on(board: &Board, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+    iter::successors(Some(id), |id| board.elements.get(id)?.kind.target())
+}
+
+/// Bends an arrow or a line the other way when the nearest element that both its ends lie on,
+/// directly or through what those stick to whole, is one of the `flipped` pictures, so that its arc
+/// follows the mirror. Ends on one note on it move with the note, which does not mirror.
+fn reflect(board: &Board, kind: &mut ElementKind, flipped: &BTreeSet<ElementId>) {
+    let (ElementKind::Arrow {
+        from_target: Some(on),
+        to_target: Some(at),
+        bend,
+        ..
+    }
+    | ElementKind::Line {
+        from_target: Some(on),
+        to_target: Some(at),
+        bend,
+        ..
+    }) = kind
+    else {
+        return;
+    };
+    let shared = lying_on(board, *on).find(|id| lying_on(board, *at).any(|other| other == *id));
+    if shared.is_some_and(|id| flipped.contains(&id)) {
+        *bend = -*bend;
+    }
 }
 
 /// The size an image shows its pixels at, one board unit each.
@@ -1786,8 +1827,9 @@ mod tests {
     use super::*;
     use crate::stick::Surface;
     use crate::tests::{
-        area, arrow, assert_at, board, comment, counted, edits_of, element, filled, id, ids, image,
-        image_of, labelled, line, locked, note, on, point, position, sticky, stroke, stuck, turned,
+        area, arrow, assert_at, bent, board, comment, counted, edits_of, element, filled, id, ids,
+        image, image_of, labelled, line, locked, note, on, point, position, sticky, stroke, stuck,
+        turned,
     };
     use crate::{Colour, Fill, Rect, Text, Tip, Weight};
 
@@ -2722,6 +2764,88 @@ mod tests {
     }
 
     #[test]
+    fn a_bent_arrow_or_line_keeps_its_arc_as_it_moves_scales_and_turns() {
+        for (name, kind) in [
+            ("arrow", stuck((10.0, 0.0), None, (20.0, 0.0), None)),
+            ("line", line((10.0, 0.0), (20.0, 0.0))),
+        ] {
+            let mut editor = Editor::new(board([(1, element(None, "a0", bent(kind, 0.5)))]));
+            let outline = |editor: &Editor| editor.board().outline(id(1)).unwrap();
+            let before = outline(&editor);
+            editor.translate(&ids([1]), 5.0, 5.0).unwrap();
+            editor.scale(&ids([1]), point(15.0, 5.0), 2.0).unwrap();
+            editor.rotate(&ids([1]), point(15.0, 5.0), 90.0).unwrap();
+            // Moved by (5, 5), then scaled and turned around where (10, 0) went.
+            let expected: Vec<Point> = before
+                .iter()
+                .map(|at| {
+                    point(15.0 + 2.0 * (at.x - 10.0), 5.0 + 2.0 * at.y)
+                        .turned(point(15.0, 5.0), 90.0)
+                })
+                .collect();
+            assert_outline(&outline(&editor), &expected, name);
+        }
+    }
+
+    #[test]
+    fn a_bend_is_kept_to_a_hundred_thousandth_and_left_out_once_straight() {
+        let mut editor = Editor::new(board([(
+            1,
+            element(None, "a0", line((0.0, 0.0), (10.0, 0.0))),
+        )]));
+        let bend = |editor: &Editor| match editor.board().elements[&id(1)].kind {
+            ElementKind::Line { bend, .. } => bend,
+            _ => unreachable!(),
+        };
+        let bent_by = |by| bent(line((0.0, 0.0), (10.0, 0.0)), by);
+        editor.update(id(1), bent_by(0.123_456_789)).unwrap();
+        assert_eq!(bend(&editor), 0.123_46);
+        editor.update(id(1), bent_by(-0.000_001)).unwrap();
+        assert_eq!(bend(&editor), 0.0);
+        assert_eq!(
+            editor.board().elements[&id(1)].kind,
+            line((0.0, 0.0), (10.0, 0.0))
+        );
+        for refused in [f64::NAN, 1000.5, -1e154] {
+            assert_eq!(
+                editor.update(id(1), bent_by(refused)),
+                Err(Error::Invalid(id(1)))
+            );
+        }
+        editor.update(id(1), bent_by(-1000.0)).unwrap();
+        assert_eq!(bend(&editor), -1000.0);
+    }
+
+    #[test]
+    fn straightening_unbends_arrows_and_lines_between_their_ends() {
+        let mut editor = Editor::new(board([
+            (1, element(None, "a0", ElementKind::group())),
+            (
+                2,
+                element(
+                    Some(1),
+                    "a0",
+                    bent(stuck((0.0, 0.0), None, (10.0, 0.0), None), 0.5),
+                ),
+            ),
+            (
+                3,
+                element(None, "a1", bent(line((0.0, 0.0), (10.0, 0.0)), -1.0)),
+            ),
+            (4, element(None, "a2", line((0.0, 20.0), (10.0, 20.0)))),
+        ]));
+        assert_eq!(editor.straighten(&ids([1, 3, 4])), Ok(ids([2, 3])));
+        assert_eq!(
+            editor.board().elements[&id(2)].kind,
+            stuck((0.0, 0.0), None, (10.0, 0.0), None)
+        );
+        assert_eq!(
+            editor.board().elements[&id(3)].kind,
+            line((0.0, 0.0), (10.0, 0.0))
+        );
+    }
+
+    #[test]
     fn a_comment_moves_scales_and_turns_with_its_pin() {
         let mut editor = Editor::new(board([(1, element(None, "a0", comment(10.0, 0.0)))]));
         editor.translate(&ids([1]), 5.0, 5.0).unwrap();
@@ -2906,6 +3030,133 @@ mod tests {
         assert_eq!(target, Some(id(1)));
         editor.undo();
         assert_eq!(editor.board(), &before);
+    }
+
+    fn assert_outline(found: &[Point], expected: &[Point], case: &str) {
+        assert_eq!(found.len(), expected.len(), "{case}: {found:?}");
+        for (found, expected) in found.iter().zip(expected) {
+            assert!(
+                (found.x - expected.x).abs() < 1e-9 && (found.y - expected.y).abs() < 1e-9,
+                "{case}: expected {expected:?}, found {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bent_arrow_or_line_with_both_ends_on_a_flipped_image_mirrors_its_arc_with_it() {
+        for (name, kind) in [
+            ("arrow", stuck((20.0, 50.0), None, (80.0, 50.0), None)),
+            ("line", line((20.0, 50.0), (80.0, 50.0))),
+        ] {
+            let mut kind = bent(kind, 0.5);
+            for (_, target) in kind.ends_mut().unwrap() {
+                *target = Some(id(1));
+            }
+            for selection in [ids([1, 2]), ids([9]), ids([1])] {
+                for horizontally in [true, false] {
+                    let case = format!("{name} {selection:?} across {horizontally}");
+                    let mut editor = Editor::new(board([
+                        (9, element(None, "a0", ElementKind::group())),
+                        (1, element(Some(9), "a0", picture(0.0, 0.0))),
+                        (2, element(Some(9), "a1", kind.clone())),
+                    ]));
+                    let before = editor.board().outline(id(2)).unwrap();
+                    // About the middle of the 200 wide picture.
+                    let mirrored: Vec<Point> = before
+                        .iter()
+                        .map(|at| match horizontally {
+                            true => point(200.0 - at.x, at.y),
+                            false => point(at.x, 200.0 - at.y),
+                        })
+                        .collect();
+
+                    editor.flip(&selection, horizontally).unwrap();
+
+                    let after = editor.board().outline(id(2)).unwrap();
+                    assert_outline(&after, &mirrored, &case);
+                    assert_sound(&editor);
+
+                    // Both ways is a half turn, which keeps the arc on its side.
+                    editor.flip(&selection, !horizontally).unwrap();
+                    let turned: Vec<Point> = before
+                        .iter()
+                        .map(|at| point(200.0 - at.x, 200.0 - at.y))
+                        .collect();
+                    let both = editor.board().outline(id(2)).unwrap();
+                    assert_outline(&both, &turned, &format!("{case} then the other way"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_bent_arrow_keeps_its_bend_as_images_flip_unless_both_its_ends_lie_on_one() {
+        let bend = |editor: &Editor| match editor.board().elements[&id(2)].kind {
+            ElementKind::Arrow { bend, .. } => bend,
+            _ => unreachable!(),
+        };
+        for (on, at) in [(Some(1), None), (None, Some(3)), (Some(1), Some(3))] {
+            let mut editor = Editor::new(board([
+                (1, element(None, "a0", picture(0.0, 0.0))),
+                (3, element(None, "a1", picture(300.0, 0.0))),
+                (
+                    2,
+                    element(
+                        None,
+                        "a2",
+                        bent(stuck((20.0, 50.0), on, (380.0, 50.0), at), 0.5),
+                    ),
+                ),
+            ]));
+            editor.flip(&ids([1, 2, 3]), true).unwrap();
+            assert_eq!(bend(&editor), 0.5, "ends on {on:?} and {at:?}");
+            assert_sound(&editor);
+        }
+    }
+
+    #[test]
+    fn a_bent_arrow_from_a_note_on_a_flipped_image_mirrors_its_arc_with_it() {
+        let bend = |editor: &Editor| match editor.board().elements[&id(2)].kind {
+            ElementKind::Arrow { bend, .. } => bend,
+            _ => unreachable!(),
+        };
+        for (to, at, mirrored) in [
+            ((150.0, 60.0), 1, true),
+            ((140.0, 135.0), 4, true),
+            ((440.0, 35.0), 6, false),
+            ((55.0, 45.0), 3, false),
+            ((45.0, 40.0), 7, false),
+        ] {
+            let mut editor = Editor::new(board([
+                (1, element(None, "a0", picture(0.0, 0.0))),
+                (5, element(None, "a1", picture(400.0, 0.0))),
+                (3, element(None, "a2", on(note(20.0, 20.0, 40.0, 30.0), 1))),
+                (
+                    4,
+                    element(None, "a3", on(note(120.0, 120.0, 40.0, 30.0), 1)),
+                ),
+                (6, element(None, "a4", on(note(420.0, 20.0, 40.0, 30.0), 5))),
+                (7, element(None, "a6", on(note(40.0, 30.0, 15.0, 15.0), 3))),
+                (
+                    2,
+                    element(
+                        None,
+                        "a5",
+                        bent(stuck((40.0, 35.0), Some(3), to, Some(at)), 0.3),
+                    ),
+                ),
+            ]));
+
+            editor.flip(&ids([1]), true).unwrap();
+
+            let expected = if mirrored { -0.3 } else { 0.3 };
+            assert_eq!(bend(&editor), expected, "to {at}");
+            assert_eq!(
+                ends(&editor, 2).map(|(_, target)| target),
+                [Some(id(3)), Some(id(at))]
+            );
+            assert_sound(&editor);
+        }
     }
 
     #[test]
@@ -3461,6 +3712,62 @@ mod tests {
     }
 
     #[test]
+    fn straightened_with_its_image_a_bent_arrow_or_line_keeps_its_end_on_its_pixel() {
+        let image = turned(picture(0.0, 0.0), 30.0);
+        let pixel = |editor: &Editor| {
+            let end = ends(editor, 2)[1].0;
+            editor.board().pixel_at(id(1), end).unwrap()
+        };
+        for (name, kind) in [
+            ("arrow", stuck((300.0, 300.0), None, (140.0, 120.0), None)),
+            ("line", line((300.0, 300.0), (140.0, 120.0))),
+        ] {
+            for (selection, with_image) in
+                [(ids([1, 2]), true), (ids([9]), true), (ids([2]), false)]
+            {
+                // The control, straight already, and the bent.
+                for bend in [0.0, 0.5] {
+                    let case = format!("{name} {bend} {selection:?}");
+                    let mut kind = bent(kind.clone(), bend);
+                    *kind.ends_mut().unwrap()[1].1 = Some(id(1));
+                    let mut editor = Editor::new(board([
+                        (9, element(None, "a0", ElementKind::group())),
+                        (1, element(Some(9), "a0", image.clone())),
+                        (2, element(Some(9), "a1", kind)),
+                    ]));
+                    let before = pixel(&editor);
+
+                    editor.straighten(&selection).unwrap();
+
+                    let after = pixel(&editor);
+                    assert!(
+                        (after.x - before.x).abs() < 1e-9 && (after.y - before.y).abs() < 1e-9,
+                        "{case} pixel {before:?} became {after:?}"
+                    );
+                    assert_eq!(ends(&editor, 2)[1].1, Some(id(1)), "{case} target");
+                    assert!(
+                        matches!(
+                            editor.board().elements[&id(2)].kind,
+                            ElementKind::Arrow { bend, .. } | ElementKind::Line { bend, .. }
+                                if bend == 0.0
+                        ),
+                        "{case} is bent"
+                    );
+                    assert_eq!(
+                        matches!(
+                            editor.board().elements[&id(1)].kind,
+                            ElementKind::Image { rotation, .. } if rotation == 0.0
+                        ),
+                        with_image,
+                        "{case} image upright"
+                    );
+                    assert_sound(&editor);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn straightened_with_its_image_a_stroke_keeps_its_points_on_their_pixels() {
         let image = turned(picture(0.0, 0.0), 30.0);
         let mut editor = Editor::new(board([
@@ -3607,6 +3914,59 @@ mod tests {
         assert_sound(&editor);
         editor.undo();
         assert_eq!(places(&editor), before);
+    }
+
+    #[test]
+    fn straightened_down_a_chain_a_bent_arrow_keeps_its_end_on_the_same_place_of_its_note() {
+        // With the note, then without it, the arrow still waits for the image its note sticks to.
+        for selected in [ids([1, 2, 4]), ids([1, 4])] {
+            let mut editor = Editor::new(board([
+                (1, element(None, "a0", turned(picture(0.0, 0.0), 30.0))),
+                (
+                    2,
+                    element(
+                        None,
+                        "a1",
+                        on(turned(note(40.0, 40.0, 80.0, 60.0), 45.0), 1),
+                    ),
+                ),
+                (
+                    4,
+                    element(
+                        None,
+                        "a3",
+                        bent(stuck((300.0, 300.0), None, (85.0, 75.0), Some(2)), 0.5),
+                    ),
+                ),
+            ]));
+            let on_note = |editor: &Editor| {
+                let note = Surface::of(&editor.board().elements[&id(2)].kind).unwrap();
+                note.to_content(ends(editor, 4)[1].0, false).unwrap()
+            };
+            let before = on_note(&editor);
+
+            editor.straighten(&selected).unwrap();
+
+            let after = on_note(&editor);
+            assert!(
+                (after.x - before.x).abs() < 1e-9 && (after.y - before.y).abs() < 1e-9,
+                "{selected:?}: {after:?} is not {before:?}"
+            );
+            assert_eq!(
+                placement(&editor, 2).1 == 0.0,
+                selected.contains(&id(2)),
+                "{selected:?}"
+            );
+            assert_eq!(ends(&editor, 4)[1].1, Some(id(2)), "{selected:?}");
+            assert!(
+                matches!(
+                    editor.board().elements[&id(4)].kind,
+                    ElementKind::Arrow { bend, .. } if bend == 0.0
+                ),
+                "{selected:?}"
+            );
+            assert_sound(&editor);
+        }
     }
 
     #[test]

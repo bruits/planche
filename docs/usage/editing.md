@@ -27,6 +27,8 @@ Lock what should stay put, such as the images a board is built on. Clicks and se
 
 Drag a selection with ⌥, or Alt outside macOS, to move a copy of it. Corners scale, the sides of a lone note, sticky note, or shape stretch it, and a drag from just outside a corner turns it. The arrow keys nudge by one pixel, ten with Shift, or one grid step while snapping to the grid.
 
+A lone arrow or line has a handle on each end, which moves that end, and, unless it is very short on screen, one in its middle, which bends it into an arc. Dragged back near the straight, it runs straight again. Straighten does the same, and also turns what is selected upright.
+
 With a grid shown, what you move or draw snaps to its lines. Snap to neighbours lines things up with the sides, middles, and gaps of what is beside them, and shows guides while it does. Hold ⌘, or Ctrl outside macOS, to move or draw freely. For a move, press it once the drag is under way, since ⌘ with a click adds to or takes from the selection.
 
 ## What sticks

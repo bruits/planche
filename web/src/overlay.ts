@@ -11,7 +11,7 @@ import { direction, distance } from "./geometry.js";
 import type { Point, Rect } from "./core.js";
 
 const SVG = "http://www.w3.org/2000/svg";
-/** Of the handles on the ends of an arrow or a line, and of a crop's grips, in CSS pixels. */
+/** Of the handles on an arrow or a line, and of a crop's grips, in CSS pixels. */
 const HANDLE_SIZE = 8;
 /** Across a corner's dot, in CSS pixels. */
 const DOT = 7;
@@ -29,6 +29,8 @@ const BRIDGE_TICK = 5;
 const GAP_TICK = 4;
 /** Below this diagonal, in CSS pixels, dots and sides would leave no room to grab the box. */
 const SMALLEST_SCALABLE = 24;
+/** Nearer an end than this, in CSS pixels, the middle of an arrow or a line takes no handle. */
+const SMALLEST_BENDABLE = 16;
 /** A double arrow across, centred in 24 pixels, as a cursor draws it. */
 const ARROWS =
   "<path d='M3.5 12 8 7.5v2.7h8V7.5l4.5 4.5-4.5 4.5v-2.7H8v2.7Z' fill='black' stroke='white' stroke-width='1.2' stroke-linejoin='round'/>";
@@ -50,26 +52,35 @@ export interface Grab {
   at: number;
 }
 
+/** As the core gives it, each point's x then y, which closes but along an arrow or a line. */
+export interface Outline {
+  points: Float64Array;
+  closes: boolean;
+}
+
 export interface Overlay {
   frame(camera: Camera, viewport: Viewport): void;
-  /** Each outline as the core gives it, each point's x then y. Empty ones show nothing. */
-  outline(outlines: Float64Array[]): void;
+  /** Empty ones show nothing. */
+  outline(outlines: Outline[]): void;
   /** The selection's box, clockwise from its top-left, or `undefined` to hide its dots. */
   box(corners: Point[] | undefined): void;
   /** What of the box the pointer is on, or holds, which then shows alone, `undefined` for nothing. */
   grab(grab: Grab | undefined, held: boolean): void;
   /** The box a gesture started from, and what it scales around when that is its centre, `undefined` to hide them. */
   start(corners: Point[] | undefined, pivot?: Point): void;
-  /** What a click would select, or what is `locked`, as `outline` takes it, `undefined` for nothing. */
-  preview(outline: Float64Array | undefined, locked?: boolean): void;
-  /** The ends of an arrow or a line, each with a handle, or `undefined` to hide them. */
-  ends(points: Point[] | undefined): void;
+  /** What a click would select, or what is `locked`, `undefined` for nothing. */
+  preview(outline: Outline | undefined, locked?: boolean): void;
+  /**
+   * The ends of an arrow or a line, each with a handle, and the middle of its arc, with one too
+   * when `bendable`, or `undefined` to hide them.
+   */
+  ends(points: [Point, Point] | undefined, middle?: Point): void;
   /** `undefined` hides it. */
   marquee(area: Rect | undefined): void;
   /** The corners of the group gone into, `undefined` to hide them. */
   entered(corners: Point[] | undefined): void;
-  /** What ends stick to, as `outline` takes them. */
-  targets(outlines: Float64Array[]): void;
+  /** What ends stick to. */
+  targets(outlines: Outline[]): void;
   /**
    * What moving, scaling, stretching, or drawing lines up with: along each line it shares with
    * others, across the room between them, from the end that stays put, and across each gap it
@@ -97,6 +108,10 @@ export interface Crop {
 /** Whether `box` shows large enough for its dots and sides, which would cover it otherwise. */
 export function dotted(box: Point[], zoom: number): boolean {
   return distance(box[0]!, box[2]!) * zoom >= SMALLEST_SCALABLE;
+}
+
+export function bendable(ends: [Point, Point], middle: Point, zoom: number): boolean {
+  return Math.min(...ends.map((end) => distance(end, middle))) * zoom >= SMALLEST_BENDABLE;
 }
 
 /**
@@ -193,7 +208,8 @@ export function overlay(host: HTMLElement): Overlay {
   let grabbed: Grab | undefined;
   let held = false;
   let centre: Point | undefined;
-  let ends: Point[] | undefined;
+  let ends: [Point, Point] | undefined;
+  let middle: Point | undefined;
   let crop: Crop | undefined;
   let linedUp: { bridges: [Point, Point][]; gaps: [Point, Point][] } = { bridges: [], gaps: [] };
   /** What the window shows, and what a picture covers, in board units. */
@@ -210,7 +226,8 @@ export function overlay(host: HTMLElement): Overlay {
   };
   const place = () => {
     if (ends) {
-      grips.replaceChildren(...ends.map((point) => circle(point, HANDLE_SIZE / zoom / 2)));
+      const handles = middle && bendable(ends, middle, zoom) ? [...ends, middle] : ends;
+      grips.replaceChildren(...handles.map((point) => circle(point, HANDLE_SIZE / zoom / 2)));
       return;
     }
     const shown: SVGElement[] = [];
@@ -286,8 +303,9 @@ export function overlay(host: HTMLElement): Overlay {
       preview.replaceChildren(...shapes(outline ? [outline] : []));
       preview.classList.toggle("locked", locked);
     },
-    ends(points) {
+    ends(points, bent) {
       ends = points;
+      middle = bent;
       place();
     },
     marquee(area) {
@@ -355,16 +373,15 @@ export function rectangle({ x, y, width, height }: Rect): Point[] {
   ];
 }
 
-/** The outlines as one path, but an arrow's two ends, a line that closing would draw twice. */
-function traced(outlines: Float64Array[]): string {
+function traced(outlines: Outline[]): string {
   return outlines
-    .filter((points) => points.length > 0)
-    .map((points) => {
+    .filter(({ points }) => points.length > 0)
+    .map(({ points, closes }) => {
       let d = `M${points[0]} ${points[1]}`;
       for (let at = 2; at < points.length; at += 2) {
         d += `L${points[at]} ${points[at + 1]}`;
       }
-      return points.length > 4 ? `${d}Z` : d;
+      return closes ? `${d}Z` : d;
     })
     .join("");
 }
@@ -389,12 +406,11 @@ function closed(points: Point[]): string {
   return `M${points.map(({ x, y }) => `${x} ${y}`).join("L")}Z`;
 }
 
-function shapes(outlines: Float64Array[]): SVGElement[] {
+function shapes(outlines: Outline[]): SVGElement[] {
   return outlines
-    .filter((points) => points.length > 0)
-    .map((points) => {
-      // An arrow's two ends make a line, which a polygon would draw twice.
-      const shape = document.createElementNS(SVG, points.length > 4 ? "polygon" : "polyline");
+    .filter(({ points }) => points.length > 0)
+    .map(({ points, closes }) => {
+      const shape = document.createElementNS(SVG, closes ? "polygon" : "polyline");
       shape.setAttribute("points", points.join(" "));
       return shape;
     });

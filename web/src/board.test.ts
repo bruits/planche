@@ -199,6 +199,7 @@ describe("placed", () => {
       kind: "line",
       from: { x: 0, y: 99 },
       to: { x: 1, y: 99 },
+      bend: 0,
       width: 1,
       paint: "ink",
       dashed: false,

@@ -147,8 +147,9 @@ const STROKE: &[Setting] = &[Setting::Colour, Setting::Weight, Setting::Opacity]
 const GROUP: &[Setting] = &[Setting::Colour, Setting::Fill];
 
 /// How finely a pen stroke's points are kept, in parts of its frame, a hundredth of a board unit
-/// across a frame of a thousand.
-const POINT_PARTS: f64 = 100_000.0;
+/// across a frame of a thousand, and so an arrow's or a line's bend, in lengths of the straight
+/// between its ends.
+const PARTS: f64 = 100_000.0;
 
 impl ElementKind {
     /// The parts of a style it takes, those of its text even while it holds none. A cross fills
@@ -309,10 +310,13 @@ impl ElementKind {
         }
         if let Self::Stroke { points, .. } = &mut self {
             for point in points.iter_mut() {
-                point.x = (point.x * POINT_PARTS).round() / POINT_PARTS;
-                point.y = (point.y * POINT_PARTS).round() / POINT_PARTS;
+                point.x = (point.x * PARTS).round() / PARTS;
+                point.y = (point.y * PARTS).round() / PARTS;
             }
             points.dedup();
+        }
+        if let Self::Arrow { bend, .. } | Self::Line { bend, .. } = &mut self {
+            *bend = (*bend * PARTS).round() / PARTS;
         }
         self
     }

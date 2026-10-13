@@ -133,6 +133,7 @@ fn sample() -> Board {
                     },
                     from_target: Some(ELLIPSE),
                     to_target: Some(STICKY),
+                    bend: 0.0,
                     colour: Colour::Ink,
                     weight: Weight::Medium,
                     dash: Dash::Solid,
@@ -166,6 +167,7 @@ fn sample() -> Board {
                     to: Point { x: 30.0, y: 5.0 },
                     from_target: None,
                     to_target: None,
+                    bend: 0.0,
                     colour: Colour::Ink,
                     weight: Weight::Medium,
                     dash: Dash::Solid,
@@ -459,6 +461,7 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
         to: Point { x: 10.0, y: 0.0 },
         from_target: None,
         to_target: None,
+        bend: 0.0,
         colour: Colour::Rgb([0xec, 0x83, 0x53]),
         weight: Weight::Medium,
         dash: Dash::Dashed,
@@ -527,6 +530,39 @@ fn a_style_writes_only_what_differs_from_the_plain_one_and_reads_back() {
             "title": "Moods"
         })
     );
+    assert_eq!(format::read(&files).unwrap().board, board);
+}
+
+#[test]
+fn a_bend_is_written_only_once_bent_and_reads_back() {
+    let segment = |bend| ElementKind::Line {
+        from: Point { x: 0.0, y: 0.0 },
+        to: Point { x: 10.0, y: 0.0 },
+        from_target: None,
+        to_target: None,
+        bend,
+        colour: Colour::Ink,
+        weight: Weight::Medium,
+        dash: Dash::Solid,
+        opacity: Opacity::default(),
+    };
+    let (straight, bent) = (id(1), id(2));
+    let board = Board {
+        elements: [
+            (straight, element(None, "a0", segment(0.0))),
+            (bent, element(None, "a1", segment(-0.25))),
+        ]
+        .into_iter()
+        .collect(),
+        ..Board::default()
+    };
+    let files = format::write(&board).unwrap();
+    let written = |id: ElementId| {
+        let bytes = &files[&format!("elements/{id}.json")];
+        serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["kind"].clone()
+    };
+    assert!(written(straight).get("bend").is_none());
+    assert_eq!(written(bent)["bend"], -0.25);
     assert_eq!(format::read(&files).unwrap().board, board);
 }
 

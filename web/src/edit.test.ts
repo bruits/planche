@@ -450,6 +450,68 @@ describe("edits", () => {
     expect(to!.x - from!.x).toBeCloseTo(Math.hypot(100, 90) * Math.SQRT1_2, 9);
   });
 
+  it("bends a lone arrow as its middle is dragged across the straight, straight again near it", async () => {
+    const ARROW = "b".repeat(32);
+    const arrow: Kind = { type: "arrow", from: { x: 200, y: 300 }, to: { x: 400, y: 300 } };
+    const { opened, editing, pointer, host } = page([[ARROW, arrow]]);
+    const kind = () => core.element(opened.editor, ARROW)!.kind;
+    editing.select([ARROW]);
+    expect(host.querySelectorAll(".handles circle")).toHaveLength(3);
+    pointer("pointerdown", 300, 300);
+    pointer("pointermove", 340, 350);
+    await nextFrame();
+    pointer("pointerup", 340, 350);
+    // A quarter of its length to its right, whatever the drag along it.
+    expect(kind()).toEqual({ ...arrow, bend: 0.25 });
+    expect(opened.editor.hit(300, 350, 1, true)).toBe(ARROW);
+    expect(opened.editor.hit(300, 300, 1, true)).toBeUndefined();
+    // Along its arc, rather than round it.
+    expect(host.querySelector(".selection path")?.getAttribute("d")).not.toContain("Z");
+    pointer("pointerdown", 300, 350);
+    pointer("pointermove", 300, 305);
+    await nextFrame();
+    pointer("pointerup", 300, 305);
+    expect(kind()).toEqual(arrow);
+    editing.undo();
+    expect(kind()).toEqual({ ...arrow, bend: 0.25 });
+  });
+
+  it("moves an end of a bent line, which keeps its bend, and shows no handle on a short one's middle", async () => {
+    const LINE = "b".repeat(32);
+    const line: Kind = {
+      type: "line",
+      from: { x: 200, y: 300 },
+      to: { x: 400, y: 300 },
+      bend: -0.5,
+    };
+    const { opened, editing, pointer, host } = page([[LINE, line]]);
+    editing.select([LINE]);
+    pointer("pointerdown", 400, 300);
+    pointer("pointermove", 300, 300);
+    await nextFrame();
+    pointer("pointerup", 300, 300);
+    expect(core.element(opened.editor, LINE)!.kind).toEqual({ ...line, to: { x: 300, y: 300 } });
+    expect(host.querySelectorAll(".handles circle")).toHaveLength(3);
+    pointer("pointerdown", 300, 300);
+    pointer("pointermove", 220, 300);
+    await nextFrame();
+    pointer("pointerup", 220, 300);
+    // 10 pixels off the straight, its middle is only 14 from either end, left to the press on the line.
+    expect(host.querySelectorAll(".handles circle")).toHaveLength(2);
+  });
+
+  it("bends a lone line no further than the board holds", async () => {
+    const LINE = "b".repeat(32);
+    const line: Kind = { type: "line", from: { x: 200, y: 300 }, to: { x: 240, y: 300 } };
+    const { opened, editing, pointer } = page([[LINE, line]]);
+    editing.select([LINE]);
+    pointer("pointerdown", 220, 300);
+    pointer("pointermove", 220, 50_300);
+    await nextFrame();
+    pointer("pointerup", 220, 50_300);
+    expect(core.element(opened.editor, LINE)!.kind).toEqual({ ...line, bend: core.mostBend() });
+  });
+
   it("turns from just outside a corner, over what lies beneath it", async () => {
     const other = "b".repeat(32);
     const { opened, editing, pointer } = page([
@@ -688,6 +750,25 @@ describe("a double-click", () => {
     }
   });
 
+  it("zooms to a lone arrow or a line from a double-click on an end of it", () => {
+    const LINED = "e".repeat(32);
+    const from = { x: 100, y: 250 };
+    const to = { x: 400, y: 350 };
+    const kinds: Kind[] = [
+      { type: "arrow", from, to },
+      { type: "line", from, to },
+    ];
+    for (const kind of kinds) {
+      for (const end of [from, to]) {
+        const { opened, editing, viewport, twice } = viewed([[LINED, kind]]);
+        editing.select([LINED]);
+        twice(end.x, end.y);
+        const area = core.extent(opened.editor, [LINED])!;
+        expect(viewport.camera()).toEqual(fit(area, size));
+      }
+    }
+  });
+
   it("goes back from a double-click on nothing, where what it zoomed to was", () => {
     const area = { x: 150, y: 0, width: 100, height: 300 };
     const { viewport, twice } = viewed([[IMAGE, { ...image, frame: area }]]);
@@ -707,6 +788,78 @@ describe("a double-click", () => {
     viewport.look(moved);
     twice(300, 20);
     expect(viewport.camera()).toEqual(moved);
+  });
+});
+
+describe("a press on the middle of a lone arrow or line", () => {
+  const LINED = "e".repeat(32);
+  const from = { x: 100, y: 250 };
+  const to = { x: 400, y: 350 };
+  const middle = { x: 250, y: 300 };
+  const kinds: Kind[] = [
+    { type: "arrow", from, to },
+    { type: "line", from, to },
+  ];
+  const selected = (kind: Kind) => {
+    const shown = viewed([[LINED, kind]]);
+    shown.editing.select([LINED]);
+    return shown;
+  };
+
+  it("zooms to it from a double-click on its middle, as on the rest of it", () => {
+    for (const kind of kinds) {
+      const { opened, viewport, twice } = selected(kind);
+      twice(middle.x, middle.y);
+      const area = core.extent(opened.editor, [LINED])!;
+      expect(viewport.camera()).toEqual(fit(area, { width: 600, height: 400 }));
+    }
+  });
+
+  it("moves it, rather than bend it, from a drag on its middle when too short to show a handle there", async () => {
+    // Its middle is too near both ends to take a handle, yet too far for either end to take the press.
+    const short = { x: 200, y: 300 };
+    const across = { x: 220, y: 300 };
+    for (const type of ["arrow", "line"] as const) {
+      const { opened, host, pointer } = selected({ type, from: short, to: across });
+      expect(host.querySelectorAll(".handles circle")).toHaveLength(2);
+      pointer("pointerdown", 210, 300);
+      pointer("pointermove", 210, 360);
+      await nextFrame();
+      pointer("pointerup", 210, 360);
+      expect(core.element(opened.editor, LINED)!.kind).toEqual({
+        type,
+        from: { x: 200, y: 360 },
+        to: { x: 220, y: 360 },
+      });
+    }
+  });
+
+  it("takes it out of the selection from a ⇧ or ⌘ click on its middle", () => {
+    for (const kind of kinds) {
+      for (const how of [{ shiftKey: true }, { free: true }]) {
+        const { editing, pointer } = selected(kind);
+        pointer("pointerdown", middle.x, middle.y, how);
+        pointer("pointerup", middle.x, middle.y, how);
+        expect(editing.selection()).toEqual([]);
+      }
+    }
+  });
+
+  it("moves a copy of it from a drag with Alt held from its middle", async () => {
+    for (const kind of kinds) {
+      const { opened, editing, pointer } = selected(kind);
+      pointer("pointerdown", middle.x, middle.y, { altKey: true });
+      pointer("pointermove", middle.x, middle.y + 60, { altKey: true });
+      await nextFrame();
+      pointer("pointerup", middle.x, middle.y + 60);
+      expect(core.element(opened.editor, LINED)!.kind).toEqual(kind);
+      const [copy] = editing.selection();
+      expect(copy).not.toBe(LINED);
+      expect(core.element(opened.editor, copy!)!.kind).toMatchObject({
+        type: kind.type,
+        from: { x: from.x, y: from.y + 60 },
+      });
+    }
   });
 });
 

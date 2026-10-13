@@ -14,26 +14,28 @@
 // the opposite one, or around its centre while ⌥ is held. The sides of a lone note, sticky note, or
 // shape stretch it, its text keeping its size, and a drag from just outside a corner turns the
 // selection around its centre, by steps of 15° while ⇧ is held, and onto an upright or a quarter
-// turn near it while snapping. Hovering shows what a press would take, and the ends of a lone
-// arrow or line move on their own. The ends of an arrow or a line, as drawn or moved, stick to the
-// image, note, sticky note, or shape they land on, onto its outline when near it, and follow it
-// from then on. While ⇧ is held, the end being drawn or moved keeps to a multiple of 45° around
-// the other one, the grid pulling it along its way, and it sticks only to what it lies on. A note,
-// a sticky note, a shape, a stroke, or a comment drawn, placed, moved, scaled, or turned whole onto
-// an image, a note, a sticky note, or a shape filled or holding text sticks to it and follows it
-// too. While snapping, what moves, scales, or is drawn lands on the grid's lines where near them
-// otherwise. While snapping to neighbours, what moves, the sides that scaling or stretching an
-// upright box moves, and the corners of a shape, a note, or a sticky note drawn or placed, line up,
-// where near, with a side or a middle of what the window shows beside them, or a gap away from one
-// as others already stand apart, and what moves halfway between two of those too, which wins over
-// the grid, and shows what it lined up with until let go. Holding ⌘, or Ctrl elsewhere than macOS,
-// keeps things from sticking, and the grid and what is beside them from pulling, but for a move
-// only once under way, as pressing an element with it toggles the element instead. The eraser
-// removes what a click would select, or all that a drag passes over but what it starts within, in
-// one edit. The pen and the highlighter draw where the pointer goes, smoothed, or a dot for a
-// click, or a straight line from where it was pressed while ⇧ is held, as one edit once let go, and
-// stay the tool. The arrow keys move the selection by a pixel, or ten while ⇧ is held, or by the
-// grid's step while snapping to the grid shown, as one edit until let go.
+// turn near it while snapping. Hovering shows what a press would take, and the ends of a lone arrow
+// or line move on their own, while its middle, unless too near them, bends it into an arc by as
+// much as the pointer moves across the straight between its ends, and straightens it when dragged
+// near the straight. The ends of an arrow or a line, as drawn or moved, stick to the image, note,
+// sticky note, or shape they land on, onto its outline when near it, and follow it from then on.
+// While ⇧ is held, the end being drawn or moved keeps to a multiple of 45° around the other one,
+// the grid pulling it along its way, and it sticks only to what it lies on. A note, a sticky note,
+// a shape, a stroke, or a comment drawn, placed, moved, scaled, or turned whole onto an image, a
+// note, a sticky note, or a shape filled or holding text sticks to it and follows it too. While
+// snapping, what moves, scales, or is drawn lands on the grid's lines where near them otherwise.
+// While snapping to neighbours, what moves, the sides that scaling or stretching an upright box
+// moves, and the corners of a shape, a note, or a sticky note drawn or placed, line up, where near,
+// with a side or a middle of what the window shows beside them, or a gap away from one as others
+// already stand apart, and what moves halfway between two of those too, which wins over the grid,
+// and shows what it lined up with until let go. Holding ⌘, or Ctrl elsewhere than macOS, keeps
+// things from sticking, and the grid and what is beside them from pulling, but for a move only once
+// under way, as pressing an element with it toggles the element instead. The eraser removes what a
+// click would select, or all that a drag passes over but what it starts within, in one edit. The
+// pen and the highlighter draw where the pointer goes, smoothed, or a dot for a click, or a
+// straight line from where it was pressed while ⇧ is held, as one edit once let go, and stay the
+// tool. The arrow keys move the selection by a pixel, or ten while ⇧ is held, or by the grid's step
+// while snapping to the grid shown, as one edit until let go.
 // Cropping shows an image whole, what its crop leaves out dimmed, and its edges and corners drag
 // the crop, or its inside moves it, until Enter or a press elsewhere crops it, or Escape leaves it
 // as it was. Holding ⇧ keeps the crop's proportions as its edges and corners drag it, X turns it
@@ -65,7 +67,15 @@ import type {
   Tip,
 } from "./core.js";
 import { anchors, isAnnotation, newId, nudge, renamed } from "./board.js";
-import { cursor, dotted, type Crop, type Grab, type Overlay } from "./overlay.js";
+import {
+  bendable,
+  cursor,
+  dotted,
+  type Crop,
+  type Grab,
+  type Outline,
+  type Overlay,
+} from "./overlay.js";
 import { pinned } from "./pins.js";
 import { toolOf } from "./style.js";
 import { onTitle, titledGroup } from "./titles.js";
@@ -87,6 +97,8 @@ const MAGNET = 2;
 const SMALLEST_SIDE = 8;
 /** How near an element an end sticks to it, and how near its outline it sticks onto that, in CSS pixels. */
 const STICK = 12;
+/** How near the straight between its ends the middle of an arrow or a line leaves it straight, in CSS pixels. */
+const STRAIGHT = 6;
 /** How far a press moves before it drags, in CSS pixels. */
 const DRAG = 3;
 /** Scaling down further would turn the selection over. */
@@ -450,6 +462,14 @@ type Press =
       segment: Segment;
       end: "from" | "to";
     }
+  | {
+      kind: "bend";
+      pointer: number;
+      start: Point;
+      dragging: boolean;
+      id: string;
+      segment: Segment;
+    }
   /**
    * `within` what a drag starts within, which it leaves with the groups holding it, whatever the
    * level.
@@ -587,7 +607,9 @@ export function edits(
       pull: pulling ? zoom : undefined,
     });
   const showTargets = (editor: Editor, ids: (string | undefined)[]) =>
-    overlay.targets(ids.flatMap((id) => (id === undefined ? [] : [editor.outline(id)])));
+    overlay.targets(
+      ids.flatMap((id) => (id === undefined ? [] : [{ points: editor.outline(id), closes: true }])),
+    );
   /** With what it moves setting down where it lands, or coming free when freed. */
   const setDown = (editor: Editor, ids: string[], how: Omit<core.Transform, "sticking"> = {}) =>
     core.transform(editor, ids, { ...how, sticking: sticking ? "land" : "free" });
@@ -806,7 +828,7 @@ export function edits(
     }
     if (editing && seen && at && zoom && hoverable(seen)) {
       const { editor } = editing;
-      corners = selected.size > 0 && !lone(editing) ? box(editor, [...selected]) : undefined;
+      corners = selected.size > 0 && !lone(editing) ? box(editing, [...selected]) : undefined;
       // A title takes the press over a grip it covers.
       over =
         corners && !onTitle(seen.target) ? grabbing(editing, corners, at, zoom, hit) : undefined;
@@ -818,7 +840,7 @@ export function edits(
     const shownLocked = over || hit !== undefined ? undefined : lockedUnder;
     const shown = previewed ?? shownLocked;
     overlay.preview(
-      editing && shown !== undefined ? editing.editor.outline(shown) : undefined,
+      editing && shown !== undefined ? outlineOf(editing, shown) : undefined,
       shownLocked !== undefined,
     );
     showGrab(corners);
@@ -857,11 +879,11 @@ export function edits(
     const editing = current();
     const ids = cropping ? [] : [...selected];
     const segment = editing && !cropping ? lone(editing)?.segment : undefined;
-    const corners = editing && ids.length > 0 && !segment ? box(editing.editor, ids) : undefined;
-    overlay.outline(editing ? ids.map((id) => editing.editor.outline(id)) : []);
+    const corners = editing && ids.length > 0 && !segment ? box(editing, ids) : undefined;
+    overlay.outline(editing ? ids.map((id) => outlineOf(editing, id)) : []);
     overlay.box(corners);
-    overlay.ends(segment ? [segment.from, segment.to] : undefined);
-    overlay.entered(editing && entered !== undefined ? box(editing.editor, [entered]) : undefined);
+    overlay.ends(segment && [segment.from, segment.to], segment && middleOf(segment));
+    overlay.entered(editing && entered !== undefined ? box(editing, [entered]) : undefined);
     overlay.crop(editing && cropShown(editing));
     const sized = press?.kind === "scale" || press?.kind === "stretch" ? press : undefined;
     overlay.start(
@@ -1152,8 +1174,18 @@ export function edits(
         view.host.setPointerCapture(pointer);
         return;
       }
+      const { from, to } = single.segment;
+      const handle = middleOf(single.segment);
+      // With a key held, it toggles or copies the arrow or line, as a press elsewhere on it does.
+      const plain = !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey;
+      if (plain && bendable([from, to], handle, zoom) && distance(at, handle) * zoom <= REACH) {
+        press = { kind: "bend", pointer, start: at, dragging: false, ...single };
+        editor.beginGesture();
+        view.host.setPointerCapture(pointer);
+        return;
+      }
     }
-    const corners = selected.size > 0 && !single ? box(editor, [...selected]) : undefined;
+    const corners = selected.size > 0 && !single ? box(editing, [...selected]) : undefined;
     const hit =
       pressedPin ??
       inside(editor, editor.hitUnlocked(at.x, at.y, TOLERANCE / zoom, showsAnnotations()));
@@ -1364,7 +1396,7 @@ export function edits(
             return;
           }
           press.dragging = true;
-          press.bounds = bounding(box(editor, ids));
+          press.bounds = bounding(box(editing, ids));
           if (held.altKey) {
             const copied = core.copy(editor, ids);
             press.copy = { copied, ids: renamed(copied), group: entered };
@@ -1473,7 +1505,7 @@ export function edits(
             // From where it landed, as a note fits its text again, which may change its height.
             // It lands where it was aimed, as nothing pulls it then, unless what it lined up with
             // no longer faces it, which leaves it to go on as nothing beside it pulled.
-            const reached = { area: bounding(box(editor, ids))!, origin, factor: 1, along };
+            const reached = { area: bounding(box(editing, ids))!, origin, factor: 1, along };
             const kept = scaledOnto({ ...reached, least: 0 }, beside, zoom);
             if (kept !== undefined && Math.abs(kept - 1) <= 1e-9) {
               showTargets(editor, editor.targetsOf(ids));
@@ -1568,6 +1600,24 @@ export function edits(
         );
         return;
       }
+      case "bend": {
+        const { id, segment, start } = press;
+        if (!press.dragging && distance(at, start) * zoom < DRAG) {
+          return;
+        }
+        press.dragging = true;
+        // By as much as the pointer moved, so that the arc never jumps to it.
+        const handle = middleOf(segment);
+        const bend = bendThrough(segment, {
+          x: handle.x + at.x - start.x,
+          y: handle.y + at.y - start.y,
+        });
+        const across = Math.abs(bend) * distance(segment.from, segment.to) * zoom;
+        const most = core.mostBend();
+        const kept = across < STRAIGHT ? 0 : Math.min(Math.max(bend, -most), most);
+        again(() => editor.update(id, JSON.stringify({ ...segment, bend: kept })));
+        return;
+      }
     }
   };
 
@@ -1580,7 +1630,12 @@ export function edits(
     if (handled.length > 0) {
       stepped(handled, moves);
     }
-    wasClick = (press.kind === "move" || press.kind === "marquee") && !press.dragging;
+    wasClick =
+      (press.kind === "move" ||
+        press.kind === "marquee" ||
+        press.kind === "end" ||
+        press.kind === "bend") &&
+      !press.dragging;
     const held = holding() !== undefined;
     overlay.targets([]);
     overlay.lineup([], []);
@@ -1952,7 +2007,7 @@ export function edits(
         editing.board.elements[id]!.kind.type === "shape" &&
         level(editing.editor, id) === id &&
         selectable(editing, id) &&
-        within(at, box(editing.editor, [id])),
+        within(at, box(editing, [id])),
     );
 
   /**
@@ -2206,7 +2261,7 @@ export function edits(
       );
       // As a left press would, with no box around a lone arrow or line.
       const onSelection =
-        hit === undefined && !lone(editing) && within(at, box(editor, [...selected]));
+        hit === undefined && !lone(editing) && within(at, box(editing, [...selected]));
       const top = aimed(editor, hit, onSelection);
       if (top !== undefined && !selected.has(top)) {
         selected = new Set([top]);
@@ -2236,14 +2291,14 @@ export function edits(
     },
     box() {
       const editing = current();
-      return editing && selected.size > 0 ? box(editing.editor, [...selected]) : undefined;
+      return editing && selected.size > 0 ? box(editing, [...selected]) : undefined;
     },
     remove: () => run((editing, ids) => edit(editing, editing.editor.remove(ids))),
     flip: (horizontally) =>
       run((editing, ids) => edit(editing, editing.editor.flip(ids, horizontally))),
     rotate: (degrees) =>
       run((editing, ids) => {
-        const corners = box(editing.editor, ids);
+        const corners = box(editing, ids);
         if (corners) {
           const how = { rotate: degrees, about: middle(corners), sticking: "land" } as const;
           edit(editing, core.transform(editing.editor, ids, how));
@@ -2369,7 +2424,7 @@ export function edits(
         return { text: `${Math.round((kind.frame.width / shown.width) * 100)}%`, snapped: false };
       }
       // As turned, unlike the bounds of the box.
-      const corners = box(editing.editor, [...selected]);
+      const corners = box(editing, [...selected]);
       if (!corners) {
         return undefined;
       }
@@ -2410,11 +2465,16 @@ function within(point: Point, corners: Point[] | undefined): boolean {
   return sides.every((side) => side >= 0) || sides.every((side) => side <= 0);
 }
 
-/** Clockwise from its top-left: a lone element's own, turned with it, or the upright bounds of all. */
-function box(editor: Editor, ids: string[]): Point[] | undefined {
-  const outline = ids.length === 1 ? editor.outline(ids[0]!) : undefined;
-  if (outline?.length === 8) {
-    return [0, 2, 4, 6].map((at) => ({ x: outline[at]!, y: outline[at + 1]! }));
+/**
+ * Clockwise from its top-left: a lone element's own, turned with it, or the upright bounds of all,
+ * as of an arrow or a line, which has no frame.
+ */
+function box(editing: Editing, ids: string[]): Point[] | undefined {
+  const { editor } = editing;
+  const outline = ids.length === 1 ? outlineOf(editing, ids[0]!) : undefined;
+  if (outline?.closes && outline.points.length === 8) {
+    const { points } = outline;
+    return [0, 2, 4, 6].map((at) => ({ x: points[at]!, y: points[at + 1]! }));
   }
   const bounds = core.bounds(editor, ids);
   if (!bounds) {
@@ -2567,6 +2627,29 @@ function rewritten(kind: Holder | Comment, content: string): Kind {
 
 function isSegment(kind: Kind | undefined): kind is Segment {
   return SEGMENTS.has(kind?.type ?? "");
+}
+
+/** As the overlay shows it, along an arrow or a line rather than round it. */
+function outlineOf({ editor, board }: Editing, id: string): Outline {
+  return { points: editor.outline(id), closes: !isSegment(board.elements[id]?.kind) };
+}
+
+/**
+ * The middle of its arc, as far square to the straight between its ends, to its right going from
+ * `from` to `to`, as its bend says in lengths of that straight.
+ */
+function middleOf({ from, to, bend = 0 }: Segment): Point {
+  return {
+    x: (from.x + to.x) / 2 - (to.y - from.y) * bend,
+    y: (from.y + to.y) / 2 + (to.x - from.x) * bend,
+  };
+}
+
+/** The bend that puts the middle of its arc as far square to the straight as `point`. */
+function bendThrough({ from, to }: Segment, point: Point): number {
+  const [x, y] = [to.x - from.x, to.y - from.y];
+  const across = (point.y - (from.y + to.y) / 2) * x - (point.x - (from.x + to.x) / 2) * y;
+  return across / (x * x + y * y);
 }
 
 export function isTip(tool: string | undefined): tool is Tip {

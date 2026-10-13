@@ -145,6 +145,9 @@ const DASH: f32 = 7.0;
 /// How far a star's inner corners are from its centre, in parts of its points' distance, as the
 /// board's `STAR_DEPTH`.
 const STAR: f32 = 0.381966;
+/// The cosine and the sine of how far each stroke of an arrow's head turns back from its shaft, as
+/// the board's `BARB`.
+const BARB: vec2f = vec2f(0.8660254, 0.5);
 
 struct Out {
     @builtin(position) position: vec4f,
@@ -160,13 +163,14 @@ struct Out {
 };
 
 /// `shape` is 0 for a line from `geometry.xy` to `geometry.zw`, and 6 for an arrow along it, its
-/// heads `degrees` long, at its end, and its start too when `extra` is 2. 1 or 2 outlines a
-/// rectangle or an ellipse in the frame `geometry`, turned by `degrees`, filling it as much as
-/// `extra`, 3 fills the rectangle, and 4 draws its diagonals. 7 or 8 outlines and fills as 1 and 2
-/// do a polygon of `corners` corners, or a star of `corners` points. `width` is in board units, but
-/// never under a device pixel, and dashes the stroke when negative, though not an arrow's heads.
-/// What one instance draws blends once, so that an arrow with its heads, or an outline with its
-/// fill, fades as a whole. A text over them blends apart.
+/// heads `degrees` long, at its end, and its start too when `extra` is 2, both bent by `corners` as
+/// the board's arrows and lines are by their bend. 1 or 2 outlines a rectangle or an ellipse in the
+/// frame `geometry`, turned by `degrees`, filling it as much as `extra`, 3 fills the rectangle, and
+/// 4 draws its diagonals. 7 or 8 outlines and fills as 1 and 2 do a polygon of `corners` corners,
+/// or a star of `corners` points. `width` is in board units, but never under a device pixel, and
+/// dashes the stroke when negative, though not an arrow's heads. What one instance draws blends
+/// once, so that an arrow with its heads, or an outline with its fill, fades as a whole. A text
+/// over them blends apart.
 @vertex fn vs(
     @builtin(vertex_index) index: u32,
     @location(0) shape: f32,
@@ -200,9 +204,22 @@ struct Out {
         let along = select(vec2f(1.0, 0.0), (end - start) / span, span > 0.0);
         let across = vec2f(-along.y, along.x);
         let head = select(0.0, degrees * camera.zoom, shape > 5.5);
-        // As far across as the heads reach, at 30° from the shaft.
-        let reach = margin + head * 0.5;
-        out.local = vec2f(mix(-margin, span + margin, corner.x), mix(-reach, reach, corner.y));
+        if bends(corners, span) {
+            // Around its arc, which reaches past its ends once it bends past half a circle, and
+            // as far as its heads reach whichever way they turn.
+            let bulge = corners * span;
+            let arc_radius = span * (1.0 + 4.0 * corners * corners) / (8.0 * abs(corners));
+            let past = select(0.0, arc_radius - span * 0.5, abs(corners) > 0.5);
+            let reach = margin + head;
+            out.local = vec2f(
+                mix(-past - reach, span + past + reach, corner.x),
+                mix(min(bulge, 0.0) - reach, max(bulge, 0.0) + reach, corner.y),
+            );
+        } else {
+            // As far across as the heads reach, at 30° from the shaft.
+            let reach = margin + head * 0.5;
+            out.local = vec2f(mix(-margin, span + margin, corner.x), mix(-reach, reach, corner.y));
+        }
         out.size = vec2f(span, head);
         out.position = clip(start + along * out.local.x + across * out.local.y);
     } else {
@@ -220,10 +237,65 @@ fn lined(shape: f32) -> bool {
     return shape < 0.5 || abs(shape - 6.0) < 0.5;
 }
 
+fn bends(bend: f32, span: f32) -> bool {
+    return bend != 0.0 && span > 0.0;
+}
+
 fn segment(point: vec2f, start: vec2f, end: vec2f) -> f32 {
     let along = end - start;
     let t = clamp(dot(point - start, along) / max(dot(along, along), 1e-6), 0.0, 1.0);
     return distance(point, start + along * t);
+}
+
+/// Of the two strokes of a head at `tip`, which turn back by `BARB` from `forward`, the way into the
+/// tip, `head` long.
+fn barbs(point: vec2f, tip: vec2f, forward: vec2f, head: f32) -> f32 {
+    let back = -forward * head;
+    let left = vec2f(back.x * BARB.x - back.y * BARB.y, back.x * BARB.y + back.y * BARB.x);
+    let right = vec2f(back.x * BARB.x + back.y * BARB.y, back.y * BARB.x - back.x * BARB.y);
+    return min(segment(point, tip, tip + left), segment(point, tip, tip + right));
+}
+
+/// Of a line from (0, 0) to (`span`, 0) bent into an arc whose middle lies `bend` spans across,
+/// as the board's `Arc` bends it, and of its heads, `head` long, at its end, and its start too when
+/// `both`. Its dashes, `dash` long apart, are measured round the arc, and its heads line up with
+/// the way from a head's length back along it into their tips.
+fn bent(local: vec2f, span: f32, bend: f32, head: f32, both: bool, dash: f32) -> f32 {
+    let half = span * 0.5;
+    let bulge = bend * span;
+    let side = sign(bend);
+    // Across from the middle of the straight, as far as the centre of the arc.
+    let off = (bulge * bulge - half * half) / (2.0 * bulge);
+    let centre = vec2f(half, off);
+    let radius = abs(bulge - off);
+    // Between the straight and the arc at either end, half of which has a tangent of twice the bend.
+    let swing = 2.0 * atan(2.0 * abs(bend));
+    let from_centre = local - centre;
+    // Round from the middle of the arc, towards its end when positive.
+    let angle = atan2(from_centre.x, from_centre.y * side);
+    // Out of the circle, which subtracting its radius would lose in floats when it is nearly flat,
+    // the centre lying through both ends.
+    let outward = (dot(local, local) - 2.0 * dot(local, centre)) / (length(from_centre) + radius);
+    var away = min(length(local), distance(local, vec2f(span, 0.0)));
+    if abs(angle) <= swing {
+        var gap = 0.0;
+        if dash > 0.0 {
+            let whole = 2.0 * swing * radius;
+            let along = (angle + swing) * radius;
+            gap = along - nearest_dash(along, whole_period(whole, dash), whole);
+        }
+        away = length(vec2f(gap, outward));
+    }
+    if head > 0.0 {
+        // A head's length back along the arc, the way in turns a little less than the arc does.
+        let into = swing - head / (2.0 * radius);
+        let forward = vec2f(cos(into), -sin(into) * side);
+        away = min(away, barbs(local, vec2f(span, 0.0), forward, head));
+        if both {
+            away = min(away, barbs(local, vec2f(0.0), vec2f(-forward.x, forward.y), head));
+        }
+    }
+    return away;
 }
 
 /// Negative within the box.
@@ -343,17 +415,19 @@ fn polygon(local: vec2f, half: vec2f, count: f32, star: bool, base: f32) -> vec2
 @fragment fn fs(in: Out) -> @location(0) vec4f {
     var away: f32;
     var filled = 0.0;
-    if lined(in.shape) {
+    if lined(in.shape) && bends(in.corners, in.size.x) {
+        let head = select(0.0, in.size.y, in.shape > 5.5);
+        away = bent(in.local, in.size.x, in.corners, head, in.extra > 1.5, in.dash);
+    } else if lined(in.shape) {
         var nearest = clamp(in.local.x, 0.0, in.size.x);
         if in.dash > 0.0 {
             nearest = nearest_dash(in.local.x, whole_period(in.size.x, in.dash), in.size.x);
         }
         away = length(vec2f(in.local.x - nearest, in.local.y));
         if in.shape > 5.5 {
-            // Folded across the shaft, each head's two strokes are one. They turn back 30° from
-            // it, as the board's `BARB` says where they end.
+            // Folded across the shaft, each head's two strokes are one.
             let point = vec2f(in.local.x, abs(in.local.y));
-            let back = in.size.y * vec2f(0.8660254, 0.5);
+            let back = in.size.y * BARB;
             let tip = vec2f(in.size.x, 0.0);
             away = min(away, segment(point, tip, tip + vec2f(-back.x, back.y)));
             if in.extra > 1.5 {

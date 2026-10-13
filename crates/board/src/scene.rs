@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use serde::{Serialize, Serializer};
 
-use crate::geometry::{around, corners, polygon, smoothed, stroke_points};
+use crate::geometry::{Arc, apart, around, corners, polygon, smoothed, stroke_points};
 use crate::{
     Annotations, AssetId, Board, Colour, CropShape, Dash, ElementId, ElementKind, Fill, Heads,
     ImageEdits, Paper, Point, Rect, Shape, Size, Text, Tip, Weight,
@@ -42,18 +42,21 @@ pub enum Item {
     },
     /// Where the text of element `id` stacks, which the shell lays out.
     Text { id: ElementId, opacity: f64 },
+    /// Bent as the board's arrows and lines are, but by none when it runs straight there.
     Line {
         from: Point,
         to: Point,
+        bend: f64,
         width: f64,
         paint: Paint,
         dashed: bool,
         opacity: f64,
     },
-    /// Its heads `head` long, never dashed.
+    /// Bent as a line, its heads `head` long, never dashed.
     Arrow {
         from: Point,
         to: Point,
+        bend: f64,
         width: f64,
         paint: Paint,
         dashed: bool,
@@ -206,20 +209,25 @@ impl Board {
                 _ => {}
             },
             Item::Line {
-                from, to, width, ..
-            } => widened(points, [*from, *to], *width),
+                from,
+                to,
+                bend,
+                width,
+                ..
+            } => widened(points, extremes(*from, *to, *bend), *width),
             Item::Arrow {
                 from,
                 to,
+                bend,
                 width,
                 head,
                 heads,
                 ..
             } => widened(
                 points,
-                [*from, *to]
+                extremes(*from, *to, *bend)
                     .into_iter()
-                    .chain(barbs(*from, *to, *head, *heads)),
+                    .chain(barbs(*from, *to, *bend, *head, *heads)),
                 *width,
             ),
             Item::Stroke {
@@ -250,27 +258,34 @@ impl Board {
     }
 }
 
-/// Where the strokes of an arrow's heads end.
-fn barbs(from: Point, to: Point, head: f64, heads: Heads) -> Vec<Point> {
-    let span = (to.x - from.x).hypot(to.y - from.y);
-    if span == 0.0 {
+fn extremes(from: Point, to: Point, bend: f64) -> Vec<Point> {
+    Arc::new(from, to, bend).map_or_else(|| vec![from, to], |arc| arc.extremes())
+}
+
+/// Where the strokes of an arrow's heads end. Each lines up with the way from a head's length back
+/// along the arrow into its tip, all along it when straight.
+fn barbs(from: Point, to: Point, bend: f64, head: f64, heads: Heads) -> Vec<Point> {
+    if from == to {
         return Vec::new();
     }
-    let along = Point {
-        x: (to.x - from.x) / span,
-        y: (to.y - from.y) / span,
-    };
+    let arc = Arc::new(from, to, bend);
+    let back = arc.map_or(0.0, |arc| head / arc.length());
     let (sin, cos) = BARB.to_radians().sin_cos();
-    let (back, across) = (head * cos, head * sin);
-    let ends = |tip: Point, way: f64| {
+    let ends = |tip: Point, behind: Point, along: f64| {
+        let behind = arc.map_or(behind, |arc| arc.at(along));
+        let span = apart(tip, behind);
+        let way = Point {
+            x: (tip.x - behind.x) / span,
+            y: (tip.y - behind.y) / span,
+        };
         [1.0, -1.0].map(|side| Point {
-            x: tip.x - way * along.x * back - side * along.y * across,
-            y: tip.y - way * along.y * back + side * along.x * across,
+            x: tip.x - way.x * head * cos - side * way.y * head * sin,
+            y: tip.y - way.y * head * cos + side * way.x * head * sin,
         })
     };
     match heads {
-        Heads::End => ends(to, 1.0).to_vec(),
-        Heads::Both => [ends(to, 1.0), ends(from, -1.0)].concat(),
+        Heads::End => ends(to, from, 1.0 - back).to_vec(),
+        Heads::Both => [ends(to, from, 1.0 - back), ends(from, to, back)].concat(),
     }
 }
 
@@ -431,6 +446,7 @@ fn drawn(
         ElementKind::Arrow {
             from,
             to,
+            bend,
             colour,
             weight,
             dash,
@@ -438,14 +454,16 @@ fn drawn(
             ..
         } => {
             let width = weight.width();
-            let span = (to.x - from.x).hypot(to.y - from.y);
+            let arc = Arc::new(*from, *to, *bend);
+            let span = arc.map_or_else(|| apart(*from, *to), |arc| arc.length());
             // One item, as heads drawn apart from their shaft would overlap it, which fading shows.
             items.push(if span == 0.0 {
-                line(*from, *to, *colour, *weight, *dash, opacity)
+                line(*from, *to, *bend, *colour, *weight, *dash, opacity)
             } else {
                 Item::Arrow {
                     from: *from,
                     to: *to,
+                    bend: arc.map_or(0.0, |_| *bend),
                     width,
                     paint: Paint::Colour(*colour),
                     dashed: *dash == Dash::Dashed,
@@ -458,11 +476,12 @@ fn drawn(
         ElementKind::Line {
             from,
             to,
+            bend,
             colour,
             weight,
             dash,
             ..
-        } => items.push(line(*from, *to, *colour, *weight, *dash, opacity)),
+        } => items.push(line(*from, *to, *bend, *colour, *weight, *dash, opacity)),
         ElementKind::Stroke {
             tip,
             frame,
@@ -484,10 +503,19 @@ fn drawn(
     }
 }
 
-fn line(from: Point, to: Point, colour: Colour, weight: Weight, dash: Dash, opacity: f64) -> Item {
+fn line(
+    from: Point,
+    to: Point,
+    bend: f64,
+    colour: Colour,
+    weight: Weight,
+    dash: Dash,
+    opacity: f64,
+) -> Item {
     Item::Line {
         from,
         to,
+        bend: Arc::new(from, to, bend).map_or(0.0, |_| bend),
         width: weight.width(),
         paint: Paint::Colour(colour),
         dashed: dash == Dash::Dashed,
@@ -524,8 +552,8 @@ fn shown(natural: Size, edits: &ImageEdits) -> Rect {
 mod tests {
     use super::*;
     use crate::tests::{
-        area, assert_at, board, comment, counted, element, highlighted, id, image_of, near, note,
-        pen, point, stroke, stuck, turned,
+        area, assert_at, bent, board, comment, counted, element, highlighted, id, image_of, line,
+        near, note, pen, point, stroke, stuck, turned,
     };
     use crate::{Opacity, Style};
 
@@ -723,15 +751,77 @@ mod tests {
     }
 
     #[test]
+    fn a_bent_arrow_or_line_draws_its_bend_and_heads_no_further_than_a_third_of_its_arc() {
+        let arrow = bent(pointing(point(30.0, 0.0), Weight::Thin, Heads::End), 0.5);
+        // Half a circle 15 across is over 47 long, which leaves the head as the stroke asks.
+        assert!(matches!(
+            &drawn(arrow)[..],
+            [Item::Arrow {
+                bend: 0.5,
+                head: 13.0,
+                ..
+            }]
+        ));
+        assert!(matches!(
+            &drawn(bent(line((0.0, 0.0), (30.0, 0.0)), -0.25))[..],
+            [Item::Line { bend: -0.25, .. }]
+        ));
+        // Too little to bend it, as the board finds it.
+        assert!(matches!(
+            &drawn(bent(line((0.0, 0.0), (30.0, 0.0)), 1e-9))[..],
+            [Item::Line { bend: 0.0, .. }]
+        ));
+    }
+
+    #[test]
+    fn a_bent_arrow_head_lines_up_with_the_last_of_its_arc_as_long_as_the_head() {
+        // Half a circle around (50, 0), which a head 16 long follows over 0.32 radians.
+        let (sin, cos) = 0.32_f64.sin_cos();
+        let behind = [
+            (point(100.0, 0.0), point(50.0 + 50.0 * cos, 50.0 * sin)),
+            (point(0.0, 0.0), point(50.0 - 50.0 * cos, 50.0 * sin)),
+        ];
+        let ends = barbs(point(0.0, 0.0), point(100.0, 0.0), 0.5, 16.0, Heads::Both);
+        assert_eq!(ends.len(), 4);
+        for (pair, (tip, behind)) in ends.chunks(2).zip(behind) {
+            let span = apart(tip, behind);
+            let middle = point((pair[0].x + pair[1].x) / 2.0, (pair[0].y + pair[1].y) / 2.0);
+            // Back along the way in, by a head turned 30° to either side.
+            let back = 16.0 * 30_f64.to_radians().cos() / span;
+            assert_at(
+                middle,
+                tip.x - (tip.x - behind.x) * back,
+                tip.y - (tip.y - behind.y) * back,
+            );
+            for end in pair {
+                assert!((apart(*end, tip) - 16.0).abs() < 1e-9, "{end:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn what_a_bent_arrow_draws_reaches_round_its_arc() {
+        let arrow = bent(pointing(point(100.0, 0.0), Weight::Medium, Heads::End), 0.5);
+        let board = board([(1, element(None, "a0", arrow))]);
+        let bounds = board
+            .drawn_bounds(&[id(1)], &BTreeSet::new(), Annotations::Shown)
+            .unwrap();
+        // Down to the middle of its arc, and its stroke 1 more, with its head out to the right.
+        assert_eq!((bounds.x, bounds.y), (-1.0, -1.0));
+        assert!((bounds.y + bounds.height - 51.0).abs() < 1e-9, "{bounds:?}");
+        assert!(bounds.x + bounds.width > 101.0, "{bounds:?}");
+    }
+
+    #[test]
     fn an_arrow_head_turns_back_thirty_degrees_from_its_shaft() {
         // As the renderer's shader spells it.
         let (back, across) = (0.866_025_4, 0.5);
-        let ends = barbs(point(0.0, 0.0), point(100.0, 0.0), 10.0, Heads::Both);
+        let ends = barbs(point(0.0, 0.0), point(100.0, 0.0), 0.0, 10.0, Heads::Both);
         let expected = [
             (100.0 - 10.0 * back, 10.0 * across),
             (100.0 - 10.0 * back, -10.0 * across),
-            (10.0 * back, 10.0 * across),
             (10.0 * back, -10.0 * across),
+            (10.0 * back, 10.0 * across),
         ];
         assert_eq!(ends.len(), expected.len());
         for (end, (x, y)) in ends.iter().zip(expected) {
@@ -840,6 +930,7 @@ mod tests {
             [Item::Line {
                 from: origin,
                 to: origin,
+                bend: 0.0,
                 width: 1.0,
                 paint: Paint::Colour(Colour::Blue),
                 dashed: false,
