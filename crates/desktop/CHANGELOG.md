@@ -1,5 +1,11 @@
 # Planche
 
+## 0.4.0 — 2026-10-13
+
+### Minor changes
+
+- [edfb484](https://github.com/bruits/planche/commit/edfb484d53694a8f5d109bd057b8b1161c40c41b) Added curved arrows and lines. Drag the handle in the middle of one to bend it. — Thanks @goulvenclech!
+
 ## 0.3.0 — 2026-10-12
 
 ### Minor changes
